@@ -40,6 +40,19 @@ interface SelectedElement {
   baselineStyles: Map<string, string>;
 }
 
+interface PickTarget {
+  element: Element;
+  ownerDocument: Document;
+  viewportRect: PreviewAnnotationRect;
+}
+
+interface ViewportOffset {
+  x: number;
+  y: number;
+}
+
+type StyleableElement = Element & { style: CSSStyleDeclaration };
+
 interface AnnotationSession {
   teardown: (notifyMain: boolean) => void;
   applyTheme: (theme: DesktopPreviewAnnotationTheme) => void;
@@ -105,9 +118,12 @@ const nextId = (prefix: string): string => {
   return `${prefix}_${idSequence.toString(36)}`;
 };
 
-const rectFromDomRect = (rect: DOMRect): PreviewAnnotationRect => ({
-  x: rect.left,
-  y: rect.top,
+const rectFromDomRectWithOffset = (
+  rect: DOMRect,
+  offset: ViewportOffset,
+): PreviewAnnotationRect => ({
+  x: rect.left + offset.x,
+  y: rect.top + offset.y,
   width: rect.width,
   height: rect.height,
 });
@@ -148,32 +164,234 @@ function unionRects(
 }
 
 function isAnnotationNode(element: Element): boolean {
-  return element instanceof Element && element.closest(`[${OVERLAY_ATTRIBUTE}]`) !== null;
+  try {
+    return element.closest(`[${OVERLAY_ATTRIBUTE}]`) !== null;
+  } catch {
+    return false;
+  }
 }
 
-function pickFromPoint(clientX: number, clientY: number): Element | null {
-  for (const candidate of document.elementsFromPoint(clientX, clientY)) {
-    if (!(candidate instanceof Element)) continue;
-    if (isAnnotationNode(candidate)) continue;
-    if (candidate === document.documentElement || candidate === document.body) continue;
-    return candidate;
+function isElementNode(value: unknown): value is Element {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { nodeType?: unknown }).nodeType === 1 &&
+    typeof (value as { getBoundingClientRect?: unknown }).getBoundingClientRect === "function"
+  );
+}
+
+function elementTagName(element: Element): string {
+  return element.tagName.toLowerCase();
+}
+
+function hasInlineStyle(element: Element): element is StyleableElement {
+  const style = (element as { style?: unknown }).style;
+  return (
+    typeof style === "object" &&
+    style !== null &&
+    typeof (style as { getPropertyValue?: unknown }).getPropertyValue === "function" &&
+    typeof (style as { setProperty?: unknown }).setProperty === "function" &&
+    typeof (style as { removeProperty?: unknown }).removeProperty === "function"
+  );
+}
+
+function getElementComputedStyle(element: Element): CSSStyleDeclaration {
+  return (element.ownerDocument.defaultView ?? window).getComputedStyle(element);
+}
+
+function isFrameElement(element: Element): boolean {
+  const tagName = elementTagName(element);
+  return tagName === "iframe" || tagName === "frame";
+}
+
+function getFrameViewportInset(frame: Element): ViewportOffset {
+  const element = frame as HTMLElement;
+  return {
+    x: typeof element.clientLeft === "number" ? element.clientLeft : 0,
+    y: typeof element.clientTop === "number" ? element.clientTop : 0,
+  };
+}
+
+function getAccessibleFrameDocument(frame: Element): Document | null {
+  if (!isFrameElement(frame)) return null;
+  const frameElement = frame as HTMLIFrameElement;
+  try {
+    if (frameElement.contentDocument?.documentElement) return frameElement.contentDocument;
+  } catch {
+    // Cross-origin frames are intentionally opaque to the top-frame picker.
+  }
+  try {
+    const frameDocument = frameElement.contentWindow?.document ?? null;
+    return frameDocument?.documentElement ? frameDocument : null;
+  } catch {
+    return null;
+  }
+}
+
+function getDocumentViewportOffset(ownerDocument: Document): ViewportOffset | null {
+  let currentDocument: Document | null = ownerDocument;
+  const offset: ViewportOffset = { x: 0, y: 0 };
+  for (let depth = 0; currentDocument !== document; depth += 1) {
+    if (depth > 32) return null;
+    let frameElement: Element | null = null;
+    try {
+      const candidate: unknown = currentDocument.defaultView?.frameElement ?? null;
+      frameElement = isElementNode(candidate) ? candidate : null;
+    } catch {
+      return null;
+    }
+    if (!frameElement) return null;
+    const frameRect = frameElement.getBoundingClientRect();
+    const inset = getFrameViewportInset(frameElement);
+    offset.x += frameRect.left + inset.x;
+    offset.y += frameRect.top + inset.y;
+    currentDocument = frameElement.ownerDocument;
+  }
+  return offset;
+}
+
+function getElementViewportRect(element: Element): PreviewAnnotationRect | null {
+  if (!element.isConnected) return null;
+  const offset = getDocumentViewportOffset(element.ownerDocument);
+  if (!offset) return null;
+  return rectFromDomRectWithOffset(element.getBoundingClientRect(), offset);
+}
+
+function isDocumentChromeElement(ownerDocument: Document, element: Element): boolean {
+  return element === ownerDocument.documentElement || element === ownerDocument.body;
+}
+
+function pickFromDocument(
+  ownerDocument: Document,
+  clientX: number,
+  clientY: number,
+  offset: ViewportOffset,
+): PickTarget | null {
+  let candidates: Element[];
+  try {
+    candidates = Array.from(ownerDocument.elementsFromPoint(clientX, clientY));
+  } catch {
+    return null;
+  }
+  for (const candidate of candidates) {
+    if (!isElementNode(candidate)) continue;
+    if (ownerDocument === document && isAnnotationNode(candidate)) continue;
+    if (isDocumentChromeElement(ownerDocument, candidate)) continue;
+
+    const candidateRect = candidate.getBoundingClientRect();
+    const viewportRect = rectFromDomRectWithOffset(candidateRect, offset);
+    if (isFrameElement(candidate)) {
+      const childDocument = getAccessibleFrameDocument(candidate);
+      if (childDocument) {
+        const inset = getFrameViewportInset(candidate);
+        const childX = clientX - candidateRect.left - inset.x;
+        const childY = clientY - candidateRect.top - inset.y;
+        const childWindow = childDocument.defaultView;
+        const insideChildViewport =
+          childX >= 0 &&
+          childY >= 0 &&
+          (!childWindow || (childX <= childWindow.innerWidth && childY <= childWindow.innerHeight));
+        if (insideChildViewport) {
+          const childTarget = pickFromDocument(childDocument, childX, childY, {
+            x: viewportRect.x + inset.x,
+            y: viewportRect.y + inset.y,
+          });
+          if (childTarget) return childTarget;
+        }
+      }
+    }
+
+    return { element: candidate, ownerDocument, viewportRect };
   }
   return null;
 }
 
+function pickFromPoint(clientX: number, clientY: number): PickTarget | null {
+  return pickFromDocument(document, clientX, clientY, { x: 0, y: 0 });
+}
+
+function isPointInRect(x: number, y: number, rect: PreviewAnnotationRect): boolean {
+  return x >= rect.x && x <= rect.x + rect.width && y >= rect.y && y <= rect.y + rect.height;
+}
+
+function isMarqueeSelectableElement(element: Element): boolean {
+  const tagName = elementTagName(element);
+  return (
+    element.children.length === 0 ||
+    tagName === "button" ||
+    tagName === "a" ||
+    element.getAttribute("role") === "button"
+  );
+}
+
+function collectElementsInRect(
+  ownerDocument: Document,
+  rect: PreviewAnnotationRect,
+  offset: ViewportOffset,
+): Array<{ element: Element; rect: PreviewAnnotationRect }> {
+  let elements: Element[];
+  try {
+    elements = Array.from(ownerDocument.querySelectorAll("body *"));
+  } catch {
+    return [];
+  }
+
+  const candidates: Array<{ element: Element; rect: PreviewAnnotationRect }> = [];
+  for (const element of elements) {
+    if (!isElementNode(element)) continue;
+    if (ownerDocument === document && isAnnotationNode(element)) continue;
+    if (isDocumentChromeElement(ownerDocument, element)) continue;
+
+    const viewportRect = rectFromDomRectWithOffset(element.getBoundingClientRect(), offset);
+    if (
+      viewportRect.width < 2 ||
+      viewportRect.height < 2 ||
+      viewportRect.x + viewportRect.width < rect.x ||
+      viewportRect.x > rect.x + rect.width ||
+      viewportRect.y + viewportRect.height < rect.y ||
+      viewportRect.y > rect.y + rect.height
+    ) {
+      continue;
+    }
+
+    if (isFrameElement(element)) {
+      const childDocument = getAccessibleFrameDocument(element);
+      if (childDocument) {
+        const inset = getFrameViewportInset(element);
+        candidates.push(
+          ...collectElementsInRect(childDocument, rect, {
+            x: viewportRect.x + inset.x,
+            y: viewportRect.y + inset.y,
+          }),
+        );
+      }
+    }
+
+    const centerX = viewportRect.x + viewportRect.width / 2;
+    const centerY = viewportRect.y + viewportRect.height / 2;
+    if (
+      centerX >= rect.x &&
+      centerX <= rect.x + rect.width &&
+      centerY >= rect.y &&
+      centerY <= rect.y + rect.height &&
+      isMarqueeSelectableElement(element)
+    ) {
+      candidates.push({ element, rect: viewportRect });
+    }
+  }
+  return candidates;
+}
+
 function describeRawElement(element: Element): string {
-  const tag = element.tagName.toLowerCase();
+  const tag = elementTagName(element);
   const id = element.id ? `#${element.id}` : "";
-  const classes =
-    element instanceof HTMLElement && typeof element.className === "string"
-      ? element.className
-          .trim()
-          .split(/\s+/)
-          .filter(Boolean)
-          .slice(0, 2)
-          .map((name) => `.${name}`)
-          .join("")
-      : "";
+  const classes = (element.getAttribute("class") ?? "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((name) => `.${name}`)
+    .join("");
   return `${tag}${id}${classes}`;
 }
 
@@ -216,16 +434,16 @@ function createLabel(): HTMLDivElement {
 }
 
 function updateSelectedVisual(target: SelectedElement): void {
-  if (!target.element.isConnected) {
+  const rect = getElementViewportRect(target.element);
+  if (!rect) {
     target.outline.style.display = "none";
     target.label.style.display = "none";
     return;
   }
-  const rect = target.element.getBoundingClientRect();
-  positionBox(target.outline, rectFromDomRect(rect));
+  positionBox(target.outline, rect);
   target.label.textContent = describeRawElement(target.element);
   target.label.style.display = "block";
-  target.label.style.transform = `translate(${Math.max(4, rect.left)}px, ${Math.max(4, rect.top - 22)}px)`;
+  target.label.style.transform = `translate(${Math.max(4, rect.x)}px, ${Math.max(4, rect.y - 22)}px)`;
 }
 
 function toStackFrame(frame: {
@@ -372,9 +590,19 @@ function startAnnotation(): void {
   document.documentElement.appendChild(cursorStyle);
   shadowRoot.appendChild(root);
 
+  const captureSurface = document.createElement("div");
+  captureSurface.setAttribute(OVERLAY_ATTRIBUTE, "");
+  captureSurface.style.cssText = [
+    "position:fixed",
+    "inset:0",
+    "background:transparent",
+    "pointer-events:auto",
+    "z-index:0",
+  ].join(";");
+
   const hoverOutline = createBox(PRIMARY, PRIMARY_FILL);
   const marqueeBox = createBox(PRIMARY, PRIMARY_FILL);
-  root.append(hoverOutline, marqueeBox);
+  root.append(captureSurface, hoverOutline, marqueeBox);
 
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   svg.setAttribute(OVERLAY_ATTRIBUTE, "");
@@ -444,6 +672,7 @@ function startAnnotation(): void {
   const toolButtons = new Map<AnnotationTool, HTMLButtonElement>();
   let tool: AnnotationTool = "select";
   let dragStart: PreviewAnnotationPoint | null = null;
+  let activePointerId: number | null = null;
   let activeStroke: { target: PreviewAnnotationStrokeTarget; path: SVGPathElement } | null = null;
   let pendingCapture = false;
   let editorExpanded = false;
@@ -489,7 +718,7 @@ function startAnnotation(): void {
   };
 
   const removeSelected = (target: SelectedElement): void => {
-    if (target.element instanceof HTMLElement || target.element instanceof SVGElement) {
+    if (hasInlineStyle(target.element)) {
       for (const [property, baseline] of target.baselineStyles) {
         if (baseline) target.element.style.setProperty(property, baseline);
         else target.element.style.removeProperty(property);
@@ -537,15 +766,14 @@ function startAnnotation(): void {
 
   const setStyleForSelected = (property: string, value: string): void => {
     for (const target of selected.values()) {
-      if (!(target.element instanceof HTMLElement || target.element instanceof SVGElement))
-        continue;
+      if (!hasInlineStyle(target.element)) continue;
       if (!target.baselineStyles.has(property)) {
         target.baselineStyles.set(property, target.element.style.getPropertyValue(property));
       }
       const key = `${target.id}:${property}`;
       const previousValue =
         styleChanges.get(key)?.previousValue ??
-        getComputedStyle(target.element).getPropertyValue(property).trim();
+        getElementComputedStyle(target.element).getPropertyValue(property).trim();
       target.element.style.setProperty(property, value, "important");
       styleChanges.set(key, {
         targetId: target.id,
@@ -757,7 +985,7 @@ function startAnnotation(): void {
   const syncStyleControls = (): void => {
     const first = selected.values().next().value as SelectedElement | undefined;
     if (!first) return;
-    const computed = getComputedStyle(first.element);
+    const computed = getElementComputedStyle(first.element);
     const rect = first.element.getBoundingClientRect();
     aspectRatio = rect.height > 0 ? rect.width / rect.height : 1;
     widthInput.value = String(Math.round(rect.width));
@@ -825,8 +1053,8 @@ function startAnnotation(): void {
   const getAnnotationBounds = (): PreviewAnnotationRect | null =>
     unionRects(
       [
-        ...Array.from(selected.values(), (target) =>
-          rectFromDomRect(target.element.getBoundingClientRect()),
+        ...Array.from(selected.values(), (target) => getElementViewportRect(target.element)).filter(
+          (rect) => rect !== null,
         ),
         ...regions.map((region) => region.rect),
         ...strokes.map((stroke) => stroke.bounds),
@@ -941,32 +1169,20 @@ function startAnnotation(): void {
 
   const removeTargetAtPoint = (x: number, y: number): boolean => {
     for (const target of Array.from(selected.values()).toReversed()) {
-      const rect = target.element.getBoundingClientRect();
-      if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+      const rect = getElementViewportRect(target.element);
+      if (rect && isPointInRect(x, y, rect)) {
         removeSelected(target);
         return true;
       }
     }
-    const regionIndex = regions.findIndex(
-      (region) =>
-        x >= region.rect.x &&
-        x <= region.rect.x + region.rect.width &&
-        y >= region.rect.y &&
-        y <= region.rect.y + region.rect.height,
-    );
+    const regionIndex = regions.findIndex((region) => isPointInRect(x, y, region.rect));
     if (regionIndex >= 0) {
       const [removed] = regions.splice(regionIndex, 1);
       root.querySelector(`[data-region-id="${removed?.id}"]`)?.remove();
       updateStatus();
       return true;
     }
-    const strokeIndex = strokes.findIndex(
-      (stroke) =>
-        x >= stroke.bounds.x &&
-        x <= stroke.bounds.x + stroke.bounds.width &&
-        y >= stroke.bounds.y &&
-        y <= stroke.bounds.y + stroke.bounds.height,
-    );
+    const strokeIndex = strokes.findIndex((stroke) => isPointInRect(x, y, stroke.bounds));
     if (strokeIndex >= 0) {
       const [removed] = strokes.splice(strokeIndex, 1);
       svg.querySelector(`[data-stroke-id="${removed?.id}"]`)?.remove();
@@ -977,32 +1193,7 @@ function startAnnotation(): void {
   };
 
   const selectElementsInRect = (rect: PreviewAnnotationRect): number => {
-    const candidates = Array.from(document.querySelectorAll("body *"))
-      .filter((element) => !isAnnotationNode(element))
-      .map((element) => ({ element, rect: element.getBoundingClientRect() }))
-      .filter(({ rect: candidate }) => {
-        if (candidate.width < 2 || candidate.height < 2) return false;
-        return !(
-          candidate.right < rect.x ||
-          candidate.left > rect.x + rect.width ||
-          candidate.bottom < rect.y ||
-          candidate.top > rect.y + rect.height
-        );
-      })
-      .filter(({ element, rect: candidate }) => {
-        const centerX = candidate.left + candidate.width / 2;
-        const centerY = candidate.top + candidate.height / 2;
-        return (
-          centerX >= rect.x &&
-          centerX <= rect.x + rect.width &&
-          centerY >= rect.y &&
-          centerY <= rect.y + rect.height &&
-          (element.children.length === 0 ||
-            element instanceof HTMLButtonElement ||
-            element instanceof HTMLAnchorElement ||
-            element.getAttribute("role") === "button")
-        );
-      })
+    const candidates = collectElementsInRect(document, rect, { x: 0, y: 0 })
       .sort(
         (left, right) => left.rect.width * left.rect.height - right.rect.width * right.rect.height,
       )
@@ -1016,13 +1207,9 @@ function startAnnotation(): void {
   };
 
   const onPointerMove = (event: PointerEvent): void => {
-    if (isAnnotationNode(event.target as Element)) {
-      clearHoverOutline();
-      return;
-    }
     if (tool === "select" && dragStart === null) {
       const target = pickFromPoint(event.clientX, event.clientY);
-      if (target) positionBox(hoverOutline, rectFromDomRect(target.getBoundingClientRect()));
+      if (target) positionBox(hoverOutline, target.viewportRect);
       else clearHoverOutline();
       return;
     }
@@ -1048,12 +1235,14 @@ function startAnnotation(): void {
   };
 
   const onPointerDown = (event: PointerEvent): void => {
-    if (event.button !== 0 || isAnnotationNode(event.target as Element)) return;
+    if (event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
+    activePointerId = event.pointerId;
+    captureSurface.setPointerCapture(event.pointerId);
     if (tool === "select") {
       const target = pickFromPoint(event.clientX, event.clientY);
-      if (target) toggleSelected(target, event.shiftKey);
+      if (target) toggleSelected(target.element, event.shiftKey);
       return;
     }
     if (tool === "erase") {
@@ -1082,7 +1271,16 @@ function startAnnotation(): void {
     }
   };
 
+  const releaseAnnotationPointer = (event: PointerEvent): void => {
+    if (activePointerId !== event.pointerId) return;
+    activePointerId = null;
+    if (captureSurface.hasPointerCapture(event.pointerId)) {
+      captureSurface.releasePointerCapture(event.pointerId);
+    }
+  };
+
   const onPointerUp = (event: PointerEvent): void => {
+    releaseAnnotationPointer(event);
     if (!dragStart) return;
     event.preventDefault();
     event.stopPropagation();
@@ -1112,8 +1310,18 @@ function startAnnotation(): void {
     updateStatus();
   };
 
+  const onPointerCancel = (event: PointerEvent): void => {
+    releaseAnnotationPointer(event);
+    dragStart = null;
+    if (activeStroke) {
+      activeStroke.path.remove();
+      activeStroke = null;
+    }
+    marqueeBox.style.display = "none";
+    clearHoverOutline();
+  };
+
   const onClick = (event: MouseEvent): void => {
-    if (isAnnotationNode(event.target as Element)) return;
     event.preventDefault();
     event.stopPropagation();
   };
@@ -1128,8 +1336,7 @@ function startAnnotation(): void {
 
   const restoreStyles = (): void => {
     for (const target of selected.values()) {
-      if (!(target.element instanceof HTMLElement || target.element instanceof SVGElement))
-        continue;
+      if (!hasInlineStyle(target.element)) continue;
       for (const [property, baseline] of target.baselineStyles) {
         if (baseline) target.element.style.setProperty(property, baseline);
         else target.element.style.removeProperty(property);
@@ -1141,11 +1348,12 @@ function startAnnotation(): void {
     if (finished) return;
     finished = true;
     restoreStyles();
-    window.removeEventListener("pointermove", onPointerMove, true);
-    window.removeEventListener("pointerdown", onPointerDown, true);
-    window.removeEventListener("pointerup", onPointerUp, true);
-    window.removeEventListener("pointerout", onPointerOut, true);
-    window.removeEventListener("click", onClick, true);
+    captureSurface.removeEventListener("pointermove", onPointerMove);
+    captureSurface.removeEventListener("pointerdown", onPointerDown);
+    captureSurface.removeEventListener("pointerup", onPointerUp);
+    captureSurface.removeEventListener("pointercancel", onPointerCancel);
+    captureSurface.removeEventListener("pointerout", onPointerOut);
+    captureSurface.removeEventListener("click", onClick);
     window.removeEventListener("blur", onWindowBlur);
     window.removeEventListener("keydown", onKeyDown, true);
     window.removeEventListener("scroll", repaint, true);
@@ -1190,6 +1398,8 @@ function startAnnotation(): void {
     submit.textContent = "Capturing…";
     void Promise.all(
       Array.from(selected.values()).map(async (target) => {
+        const rect = getElementViewportRect(target.element);
+        if (!rect) return null;
         const element = await captureElement(target.element);
         if (!element) return null;
         for (const change of styleChanges.values()) {
@@ -1198,7 +1408,7 @@ function startAnnotation(): void {
         return {
           id: target.id,
           element,
-          rect: rectFromDomRect(target.element.getBoundingClientRect()),
+          rect,
         };
       }),
     ).then((captured) => {
@@ -1232,11 +1442,12 @@ function startAnnotation(): void {
     submit.click();
   });
 
-  window.addEventListener("pointermove", onPointerMove, { capture: true, passive: false });
-  window.addEventListener("pointerdown", onPointerDown, { capture: true, passive: false });
-  window.addEventListener("pointerup", onPointerUp, { capture: true, passive: false });
-  window.addEventListener("pointerout", onPointerOut, { capture: true, passive: true });
-  window.addEventListener("click", onClick, { capture: true, passive: false });
+  captureSurface.addEventListener("pointermove", onPointerMove, { passive: false });
+  captureSurface.addEventListener("pointerdown", onPointerDown, { passive: false });
+  captureSurface.addEventListener("pointerup", onPointerUp, { passive: false });
+  captureSurface.addEventListener("pointercancel", onPointerCancel, { passive: true });
+  captureSurface.addEventListener("pointerout", onPointerOut, { passive: true });
+  captureSurface.addEventListener("click", onClick, { passive: false });
   window.addEventListener("blur", onWindowBlur);
   window.addEventListener("keydown", onKeyDown, { capture: true });
   window.addEventListener("scroll", repaint, { capture: true, passive: true });
