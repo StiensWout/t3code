@@ -92,6 +92,19 @@ const SURROUND_SYMBOLS: [string, string][] = [
 ];
 const SURROUND_SYMBOLS_MAP = new Map<string, string>(SURROUND_SYMBOLS);
 const BACKTICK_SURROUND_CLOSE_SYMBOL = SURROUND_SYMBOLS_MAP.get("`") ?? null;
+const DEAD_KEY_GRAVE_LOOKALIKE_CHARACTERS = new Set(["\u02cb", "\u2035", "\uff40"]);
+const RECENT_DEAD_KEY_MAX_AGE_MS = 1_000;
+
+function hasCommandModifier(event: KeyboardEvent): boolean {
+  return event.metaKey || event.ctrlKey;
+}
+
+function hasRecentDeadKeyDown(recentDeadKeyDown: { timestamp: number } | null): boolean {
+  return (
+    recentDeadKeyDown !== null &&
+    performance.now() - recentDeadKeyDown.timestamp <= RECENT_DEAD_KEY_MAX_AGE_MS
+  );
+}
 
 type SerializedComposerMentionNode = Spread<
   {
@@ -1134,6 +1147,7 @@ function ComposerSurroundSelectionPlugin(props: {
     expandedStart: number;
     expandedEnd: number;
   } | null>(null);
+  const recentDeadKeyDownRef = useRef<{ timestamp: number } | null>(null);
 
   useEffect(() => {
     terminalContextsRef.current = props.terminalContexts;
@@ -1205,6 +1219,14 @@ function ComposerSurroundSelectionPlugin(props: {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      recentDeadKeyDownRef.current =
+        event.key === "Dead" &&
+        !event.defaultPrevented &&
+        !event.isComposing &&
+        !hasCommandModifier(event)
+          ? { timestamp: performance.now() }
+          : null;
+
       if (pendingDeadKeySelectionRef.current) {
         if (event.key === "Dead" || event.key === " " || event.code === "Space") {
           return;
@@ -1212,7 +1234,7 @@ function ComposerSurroundSelectionPlugin(props: {
         pendingDeadKeySelectionRef.current = null;
       }
 
-      if (event.defaultPrevented || event.isComposing || event.metaKey || event.ctrlKey) {
+      if (event.defaultPrevented || event.isComposing || hasCommandModifier(event)) {
         pendingSurroundSelectionRef.current = null;
         pendingDeadKeySelectionRef.current = null;
         return;
@@ -1259,6 +1281,7 @@ function ComposerSurroundSelectionPlugin(props: {
         BACKTICK_SURROUND_CLOSE_SYMBOL !== null &&
         pendingSurroundSelectionRef.current
       ) {
+        recentDeadKeyDownRef.current = null;
         pendingDeadKeySelectionRef.current = pendingSurroundSelectionRef.current;
         return;
       }
@@ -1267,23 +1290,52 @@ function ComposerSurroundSelectionPlugin(props: {
         return;
       }
 
+      if (
+        event.inputType === "insertCompositionText" &&
+        typeof event.data === "string" &&
+        DEAD_KEY_GRAVE_LOOKALIKE_CHARACTERS.has(event.data) &&
+        hasRecentDeadKeyDown(recentDeadKeyDownRef.current)
+      ) {
+        recentDeadKeyDownRef.current = null;
+        if (!applySurroundInsertion("`")) {
+          editor.update(() => {
+            const selection = $getSelection();
+            if ($isRangeSelection(selection)) {
+              selection.insertText("`");
+            }
+            pendingSurroundSelectionRef.current = null;
+          });
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        return;
+      }
+
       if (event.inputType === "insertCompositionText") {
+        if (typeof event.data === "string" && event.data.length > 0) {
+          recentDeadKeyDownRef.current = null;
+        }
         return;
       }
 
       if (typeof event.data !== "string") {
+        recentDeadKeyDownRef.current = null;
         pendingSurroundSelectionRef.current = null;
         return;
       }
       const inputData = event.inputType === "insertText" ? event.data : null;
       if (!inputData || inputData.length !== 1) {
+        recentDeadKeyDownRef.current = null;
         pendingSurroundSelectionRef.current = null;
         return;
       }
       if (!applySurroundInsertion(inputData)) {
+        recentDeadKeyDownRef.current = null;
         return;
       }
 
+      recentDeadKeyDownRef.current = null;
       event.preventDefault();
       event.stopPropagation();
       event.stopImmediatePropagation();
