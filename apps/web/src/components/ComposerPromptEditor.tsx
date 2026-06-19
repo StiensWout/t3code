@@ -1219,13 +1219,21 @@ function ComposerSurroundSelectionPlugin(props: {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      recentDeadKeyDownRef.current =
+      const isPlainDeadKeyDown =
         event.key === "Dead" &&
         !event.defaultPrevented &&
         !event.isComposing &&
-        !hasCommandModifier(event)
-          ? { timestamp: performance.now() }
-          : null;
+        !hasCommandModifier(event);
+      const isPlainSpaceKeyDown =
+        (event.key === " " || event.code === "Space") &&
+        !event.defaultPrevented &&
+        !event.isComposing &&
+        !hasCommandModifier(event);
+      if (isPlainDeadKeyDown) {
+        recentDeadKeyDownRef.current = { timestamp: performance.now() };
+      } else if (!isPlainSpaceKeyDown) {
+        recentDeadKeyDownRef.current = null;
+      }
 
       if (pendingDeadKeySelectionRef.current) {
         if (event.key === "Dead" || event.key === " " || event.code === "Space") {
