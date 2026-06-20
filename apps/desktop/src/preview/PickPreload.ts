@@ -228,6 +228,24 @@ function getAccessibleFrameDocument(frame: Element): Document | null {
   }
 }
 
+function isPointInFrameViewport(
+  frame: Element,
+  childDocument: Document,
+  childX: number,
+  childY: number,
+): boolean {
+  const element = frame as HTMLElement;
+  const childWindow = childDocument.defaultView;
+  const viewportWidth = childWindow?.innerWidth ?? element.clientWidth;
+  const viewportHeight = childWindow?.innerHeight ?? element.clientHeight;
+  return (
+    childX >= 0 &&
+    childY >= 0 &&
+    childX <= viewportWidth &&
+    childY <= viewportHeight
+  );
+}
+
 function getDocumentViewportOffset(ownerDocument: Document): ViewportOffset | null {
   let currentDocument: Document | null = ownerDocument;
   const offset: ViewportOffset = { x: 0, y: 0 };
@@ -286,12 +304,7 @@ function pickFromDocument(
         const inset = getFrameViewportInset(candidate);
         const childX = clientX - candidateRect.left - inset.x;
         const childY = clientY - candidateRect.top - inset.y;
-        const childWindow = childDocument.defaultView;
-        const insideChildViewport =
-          childX >= 0 &&
-          childY >= 0 &&
-          (!childWindow || (childX <= childWindow.innerWidth && childY <= childWindow.innerHeight));
-        if (insideChildViewport) {
+        if (isPointInFrameViewport(candidate, childDocument, childX, childY)) {
           const childTarget = pickFromDocument(childDocument, childX, childY, {
             x: viewportRect.x + inset.x,
             y: viewportRect.y + inset.y,
@@ -1230,7 +1243,12 @@ function startAnnotation(): void {
           const inset = getFrameViewportInset(element);
           const childX = clientX - frameRect.left - inset.x;
           const childY = clientY - frameRect.top - inset.y;
-          if (scrollDocumentAtPoint(childDocument, childX, childY, deltaX, deltaY)) return true;
+          if (
+            isPointInFrameViewport(element, childDocument, childX, childY) &&
+            scrollDocumentAtPoint(childDocument, childX, childY, deltaX, deltaY)
+          ) {
+            return true;
+          }
         }
       }
 
@@ -1436,13 +1454,43 @@ function startAnnotation(): void {
     event.stopPropagation();
   };
 
+  const normalizeWheelDelta = (
+    event: WheelEvent,
+  ): {
+    deltaX: number;
+    deltaY: number;
+  } => {
+    if (event.deltaMode === WheelEvent.DOM_DELTA_LINE) {
+      const lineHeight = Number.parseFloat(
+        getElementComputedStyle(document.documentElement).lineHeight,
+      );
+      const scale = Number.isFinite(lineHeight) && lineHeight > 0 ? lineHeight : 16;
+      return {
+        deltaX: event.deltaX * scale,
+        deltaY: event.deltaY * scale,
+      };
+    }
+
+    if (event.deltaMode === WheelEvent.DOM_DELTA_PAGE) {
+      const view = document.defaultView ?? window;
+      return {
+        deltaX: event.deltaX * view.innerWidth,
+        deltaY: event.deltaY * view.innerHeight,
+      };
+    }
+
+    return {
+      deltaX: event.deltaX,
+      deltaY: event.deltaY,
+    };
+  };
+
   const onWheel = (event: WheelEvent): void => {
+    const { deltaX, deltaY } = normalizeWheelDelta(event);
     const previousPointerEvents = captureSurface.style.pointerEvents;
     captureSurface.style.pointerEvents = "none";
     try {
-      if (
-        scrollDocumentAtPoint(document, event.clientX, event.clientY, event.deltaX, event.deltaY)
-      ) {
+      if (scrollDocumentAtPoint(document, event.clientX, event.clientY, deltaX, deltaY)) {
         event.preventDefault();
         event.stopPropagation();
         repaint();
