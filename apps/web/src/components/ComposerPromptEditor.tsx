@@ -1224,15 +1224,8 @@ function ComposerSurroundSelectionPlugin(props: {
         !event.defaultPrevented &&
         !event.isComposing &&
         !hasCommandModifier(event);
-      const isPlainSpaceKeyDown =
-        (event.key === " " || event.code === "Space") &&
-        !event.defaultPrevented &&
-        !event.isComposing &&
-        !hasCommandModifier(event);
       if (isPlainDeadKeyDown) {
         recentDeadKeyDownRef.current = { timestamp: performance.now() };
-      } else if (!isPlainSpaceKeyDown) {
-        recentDeadKeyDownRef.current = null;
       }
 
       if (pendingDeadKeySelectionRef.current) {
