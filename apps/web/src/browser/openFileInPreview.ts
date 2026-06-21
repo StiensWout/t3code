@@ -46,12 +46,14 @@ export async function openUrlInPreview<E>(input: {
   readonly threadRef: ScopedThreadRef;
   readonly url: string;
   readonly openPreview: OpenPreviewMutation<E>;
+  readonly signal?: AbortSignal;
 }): Promise<AtomCommandResult<void, E>> {
   const result = await input.openPreview({
     environmentId: input.threadRef.environmentId,
     input: { threadId: input.threadRef.threadId, url: input.url },
   });
   return mapAtomCommandResult(result, (snapshot) => {
+    if (input.signal?.aborted) return;
     applyPreviewServerSnapshot(input.threadRef, snapshot);
     rememberPreviewUrl(input.threadRef, input.url);
     useRightPanelStore.getState().openBrowser(input.threadRef, snapshot.tabId);
@@ -67,6 +69,7 @@ export async function openFileInPreview<AssetError, PreviewError>(input: {
     readonly input: { readonly resource: AssetResource };
   }) => Promise<AtomCommandResult<AssetCreateUrlResult, AssetError>>;
   readonly openPreview: OpenPreviewMutation<PreviewError>;
+  readonly signal?: AbortSignal;
 }): Promise<AtomCommandResult<void, AssetError | PreviewError | BrowserPreviewUnavailableError>> {
   if (!isPreviewSupportedInRuntime()) {
     return AsyncResult.failure(
@@ -87,6 +90,9 @@ export async function openFileInPreview<AssetError, PreviewError>(input: {
       },
     },
   });
+  if (input.signal?.aborted) {
+    return AsyncResult.success(undefined);
+  }
   if (assetResult._tag === "Failure") {
     return AsyncResult.failure(assetResult.cause);
   }
@@ -100,5 +106,6 @@ export async function openFileInPreview<AssetError, PreviewError>(input: {
     threadRef: input.threadRef,
     url: assetUrl,
     openPreview: input.openPreview,
+    ...(input.signal ? { signal: input.signal } : {}),
   });
 }

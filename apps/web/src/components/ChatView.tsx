@@ -1023,6 +1023,7 @@ function ChatViewContent(props: ChatViewProps) {
   const createAssetUrl = useAtomQueryRunner(assetEnvironment.createUrl, {
     reportFailure: false,
   });
+  const filePreviewAbortControllerRef = useRef<AbortController | null>(null);
   const closePreview = useAtomCommand(previewEnvironment.close, "preview close");
   const { environments } = useEnvironments();
   const primaryEnvironment = usePrimaryEnvironment();
@@ -2751,9 +2752,16 @@ function ChatViewContent(props: ChatViewProps) {
     if (!activeThreadRef || !activeProject) return;
     useRightPanelStore.getState().open(activeThreadRef, "files");
   }, [activeProject, activeThreadRef]);
+  useEffect(
+    () => () => {
+      filePreviewAbortControllerRef.current?.abort();
+    },
+    [activeThreadKey],
+  );
   const openFileSurface = useCallback(
     (relativePath: string) => {
       if (!activeThreadRef || !activeProject) return;
+      filePreviewAbortControllerRef.current?.abort();
       const openFallback = () => {
         useRightPanelStore.getState().openFile(activeThreadRef, relativePath);
       };
@@ -2767,6 +2775,8 @@ function ChatViewContent(props: ChatViewProps) {
         return;
       }
 
+      const abortController = new AbortController();
+      filePreviewAbortControllerRef.current = abortController;
       const absolutePath = resolvePathLinkTarget(relativePath, activeWorkspaceRoot);
       void (async () => {
         const result = await openFileInPreview({
@@ -2775,7 +2785,11 @@ function ChatViewContent(props: ChatViewProps) {
           httpBaseUrl: activeEnvironmentHttpBaseUrl,
           createAssetUrl,
           openPreview,
+          signal: abortController.signal,
         });
+        if (abortController.signal.aborted) {
+          return;
+        }
         if (result._tag === "Success") {
           return;
         }

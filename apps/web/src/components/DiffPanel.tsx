@@ -227,6 +227,7 @@ export default function DiffPanel({ mode = "inline", composerDraftTarget }: Diff
     reportFailure: false,
   });
   const openPreview = useAtomCommand(previewEnvironment.open, { reportFailure: false });
+  const filePreviewAbortControllerRef = useRef<AbortController | null>(null);
   const serverConfig = useAtomValue(
     serverEnvironment.configValueAtom(activeThread?.environmentId ?? null),
   );
@@ -457,8 +458,16 @@ export default function DiffPanel({ mode = "inline", composerDraftTarget }: Diff
     codeViewRef.current?.scrollTo({ type: "item", id: file.fileKey, align: "start" });
   }, [codeViewFiles, selectedFilePath, selectedFileRevealRequestId]);
 
+  useEffect(
+    () => () => {
+      filePreviewAbortControllerRef.current?.abort();
+    },
+    [routeThreadRef?.environmentId, routeThreadRef?.threadId],
+  );
+
   const openDiffFile = useCallback(
     (filePath: string) => {
+      filePreviewAbortControllerRef.current?.abort();
       const openFallback = () => {
         openDiffFilePrimaryAction({
           threadRef: routeThreadRef,
@@ -495,6 +504,8 @@ export default function DiffPanel({ mode = "inline", composerDraftTarget }: Diff
         return;
       }
 
+      const abortController = new AbortController();
+      filePreviewAbortControllerRef.current = abortController;
       void (async () => {
         const result = await openFileInPreview({
           threadRef: routeThreadRef,
@@ -502,7 +513,11 @@ export default function DiffPanel({ mode = "inline", composerDraftTarget }: Diff
           httpBaseUrl: environmentHttpBaseUrl,
           createAssetUrl,
           openPreview,
+          signal: abortController.signal,
         });
+        if (abortController.signal.aborted) {
+          return;
+        }
         if (result._tag === "Success") {
           return;
         }
