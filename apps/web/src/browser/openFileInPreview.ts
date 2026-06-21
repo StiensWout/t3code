@@ -33,7 +33,10 @@ export const isWorkspacePreviewFile = isWorkspacePreviewEntryPath;
 
 export class BrowserPreviewUnavailableError extends Schema.TaggedErrorClass<BrowserPreviewUnavailableError>()(
   "BrowserPreviewUnavailableError",
-  {},
+  {
+    environmentId: Schema.String,
+    threadId: Schema.String,
+  },
 ) {
   override get message(): string {
     return "The integrated browser is unavailable in this runtime.";
@@ -165,7 +168,14 @@ export async function openFileInPreview<AssetError, PreviewError>(input: {
   const request = beginPreviewRequest(input.threadRef, input.signal);
   try {
     if (!isPreviewSupportedInRuntime()) {
-      return AsyncResult.failure(Cause.fail(new BrowserPreviewUnavailableError()));
+      return AsyncResult.failure(
+        Cause.fail(
+          new BrowserPreviewUnavailableError({
+            environmentId: input.threadRef.environmentId,
+            threadId: input.threadRef.threadId,
+          }),
+        ),
+      );
     }
     const assetResult = await input.createAssetUrl({
       environmentId: input.threadRef.environmentId,

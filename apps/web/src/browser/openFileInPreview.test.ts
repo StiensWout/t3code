@@ -37,10 +37,27 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("openFileInPreview", () => {
-  it("uses the fixed unavailable-runtime message", () => {
-    expect(new BrowserPreviewUnavailableError().message).toBe(
-      "The integrated browser is unavailable in this runtime.",
+  it("reports an unavailable runtime with thread context", async () => {
+    vi.stubGlobal("window", {});
+
+    const result = await openFileInPreview({
+      threadRef,
+      filePath: "docs/report.pdf",
+      httpBaseUrl: "https://environment.test",
+      createAssetUrl: vi.fn(),
+      openPreview: vi.fn(),
+    });
+    const error = result._tag === "Failure" ? Cause.squash(result.cause) : undefined;
+
+    expect(error).toEqual(
+      new BrowserPreviewUnavailableError({
+        environmentId: "environment-1",
+        threadId: "thread-1",
+      }),
     );
+    expect(error).toMatchObject({
+      message: "The integrated browser is unavailable in this runtime.",
+    });
   });
 
   it("reports invalid asset URLs with safe context and the exact parser cause", async () => {
