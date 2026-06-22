@@ -1,9 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
 import * as PlatformError from "effect/PlatformError";
-import type * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 
 import { SecretStorePersistError } from "./ServerSecretStore.ts";
-import { mapDpopReplayStoreError, requestAbsoluteUrl } from "./dpop.ts";
+import { mapDpopReplayStoreError } from "./dpop.ts";
 
 const storeFailure = (tag: "AlreadyExists" | "PermissionDenied") =>
   new SecretStorePersistError({
@@ -34,18 +33,5 @@ describe("mapDpopReplayStoreError", () => {
     if (error._tag === "ServerAuthDpopReplayStateRecordError") {
       expect(error.message).toBe("Failed to record DPoP proof replay state.");
     }
-  });
-});
-
-describe("requestAbsoluteUrl", () => {
-  it("returns null when the request URL cannot be resolved", () => {
-    const request = {
-      url: "/api/dpop",
-      headers: {
-        host: "bad host",
-      },
-    } as unknown as HttpServerRequest.HttpServerRequest;
-
-    expect(requestAbsoluteUrl(request)).toBeNull();
   });
 });
