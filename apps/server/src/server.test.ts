@@ -5509,6 +5509,69 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("streams thread metadata updates to subscribeThread live subscribers", () =>
+    Effect.gen(function* () {
+      const now = "2026-01-01T00:00:00.000Z";
+      const thread = makeDefaultOrchestrationReadModel().threads[0];
+      if (!thread) {
+        throw new Error("Expected default read model to include a thread.");
+      }
+      const event = {
+        sequence: 2,
+        eventId: EventId.make("event-thread-meta-updated"),
+        aggregateKind: "thread",
+        aggregateId: defaultThreadId,
+        occurredAt: now,
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "thread.meta-updated",
+        payload: {
+          threadId: defaultThreadId,
+          title: "Renamed Thread",
+          updatedAt: now,
+        },
+      } satisfies Extract<OrchestrationEvent, { type: "thread.meta-updated" }>;
+
+      yield* buildAppUnderTest({
+        layers: {
+          projectionSnapshotQuery: {
+            getThreadDetailById: () => Effect.succeed(Option.some(thread)),
+            getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 1 }),
+          },
+          orchestrationEngine: {
+            streamDomainEvents: Stream.make(event),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const events = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.subscribeThread]({ threadId: defaultThreadId }).pipe(
+            Stream.take(2),
+            Stream.runCollect,
+          ),
+        ),
+      );
+
+      const [snapshot, update] = Array.from(events);
+      assert.equal(events.length, 2);
+      assert.equal(snapshot?.kind, "snapshot");
+      if (snapshot?.kind === "snapshot") {
+        assert.equal(snapshot.snapshot.snapshotSequence, 1);
+        assert.equal(snapshot.snapshot.thread.id, defaultThreadId);
+      }
+      assert.equal(update?.kind, "event");
+      if (update?.kind === "event" && update.event.type === "thread.meta-updated") {
+        assert.equal(update.event.payload.title, "Renamed Thread");
+      } else {
+        assert.fail("Expected a thread.meta-updated event.");
+      }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("routes websocket rpc orchestration shell snapshot errors", () =>
     Effect.gen(function* () {
       const projectionError = new PersistenceSqlError({

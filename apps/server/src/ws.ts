@@ -258,7 +258,16 @@ function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
       | "thread.proposed-plan-upserted"
       | "thread.activity-appended"
       | "thread.turn-diff-completed"
+      | "thread.deleted"
+      | "thread.archived"
+      | "thread.unarchived"
+      | "thread.meta-updated"
+      | "thread.runtime-mode-set"
+      | "thread.interaction-mode-set"
+      | "thread.turn-start-requested"
+      | "thread.turn-interrupt-requested"
       | "thread.reverted"
+      | "thread.session-stop-requested"
       | "thread.session-set";
   }
 > {
@@ -267,7 +276,16 @@ function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
     event.type === "thread.proposed-plan-upserted" ||
     event.type === "thread.activity-appended" ||
     event.type === "thread.turn-diff-completed" ||
+    event.type === "thread.deleted" ||
+    event.type === "thread.archived" ||
+    event.type === "thread.unarchived" ||
+    event.type === "thread.meta-updated" ||
+    event.type === "thread.runtime-mode-set" ||
+    event.type === "thread.interaction-mode-set" ||
+    event.type === "thread.turn-start-requested" ||
+    event.type === "thread.turn-interrupt-requested" ||
     event.type === "thread.reverted" ||
+    event.type === "thread.session-stop-requested" ||
     event.type === "thread.session-set"
   );
 }
