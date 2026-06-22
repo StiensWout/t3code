@@ -14,11 +14,6 @@ import {
 } from "./EnvironmentAuth.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
 
-export function requestAbsoluteUrl(request: HttpServerRequest.HttpServerRequest): string | null {
-  const url = HttpServerRequest.toURL(request);
-  return Option.isSome(url) ? url.value.href : null;
-}
-
 export const mapDpopReplayStoreError = (
   error: ServerSecretStore.SecretStoreError,
 ): ServerAuthInvalidCredentialError | ServerAuthInternalError =>
@@ -38,8 +33,8 @@ export const verifyRequestDpopProof = (input: {
 }) =>
   Effect.gen(function* () {
     const proof = input.request.headers.dpop;
-    const url = requestAbsoluteUrl(input.request);
-    if (url === null) {
+    const url = HttpServerRequest.toURL(input.request)
+    if (Option.isNone(url)) {
       return yield* new ServerAuthInvalidCredentialError({
         diagnostic: "Invalid DPoP request URL.",
       });
@@ -48,7 +43,7 @@ export const verifyRequestDpopProof = (input: {
     const result = verifyDpopProof({
       proof,
       method: input.request.method,
-      url,
+      url: url.value,
       nowEpochSeconds: Math.floor(now.epochMilliseconds / 1_000),
       ...(input.expectedThumbprint ? { expectedThumbprint: input.expectedThumbprint } : {}),
       ...(input.expectedAccessToken ? { expectedAccessToken: input.expectedAccessToken } : {}),
