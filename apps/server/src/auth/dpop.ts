@@ -33,7 +33,7 @@ export const verifyRequestDpopProof = (input: {
 }) =>
   Effect.gen(function* () {
     const proof = input.request.headers.dpop;
-    const url = HttpServerRequest.toURL(input.request)
+    const url = HttpServerRequest.toURL(input.request);
     if (Option.isNone(url)) {
       return yield* new ServerAuthInvalidCredentialError({
         diagnostic: "Invalid DPoP request URL.",
@@ -43,7 +43,7 @@ export const verifyRequestDpopProof = (input: {
     const result = verifyDpopProof({
       proof,
       method: input.request.method,
-      url: url.value,
+      url: url.value.href,
       nowEpochSeconds: Math.floor(now.epochMilliseconds / 1_000),
       ...(input.expectedThumbprint ? { expectedThumbprint: input.expectedThumbprint } : {}),
       ...(input.expectedAccessToken ? { expectedAccessToken: input.expectedAccessToken } : {}),
