@@ -38,9 +38,9 @@ describe("mapDpopReplayStoreError", () => {
 });
 
 describe("requestAbsoluteUrl", () => {
-  it("returns null when fallback host URL construction is invalid", () => {
+  it("returns null when the request URL cannot be resolved", () => {
     const request = {
-      originalUrl: "/api/dpop",
+      url: "/api/dpop",
       headers: {
         host: "bad host",
       },

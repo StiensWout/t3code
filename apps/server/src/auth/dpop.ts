@@ -3,7 +3,8 @@ import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Encoding from "effect/Encoding";
-import type * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
+import * as Option from "effect/Option";
+import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 
 import {
   ServerAuthDpopReplayKeyCalculationError,
@@ -13,24 +14,9 @@ import {
 } from "./EnvironmentAuth.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
 
-function firstHeaderValue(value: string | undefined): string | undefined {
-  const first = value?.split(",")[0]?.trim();
-  return first && first.length > 0 ? first : undefined;
-}
-
 export function requestAbsoluteUrl(request: HttpServerRequest.HttpServerRequest): string | null {
-  try {
-    return new URL(request.originalUrl).href;
-  } catch {
-    const host = firstHeaderValue(request.headers.host) ?? "127.0.0.1";
-    const forwardedProto = firstHeaderValue(request.headers["x-forwarded-proto"]);
-    const proto = forwardedProto === "https" || forwardedProto === "http" ? forwardedProto : "http";
-    try {
-      return new URL(request.originalUrl, `${proto}://${host}`).href;
-    } catch {
-      return null;
-    }
-  }
+  const url = HttpServerRequest.toURL(request);
+  return Option.isSome(url) ? url.value.href : null;
 }
 
 export const mapDpopReplayStoreError = (
