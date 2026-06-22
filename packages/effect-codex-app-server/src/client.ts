@@ -1,5 +1,6 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
@@ -264,10 +265,13 @@ const makeChildProcessClient = Effect.fn(
   "effect-codex-app-server/CodexAppServerClient.makeChildProcessClient",
 )(function* (handle: ChildProcessSpawner.ChildProcessHandle, options: CodexAppServerClientOptions) {
   const stderrCapture = yield* makeStderrTailCapture(handle.stderr);
-  yield* stderrCapture.drain.pipe(Effect.forkScoped);
+  const stderrDrainFiber = yield* stderrCapture.drain.pipe(Effect.forkScoped);
   return yield* make(
     makeChildStdio(handle),
     options,
-    makeTerminationError(handle, stderrCapture.snapshot),
+    makeTerminationError(handle, {
+      snapshot: stderrCapture.snapshot,
+      awaitDrain: Fiber.join(stderrDrainFiber),
+    }),
   );
 });

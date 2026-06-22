@@ -173,4 +173,33 @@ it.layer(NodeServices.layer)("effect-codex-app-server client", (it) => {
       assert.include(error.message, "Access is denied");
     }),
   );
+  it.effect("includes redacted delayed multi-chunk stderr when initialize exits", () =>
+    Effect.gen(function* () {
+      const secret = "sk-proj-clientDiagnosticSecret1234567890";
+      const handle = yield* makeHandle({
+        CODEX_APP_SERVER_TEST_EXIT_WITH_STDERR_CHUNKS: [
+          `OPENAI_API_KEY=${secret}\n`,
+          "Delayed access failure\n",
+        ].join("|"),
+      });
+      const scope = yield* Scope.make();
+      const clientLayer = CodexClient.layerChildProcess(handle);
+      const context = yield* Layer.buildWithScope(clientLayer, scope);
+
+      const error = yield* Effect.gen(function* () {
+        const client = yield* CodexClient.CodexAppServerClient;
+        return yield* client.request("initialize", initializeParams).pipe(Effect.flip);
+      }).pipe(
+        Effect.timeout("5 seconds"),
+        Effect.provide(context),
+        Effect.ensuring(Scope.close(scope, Exit.void)),
+      );
+
+      assert.instanceOf(error, CodexError.CodexAppServerProcessExitedError);
+      assert.notInclude(error.stderrTail ?? "", secret);
+      assert.notInclude(error.message, secret);
+      assert.include(error.message, "[REDACTED]");
+      assert.include(error.message, "Delayed access failure");
+    }),
+  );
 });

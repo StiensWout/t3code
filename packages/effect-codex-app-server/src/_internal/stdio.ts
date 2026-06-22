@@ -10,6 +10,14 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import * as CodexError from "../errors.ts";
 
 const encoder = new TextEncoder();
+const RedactedDiagnosticValue = "[REDACTED]";
+const StderrDrainGracePeriod = "50 millis";
+const sensitiveKeyValuePattern =
+  /((?:^|[^A-Za-z0-9_-])(?:[A-Za-z0-9_.-]*(?:api[_-]?key|auth[_-]?token|access[_-]?token|refresh[_-]?token|id[_-]?token|session[_-]?token|bearer[_-]?token|token|secret|password|passwd|private[_-]?key|credential)[A-Za-z0-9_.-]*)["']?\s*[:=]\s*["']?)([^\s"',;}\]]+)/giu;
+const bearerCredentialPattern = /\b(Bearer|Basic)\s+([A-Za-z0-9._~+/=-]{8,})/giu;
+const openAiSecretPattern = /\bsk-(?:proj-)?[A-Za-z0-9_-]{8,}\b/gu;
+const jwtPattern = /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/gu;
+const urlCredentialPattern = /\b([A-Za-z][A-Za-z0-9+.-]*:\/\/)([^@\s/]+)@/gu;
 
 interface StderrTailState {
   readonly bytes: Uint8Array;
@@ -21,10 +29,23 @@ export interface StderrTailSnapshot {
   readonly stderrTruncated: boolean;
 }
 
+export interface StderrTailDiagnostics {
+  readonly snapshot: Effect.Effect<StderrTailSnapshot>;
+  readonly awaitDrain?: Effect.Effect<unknown, never>;
+}
+
 const emptyStderrTailState: StderrTailState = {
   bytes: new Uint8Array(),
   truncated: false,
 };
+
+const redactSensitiveStderr = (stderr: string): string =>
+  stderr
+    .replace(urlCredentialPattern, `$1${RedactedDiagnosticValue}@`)
+    .replace(bearerCredentialPattern, `$1 ${RedactedDiagnosticValue}`)
+    .replace(sensitiveKeyValuePattern, `$1${RedactedDiagnosticValue}`)
+    .replace(openAiSecretPattern, RedactedDiagnosticValue)
+    .replace(jwtPattern, RedactedDiagnosticValue);
 
 const appendTailBytes = (
   state: StderrTailState,
@@ -43,7 +64,7 @@ const appendTailBytes = (
   if (chunk.byteLength >= byteLimit) {
     return {
       bytes: chunk.slice(chunk.byteLength - byteLimit),
-      truncated: true,
+      truncated: state.truncated || state.bytes.byteLength > 0 || chunk.byteLength > byteLimit,
     };
   }
 
@@ -85,7 +106,7 @@ export const makeStderrTailCapture = Effect.fn("makeStderrTailCapture")(function
     ),
     snapshot: Ref.get(state).pipe(
       Effect.map((current): StderrTailSnapshot => {
-        const stderrTail = decoder.decode(current.bytes).trim();
+        const stderrTail = redactSensitiveStderr(decoder.decode(current.bytes)).trim();
         return {
           stderrTail,
           stderrTruncated: current.truncated,
@@ -136,27 +157,39 @@ type ChildProcessTerminationHandle = Pick<
 
 export const makeTerminationError = (
   handle: ChildProcessTerminationHandle,
-  stderrSnapshot?: Effect.Effect<StderrTailSnapshot>,
+  stderrDiagnostics?: StderrTailDiagnostics,
 ): Effect.Effect<CodexError.CodexAppServerError> =>
   Effect.gen(function* () {
-    const snapshot = stderrSnapshot ? yield* stderrSnapshot : undefined;
-    return yield* Effect.match(handle.exitCode, {
+    const exitStatus = yield* Effect.match(handle.exitCode, {
       onFailure: (cause) =>
-        new CodexError.CodexAppServerTransportError({
-          operation: "read-process-exit-status",
-          pid: handle.pid,
-          cause,
-        }),
-      onSuccess: (code) =>
-        new CodexError.CodexAppServerProcessExitedError({
-          code,
-          pid: handle.pid,
-          ...(snapshot?.stderrTail
-            ? {
-                stderrTail: snapshot.stderrTail,
-                stderrTruncated: snapshot.stderrTruncated,
-              }
-            : {}),
-        }),
+        ({
+          _tag: "failure" as const,
+          error: new CodexError.CodexAppServerTransportError({
+            operation: "read-process-exit-status",
+            pid: handle.pid,
+            cause,
+          }),
+        }) as const,
+      onSuccess: (code) => ({ _tag: "success" as const, code }) as const,
+    });
+    if (exitStatus._tag === "failure") {
+      return exitStatus.error;
+    }
+    if (stderrDiagnostics?.awaitDrain) {
+      yield* stderrDiagnostics.awaitDrain.pipe(
+        Effect.timeoutOption(StderrDrainGracePeriod),
+        Effect.ignore,
+      );
+    }
+    const snapshot = stderrDiagnostics ? yield* stderrDiagnostics.snapshot : undefined;
+    return new CodexError.CodexAppServerProcessExitedError({
+      code: exitStatus.code,
+      pid: handle.pid,
+      ...(snapshot?.stderrTail
+        ? {
+            stderrTail: snapshot.stderrTail,
+            stderrTruncated: snapshot.stderrTruncated,
+          }
+        : {}),
     });
   });
