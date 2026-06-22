@@ -11,6 +11,7 @@ import * as CodexError from "../errors.ts";
 
 const encoder = new TextEncoder();
 const RedactedDiagnosticValue = "[REDACTED]";
+const EmptyTruncatedStderrTail = "[stderr truncated; no non-whitespace tail captured]";
 const StderrDrainGracePeriod = "50 millis";
 const sensitiveKeyValuePattern =
   /((?:^|[^A-Za-z0-9_-])(?:[A-Za-z0-9_.-]*(?:api[_-]?key|auth[_-]?token|access[_-]?token|refresh[_-]?token|id[_-]?token|session[_-]?token|bearer[_-]?token|token|secret|password|passwd|private[_-]?key|credential)[A-Za-z0-9_.-]*)["']?\s*[:=]\s*["']?)([^\s"',;}\]]+)/giu;
@@ -182,13 +183,15 @@ export const makeTerminationError = (
       );
     }
     const snapshot = stderrDiagnostics ? yield* stderrDiagnostics.snapshot : undefined;
+    const stderrTail =
+      snapshot?.stderrTail || (snapshot?.stderrTruncated ? EmptyTruncatedStderrTail : undefined);
     return new CodexError.CodexAppServerProcessExitedError({
       code: exitStatus.code,
       pid: handle.pid,
-      ...(snapshot?.stderrTail
+      ...(stderrTail
         ? {
-            stderrTail: snapshot.stderrTail,
-            stderrTruncated: snapshot.stderrTruncated,
+            stderrTail,
+            stderrTruncated: snapshot?.stderrTruncated ?? false,
           }
         : {}),
     });

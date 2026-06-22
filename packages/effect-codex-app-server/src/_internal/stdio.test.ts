@@ -74,6 +74,32 @@ describe("Codex App Server child process termination", () => {
     }),
   );
 
+  it.effect("preserves truncated stderr diagnostics when the retained tail trims empty", () =>
+    Effect.gen(function* () {
+      const capture = yield* makeStderrTailCapture(
+        Stream.fromIterable([encoder.encode("prefix-dropped     ")]),
+        5,
+      );
+      yield* capture.drain;
+      const snapshot = yield* capture.snapshot;
+      const error = yield* makeTerminationError(
+        {
+          pid: ChildProcessSpawner.ProcessId(56),
+          exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(1)),
+        },
+        { snapshot: Effect.succeed(snapshot) },
+      );
+
+      assert.instanceOf(error, CodexError.CodexAppServerProcessExitedError);
+      assert.equal(snapshot.stderrTail, "");
+      assert.equal(snapshot.stderrTruncated, true);
+      assert.equal(error.stderrTail, "[stderr truncated; no non-whitespace tail captured]");
+      assert.equal(error.stderrTruncated, true);
+      assert.include(error.message, "recent stderr (last 4096 bytes, truncated)");
+      assert.include(error.message, "[stderr truncated; no non-whitespace tail captured]");
+    }),
+  );
+
   it.effect("does not mark an exact-limit first stderr chunk as truncated", () =>
     Effect.gen(function* () {
       const capture = yield* makeStderrTailCapture(
