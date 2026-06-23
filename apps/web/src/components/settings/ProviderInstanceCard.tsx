@@ -107,14 +107,21 @@ function isEnvironmentDraftRowAcknowledgedByPersisted(
   previousVariable: ProviderInstanceEnvironmentVariable | undefined,
 ): boolean {
   if (isEnvironmentDraftRowEqualToPersisted(row, variable)) return true;
+  if (
+    row.name !== variable.name ||
+    row.sensitive !== true ||
+    variable.sensitive !== true ||
+    variable.value !== "" ||
+    variable.valueRedacted !== true ||
+    row.valueRedacted === true
+  ) {
+    return false;
+  }
+
+  if (previousVariable === undefined) return true;
+
   return (
-    previousVariable === undefined &&
-    row.name === variable.name &&
-    row.sensitive === true &&
-    variable.sensitive === true &&
-    variable.value === "" &&
-    variable.valueRedacted === true &&
-    row.valueRedacted !== true
+    isSameEnvironmentVariable(previousVariable, variable) && previousVariable.sensitive === true
   );
 }
 
@@ -129,6 +136,7 @@ export function mergeEnvironmentDraftRowsForPersistedUpdate(input: {
   readonly rows: ReadonlyArray<EnvironmentDraftRow>;
   readonly previousEnvironment: ReadonlyArray<ProviderInstanceEnvironmentVariable>;
   readonly nextEnvironment: ReadonlyArray<ProviderInstanceEnvironmentVariable>;
+  readonly locallyDeletedEnvironmentVariableNames?: ReadonlySet<string>;
 }): ReadonlyArray<EnvironmentDraftRow> {
   const previousById = new Map(
     input.previousEnvironment.map((variable, index) => [
@@ -195,6 +203,10 @@ export function mergeEnvironmentDraftRowsForPersistedUpdate(input: {
     if (changedCurrentRow !== undefined) {
       consumeRow(changedCurrentRow);
       return [changedCurrentRow];
+    }
+
+    if (input.locallyDeletedEnvironmentVariableNames?.has(variable.name)) {
+      return [];
     }
 
     if (
@@ -319,6 +331,7 @@ function ProviderEnvironmentSection(props: {
   const persistedEnvironmentContentKey = getProviderEnvironmentContentKey(props.environment);
   const previousPersistedEnvironment = useRef(props.environment);
   const previousPersistedEnvironmentContentKey = useRef(persistedEnvironmentContentKey);
+  const locallyDeletedEnvironmentVariableNames = useRef<Set<string>>(new Set());
   const [rows, setRows] = useState<ReadonlyArray<EnvironmentDraftRow>>(() =>
     props.environment.map(makeEnvironmentDraftRow),
   );
@@ -328,13 +341,18 @@ function ProviderEnvironmentSection(props: {
       return;
     }
     previousPersistedEnvironmentContentKey.current = persistedEnvironmentContentKey;
-    setRows((currentRows) =>
-      mergeEnvironmentDraftRowsForPersistedUpdate({
+    setRows((currentRows) => {
+      const nextRows = mergeEnvironmentDraftRowsForPersistedUpdate({
         rows: currentRows,
         previousEnvironment: previousPersistedEnvironment.current,
         nextEnvironment: props.environment,
-      }),
-    );
+        locallyDeletedEnvironmentVariableNames: locallyDeletedEnvironmentVariableNames.current,
+      });
+      for (const row of nextRows) {
+        locallyDeletedEnvironmentVariableNames.current.delete(row.name);
+      }
+      return nextRows;
+    });
     previousPersistedEnvironment.current = props.environment;
   }, [persistedEnvironmentContentKey, props.environment]);
 
@@ -360,6 +378,9 @@ function ProviderEnvironmentSection(props: {
   };
 
   const updateVariable = (id: string, patch: Partial<Omit<EnvironmentDraftRow, "id">>) => {
+    if (patch.name !== undefined) {
+      locallyDeletedEnvironmentVariableNames.current.delete(patch.name.trim());
+    }
     const nextRows = rows.map((row) =>
       row.id === id
         ? {
@@ -374,6 +395,14 @@ function ProviderEnvironmentSection(props: {
   };
 
   const removeVariable = (id: string) => {
+    const removedRow = rows.find((row) => row.id === id);
+    const previousVariable = previousPersistedEnvironment.current.find(
+      (variable, index) => makeEnvironmentDraftRow(variable, index).id === id,
+    );
+    if (removedRow !== undefined && previousVariable !== undefined) {
+      locallyDeletedEnvironmentVariableNames.current.add(previousVariable.name);
+      locallyDeletedEnvironmentVariableNames.current.add(removedRow.name.trim());
+    }
     const nextRows = rows.filter((row) => row.id !== id);
     setRows(nextRows);
     publishRows(nextRows);

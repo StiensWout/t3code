@@ -211,6 +211,46 @@ describe("mergeEnvironmentDraftRowsForPersistedUpdate", () => {
     ]);
   });
 
+  it("consumes an existing sensitive row when its persisted save echo is redacted", () => {
+    const rows = mergeEnvironmentDraftRowsForPersistedUpdate({
+      rows: [
+        {
+          id: "0:API_KEY",
+          name: "API_KEY",
+          value: "updated-secret",
+          sensitive: true,
+          valueRedacted: false,
+        },
+      ],
+      previousEnvironment: [
+        {
+          name: "API_KEY",
+          value: "",
+          sensitive: true,
+          valueRedacted: true,
+        },
+      ],
+      nextEnvironment: [
+        {
+          name: "API_KEY",
+          value: "",
+          sensitive: true,
+          valueRedacted: true,
+        },
+      ],
+    });
+
+    expect(rows).toEqual([
+      {
+        id: "0:API_KEY",
+        name: "API_KEY",
+        value: "",
+        sensitive: true,
+        valueRedacted: true,
+      },
+    ]);
+  });
+
   it("preserves a local deletion when a stale persisted echo still contains the row", () => {
     const previousEnvironment: ReadonlyArray<ProviderInstanceEnvironmentVariable> = [
       {
@@ -224,6 +264,23 @@ describe("mergeEnvironmentDraftRowsForPersistedUpdate", () => {
       rows: [],
       previousEnvironment,
       nextEnvironment: previousEnvironment,
+    });
+
+    expect(rows).toEqual([]);
+  });
+
+  it("preserves a confirmed empty local deletion when a stale persisted echo restores the row", () => {
+    const rows = mergeEnvironmentDraftRowsForPersistedUpdate({
+      rows: [],
+      previousEnvironment: [],
+      nextEnvironment: [
+        {
+          name: "API_KEY",
+          value: "old",
+          sensitive: true,
+        },
+      ],
+      locallyDeletedEnvironmentVariableNames: new Set(["API_KEY"]),
     });
 
     expect(rows).toEqual([]);
