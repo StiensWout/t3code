@@ -30,11 +30,15 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout pull request head
-        uses: actions/checkout@v6
-        with:
-          repository: ${{ github.event.pull_request.head.repo.full_name }}
-          ref: ${{ github.event.pull_request.head.sha }}
-          persist-credentials: false
+        env:
+          PR_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git init .
+          git remote add origin "https://github.com/${PR_REPOSITORY}.git"
+          git fetch --no-tags --depth=1 origin "${PR_SHA}"
+          git checkout --force --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "${PR_SHA}"
 
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@v1
@@ -62,11 +66,15 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout pull request head
-        uses: actions/checkout@v6
-        with:
-          repository: ${{ github.event.pull_request.head.repo.full_name }}
-          ref: ${{ github.event.pull_request.head.sha }}
-          persist-credentials: false
+        env:
+          PR_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git init .
+          git remote add origin "https://github.com/${PR_REPOSITORY}.git"
+          git fetch --no-tags --depth=1 origin "${PR_SHA}"
+          git checkout --force --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "${PR_SHA}"
 
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@v1
@@ -88,11 +96,15 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout pull request head
-        uses: actions/checkout@v6
-        with:
-          repository: ${{ github.event.pull_request.head.repo.full_name }}
-          ref: ${{ github.event.pull_request.head.sha }}
-          persist-credentials: false
+        env:
+          PR_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git init .
+          git remote add origin "https://github.com/${PR_REPOSITORY}.git"
+          git fetch --no-tags --depth=1 origin "${PR_SHA}"
+          git checkout --force --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "${PR_SHA}"
 
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@v1
