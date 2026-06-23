@@ -26,6 +26,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import * as Tracer from "effect/Tracer";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
@@ -347,6 +348,95 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
     ).toEqual([activeThreadId]);
   });
 
+  it.effect("propagates active snapshot publish failures so startup can retry", () =>
+    Effect.gen(function* () {
+      const now = "2026-05-25T00:00:00.000Z";
+      const environmentId = "env-1" as EnvironmentId;
+      const projectId = "project-1" as ProjectId;
+      const failingThreadId = "thread-1" as ThreadId;
+      const threadIds = [
+        failingThreadId,
+        "thread-2" as ThreadId,
+        "thread-3" as ThreadId,
+        "thread-4" as ThreadId,
+        "thread-5" as ThreadId,
+      ];
+      const failure = new Error("transient relay failure");
+      const attempts: ThreadId[] = [];
+
+      const project = {
+        id: projectId,
+        title: "T3 Code",
+        workspaceRoot: "/workspace",
+        repositoryIdentity: null,
+        defaultModelSelection: null,
+        scripts: [],
+        createdAt: now,
+        updatedAt: now,
+      } satisfies OrchestrationProjectShell;
+
+      const makeThread = (threadId: ThreadId) =>
+        ({
+          id: threadId,
+          projectId,
+          title: "Run remote agent",
+          modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          latestTurn: {
+            turnId: `turn-${threadId}` as TurnId,
+            state: "running",
+            requestedAt: now,
+            startedAt: now,
+            completedAt: null,
+            assistantMessageId: null,
+          },
+          createdAt: now,
+          updatedAt: now,
+          archivedAt: null,
+          session: {
+            threadId,
+            status: "running",
+            providerName: "Codex",
+            runtimeMode: "full-access",
+            activeTurnId: `turn-${threadId}` as TurnId,
+            lastError: null,
+            updatedAt: now,
+          },
+          latestUserMessageAt: now,
+          hasPendingApprovals: false,
+          hasPendingUserInput: false,
+          hasActionableProposedPlan: false,
+        }) satisfies OrchestrationThreadShell;
+
+      const threads = threadIds.map(makeThread);
+
+      const observedFailure = yield* AgentAwarenessRelay.publishActiveAgentActivitySnapshotUnsafe({
+        environmentId,
+        snapshot: {
+          snapshotSequence: 1,
+          projects: [project],
+          threads,
+          updatedAt: now,
+        } satisfies OrchestrationShellSnapshot,
+        publishThread: (publishedThreadId) =>
+          Effect.sync(() => {
+            attempts.push(publishedThreadId);
+          }).pipe(
+            Effect.andThen(
+              publishedThreadId === failingThreadId ? Effect.fail(failure) : Effect.void,
+            ),
+          ),
+      }).pipe(Effect.flip);
+
+      expect(observedFailure).toBe(failure);
+      expect(new Set(attempts)).toEqual(new Set(threadIds));
+      expect(attempts).toHaveLength(threadIds.length);
+    }),
+  );
+
   it("signs the activity publish JWT and rejects tampering", async () => {
     const keyPair = NodeCrypto.generateKeyPairSync("ed25519", {
       privateKeyEncoding: { format: "pem", type: "pkcs8" },
@@ -538,13 +628,12 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
     ),
   );
 
-  it.effect("publishes agent activity to the relay transport URL, not the relay issuer", () =>
+  it.effect("publishes startup agent activity with relay tracing to the transport URL", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const originalFetch = globalThis.fetch;
         const context = yield* Effect.context<never>();
         const runFork = Effect.runForkWith(context);
-        const events = yield* Queue.unbounded<OrchestrationEvent>();
         const fetchSeen = yield* Deferred.make<URL>();
         const userSpans: Array<string> = [];
         const productSpans: Array<string> = [];
@@ -649,7 +738,7 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
           Layer.succeed(OrchestrationEngineService, {
             readEvents: () => Stream.empty,
             dispatch: () => Effect.succeed({ sequence: 1 }),
-            streamDomainEvents: Stream.fromQueue(events),
+            streamDomainEvents: Stream.empty,
           } satisfies OrchestrationEngineShape),
           Layer.succeed(ProjectionSnapshotQuery, {
             getShellSnapshot: () =>
@@ -671,24 +760,9 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
           yield* secrets.setString(RELAY_ENVIRONMENT_CREDENTIAL_SECRET, "relay-credential");
           yield* secrets.setString(PUBLISH_AGENT_ACTIVITY_SECRET, "true");
           yield* relay.start();
-          yield* Queue.offer(events, {
-            type: "thread.activity-appended",
-            sequence: 1,
-            eventId: "evt-1",
-            commandId: CommandId.make("cmd-1"),
-            aggregateKind: "thread",
-            aggregateId: threadId,
-            actor: { kind: "server" },
-            payload: {
-              threadId,
-              activity: {
-                kind: "approval.requested",
-              },
-            },
-            occurredAt: now,
-          } as unknown as OrchestrationEvent);
+          yield* TestClock.adjust("1 second");
 
-          const url = yield* Deferred.await(fetchSeen).pipe(Effect.timeout("2 seconds"));
+          const url = yield* Deferred.await(fetchSeen).pipe(Effect.timeout("3 seconds"));
           expect(url.origin).toBe("https://transport.example.test");
           expect(productSpans).toContain("makePublishProof");
           expect(userSpans).not.toContain("makePublishProof");
@@ -697,6 +771,7 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
             AgentAwarenessRelay.layer.pipe(
               Layer.provide(layer),
               Layer.provideMerge(NodeServices.layer),
+              Layer.provideMerge(TestClock.layer()),
             ),
           ),
           Effect.provideService(RelayClientTracer, Option.some(collectingTracer(productSpans))),
