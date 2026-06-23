@@ -444,6 +444,9 @@ export const make = Effect.gen(function* () {
     });
   });
 
+  const withPublishThreadTracing = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    effect.pipe(Effect.withSpan("AgentAwarenessRelay.publishThread"), withRelayClientTracing);
+
   const publishThread: AgentAwarenessRelay["Service"]["publishThread"] = (threadId) =>
     publishThreadUnsafe(threadId).pipe(
       Effect.catchCause((cause) => {
@@ -452,8 +455,7 @@ export const make = Effect.gen(function* () {
           cause: Cause.pretty(cause),
         });
       }),
-      Effect.withSpan("AgentAwarenessRelay.publishThread"),
-      withRelayClientTracing,
+      withPublishThreadTracing,
     );
 
   const publishActiveThreadsUnsafe = Effect.gen(function* () {
@@ -474,7 +476,7 @@ export const make = Effect.gen(function* () {
     return yield* publishActiveAgentActivitySnapshotUnsafe({
       environmentId,
       snapshot,
-      publishThread: publishThreadUnsafe,
+      publishThread: (threadId) => publishThreadUnsafe(threadId).pipe(withPublishThreadTracing),
     });
   });
 

@@ -26,6 +26,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import * as Tracer from "effect/Tracer";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
@@ -627,13 +628,12 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
     ),
   );
 
-  it.effect("publishes agent activity to the relay transport URL, not the relay issuer", () =>
+  it.effect("publishes startup agent activity with relay tracing to the transport URL", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const originalFetch = globalThis.fetch;
         const context = yield* Effect.context<never>();
         const runFork = Effect.runForkWith(context);
-        const events = yield* Queue.unbounded<OrchestrationEvent>();
         const fetchSeen = yield* Deferred.make<URL>();
         const userSpans: Array<string> = [];
         const productSpans: Array<string> = [];
@@ -738,7 +738,7 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
           Layer.succeed(OrchestrationEngineService, {
             readEvents: () => Stream.empty,
             dispatch: () => Effect.succeed({ sequence: 1 }),
-            streamDomainEvents: Stream.fromQueue(events),
+            streamDomainEvents: Stream.empty,
           } satisfies OrchestrationEngineShape),
           Layer.succeed(ProjectionSnapshotQuery, {
             getShellSnapshot: () =>
@@ -760,24 +760,9 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
           yield* secrets.setString(RELAY_ENVIRONMENT_CREDENTIAL_SECRET, "relay-credential");
           yield* secrets.setString(PUBLISH_AGENT_ACTIVITY_SECRET, "true");
           yield* relay.start();
-          yield* Queue.offer(events, {
-            type: "thread.activity-appended",
-            sequence: 1,
-            eventId: "evt-1",
-            commandId: CommandId.make("cmd-1"),
-            aggregateKind: "thread",
-            aggregateId: threadId,
-            actor: { kind: "server" },
-            payload: {
-              threadId,
-              activity: {
-                kind: "approval.requested",
-              },
-            },
-            occurredAt: now,
-          } as unknown as OrchestrationEvent);
+          yield* TestClock.adjust("1 second");
 
-          const url = yield* Deferred.await(fetchSeen).pipe(Effect.timeout("2 seconds"));
+          const url = yield* Deferred.await(fetchSeen).pipe(Effect.timeout("3 seconds"));
           expect(url.origin).toBe("https://transport.example.test");
           expect(productSpans).toContain("makePublishProof");
           expect(userSpans).not.toContain("makePublishProof");
@@ -786,6 +771,7 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
             AgentAwarenessRelay.layer.pipe(
               Layer.provide(layer),
               Layer.provideMerge(NodeServices.layer),
+              Layer.provideMerge(TestClock.layer()),
             ),
           ),
           Effect.provideService(RelayClientTracer, Option.some(collectingTracer(productSpans))),
