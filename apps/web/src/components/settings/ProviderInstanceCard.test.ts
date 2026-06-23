@@ -225,9 +225,8 @@ describe("mergeEnvironmentDraftRowsForPersistedUpdate", () => {
       previousEnvironment: [
         {
           name: "API_KEY",
-          value: "",
+          value: "previous-secret",
           sensitive: true,
-          valueRedacted: true,
         },
       ],
       nextEnvironment: [
@@ -247,6 +246,68 @@ describe("mergeEnvironmentDraftRowsForPersistedUpdate", () => {
         value: "",
         sensitive: true,
         valueRedacted: true,
+      },
+    ]);
+  });
+
+  it("keeps a sensitive plaintext draft when a sibling persisted row changes", () => {
+    const rows = mergeEnvironmentDraftRowsForPersistedUpdate({
+      rows: [
+        {
+          id: "0:API_KEY",
+          name: "API_KEY",
+          value: "typed-secret",
+          sensitive: true,
+          valueRedacted: false,
+        },
+        {
+          id: "1:BASE_URL",
+          name: "BASE_URL",
+          value: "https://old.example.test",
+          sensitive: false,
+        },
+      ],
+      previousEnvironment: [
+        {
+          name: "API_KEY",
+          value: "",
+          sensitive: true,
+          valueRedacted: true,
+        },
+        {
+          name: "BASE_URL",
+          value: "https://old.example.test",
+          sensitive: false,
+        },
+      ],
+      nextEnvironment: [
+        {
+          name: "API_KEY",
+          value: "",
+          sensitive: true,
+          valueRedacted: true,
+        },
+        {
+          name: "BASE_URL",
+          value: "https://new.example.test",
+          sensitive: false,
+        },
+      ],
+    });
+
+    expect(rows).toEqual([
+      {
+        id: "0:API_KEY",
+        name: "API_KEY",
+        value: "typed-secret",
+        sensitive: true,
+        valueRedacted: false,
+      },
+      {
+        id: "1:BASE_URL",
+        name: "BASE_URL",
+        value: "https://new.example.test",
+        sensitive: false,
       },
     ]);
   });

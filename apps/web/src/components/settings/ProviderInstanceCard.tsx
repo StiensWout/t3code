@@ -101,6 +101,18 @@ function isEnvironmentDraftRowEqualToPersisted(
   );
 }
 
+function isProviderEnvironmentVariableEqual(
+  left: ProviderInstanceEnvironmentVariable,
+  right: ProviderInstanceEnvironmentVariable,
+): boolean {
+  return (
+    left.name === right.name &&
+    left.value === right.value &&
+    left.sensitive === right.sensitive &&
+    left.valueRedacted === right.valueRedacted
+  );
+}
+
 function isEnvironmentDraftRowAcknowledgedByPersisted(
   row: EnvironmentDraftRow,
   variable: ProviderInstanceEnvironmentVariable,
@@ -121,7 +133,9 @@ function isEnvironmentDraftRowAcknowledgedByPersisted(
   if (previousVariable === undefined) return true;
 
   return (
-    isSameEnvironmentVariable(previousVariable, variable) && previousVariable.sensitive === true
+    isSameEnvironmentVariable(previousVariable, variable) &&
+    previousVariable.sensitive === true &&
+    !isProviderEnvironmentVariableEqual(previousVariable, variable)
   );
 }
 
