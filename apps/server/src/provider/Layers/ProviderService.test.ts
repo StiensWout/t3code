@@ -1592,6 +1592,68 @@ fanout.layer("ProviderServiceLive fanout", (it) => {
     }),
   );
 
+  it.effect("skips invalid adapter events without killing the instance subscription", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const session = yield* provider.startSession(asThreadId("thread-skip-invalid"), {
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: codexInstanceId,
+        threadId: asThreadId("thread-skip-invalid"),
+        runtimeMode: "full-access",
+      });
+
+      const receivedRef = yield* Ref.make<Array<ProviderRuntimeEvent>>([]);
+      const consumer = yield* Stream.take(provider.streamEvents, 2).pipe(
+        Stream.runForEach((event) => Ref.update(receivedRef, (current) => [...current, event])),
+        Effect.forkChild,
+      );
+      yield* advanceTestClock(50);
+
+      fanout.codex.emit({
+        type: "tool.started",
+        eventId: asEventId("evt-valid-before-invalid"),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        threadId: session.threadId,
+        turnId: asTurnId("turn-1"),
+        toolKind: "command",
+        title: "Ran command",
+      });
+      fanout.codex.emit({
+        type: "message.delta",
+        eventId: asEventId("evt-wrong-instance"),
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: claudeAgentInstanceId,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        threadId: session.threadId,
+        turnId: asTurnId("turn-1"),
+        delta: "wrong instance",
+      });
+      fanout.codex.emit({
+        type: "tool.completed",
+        eventId: asEventId("evt-valid-after-invalid"),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        threadId: session.threadId,
+        turnId: asTurnId("turn-1"),
+        toolKind: "command",
+        title: "Ran command",
+      });
+
+      yield* Fiber.join(consumer);
+      const received = yield* Ref.get(receivedRef);
+
+      assert.deepEqual(
+        received.map((event) => event.eventId),
+        [asEventId("evt-valid-before-invalid"), asEventId("evt-valid-after-invalid")],
+      );
+      assert.deepEqual(
+        received.map((event) => event.providerInstanceId),
+        [codexInstanceId, codexInstanceId],
+      );
+    }),
+  );
+
   it.effect("keeps subscriber delivery ordered and isolates failing subscribers", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService.ProviderService;

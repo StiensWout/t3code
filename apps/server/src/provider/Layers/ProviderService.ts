@@ -25,6 +25,7 @@ import {
   type ProviderSession,
 } from "@t3tools/contracts";
 import { causeErrorTag } from "@t3tools/shared/observability";
+import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -297,6 +298,31 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       ),
     );
 
+  const processRuntimeEventSafely = (
+    source: {
+      readonly instanceId: ProviderInstanceId;
+      readonly provider: ProviderDriverKind;
+    },
+    event: ProviderRuntimeEvent,
+  ) =>
+    processRuntimeEvent(source, event).pipe(
+      Effect.catchCause((cause) => {
+        if (Cause.hasInterrupts(cause)) {
+          return Effect.failCause(cause);
+        }
+        return Effect.logWarning("provider runtime event skipped", {
+          errorTag: causeErrorTag(cause),
+          sourceProvider: source.provider,
+          sourceProviderInstanceId: source.instanceId,
+          eventId: event.eventId,
+          eventType: event.type,
+          eventProvider: event.provider,
+          eventProviderInstanceId: event.providerInstanceId ?? null,
+          threadId: event.threadId,
+        });
+      }),
+    );
+
   // `subscribedAdapters` is our source-of-truth for "which instance adapters
   // are currently wired into the runtime event bus". It both tracks the set
   // of live subscriptions (so `reconcileInstanceSubscriptions` can diff and
@@ -332,7 +358,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       next.set(id, adapter);
       if (previous.get(id) !== adapter) {
         yield* Stream.runForEach(adapter.streamEvents, (event) =>
-          processRuntimeEvent(
+          processRuntimeEventSafely(
             {
               instanceId: id,
               provider: adapter.provider,
