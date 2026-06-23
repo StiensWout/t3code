@@ -30,12 +30,13 @@ export class BunPtyOperationUnavailableError extends Schema.TaggedErrorClass<Bun
   }
 }
 
-class BunPtyProcess implements PtyAdapter.PtyProcess {
+export class BunPtyProcess implements PtyAdapter.PtyProcess {
   private readonly dataListeners = new Set<(data: string) => void>();
   private readonly exitListeners = new Set<(event: PtyAdapter.PtyExitEvent) => void>();
   private readonly decoder = new TextDecoder();
   private readonly process: Bun.Subprocess;
   private didExit = false;
+  private finalExitEvent: PtyAdapter.PtyExitEvent | null = null;
 
   constructor(process: Bun.Subprocess) {
     this.process = process;
@@ -86,6 +87,14 @@ class BunPtyProcess implements PtyAdapter.PtyProcess {
 
   onExit(callback: (event: PtyAdapter.PtyExitEvent) => void): () => void {
     this.exitListeners.add(callback);
+    const finalExitEvent = this.finalExitEvent;
+    if (finalExitEvent) {
+      queueMicrotask(() => {
+        if (this.exitListeners.has(callback)) {
+          callback(finalExitEvent);
+        }
+      });
+    }
     return () => {
       this.exitListeners.delete(callback);
     };
@@ -103,6 +112,7 @@ class BunPtyProcess implements PtyAdapter.PtyProcess {
   private emitExit(event: PtyAdapter.PtyExitEvent): void {
     if (this.didExit) return;
     this.didExit = true;
+    this.finalExitEvent = event;
 
     const remainder = this.decoder.decode();
     if (remainder.length > 0) {
