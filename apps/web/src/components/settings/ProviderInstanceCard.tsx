@@ -89,6 +89,18 @@ function isEnvironmentDraftRowChangedFromPersisted(
   );
 }
 
+function isEnvironmentDraftRowEqualToPersisted(
+  row: EnvironmentDraftRow,
+  variable: ProviderInstanceEnvironmentVariable,
+): boolean {
+  return (
+    row.name === variable.name &&
+    row.value === variable.value &&
+    row.sensitive === variable.sensitive &&
+    row.valueRedacted === variable.valueRedacted
+  );
+}
+
 export function mergeEnvironmentDraftRowsForPersistedUpdate(input: {
   readonly rows: ReadonlyArray<EnvironmentDraftRow>;
   readonly previousEnvironment: ReadonlyArray<ProviderInstanceEnvironmentVariable>;
@@ -100,26 +112,74 @@ export function mergeEnvironmentDraftRowsForPersistedUpdate(input: {
       variable,
     ]),
   );
+  const previousRowsByIndex = input.previousEnvironment.map(makeEnvironmentDraftRow);
   const rowsById = new Map(input.rows.map((row) => [row.id, row]));
   const nextIds = new Set<string>();
-  const nextRows = input.nextEnvironment.map((variable, index) => {
+  const consumedRowIds = new Set<string>();
+  const consumeRow = (row: EnvironmentDraftRow) => {
+    consumedRowIds.add(row.id);
+  };
+  const findMatchingCurrentRow = (variable: ProviderInstanceEnvironmentVariable) =>
+    input.rows.find(
+      (row) => !consumedRowIds.has(row.id) && isEnvironmentDraftRowEqualToPersisted(row, variable),
+    );
+
+  const nextRows = input.nextEnvironment.flatMap((variable, index) => {
     const nextRow = makeEnvironmentDraftRow(variable, index);
     nextIds.add(nextRow.id);
 
     const currentRow = rowsById.get(nextRow.id);
     const previousVariable = previousById.get(nextRow.id);
+    const previousRowAtIndex = previousRowsByIndex[index];
+    const currentRowAtPreviousIndex =
+      previousRowAtIndex !== undefined ? rowsById.get(previousRowAtIndex.id) : undefined;
     if (
       currentRow !== undefined &&
       previousVariable !== undefined &&
       isEnvironmentDraftRowChangedFromPersisted(currentRow, previousVariable)
     ) {
-      return currentRow;
+      consumeRow(currentRow);
+      return isEnvironmentDraftRowEqualToPersisted(currentRow, variable) ? [nextRow] : [currentRow];
     }
 
-    return nextRow;
+    if (currentRow !== undefined) {
+      consumeRow(currentRow);
+      return [nextRow];
+    }
+
+    if (
+      currentRowAtPreviousIndex !== undefined &&
+      previousRowAtIndex !== undefined &&
+      !consumedRowIds.has(currentRowAtPreviousIndex.id) &&
+      isEnvironmentDraftRowChangedFromPersisted(
+        currentRowAtPreviousIndex,
+        previousById.get(previousRowAtIndex.id) ?? variable,
+      )
+    ) {
+      consumeRow(currentRowAtPreviousIndex);
+      return isEnvironmentDraftRowEqualToPersisted(currentRowAtPreviousIndex, variable)
+        ? [nextRow]
+        : [currentRowAtPreviousIndex];
+    }
+
+    const matchingCurrentRow = findMatchingCurrentRow(variable);
+    if (matchingCurrentRow !== undefined) {
+      consumeRow(matchingCurrentRow);
+      return [nextRow];
+    }
+
+    if (
+      previousVariable !== undefined ||
+      (previousRowAtIndex !== undefined && currentRowAtPreviousIndex === undefined)
+    ) {
+      return [];
+    }
+
+    return [nextRow];
   });
 
   const localRows = input.rows.filter((row) => {
+    if (consumedRowIds.has(row.id)) return false;
     if (nextIds.has(row.id)) return false;
 
     const previousVariable = previousById.get(row.id);
