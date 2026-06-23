@@ -20,8 +20,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  cancel_pending_ci:
-    name: Cancel Pending CI
+  cancel_pending_pr_runs:
+    name: Cancel Pending PR Runs
     if: >-
       github.event_name == 'pull_request_target' &&
       github.event.action == 'labeled' &&
@@ -34,7 +34,7 @@ jobs:
     permissions:
       actions: write
     steps:
-      - name: Cancel queued original CI runs for this pull request head
+      - name: Cancel pending workflow runs for this pull request head
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
@@ -44,7 +44,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          statuses=(queued in_progress waiting)
+          statuses=(queued in_progress waiting requested pending)
           canceled=0
 
           for status in "${statuses[@]}"; do
@@ -60,10 +60,10 @@ jobs:
                 -f branch="${PR_HEAD_REF}" \
                 -f head_sha="${PR_HEAD_SHA}" \
                 -f per_page=100 \
-                --jq '.workflow_runs[] | select(.name == "CI") | [.id, .status, .head_branch, .head_sha, .html_url] | @tsv' \
+                --jq '.workflow_runs[] | [.id, .name, .status, .head_branch, .head_sha, .html_url] | @tsv' \
                 2>"${error_file}"
             )"; then
-              if [ "${status}" = "waiting" ]; then
+              if [ "${status}" = "waiting" ] || [ "${status}" = "requested" ] || [ "${status}" = "pending" ]; then
                 echo "Skipping workflow run status '${status}' because the API did not accept it."
                 cat "${error_file}"
                 rm -f "${error_file}"
@@ -81,7 +81,7 @@ jobs:
               continue
             fi
 
-            while IFS=$'\t' read -r run_id run_status head_branch head_sha html_url; do
+            while IFS=$'\t' read -r run_id run_name run_status head_branch head_sha html_url; do
               if [ -z "${run_id}" ] || [ "${run_id}" = "${CURRENT_RUN_ID}" ]; then
                 continue
               fi
@@ -90,7 +90,7 @@ jobs:
                 continue
               fi
 
-              echo "Canceling CI run ${run_id} (${run_status}) for ${head_branch}@${head_sha}: ${html_url}"
+              echo "Canceling ${run_name} run ${run_id} (${run_status}) for ${head_branch}@${head_sha}: ${html_url}"
               gh api --method POST \
                 -H "Accept: application/vnd.github+json" \
                 -H "X-GitHub-Api-Version: 2022-11-28" \
@@ -99,7 +99,7 @@ jobs:
             done <<< "${runs}"
           done
 
-          echo "Canceled ${canceled} queued or in-progress CI run(s)."
+          echo "Canceled ${canceled} pending workflow run(s)."
 
   check:
     name: Check
