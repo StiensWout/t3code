@@ -21,6 +21,7 @@ function ChatThreadRouteView() {
   const serverThreadShell = useThreadShell(threadRef);
   const serverThreadDetail = useThreadDetail(threadRef);
   const bootstrapComplete = shell.data?.snapshot._tag === "Some";
+  const shellSynchronized = shell.data?.status === "live";
   const threadExists = serverThreadShell !== null || serverThreadDetail !== null;
   const draftThreadExists = useComposerDraftStore((store) =>
     threadRef ? store.getDraftThreadByRef(threadRef) !== null : false,
@@ -32,14 +33,14 @@ function ChatThreadRouteView() {
   const serverThreadStarted = threadHasStarted(serverThreadDetail);
 
   useEffect(() => {
-    if (!threadRef || !bootstrapComplete) {
+    if (!threadRef || !shellSynchronized) {
       return;
     }
 
     if (!routeThreadExists) {
       void navigate({ to: "/", replace: true });
     }
-  }, [bootstrapComplete, navigate, routeThreadExists, threadRef]);
+  }, [navigate, routeThreadExists, shellSynchronized, threadRef]);
 
   useEffect(() => {
     if (!threadRef || !serverThreadStarted || !draftThread) {
