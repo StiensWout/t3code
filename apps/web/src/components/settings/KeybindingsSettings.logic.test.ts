@@ -64,6 +64,23 @@ describe("KeybindingsSettings.logic", () => {
     ).toBe("mod+shift+k");
   });
 
+  it("captures bare special keys without accepting bare printable keys or tab", () => {
+    const capture = (key: string) =>
+      keybindingFromKeyboardEvent(
+        { key, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false },
+        "Win32",
+      );
+
+    expect(capture("F2")).toBe("f2");
+    expect(capture("ArrowDown")).toBe("arrowdown");
+    expect(capture("PageUp")).toBe("pageup");
+
+    for (const key of ["a", "1", ".", " "]) {
+      expect(capture(key)).toBeNull();
+    }
+    expect(capture("Tab")).toBeNull();
+  });
+
   it("serializes shortcuts and when expressions for upserts", () => {
     expect(
       shortcutToKeybindingInput({

@@ -315,6 +315,32 @@ export function normalizeShortcutKeyToken(key: string): string | null {
   return null;
 }
 
+const BARE_SPECIAL_KEY_TOKENS = new Set([
+  "f1",
+  "f2",
+  "f3",
+  "f4",
+  "f5",
+  "f6",
+  "f7",
+  "f8",
+  "f9",
+  "f10",
+  "f11",
+  "f12",
+  "arrowup",
+  "arrowdown",
+  "arrowleft",
+  "arrowright",
+  "enter",
+  "backspace",
+  "delete",
+  "home",
+  "end",
+  "pageup",
+  "pagedown",
+]);
+
 export function keybindingFromKeyboardEvent(
   event: Pick<KeyboardEvent, "key" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey">,
   platform: string,
@@ -332,7 +358,7 @@ export function keybindingFromKeyboardEvent(
   }
   if (event.altKey) parts.push("alt");
   if (event.shiftKey) parts.push("shift");
-  if (parts.length === 0) {
+  if (parts.length === 0 && !BARE_SPECIAL_KEY_TOKENS.has(keyToken)) {
     return null;
   }
   parts.push(keyToken);
