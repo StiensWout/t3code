@@ -71,7 +71,12 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
         }
         const hasPendingApprovals = thread?.hasPendingApprovals === true;
         const hasPendingUserInput = thread?.hasPendingUserInput === true;
-        if (hasPendingApprovals || hasPendingUserInput) {
+        const threadSessionStatus = thread?.session?.status;
+        const threadSessionIsLive =
+          threadSessionStatus != null &&
+          threadSessionStatus !== "stopped" &&
+          threadSessionStatus !== "error";
+        if (threadSessionIsLive && (hasPendingApprovals || hasPendingUserInput)) {
           yield* directory.touchLastSeenAt(binding.threadId);
           yield* Effect.logDebug("provider.session.reaper.skipped-pending-request", {
             threadId: binding.threadId,
