@@ -72,10 +72,12 @@ describe("KeybindingsSettings.logic", () => {
       );
 
     expect(capture("F2")).toBe("f2");
+    expect(capture("F13")).toBe("f13");
+    expect(capture("F24")).toBe("f24");
     expect(capture("ArrowDown")).toBe("arrowdown");
     expect(capture("PageUp")).toBe("pageup");
 
-    for (const key of ["a", "1", ".", " "]) {
+    for (const key of ["a", "1", ".", " ", "F25"]) {
       expect(capture(key)).toBeNull();
     }
     expect(capture("Tab")).toBeNull();
