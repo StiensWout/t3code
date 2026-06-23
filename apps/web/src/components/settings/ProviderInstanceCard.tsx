@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import * as Arr from "effect/Array";
 import * as Result from "effect/Result";
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   isProviderDriverKind,
   type ProviderInstanceConfig,
@@ -75,6 +75,19 @@ function makeEnvironmentDraftRow(
     sensitive: variable.sensitive,
     ...(variable.valueRedacted !== undefined ? { valueRedacted: variable.valueRedacted } : {}),
   };
+}
+
+export function getProviderEnvironmentContentKey(
+  environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>,
+): string {
+  return JSON.stringify(
+    environment.map((variable) => [
+      variable.name,
+      variable.value,
+      variable.sensitive,
+      variable.valueRedacted,
+    ]),
+  );
 }
 
 /**
@@ -157,9 +170,19 @@ function ProviderEnvironmentSection(props: {
   readonly environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>;
   readonly onChange: (environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>) => void;
 }) {
+  const persistedEnvironmentContentKey = getProviderEnvironmentContentKey(props.environment);
+  const previousPersistedEnvironmentContentKey = useRef(persistedEnvironmentContentKey);
   const [rows, setRows] = useState<ReadonlyArray<EnvironmentDraftRow>>(() =>
     props.environment.map(makeEnvironmentDraftRow),
   );
+
+  useEffect(() => {
+    if (previousPersistedEnvironmentContentKey.current === persistedEnvironmentContentKey) {
+      return;
+    }
+    previousPersistedEnvironmentContentKey.current = persistedEnvironmentContentKey;
+    setRows(props.environment.map(makeEnvironmentDraftRow));
+  }, [persistedEnvironmentContentKey, props.environment]);
 
   const publishRows = (nextRows: ReadonlyArray<EnvironmentDraftRow>) => {
     const published: ProviderInstanceEnvironmentVariable[] = [];
