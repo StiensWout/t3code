@@ -70,6 +70,30 @@ it.effect("enqueueCommand fails queued work when readiness fails", () =>
   ),
 );
 
+it.effect("enqueueCommand skips queued work after caller interruption before readiness", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const executionCount = yield* Ref.make(0);
+      const commandGate = yield* ServerRuntimeStartup.makeCommandGate;
+
+      const interruptedFiber = yield* commandGate
+        .enqueueCommand(Ref.update(executionCount, (count) => count + 1))
+        .pipe(Effect.forkScoped);
+
+      yield* Effect.yieldNow;
+      yield* Fiber.interrupt(interruptedFiber);
+
+      const barrierFiber = yield* commandGate.enqueueCommand(Effect.void).pipe(Effect.forkScoped);
+
+      yield* Effect.yieldNow;
+      yield* commandGate.signalCommandReady;
+      yield* Fiber.join(barrierFiber);
+
+      assert.equal(yield* Ref.get(executionCount), 0);
+    }),
+  ),
+);
+
 it.effect("launchStartupHeartbeat does not block the caller while counts are loading", () =>
   Effect.scoped(
     Effect.gen(function* () {
