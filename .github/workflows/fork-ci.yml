@@ -20,6 +20,87 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  cancel_pending_ci:
+    name: Cancel Pending CI
+    if: >-
+      github.event_name == 'pull_request_target' &&
+      github.event.action == 'labeled' &&
+      github.event.label.name == 'fork-ci' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      startsWith(github.event.pull_request.head.ref, 'codex/fix/') &&
+      startsWith(github.event.pull_request.base.ref, 'staging/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Cancel queued original CI runs for this pull request head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          CURRENT_RUN_ID: ${{ github.run_id }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          statuses=(queued in_progress waiting)
+          canceled=0
+
+          for status in "${statuses[@]}"; do
+            error_file="$(mktemp)"
+
+            if ! runs="$(
+              gh api --method GET --paginate \
+                -H "Accept: application/vnd.github+json" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                "/repos/${REPOSITORY}/actions/runs" \
+                -f event=pull_request \
+                -f status="${status}" \
+                -f branch="${PR_HEAD_REF}" \
+                -f head_sha="${PR_HEAD_SHA}" \
+                -f per_page=100 \
+                --jq '.workflow_runs[] | select(.name == "CI") | [.id, .status, .head_branch, .head_sha, .html_url] | @tsv' \
+                2>"${error_file}"
+            )"; then
+              if [ "${status}" = "waiting" ]; then
+                echo "Skipping workflow run status '${status}' because the API did not accept it."
+                cat "${error_file}"
+                rm -f "${error_file}"
+                continue
+              fi
+
+              cat "${error_file}" >&2
+              rm -f "${error_file}"
+              exit 1
+            fi
+
+            rm -f "${error_file}"
+
+            if [ -z "${runs}" ]; then
+              continue
+            fi
+
+            while IFS=$'\t' read -r run_id run_status head_branch head_sha html_url; do
+              if [ -z "${run_id}" ] || [ "${run_id}" = "${CURRENT_RUN_ID}" ]; then
+                continue
+              fi
+
+              if [ "${head_branch}" != "${PR_HEAD_REF}" ] || [ "${head_sha}" != "${PR_HEAD_SHA}" ]; then
+                continue
+              fi
+
+              echo "Canceling CI run ${run_id} (${run_status}) for ${head_branch}@${head_sha}: ${html_url}"
+              gh api --method POST \
+                -H "Accept: application/vnd.github+json" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                "/repos/${REPOSITORY}/actions/runs/${run_id}/cancel"
+              canceled=$((canceled + 1))
+            done <<< "${runs}"
+          done
+
+          echo "Canceled ${canceled} queued or in-progress CI run(s)."
+
   check:
     name: Check
     if: >-
