@@ -34,13 +34,12 @@ jobs:
     permissions:
       actions: write
     steps:
-      - name: Cancel pending workflow runs for this pull request head
+      - name: Cancel pending workflow runs for this pull request branch
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           CURRENT_RUN_ID: ${{ github.run_id }}
           PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
 
@@ -58,7 +57,6 @@ jobs:
                 -f event=pull_request \
                 -f status="${status}" \
                 -f branch="${PR_HEAD_REF}" \
-                -f head_sha="${PR_HEAD_SHA}" \
                 -f per_page=100 \
                 --jq '.workflow_runs[] | [.id, .name, .status, .head_branch, .head_sha, .html_url] | @tsv' \
                 2>"${error_file}"
@@ -86,7 +84,7 @@ jobs:
                 continue
               fi
 
-              if [ "${head_branch}" != "${PR_HEAD_REF}" ] || [ "${head_sha}" != "${PR_HEAD_SHA}" ]; then
+              if [ "${head_branch}" != "${PR_HEAD_REF}" ]; then
                 continue
               fi
 
