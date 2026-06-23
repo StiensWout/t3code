@@ -118,14 +118,24 @@ export const makeCommandGate = Effect.gen(function* () {
         }
 
         const result = yield* Deferred.make<A, E | ServerRuntimeStartupError>();
-        yield* Queue.offer(commandQueue, {
-          run: Deferred.await(commandReady).pipe(
-            Effect.flatMap(() => effect),
-            Effect.exit,
-            Effect.flatMap((exit) => settleQueuedCommand(result, exit)),
-          ),
-        });
-        return yield* Deferred.await(result);
+        const canceled = yield* Ref.make(false);
+        return yield* Effect.gen(function* () {
+          yield* Queue.offer(commandQueue, {
+            run: Deferred.await(commandReady).pipe(
+              Effect.flatMap(() => Ref.get(canceled)),
+              Effect.flatMap((isCanceled) =>
+                isCanceled
+                  ? Effect.void
+                  : effect.pipe(
+                      Effect.exit,
+                      Effect.flatMap((exit) => settleQueuedCommand(result, exit)),
+                    ),
+              ),
+              Effect.catch((error) => Deferred.fail(result, error).pipe(Effect.asVoid)),
+            ),
+          });
+          return yield* Deferred.await(result);
+        }).pipe(Effect.onInterrupt(() => Ref.set(canceled, true)));
       }),
   } satisfies CommandGate;
 });
