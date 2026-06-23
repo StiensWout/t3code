@@ -59,6 +59,8 @@ const unsupported = () => Effect.die(new Error("Unsupported provider call in tes
 function makeReadModel(
   threads: ReadonlyArray<{
     readonly id: ThreadId;
+    readonly hasPendingApprovals?: boolean;
+    readonly hasPendingUserInput?: boolean;
     readonly session: {
       readonly threadId: ThreadId;
       readonly status: "starting" | "running" | "ready" | "interrupted" | "stopped" | "error";
@@ -101,8 +103,8 @@ function makeReadModel(
       updatedAt: now,
       archivedAt: null,
       latestUserMessageAt: null,
-      hasPendingApprovals: false,
-      hasPendingUserInput: false,
+      hasPendingApprovals: thread.hasPendingApprovals ?? false,
+      hasPendingUserInput: thread.hasPendingUserInput ?? false,
       hasActionableProposedPlan: false,
       latestTurn: null,
       messages: [],
@@ -584,5 +586,205 @@ describe("ProviderSessionReaper", () => {
       defectThreadId,
       reapedThreadId,
     ]);
+  });
+
+  it("skips stale sessions when the thread has pending approvals", async () => {
+    const threadId = ThreadId.make("thread-reaper-pending-approval");
+    const now = "2026-01-01T00:00:00.000Z";
+    const staleLastSeenAt = "2026-04-14T00:00:00.000Z";
+    const harness = await createHarness({
+      readModel: makeReadModel([
+        {
+          id: threadId,
+          hasPendingApprovals: true,
+          session: {
+            threadId,
+            status: "ready",
+            providerName: "claudeAgent",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: now,
+          },
+        },
+      ]),
+    });
+    const repository = await runtime!.runPromise(
+      Effect.service(ProviderSessionRuntime.ProviderSessionRuntimeRepository),
+    );
+
+    await runtime!.runPromise(
+      repository.upsert({
+        threadId,
+        providerName: "claudeAgent",
+        providerInstanceId: null,
+        adapterKey: "claudeAgent",
+        runtimeMode: "full-access",
+        status: "running",
+        lastSeenAt: staleLastSeenAt,
+        resumeCursor: {
+          opaque: "resume-pending-approval",
+        },
+        runtimePayload: null,
+      }),
+    );
+
+    const reaper = await runtime!.runPromise(Effect.service(ProviderSessionReaper));
+    scope = await runtime!.runPromise(Scope.make("sequential"));
+    await runtime!.runPromise(reaper.start().pipe(Scope.provide(scope)));
+    await runtime!.runPromise(drainFibers);
+
+    expect(harness.stopSession).not.toHaveBeenCalled();
+    const remaining = await runtime!.runPromise(repository.getByThreadId({ threadId }));
+    expect(Option.isSome(remaining)).toBe(true);
+    expect(Option.getOrThrow(remaining).lastSeenAt).not.toBe(staleLastSeenAt);
+    expect(Date.parse(Option.getOrThrow(remaining).lastSeenAt)).toBeGreaterThan(
+      Date.parse(staleLastSeenAt),
+    );
+  });
+
+  it("skips stale sessions when the thread has pending user input", async () => {
+    const threadId = ThreadId.make("thread-reaper-pending-user-input");
+    const now = "2026-01-01T00:00:00.000Z";
+    const staleLastSeenAt = "2026-04-14T00:00:00.000Z";
+    const harness = await createHarness({
+      readModel: makeReadModel([
+        {
+          id: threadId,
+          hasPendingUserInput: true,
+          session: {
+            threadId,
+            status: "ready",
+            providerName: "claudeAgent",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: now,
+          },
+        },
+      ]),
+    });
+    const repository = await runtime!.runPromise(
+      Effect.service(ProviderSessionRuntime.ProviderSessionRuntimeRepository),
+    );
+
+    await runtime!.runPromise(
+      repository.upsert({
+        threadId,
+        providerName: "claudeAgent",
+        providerInstanceId: null,
+        adapterKey: "claudeAgent",
+        runtimeMode: "full-access",
+        status: "running",
+        lastSeenAt: staleLastSeenAt,
+        resumeCursor: {
+          opaque: "resume-pending-user-input",
+        },
+        runtimePayload: null,
+      }),
+    );
+
+    const reaper = await runtime!.runPromise(Effect.service(ProviderSessionReaper));
+    scope = await runtime!.runPromise(Scope.make("sequential"));
+    await runtime!.runPromise(reaper.start().pipe(Scope.provide(scope)));
+    await runtime!.runPromise(drainFibers);
+
+    expect(harness.stopSession).not.toHaveBeenCalled();
+    const remaining = await runtime!.runPromise(repository.getByThreadId({ threadId }));
+    expect(Option.isSome(remaining)).toBe(true);
+    expect(Option.getOrThrow(remaining).lastSeenAt).not.toBe(staleLastSeenAt);
+    expect(Date.parse(Option.getOrThrow(remaining).lastSeenAt)).toBeGreaterThan(
+      Date.parse(staleLastSeenAt),
+    );
+  });
+
+  it("reaps stale pending-request sessions after the thread session exits", async () => {
+    const stoppedThreadId = ThreadId.make("thread-reaper-pending-exited-stopped");
+    const erroredThreadId = ThreadId.make("thread-reaper-pending-exited-error");
+    const now = "2026-01-01T00:00:00.000Z";
+    const stoppedLastSeenAt = "2026-04-14T00:00:00.000Z";
+    const erroredLastSeenAt = "2026-04-14T00:01:00.000Z";
+    const harness = await createHarness({
+      readModel: makeReadModel([
+        {
+          id: stoppedThreadId,
+          hasPendingApprovals: true,
+          session: {
+            threadId: stoppedThreadId,
+            status: "stopped",
+            providerName: "claudeAgent",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: now,
+          },
+        },
+        {
+          id: erroredThreadId,
+          hasPendingUserInput: true,
+          session: {
+            threadId: erroredThreadId,
+            status: "error",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: "provider exited",
+            updatedAt: now,
+          },
+        },
+      ]),
+    });
+    const repository = await runtime!.runPromise(
+      Effect.service(ProviderSessionRuntime.ProviderSessionRuntimeRepository),
+    );
+
+    await runtime!.runPromise(
+      repository.upsert({
+        threadId: stoppedThreadId,
+        providerName: "claudeAgent",
+        providerInstanceId: null,
+        adapterKey: "claudeAgent",
+        runtimeMode: "full-access",
+        status: "running",
+        lastSeenAt: stoppedLastSeenAt,
+        resumeCursor: {
+          opaque: "resume-pending-exited-stopped",
+        },
+        runtimePayload: null,
+      }),
+    );
+    await runtime!.runPromise(
+      repository.upsert({
+        threadId: erroredThreadId,
+        providerName: "codex",
+        providerInstanceId: null,
+        adapterKey: "codex",
+        runtimeMode: "full-access",
+        status: "running",
+        lastSeenAt: erroredLastSeenAt,
+        resumeCursor: {
+          opaque: "resume-pending-exited-error",
+        },
+        runtimePayload: null,
+      }),
+    );
+
+    const reaper = await runtime!.runPromise(Effect.service(ProviderSessionReaper));
+    scope = await runtime!.runPromise(Scope.make("sequential"));
+    await runtime!.runPromise(reaper.start().pipe(Scope.provide(scope)));
+
+    await waitFor(() => harness.stopSession.mock.calls.length === 2);
+
+    expect(new Set(harness.stopSession.mock.calls.map(([request]) => request.threadId))).toEqual(
+      new Set([stoppedThreadId, erroredThreadId]),
+    );
+    const stoppedRuntime = await runtime!.runPromise(
+      repository.getByThreadId({ threadId: stoppedThreadId }),
+    );
+    const erroredRuntime = await runtime!.runPromise(
+      repository.getByThreadId({ threadId: erroredThreadId }),
+    );
+    expect(Option.getOrThrow(stoppedRuntime).lastSeenAt).toBe(stoppedLastSeenAt);
+    expect(Option.getOrThrow(erroredRuntime).lastSeenAt).toBe(erroredLastSeenAt);
   });
 });

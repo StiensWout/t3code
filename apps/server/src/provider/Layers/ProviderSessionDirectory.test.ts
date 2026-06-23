@@ -122,6 +122,53 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
       }
     }));
 
+  it("touches lastSeenAt without changing runtime fields", () =>
+    Effect.gen(function* () {
+      const directory = yield* ProviderSessionDirectory;
+      const runtimeRepository = yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository;
+
+      const threadId = ThreadId.make("thread-touch-runtime");
+      const staleLastSeenAt = "2026-04-14T00:00:00.000Z";
+
+      yield* runtimeRepository.upsert({
+        threadId,
+        providerName: "claudeAgent",
+        providerInstanceId: null,
+        adapterKey: "claudeAgent",
+        runtimeMode: "approval-required",
+        status: "stopped",
+        lastSeenAt: staleLastSeenAt,
+        resumeCursor: {
+          opaque: "current-resume",
+        },
+        runtimePayload: {
+          activeTurnId: null,
+          cwd: "/tmp/current",
+        },
+      });
+
+      yield* directory.touchLastSeenAt(threadId);
+
+      const runtime = yield* runtimeRepository.getByThreadId({ threadId });
+      assert.equal(Option.isSome(runtime), true);
+      if (Option.isSome(runtime)) {
+        assert.equal(runtime.value.threadId, threadId);
+        assert.equal(runtime.value.providerName, "claudeAgent");
+        assert.equal(runtime.value.adapterKey, "claudeAgent");
+        assert.equal(runtime.value.runtimeMode, "approval-required");
+        assert.equal(runtime.value.status, "stopped");
+        assert.deepEqual(runtime.value.resumeCursor, {
+          opaque: "current-resume",
+        });
+        assert.deepEqual(runtime.value.runtimePayload, {
+          activeTurnId: null,
+          cwd: "/tmp/current",
+        });
+        assert.notEqual(runtime.value.lastSeenAt, staleLastSeenAt);
+        assert.isTrue(Date.parse(runtime.value.lastSeenAt) > Date.parse(staleLastSeenAt));
+      }
+    }));
+
   it("lists persisted bindings with metadata in oldest-first order", () =>
     Effect.gen(function* () {
       const directory = yield* ProviderSessionDirectory;

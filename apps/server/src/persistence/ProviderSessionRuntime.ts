@@ -53,6 +53,13 @@ export type ProviderSessionRuntime = typeof ProviderSessionRuntime.Type;
 export const GetProviderSessionRuntimeInput = Schema.Struct({ threadId: ThreadId });
 export type GetProviderSessionRuntimeInput = typeof GetProviderSessionRuntimeInput.Type;
 
+export const TouchProviderSessionRuntimeLastSeenAtInput = Schema.Struct({
+  threadId: ThreadId,
+  lastSeenAt: IsoDateTime,
+});
+export type TouchProviderSessionRuntimeLastSeenAtInput =
+  typeof TouchProviderSessionRuntimeLastSeenAtInput.Type;
+
 export const DeleteProviderSessionRuntimeInput = Schema.Struct({ threadId: ThreadId });
 export type DeleteProviderSessionRuntimeInput = typeof DeleteProviderSessionRuntimeInput.Type;
 
@@ -80,6 +87,13 @@ export class ProviderSessionRuntimeRepository extends Context.Service<
       Option.Option<ProviderSessionRuntime>,
       ProviderSessionRuntimeRepositoryError
     >;
+
+    /**
+     * Refresh only the runtime liveness timestamp for a thread.
+     */
+    readonly touchLastSeenAt: (
+      input: TouchProviderSessionRuntimeLastSeenAtInput,
+    ) => Effect.Effect<void, ProviderSessionRuntimeRepositoryError>;
 
     /**
      * List all provider runtime rows.
@@ -204,6 +218,16 @@ export const make = Effect.gen(function* () {
       `,
   });
 
+  const touchRuntimeLastSeenAt = SqlSchema.void({
+    Request: TouchProviderSessionRuntimeLastSeenAtInput,
+    execute: ({ threadId, lastSeenAt }) =>
+      sql`
+        UPDATE provider_session_runtime
+        SET last_seen_at = ${lastSeenAt}
+        WHERE thread_id = ${threadId}
+      `,
+  });
+
   const listRuntimeRows = SqlSchema.findAll({
     Request: Schema.Void,
     Result: ProviderSessionRuntimeRawDbRowSchema,
@@ -240,6 +264,17 @@ export const make = Effect.gen(function* () {
           "ProviderSessionRuntimeRepository.upsert:query",
           "ProviderSessionRuntimeRepository.upsert:encodeRequest",
           { threadId: runtime.threadId },
+        ),
+      ),
+    );
+
+  const touchLastSeenAt: ProviderSessionRuntimeRepository["Service"]["touchLastSeenAt"] = (input) =>
+    touchRuntimeLastSeenAt(input).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProviderSessionRuntimeRepository.touchLastSeenAt:query",
+          "ProviderSessionRuntimeRepository.touchLastSeenAt:encodeRequest",
+          { threadId: input.threadId },
         ),
       ),
     );
@@ -310,6 +345,7 @@ export const make = Effect.gen(function* () {
 
   return {
     upsert,
+    touchLastSeenAt,
     getByThreadId,
     list,
     deleteByThreadId,

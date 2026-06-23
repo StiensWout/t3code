@@ -45,6 +45,10 @@ export interface ProviderSessionDirectoryShape {
     binding: ProviderRuntimeBinding,
   ) => Effect.Effect<void, ProviderSessionDirectoryWriteError>;
 
+  readonly touchLastSeenAt: (
+    threadId: ThreadId,
+  ) => Effect.Effect<void, ProviderSessionDirectoryWriteError>;
+
   readonly getProvider: (
     threadId: ThreadId,
   ) => Effect.Effect<ProviderDriverKind, ProviderSessionDirectoryReadError>;
