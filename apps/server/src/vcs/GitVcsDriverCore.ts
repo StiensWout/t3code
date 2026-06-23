@@ -1339,32 +1339,26 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       });
     }
 
-    const [unstagedNumstatStdout, stagedNumstatStdout, defaultRefResult, hasPrimaryRemote] =
-      yield* Effect.all(
-        [
-          runGitStdout("GitVcsDriver.statusDetails.unstagedNumstat", cwd, ["diff", "--numstat"]),
-          runGitStdout("GitVcsDriver.statusDetails.stagedNumstat", cwd, [
-            "diff",
-            "--cached",
-            "--numstat",
-          ]),
-          executeGit(
-            "GitVcsDriver.statusDetails.defaultRef",
-            cwd,
-            ["symbolic-ref", "refs/remotes/origin/HEAD"],
-            {
-              allowNonZeroExit: true,
-            },
-          ),
-          originRemoteExists(cwd).pipe(Effect.orElseSucceed(() => false)),
-        ],
-        { concurrency: "unbounded" },
-      );
-    const statusStdout = statusResult.stdout;
+    const [unstagedNumstatStdout, stagedNumstatStdout, primaryRemoteName] = yield* Effect.all(
+      [
+        runGitStdout("GitVcsDriver.statusDetails.unstagedNumstat", cwd, ["diff", "--numstat"]),
+        runGitStdout("GitVcsDriver.statusDetails.stagedNumstat", cwd, [
+          "diff",
+          "--cached",
+          "--numstat",
+        ]),
+        resolvePrimaryRemoteName(cwd).pipe(Effect.orElseSucceed(() => null)),
+      ],
+      { concurrency: "unbounded" },
+    );
     const defaultBranch =
-      defaultRefResult.exitCode === 0
-        ? defaultRefResult.stdout.trim().replace(/^refs\/remotes\/origin\//, "")
-        : null;
+      primaryRemoteName === null
+        ? null
+        : yield* resolveDefaultBranchName(cwd, primaryRemoteName).pipe(
+            Effect.orElseSucceed(() => null),
+          );
+    const hasPrimaryRemote = primaryRemoteName !== null;
+    const statusStdout = statusResult.stdout;
 
     let refName: string | null = null;
     let upstreamRef: string | null = null;
@@ -2096,18 +2090,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         }),
       );
 
-      const [defaultRef, worktreeList, remoteBranchResult, remoteNamesResult, branchLastCommit] =
+      const [worktreeList, remoteBranchResult, remoteNamesResult, branchLastCommit] =
         yield* Effect.all(
           [
-            executeGit(
-              "GitVcsDriver.listRefs.defaultRef",
-              input.cwd,
-              ["symbolic-ref", "refs/remotes/origin/HEAD"],
-              {
-                timeoutMs: 5_000,
-                allowNonZeroExit: true,
-              },
-            ),
             executeGit(
               "GitVcsDriver.listRefs.worktreeList",
               input.cwd,
@@ -2126,6 +2111,13 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
 
       const remoteNames =
         remoteNamesResult.exitCode === 0 ? parseRemoteNames(remoteNamesResult.stdout) : [];
+      const remoteNamesInGitOrder =
+        remoteNamesResult.exitCode === 0
+          ? parseRemoteNamesInGitOrder(remoteNamesResult.stdout)
+          : [];
+      const primaryRemoteName = remoteNamesInGitOrder.includes("origin")
+        ? "origin"
+        : (remoteNamesInGitOrder[0] ?? null);
       if (remoteBranchResult.exitCode !== 0 && remoteBranchResult.stderr.trim().length > 0) {
         yield* Effect.logWarning(
           `GitVcsDriver.listRefs: remote refName lookup returned code ${remoteBranchResult.exitCode} for ${input.cwd}: ${remoteBranchResult.stderr.trim()}. Falling back to an empty remote refName list.`,
@@ -2138,9 +2130,11 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       }
 
       const defaultBranch =
-        defaultRef.exitCode === 0
-          ? defaultRef.stdout.trim().replace(/^refs\/remotes\/origin\//, "")
-          : null;
+        primaryRemoteName === null
+          ? null
+          : yield* resolveDefaultBranchName(input.cwd, primaryRemoteName).pipe(
+              Effect.orElseSucceed(() => null),
+            );
 
       const worktreeMap = new Map<string, string>();
       if (worktreeList.exitCode === 0) {
@@ -2235,7 +2229,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       return {
         refs: [...refs.refs],
         isRepo: true,
-        hasPrimaryRemote: remoteNames.includes("origin"),
+        hasPrimaryRemote: primaryRemoteName !== null,
         nextCursor: refs.nextCursor,
         totalCount: refs.totalCount,
       };

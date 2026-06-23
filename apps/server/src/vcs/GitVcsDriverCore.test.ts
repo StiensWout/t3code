@@ -388,6 +388,30 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
       }),
     );
 
+    it.effect("uses the primary remote for upstream-only local status details", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const upstream = yield* makeTmpDir("git-vcs-driver-upstream-");
+        yield* initRepoWithCommit(cwd);
+        yield* git(upstream, ["init", "--bare"]);
+        yield* git(cwd, ["branch", "-M", "main"]);
+        yield* git(cwd, ["remote", "add", "upstream", upstream]);
+        yield* git(cwd, ["push", "-u", "upstream", "main"]);
+        yield* git(cwd, [
+          "symbolic-ref",
+          "refs/remotes/upstream/HEAD",
+          "refs/remotes/upstream/main",
+        ]);
+
+        const status = yield* (yield* GitVcsDriver.GitVcsDriver).statusDetails(cwd);
+
+        assert.equal(status.hasOriginRemote, true);
+        assert.equal(status.branch, "main");
+        assert.equal(status.isDefaultBranch, true);
+        assert.equal(status.aheadOfDefaultCount, 0);
+      }),
+    );
+
     it.effect("makes background upstream status fetches non-interactive", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();
@@ -520,6 +544,36 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         assert.equal(remoteOnly.refs.length, 1);
         assert.equal(remoteOnly.refs[0]?.name, `origin/${initialBranch}`);
         assert.equal(remoteOnly.refs[0]?.isRemote, true);
+      }),
+    );
+
+    it.effect("uses the primary remote for upstream-only ref listing", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const upstream = yield* makeTmpDir("git-vcs-driver-upstream-");
+        yield* initRepoWithCommit(cwd);
+        yield* git(upstream, ["init", "--bare"]);
+        yield* git(cwd, ["branch", "-M", "main"]);
+        yield* git(cwd, ["remote", "add", "upstream", upstream]);
+        yield* git(cwd, ["push", "-u", "upstream", "main"]);
+        yield* git(cwd, [
+          "symbolic-ref",
+          "refs/remotes/upstream/HEAD",
+          "refs/remotes/upstream/main",
+        ]);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+
+        const refs = yield* driver.listRefs({ cwd, includeMatchingRemoteRefs: true });
+
+        assert.equal(refs.hasPrimaryRemote, true);
+        assert.equal(refs.refs.find((ref) => ref.name === "main")?.isDefault, true);
+        assert.deepInclude(
+          refs.refs.find((ref) => ref.name === "upstream/main"),
+          {
+            isRemote: true,
+            remoteName: "upstream",
+          },
+        );
       }),
     );
 
