@@ -352,7 +352,14 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
       const now = "2026-05-25T00:00:00.000Z";
       const environmentId = "env-1" as EnvironmentId;
       const projectId = "project-1" as ProjectId;
-      const threadId = "thread-1" as ThreadId;
+      const failingThreadId = "thread-1" as ThreadId;
+      const threadIds = [
+        failingThreadId,
+        "thread-2" as ThreadId,
+        "thread-3" as ThreadId,
+        "thread-4" as ThreadId,
+        "thread-5" as ThreadId,
+      ];
       const failure = new Error("transient relay failure");
       const attempts: ThreadId[] = [];
 
@@ -367,57 +374,65 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
         updatedAt: now,
       } satisfies OrchestrationProjectShell;
 
-      const thread = {
-        id: threadId,
-        projectId,
-        title: "Run remote agent",
-        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        branch: null,
-        worktreePath: null,
-        latestTurn: {
-          turnId: "turn-1" as TurnId,
-          state: "running",
-          requestedAt: now,
-          startedAt: now,
-          completedAt: null,
-          assistantMessageId: null,
-        },
-        createdAt: now,
-        updatedAt: now,
-        archivedAt: null,
-        session: {
-          threadId,
-          status: "running",
-          providerName: "Codex",
+      const makeThread = (threadId: ThreadId) =>
+        ({
+          id: threadId,
+          projectId,
+          title: "Run remote agent",
+          modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
           runtimeMode: "full-access",
-          activeTurnId: "turn-1" as TurnId,
-          lastError: null,
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          latestTurn: {
+            turnId: `turn-${threadId}` as TurnId,
+            state: "running",
+            requestedAt: now,
+            startedAt: now,
+            completedAt: null,
+            assistantMessageId: null,
+          },
+          createdAt: now,
           updatedAt: now,
-        },
-        latestUserMessageAt: now,
-        hasPendingApprovals: false,
-        hasPendingUserInput: false,
-        hasActionableProposedPlan: false,
-      } satisfies OrchestrationThreadShell;
+          archivedAt: null,
+          session: {
+            threadId,
+            status: "running",
+            providerName: "Codex",
+            runtimeMode: "full-access",
+            activeTurnId: `turn-${threadId}` as TurnId,
+            lastError: null,
+            updatedAt: now,
+          },
+          latestUserMessageAt: now,
+          hasPendingApprovals: false,
+          hasPendingUserInput: false,
+          hasActionableProposedPlan: false,
+        }) satisfies OrchestrationThreadShell;
+
+      const threads = threadIds.map(makeThread);
 
       const observedFailure = yield* AgentAwarenessRelay.publishActiveAgentActivitySnapshotUnsafe({
         environmentId,
         snapshot: {
           snapshotSequence: 1,
           projects: [project],
-          threads: [thread],
+          threads,
           updatedAt: now,
         } satisfies OrchestrationShellSnapshot,
         publishThread: (publishedThreadId) =>
           Effect.sync(() => {
             attempts.push(publishedThreadId);
-          }).pipe(Effect.andThen(Effect.fail(failure))),
+          }).pipe(
+            Effect.andThen(
+              publishedThreadId === failingThreadId ? Effect.fail(failure) : Effect.void,
+            ),
+          ),
       }).pipe(Effect.flip);
 
       expect(observedFailure).toBe(failure);
-      expect(attempts).toEqual([threadId]);
+      expect(new Set(attempts)).toEqual(new Set(threadIds));
+      expect(attempts).toHaveLength(threadIds.length);
     }),
   );
 

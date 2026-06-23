@@ -282,7 +282,12 @@ export function publishActiveAgentActivitySnapshotUnsafe<E>(input: {
     yield* Effect.logInfo("publishing active agent activity snapshot", {
       count: activeThreadIds.length,
     });
-    yield* Effect.forEach(activeThreadIds, input.publishThread, { concurrency: 4, discard: true });
+    const [failures] = yield* Effect.partition(activeThreadIds, input.publishThread, {
+      concurrency: 4,
+    });
+    if (failures.length > 0) {
+      return yield* Effect.fail(failures[0]!);
+    }
     return true;
   });
 }
