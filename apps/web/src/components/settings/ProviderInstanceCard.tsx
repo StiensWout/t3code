@@ -77,6 +77,61 @@ function makeEnvironmentDraftRow(
   };
 }
 
+function isEnvironmentDraftRowChangedFromPersisted(
+  row: EnvironmentDraftRow,
+  variable: ProviderInstanceEnvironmentVariable,
+): boolean {
+  return (
+    row.name !== variable.name ||
+    row.value !== variable.value ||
+    row.sensitive !== variable.sensitive ||
+    row.valueRedacted !== variable.valueRedacted
+  );
+}
+
+export function mergeEnvironmentDraftRowsForPersistedUpdate(input: {
+  readonly rows: ReadonlyArray<EnvironmentDraftRow>;
+  readonly previousEnvironment: ReadonlyArray<ProviderInstanceEnvironmentVariable>;
+  readonly nextEnvironment: ReadonlyArray<ProviderInstanceEnvironmentVariable>;
+}): ReadonlyArray<EnvironmentDraftRow> {
+  const previousById = new Map(
+    input.previousEnvironment.map((variable, index) => [
+      makeEnvironmentDraftRow(variable, index).id,
+      variable,
+    ]),
+  );
+  const rowsById = new Map(input.rows.map((row) => [row.id, row]));
+  const nextIds = new Set<string>();
+  const nextRows = input.nextEnvironment.map((variable, index) => {
+    const nextRow = makeEnvironmentDraftRow(variable, index);
+    nextIds.add(nextRow.id);
+
+    const currentRow = rowsById.get(nextRow.id);
+    const previousVariable = previousById.get(nextRow.id);
+    if (
+      currentRow !== undefined &&
+      previousVariable !== undefined &&
+      isEnvironmentDraftRowChangedFromPersisted(currentRow, previousVariable)
+    ) {
+      return currentRow;
+    }
+
+    return nextRow;
+  });
+
+  const localRows = input.rows.filter((row) => {
+    if (nextIds.has(row.id)) return false;
+
+    const previousVariable = previousById.get(row.id);
+    return (
+      previousVariable === undefined ||
+      isEnvironmentDraftRowChangedFromPersisted(row, previousVariable)
+    );
+  });
+
+  return [...nextRows, ...localRows];
+}
+
 export function getProviderEnvironmentContentKey(
   environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>,
 ): string {
@@ -171,6 +226,7 @@ function ProviderEnvironmentSection(props: {
   readonly onChange: (environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>) => void;
 }) {
   const persistedEnvironmentContentKey = getProviderEnvironmentContentKey(props.environment);
+  const previousPersistedEnvironment = useRef(props.environment);
   const previousPersistedEnvironmentContentKey = useRef(persistedEnvironmentContentKey);
   const [rows, setRows] = useState<ReadonlyArray<EnvironmentDraftRow>>(() =>
     props.environment.map(makeEnvironmentDraftRow),
@@ -181,7 +237,14 @@ function ProviderEnvironmentSection(props: {
       return;
     }
     previousPersistedEnvironmentContentKey.current = persistedEnvironmentContentKey;
-    setRows(props.environment.map(makeEnvironmentDraftRow));
+    setRows((currentRows) =>
+      mergeEnvironmentDraftRowsForPersistedUpdate({
+        rows: currentRows,
+        previousEnvironment: previousPersistedEnvironment.current,
+        nextEnvironment: props.environment,
+      }),
+    );
+    previousPersistedEnvironment.current = props.environment;
   }, [persistedEnvironmentContentKey, props.environment]);
 
   const publishRows = (nextRows: ReadonlyArray<EnvironmentDraftRow>) => {

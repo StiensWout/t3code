@@ -4,6 +4,7 @@ import type { ProviderInstanceEnvironmentVariable, ServerProviderModel } from "@
 import {
   deriveProviderModelsForDisplay,
   getProviderEnvironmentContentKey,
+  mergeEnvironmentDraftRowsForPersistedUpdate,
 } from "./ProviderInstanceCard";
 
 describe("deriveProviderModelsForDisplay", () => {
@@ -83,5 +84,97 @@ describe("getProviderEnvironmentContentKey", () => {
         baseUrlVariable,
       ]),
     );
+  });
+});
+
+describe("mergeEnvironmentDraftRowsForPersistedUpdate", () => {
+  it("keeps a newer local draft when an older persisted echo arrives", () => {
+    const previousEnvironment: ReadonlyArray<ProviderInstanceEnvironmentVariable> = [
+      {
+        name: "API_KEY",
+        value: "old",
+        sensitive: true,
+      },
+    ];
+    const olderEcho: ReadonlyArray<ProviderInstanceEnvironmentVariable> = [
+      {
+        name: "API_KEY",
+        value: "first-edit",
+        sensitive: true,
+      },
+    ];
+
+    const rows = mergeEnvironmentDraftRowsForPersistedUpdate({
+      rows: [
+        {
+          id: "0:API_KEY",
+          name: "API_KEY",
+          value: "second-edit",
+          sensitive: true,
+        },
+      ],
+      previousEnvironment,
+      nextEnvironment: olderEcho,
+    });
+
+    expect(rows).toEqual([
+      {
+        id: "0:API_KEY",
+        name: "API_KEY",
+        value: "second-edit",
+        sensitive: true,
+      },
+    ]);
+  });
+
+  it("keeps unpublished add rows when persisted settings change", () => {
+    const previousEnvironment: ReadonlyArray<ProviderInstanceEnvironmentVariable> = [
+      {
+        name: "API_KEY",
+        value: "old",
+        sensitive: true,
+      },
+    ];
+    const nextEnvironment: ReadonlyArray<ProviderInstanceEnvironmentVariable> = [
+      {
+        name: "API_KEY",
+        value: "new",
+        sensitive: true,
+      },
+    ];
+
+    const rows = mergeEnvironmentDraftRowsForPersistedUpdate({
+      rows: [
+        {
+          id: "0:API_KEY",
+          name: "API_KEY",
+          value: "old",
+          sensitive: true,
+        },
+        {
+          id: "provider-env-1",
+          name: "",
+          value: "",
+          sensitive: true,
+        },
+      ],
+      previousEnvironment,
+      nextEnvironment,
+    });
+
+    expect(rows).toEqual([
+      {
+        id: "0:API_KEY",
+        name: "API_KEY",
+        value: "new",
+        sensitive: true,
+      },
+      {
+        id: "provider-env-1",
+        name: "",
+        value: "",
+        sensitive: true,
+      },
+    ]);
   });
 });
