@@ -591,6 +591,7 @@ describe("ProviderSessionReaper", () => {
   it("skips stale sessions when the thread has pending approvals", async () => {
     const threadId = ThreadId.make("thread-reaper-pending-approval");
     const now = "2026-01-01T00:00:00.000Z";
+    const staleLastSeenAt = "2026-04-14T00:00:00.000Z";
     const harness = await createHarness({
       readModel: makeReadModel([
         {
@@ -620,7 +621,7 @@ describe("ProviderSessionReaper", () => {
         adapterKey: "claudeAgent",
         runtimeMode: "full-access",
         status: "running",
-        lastSeenAt: "2026-04-14T00:00:00.000Z",
+        lastSeenAt: staleLastSeenAt,
         resumeCursor: {
           opaque: "resume-pending-approval",
         },
@@ -636,11 +637,16 @@ describe("ProviderSessionReaper", () => {
     expect(harness.stopSession).not.toHaveBeenCalled();
     const remaining = await runtime!.runPromise(repository.getByThreadId({ threadId }));
     expect(Option.isSome(remaining)).toBe(true);
+    expect(Option.getOrThrow(remaining).lastSeenAt).not.toBe(staleLastSeenAt);
+    expect(Date.parse(Option.getOrThrow(remaining).lastSeenAt)).toBeGreaterThan(
+      Date.parse(staleLastSeenAt),
+    );
   });
 
   it("skips stale sessions when the thread has pending user input", async () => {
     const threadId = ThreadId.make("thread-reaper-pending-user-input");
     const now = "2026-01-01T00:00:00.000Z";
+    const staleLastSeenAt = "2026-04-14T00:00:00.000Z";
     const harness = await createHarness({
       readModel: makeReadModel([
         {
@@ -670,7 +676,7 @@ describe("ProviderSessionReaper", () => {
         adapterKey: "claudeAgent",
         runtimeMode: "full-access",
         status: "running",
-        lastSeenAt: "2026-04-14T00:00:00.000Z",
+        lastSeenAt: staleLastSeenAt,
         resumeCursor: {
           opaque: "resume-pending-user-input",
         },
@@ -686,5 +692,9 @@ describe("ProviderSessionReaper", () => {
     expect(harness.stopSession).not.toHaveBeenCalled();
     const remaining = await runtime!.runPromise(repository.getByThreadId({ threadId }));
     expect(Option.isSome(remaining)).toBe(true);
+    expect(Option.getOrThrow(remaining).lastSeenAt).not.toBe(staleLastSeenAt);
+    expect(Date.parse(Option.getOrThrow(remaining).lastSeenAt)).toBeGreaterThan(
+      Date.parse(staleLastSeenAt),
+    );
   });
 });
