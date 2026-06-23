@@ -2,6 +2,7 @@ import type {
   EnvironmentId,
   OrchestrationEvent,
   OrchestrationProjectShell,
+  OrchestrationShellSnapshot,
   OrchestrationThreadShell,
   ThreadId,
 } from "@t3tools/contracts";
@@ -263,6 +264,29 @@ export function resolveAgentAwarenessRelayActiveThreadIds(input: {
     .map((thread) => thread.id);
 }
 
+export function publishActiveAgentActivitySnapshotUnsafe<E>(input: {
+  readonly environmentId: EnvironmentId;
+  readonly snapshot: OrchestrationShellSnapshot;
+  readonly publishThread: (threadId: ThreadId) => Effect.Effect<void, E>;
+}): Effect.Effect<boolean, E> {
+  return Effect.gen(function* () {
+    const activeThreadIds = resolveAgentAwarenessRelayActiveThreadIds({
+      environmentId: input.environmentId,
+      projects: input.snapshot.projects,
+      threads: input.snapshot.threads,
+    });
+    if (activeThreadIds.length === 0) {
+      yield* Effect.logDebug("agent activity snapshot has no publishable threads");
+      return true;
+    }
+    yield* Effect.logInfo("publishing active agent activity snapshot", {
+      count: activeThreadIds.length,
+    });
+    yield* Effect.forEach(activeThreadIds, input.publishThread, { concurrency: 4, discard: true });
+    return true;
+  });
+}
+
 export const make = Effect.gen(function* () {
   const secrets = yield* ServerSecretStore.ServerSecretStore;
   const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
@@ -442,20 +466,11 @@ export const make = Effect.gen(function* () {
     }
     const environmentId = yield* serverEnvironment.getEnvironmentId;
     const snapshot = yield* snapshotQuery.getShellSnapshot();
-    const activeThreadIds = resolveAgentAwarenessRelayActiveThreadIds({
+    return yield* publishActiveAgentActivitySnapshotUnsafe({
       environmentId,
-      projects: snapshot.projects,
-      threads: snapshot.threads,
+      snapshot,
+      publishThread: publishThreadUnsafe,
     });
-    if (activeThreadIds.length === 0) {
-      yield* Effect.logDebug("agent activity snapshot has no publishable threads");
-      return true;
-    }
-    yield* Effect.logInfo("publishing active agent activity snapshot", {
-      count: activeThreadIds.length,
-    });
-    yield* Effect.forEach(activeThreadIds, publishThread, { concurrency: 4, discard: true });
-    return true;
   });
 
   const publishActiveThreadsOnceWhenConfigured = (logEnabledWhenReady: boolean) =>

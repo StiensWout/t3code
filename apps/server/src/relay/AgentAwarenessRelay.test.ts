@@ -347,6 +347,80 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
     ).toEqual([activeThreadId]);
   });
 
+  it.effect("propagates active snapshot publish failures so startup can retry", () =>
+    Effect.gen(function* () {
+      const now = "2026-05-25T00:00:00.000Z";
+      const environmentId = "env-1" as EnvironmentId;
+      const projectId = "project-1" as ProjectId;
+      const threadId = "thread-1" as ThreadId;
+      const failure = new Error("transient relay failure");
+      const attempts: ThreadId[] = [];
+
+      const project = {
+        id: projectId,
+        title: "T3 Code",
+        workspaceRoot: "/workspace",
+        repositoryIdentity: null,
+        defaultModelSelection: null,
+        scripts: [],
+        createdAt: now,
+        updatedAt: now,
+      } satisfies OrchestrationProjectShell;
+
+      const thread = {
+        id: threadId,
+        projectId,
+        title: "Run remote agent",
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        latestTurn: {
+          turnId: "turn-1" as TurnId,
+          state: "running",
+          requestedAt: now,
+          startedAt: now,
+          completedAt: null,
+          assistantMessageId: null,
+        },
+        createdAt: now,
+        updatedAt: now,
+        archivedAt: null,
+        session: {
+          threadId,
+          status: "running",
+          providerName: "Codex",
+          runtimeMode: "full-access",
+          activeTurnId: "turn-1" as TurnId,
+          lastError: null,
+          updatedAt: now,
+        },
+        latestUserMessageAt: now,
+        hasPendingApprovals: false,
+        hasPendingUserInput: false,
+        hasActionableProposedPlan: false,
+      } satisfies OrchestrationThreadShell;
+
+      const observedFailure = yield* AgentAwarenessRelay.publishActiveAgentActivitySnapshotUnsafe({
+        environmentId,
+        snapshot: {
+          snapshotSequence: 1,
+          projects: [project],
+          threads: [thread],
+          updatedAt: now,
+        } satisfies OrchestrationShellSnapshot,
+        publishThread: (publishedThreadId) =>
+          Effect.sync(() => {
+            attempts.push(publishedThreadId);
+          }).pipe(Effect.andThen(Effect.fail(failure))),
+      }).pipe(Effect.flip);
+
+      expect(observedFailure).toBe(failure);
+      expect(attempts).toEqual([threadId]);
+    }),
+  );
+
   it("signs the activity publish JWT and rejects tampering", async () => {
     const keyPair = NodeCrypto.generateKeyPairSync("ed25519", {
       privateKeyEncoding: { format: "pem", type: "pkcs8" },
