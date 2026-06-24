@@ -34,17 +34,19 @@ jobs:
     permissions:
       actions: write
     steps:
-      - name: Cancel pending workflow runs for this pull request branch
+      - name: Cancel stale CI workflow runs for this pull request
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           CURRENT_RUN_ID: ${{ github.run_id }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
           set -euo pipefail
 
-          statuses=(queued in_progress waiting requested pending)
+          statuses=(queued in_progress)
           canceled=0
+          failed=0
 
           for status in "${statuses[@]}"; do
             error_file="$(mktemp)"
@@ -53,21 +55,17 @@ jobs:
               gh api --method GET --paginate \
                 -H "Accept: application/vnd.github+json" \
                 -H "X-GitHub-Api-Version: 2022-11-28" \
-                "/repos/${REPOSITORY}/actions/runs" \
+                "/repos/${REPOSITORY}/actions/workflows/ci.yml/runs" \
                 -f event=pull_request \
                 -f status="${status}" \
                 -f branch="${PR_HEAD_REF}" \
                 -f per_page=100 \
-                --jq '.workflow_runs[] | [.id, .name, .status, .head_branch, .head_sha, .html_url] | @tsv' \
+                --jq ".workflow_runs[]
+                  | select([.pull_requests[]?.number] | index(${PR_NUMBER}))
+                  | [.id, .name, .status, .head_branch, .head_sha, .html_url]
+                  | @tsv" \
                 2>"${error_file}"
             )"; then
-              if [ "${status}" = "waiting" ] || [ "${status}" = "requested" ] || [ "${status}" = "pending" ]; then
-                echo "Skipping workflow run status '${status}' because the API did not accept it."
-                cat "${error_file}"
-                rm -f "${error_file}"
-                continue
-              fi
-
               cat "${error_file}" >&2
               rm -f "${error_file}"
               exit 1
@@ -88,16 +86,26 @@ jobs:
                 continue
               fi
 
-              echo "Canceling ${run_name} run ${run_id} (${run_status}) for ${head_branch}@${head_sha}: ${html_url}"
-              gh api --method POST \
+              cancel_error_file="$(mktemp)"
+
+              echo "Canceling stale ${run_name} run ${run_id} (${run_status}) for PR #${PR_NUMBER} at ${head_branch}@${head_sha}: ${html_url}"
+              if gh api --method POST \
                 -H "Accept: application/vnd.github+json" \
                 -H "X-GitHub-Api-Version: 2022-11-28" \
-                "/repos/${REPOSITORY}/actions/runs/${run_id}/cancel"
-              canceled=$((canceled + 1))
+                "/repos/${REPOSITORY}/actions/runs/${run_id}/cancel" \
+                2>"${cancel_error_file}"; then
+                canceled=$((canceled + 1))
+              else
+                echo "::warning::Failed to cancel stale CI run ${run_id} for PR #${PR_NUMBER}; continuing."
+                cat "${cancel_error_file}" >&2
+                failed=$((failed + 1))
+              fi
+
+              rm -f "${cancel_error_file}"
             done <<< "${runs}"
           done
 
-          echo "Canceled ${canceled} pending workflow run(s)."
+          echo "Canceled ${canceled} stale CI workflow run(s); ${failed} cancel request(s) failed."
 
   check:
     name: Check
