@@ -3,6 +3,14 @@ import { isWindowsPlatform } from "../lib/utils";
 
 export type DesktopUpdateButtonAction = "download" | "install" | "none";
 
+const DESKTOP_RELEASE_URL = "https://github.com/pingdotgg/t3code/releases/tag";
+
+export function getDesktopUpdateReleaseUrl(version: string | null): string | null {
+  const normalizedVersion = version?.trim();
+  if (!normalizedVersion) return null;
+  return `${DESKTOP_RELEASE_URL}/v${encodeURIComponent(normalizedVersion)}`;
+}
+
 export function resolveDesktopUpdateButtonAction(
   state: DesktopUpdateState,
 ): DesktopUpdateButtonAction {

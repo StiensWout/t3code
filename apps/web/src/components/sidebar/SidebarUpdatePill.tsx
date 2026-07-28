@@ -2,6 +2,7 @@ import { DownloadIcon, RotateCwIcon, TriangleAlertIcon, XIcon } from "lucide-rea
 import { useCallback, useState } from "react";
 import { isElectron } from "../../env";
 import { useDesktopUpdateState } from "../../state/desktopUpdate";
+import { showDesktopUpdateDownloadedToast } from "../desktopUpdate.toast";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import {
   getArm64IntelBuildWarningDescription,
@@ -80,11 +81,7 @@ export function SidebarUpdatePill() {
         .downloadUpdate()
         .then((result) => {
           if (result.completed) {
-            toastManager.add({
-              type: "success",
-              title: "Update downloaded",
-              description: "Restart the app from the update button to install it.",
-            });
+            showDesktopUpdateDownloadedToast(bridge, result.state.downloadedVersion);
           }
           if (!shouldToastDesktopUpdateActionResult(result)) return;
           const actionError = getDesktopUpdateActionError(result);
