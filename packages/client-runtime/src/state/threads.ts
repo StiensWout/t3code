@@ -214,7 +214,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       ),
     );
     yield* Deferred.succeed(deletedSignal, undefined);
-  });
+  }, Effect.uninterruptible);
 
   const handleStreamFailure = Effect.fn("EnvironmentThreadState.handleStreamFailure")(function* (
     cause: Cause.Cause<unknown>,

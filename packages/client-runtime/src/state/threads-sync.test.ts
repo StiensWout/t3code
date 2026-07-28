@@ -13,10 +13,14 @@ import {
   type OrchestrationThreadStreamItem,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
+import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as TestClock from "effect/testing/TestClock";
@@ -137,6 +141,8 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
   readonly httpSnapshot?: Option.Option<OrchestrationThreadDetailSnapshot>;
   readonly completionMarker?: boolean;
   readonly shellMembership?: ShellThreadMembership;
+  readonly removeThread?: Effect.Effect<void>;
+  readonly scope?: Scope.Scope;
 }) {
   const inputs = yield* Queue.unbounded<TestThreadInput>();
   const observed = yield* Queue.unbounded<EnvironmentThreadState>();
@@ -216,7 +222,9 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
     saveThread: (_environmentId, thread) =>
       Ref.update(savedThreads, (current) => [...current, thread]),
     removeThread: (_environmentId, threadId) =>
-      Ref.update(removedThreads, (current) => [...current, threadId]),
+      (options?.removeThread ?? Effect.void).pipe(
+        Effect.andThen(Ref.update(removedThreads, (current) => [...current, threadId])),
+      ),
     loadServerConfig: () => Effect.succeed(Option.none()),
     saveServerConfig: () => Effect.void,
     loadVcsRefs: () => Effect.succeed(Option.none()),
@@ -228,7 +236,7 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
     setAuthoritative: () => Effect.void,
     setUnknown: () => Effect.succeed(0),
   });
-  const threadState = yield* makeEnvironmentThreadState(THREAD_ID).pipe(
+  const makeThreadState = makeEnvironmentThreadState(THREAD_ID).pipe(
     Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
     Effect.provideService(Persistence.EnvironmentCacheStore, cache),
     Effect.provideService(ThreadSnapshotLoader, snapshotLoader),
@@ -238,6 +246,9 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
       ConnectionWakeups.ConnectionWakeups.of({ changes: Stream.fromQueue(wakeups) }),
     ),
   );
+  const threadState = yield* options?.scope === undefined
+    ? makeThreadState
+    : makeThreadState.pipe(Effect.provideService(Scope.Scope, options.scope));
   yield* SubscriptionRef.changes(threadState).pipe(
     Stream.runForEach((state) =>
       Ref.set(latest, state).pipe(Effect.andThen(Queue.offer(observed, state))),
@@ -489,6 +500,32 @@ describe("EnvironmentThreads", () => {
       yield* Effect.yieldNow;
 
       expect(yield* Ref.get(harness.savedThreads)).toEqual([]);
+      expect(yield* Ref.get(harness.removedThreads)).toEqual([THREAD_ID]);
+    }),
+  );
+
+  it.effect("completes deletion when the active subscription is interrupted", () =>
+    Effect.gen(function* () {
+      const allowRemoval = yield* Deferred.make<void>();
+      const scope = yield* Scope.make();
+      const harness = yield* makeHarness({
+        cached: BASE_THREAD,
+        removeThread: Deferred.await(allowRemoval),
+        scope,
+      });
+      yield* Queue.offer(harness.inputs, snapshot(BASE_THREAD));
+      yield* awaitThreadState(
+        harness.observed,
+        (value) => value.status === "live" && Option.isSome(value.data),
+      );
+      yield* Queue.offer(harness.inputs, deleted());
+      yield* awaitThreadState(harness.observed, (value) => value.status === "deleted");
+
+      const closeFiber = yield* Scope.close(scope, Exit.void).pipe(Effect.forkScoped);
+      for (let attempt = 0; attempt < 100; attempt += 1) yield* Effect.yieldNow;
+      yield* Deferred.succeed(allowRemoval, undefined);
+      yield* Fiber.join(closeFiber);
+
       expect(yield* Ref.get(harness.removedThreads)).toEqual([THREAD_ID]);
     }),
   );
