@@ -10,6 +10,7 @@ import {
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
@@ -112,7 +113,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     );
   });
 
-  yield* Stream.fromQueue(persistence).pipe(
+  const persistenceFiber = yield* Stream.fromQueue(persistence).pipe(
     Stream.debounce("500 millis"),
     Stream.runForEach(persist),
     Effect.forkScoped,
@@ -159,11 +160,21 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     thread: OrchestrationThread,
   ) {
     const waiting = yield* Ref.get(awaitingCompletion);
-    yield* SubscriptionRef.set(state, {
-      data: Option.some(thread),
-      status: waiting ? "synchronizing" : "live",
-      error: Option.none(),
-    });
+    const updated = yield* SubscriptionRef.modify(state, (current) =>
+      current.status === "deleted"
+        ? [false, current]
+        : [
+            true,
+            {
+              data: Option.some(thread),
+              status: waiting ? ("synchronizing" as const) : ("live" as const),
+              error: Option.none(),
+            },
+          ],
+    );
+    if (!updated) {
+      return;
+    }
     // Active threads can update many times per second and retain large tool
     // payloads. The server remains the source of truth while a turn is active;
     // persist once it settles so cache encoding stays off the streaming path.
@@ -175,11 +186,22 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
 
   const setDeleted = Effect.fn("EnvironmentThreadState.setDeleted")(function* () {
     yield* Ref.set(awaitingCompletion, false);
-    yield* SubscriptionRef.set(state, {
-      data: Option.none(),
-      status: "deleted",
-      error: Option.none(),
-    });
+    const deleted = yield* SubscriptionRef.modify(state, (current) =>
+      current.status === "deleted"
+        ? [false, current]
+        : [
+            true,
+            {
+              data: Option.none(),
+              status: "deleted" as const,
+              error: Option.none(),
+            },
+          ],
+    );
+    if (!deleted) {
+      return;
+    }
+    yield* Fiber.interrupt(persistenceFiber);
     yield* cache.removeThread(environmentId, threadId).pipe(
       Effect.catch((error) =>
         Effect.logWarning("Could not remove the cached thread.").pipe(

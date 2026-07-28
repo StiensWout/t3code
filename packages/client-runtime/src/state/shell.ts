@@ -201,6 +201,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
   });
 
   yield* invalidateMembership;
+  yield* Effect.addFinalizer(() => invalidateMembership);
   yield* setSynchronizing;
   yield* Effect.forkScoped(
     subscribeDynamicWithContext(
@@ -265,8 +266,6 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
     }),
     Effect.forkScoped,
   );
-
-  yield* Effect.addFinalizer(() => invalidateMembership);
 
   return state;
 });

@@ -8,9 +8,11 @@ import {
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
+import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 
@@ -104,7 +106,9 @@ describe("environment shell synchronization", () => {
         load: () => Effect.succeed(Option.none()),
       });
       const shellMembership = yield* EnvironmentShellMembership;
+      const scope = yield* Scope.make();
       const shellState = yield* makeEnvironmentShellState().pipe(
+        Effect.provideService(Scope.Scope, scope),
         Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
         Effect.provideService(Persistence.EnvironmentCacheStore, cache),
         Effect.provideService(ShellSnapshotLoader, snapshotLoader),
@@ -162,6 +166,14 @@ describe("environment shell synchronization", () => {
           ThreadId.make("missing-thread"),
         ),
       ).toBe("absent");
+
+      yield* Scope.close(scope, Exit.void);
+      expect(
+        yield* shellMembership.getThreadMembership(
+          TARGET.environmentId,
+          ThreadId.make("missing-thread"),
+        ),
+      ).toBe("unknown");
     }).pipe(Effect.provide(environmentShellMembershipLayer)),
   );
 

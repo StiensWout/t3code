@@ -474,6 +474,25 @@ describe("EnvironmentThreads", () => {
     }),
   );
 
+  it.effect("cancels queued persistence before removing a deleted thread", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ cached: BASE_THREAD });
+      yield* Queue.offer(harness.inputs, snapshot(BASE_THREAD));
+      yield* awaitThreadState(
+        harness.observed,
+        (value) => value.status === "live" && Option.isSome(value.data),
+      );
+      yield* Queue.offer(harness.inputs, deleted());
+      yield* awaitThreadState(harness.observed, (value) => value.status === "deleted");
+
+      yield* TestClock.adjust("500 millis");
+      yield* Effect.yieldNow;
+
+      expect(yield* Ref.get(harness.savedThreads)).toEqual([]);
+      expect(yield* Ref.get(harness.removedThreads)).toEqual([THREAD_ID]);
+    }),
+  );
+
   it.effect("does not resurrect a deleted thread when the app returns to the foreground", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({
