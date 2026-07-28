@@ -16,7 +16,18 @@ export function showDesktopUpdateDownloadedToast(
       ? {
           actionProps: {
             children: "Read more",
-            onClick: () => void shell.openExternal(releaseUrl),
+            onClick: async () => {
+              try {
+                const opened = await shell.openExternal(releaseUrl);
+                if (opened) return;
+              } catch {
+                // Surface rejected IPC calls through the same user-visible fallback.
+              }
+              toastManager.add({
+                type: "error",
+                title: "Unable to open release notes",
+              });
+            },
           },
           data: { actionVariant: "link" as const },
         }
