@@ -34,6 +34,14 @@ export function isTerminalCopyShortcut(
   return isMacPlatform(platform) ? event.metaKey : event.ctrlKey && event.shiftKey;
 }
 
+export function isTerminalPasteShortcut(
+  event: Pick<KeyboardEvent, "ctrlKey" | "key" | "metaKey" | "shiftKey">,
+  platform = navigator.platform,
+) {
+  if (event.key.toLowerCase() !== "v") return false;
+  return isMacPlatform(platform) ? event.metaKey : event.ctrlKey && event.shiftKey;
+}
+
 export interface GhosttySelectionPosition {
   readonly start: { readonly x: number; readonly y: number };
   readonly end: { readonly x: number; readonly y: number };
@@ -253,6 +261,7 @@ export class GhosttyTerminalSurface {
       void navigator.clipboard.writeText(this.getSelection());
       return;
     }
+    if (isTerminalPasteShortcut(event)) return;
     if (event.isComposing || this.composing || event.key === "Process") return;
     const data = this.core.encodeKey(event);
     if (data.length === 0) return;

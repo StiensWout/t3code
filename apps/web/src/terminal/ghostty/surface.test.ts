@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import type { GhosttyCell, GhosttyRow } from "./core";
-import { isTerminalCopyShortcut, terminalLinkAtColumn } from "./surface";
+import { isTerminalCopyShortcut, isTerminalPasteShortcut, terminalLinkAtColumn } from "./surface";
 
 const cell = (text: string): GhosttyCell => ({
   text,
@@ -61,5 +61,27 @@ describe("isTerminalCopyShortcut", () => {
   it("uses the produced character instead of the physical key position", () => {
     expect(isTerminalCopyShortcut(event({ key: "C", metaKey: true }), "MacIntel")).toBe(true);
     expect(isTerminalCopyShortcut(event({ key: "j", metaKey: true }), "MacIntel")).toBe(false);
+  });
+});
+
+describe("isTerminalPasteShortcut", () => {
+  const event = (overrides: Partial<Parameters<typeof isTerminalPasteShortcut>[0]> = {}) => ({
+    ctrlKey: false,
+    key: "v",
+    metaKey: false,
+    shiftKey: false,
+    ...overrides,
+  });
+
+  it("uses Cmd+V on macOS", () => {
+    expect(isTerminalPasteShortcut(event({ metaKey: true }), "MacIntel")).toBe(true);
+    expect(isTerminalPasteShortcut(event({ ctrlKey: true }), "MacIntel")).toBe(false);
+  });
+
+  it("preserves Ctrl+V and uses Ctrl+Shift+V elsewhere", () => {
+    expect(isTerminalPasteShortcut(event({ ctrlKey: true }), "Linux x86_64")).toBe(false);
+    expect(isTerminalPasteShortcut(event({ ctrlKey: true, shiftKey: true }), "Linux x86_64")).toBe(
+      true,
+    );
   });
 });

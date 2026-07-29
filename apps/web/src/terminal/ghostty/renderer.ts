@@ -82,6 +82,14 @@ export function renderGhosttySnapshot(options: {
     rowsToDraw.push(snapshot.cursorY);
   }
 
+  if (forceFull) {
+    context.save();
+    context.resetTransform();
+    context.fillStyle = cssColor(snapshot.background);
+    context.fillRect(0, 0, context.canvas.width, context.canvas.height);
+    context.restore();
+  }
+
   context.textBaseline = "alphabetic";
   for (const rowIndex of rowsToDraw) {
     const row = snapshot.rowData[rowIndex];

@@ -87,15 +87,24 @@ function writeTerminalBuffer(terminal: GhosttyTerminalSurface, buffer: string): 
 }
 
 function parseTerminalColor(value: string, fallback: GhosttyColor): GhosttyColor {
-  const channels = value
-    .match(/\d+(?:\.\d+)?/gu)
-    ?.slice(0, 3)
-    .map(Number);
-  if (!channels || channels.length < 3) return fallback;
+  if (typeof document === "undefined") return fallback;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = 1;
+  canvas.height = 1;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) return fallback;
+
+  context.clearRect(0, 0, 1, 1);
+  context.fillStyle = value;
+  context.fillRect(0, 0, 1, 1);
+  const [red, green, blue, alpha] = context.getImageData(0, 0, 1, 1).data;
+  if (alpha === 0) return fallback;
+
   return {
-    r: Math.max(0, Math.min(255, Math.round(channels[0] ?? fallback.r))),
-    g: Math.max(0, Math.min(255, Math.round(channels[1] ?? fallback.g))),
-    b: Math.max(0, Math.min(255, Math.round(channels[2] ?? fallback.b))),
+    r: red ?? fallback.r,
+    g: green ?? fallback.g,
+    b: blue ?? fallback.b,
   };
 }
 
@@ -1206,7 +1215,7 @@ export default function ThreadTerminalDrawer({
 
       {!hasTerminalSidebar && (
         <div className="pointer-events-none absolute right-2 top-2 z-20">
-          <div className="pointer-events-auto inline-flex items-center overflow-hidden rounded-md border border-border/80 bg-background/70">
+          <div className="pointer-events-auto inline-flex items-center overflow-hidden rounded-md border border-border/80 bg-background shadow-xs">
             <TerminalActionButton
               className={`p-1 text-foreground/90 transition-colors ${
                 hasReachedSplitLimit
