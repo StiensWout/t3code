@@ -364,7 +364,6 @@ export class GhosttyTerminalCore {
     const textPointer = textBytes.length === 0 ? 0 : this.runtime.alloc(textBytes.length);
     if (textPointer !== 0) this.runtime.bytes(textPointer, textBytes.length).set(textBytes);
     this.runtime.call("ghostty_key_event_set_utf8", this.keyEvent, textPointer, textBytes.length);
-    if (textPointer !== 0) this.runtime.free(textPointer, textBytes.length);
 
     const written = this.runtime.call("ghostty_wasm_alloc_usize");
     const encoded = this.encodeOutput(written, (output, outputSize) =>
@@ -378,6 +377,7 @@ export class GhosttyTerminalCore {
       ),
     );
     this.runtime.call("ghostty_wasm_free_usize", written);
+    if (textPointer !== 0) this.runtime.free(textPointer, textBytes.length);
     return encoded;
   }
 
