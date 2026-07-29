@@ -27,10 +27,10 @@ export function terminalLinkAtColumn(row: GhosttySnapshot["rowData"][number], co
 }
 
 export function isTerminalCopyShortcut(
-  event: Pick<KeyboardEvent, "code" | "ctrlKey" | "metaKey" | "shiftKey">,
+  event: Pick<KeyboardEvent, "ctrlKey" | "key" | "metaKey" | "shiftKey">,
   platform = navigator.platform,
 ) {
-  if (event.code !== "KeyC") return false;
+  if (event.key.toLowerCase() !== "c") return false;
   return isMacPlatform(platform) ? event.metaKey : event.ctrlKey && event.shiftKey;
 }
 
@@ -68,6 +68,8 @@ export class GhosttyTerminalSurface {
   private disposed = false;
   private selectionAnchor: { x: number; y: number } | null = null;
   private selectionEnd: { x: number; y: number } | null = null;
+  private selectionAnchorScreen: { x: number; y: number } | null = null;
+  private selectionEndScreen: { x: number; y: number } | null = null;
   private selectionMoved = false;
   private composing = false;
 
@@ -199,23 +201,23 @@ export class GhosttyTerminalSurface {
   }
 
   getSelectionPosition(): GhosttySelectionPosition | null {
-    if (!this.selectionAnchor || !this.selectionEnd || !this.hasSelection()) return null;
+    if (!this.selectionAnchorScreen || !this.selectionEndScreen || !this.hasSelection())
+      return null;
     const before =
-      this.selectionAnchor.y < this.selectionEnd.y ||
-      (this.selectionAnchor.y === this.selectionEnd.y &&
-        this.selectionAnchor.x <= this.selectionEnd.x);
-    const ordered = before
-      ? { start: this.selectionAnchor, end: this.selectionEnd }
-      : { start: this.selectionEnd, end: this.selectionAnchor };
-    const start = this.core.viewportPointToScreen(ordered.start.x, ordered.start.y);
-    const end = this.core.viewportPointToScreen(ordered.end.x, ordered.end.y);
-    return start && end ? { start, end } : null;
+      this.selectionAnchorScreen.y < this.selectionEndScreen.y ||
+      (this.selectionAnchorScreen.y === this.selectionEndScreen.y &&
+        this.selectionAnchorScreen.x <= this.selectionEndScreen.x);
+    return before
+      ? { start: this.selectionAnchorScreen, end: this.selectionEndScreen }
+      : { start: this.selectionEndScreen, end: this.selectionAnchorScreen };
   }
 
   clearSelection(): void {
     this.core.clearSelection();
     this.selectionAnchor = null;
     this.selectionEnd = null;
+    this.selectionAnchorScreen = null;
+    this.selectionEndScreen = null;
     this.options.onSelectionChange();
     this.requestRender();
   }
@@ -284,6 +286,8 @@ export class GhosttyTerminalSurface {
     this.selectionEnd = cell;
     this.selectionMoved = false;
     this.core.setSelection(cell.x, cell.y, cell.x, cell.y);
+    this.selectionAnchorScreen = this.core.viewportPointToScreen(cell.x, cell.y);
+    this.selectionEndScreen = this.selectionAnchorScreen;
     this.canvas.setPointerCapture(event.pointerId);
     this.requestRender();
   };
@@ -295,15 +299,20 @@ export class GhosttyTerminalSurface {
     this.selectionMoved = true;
     this.selectionEnd = cell;
     this.core.setSelection(this.selectionAnchor.x, this.selectionAnchor.y, cell.x, cell.y);
+    this.selectionAnchorScreen = this.core.viewportPointToScreen(
+      this.selectionAnchor.x,
+      this.selectionAnchor.y,
+    );
+    this.selectionEndScreen = this.core.viewportPointToScreen(cell.x, cell.y);
     this.options.onSelectionChange();
     this.requestRender();
   };
 
   private readonly onPointerUp = (event: PointerEvent) => {
-    if (event.button !== 0) return;
     if (this.canvas.hasPointerCapture(event.pointerId)) {
       this.canvas.releasePointerCapture(event.pointerId);
     }
+    if (event.button !== 0) return;
     if (!this.selectionMoved && (event.metaKey || event.ctrlKey)) {
       const link = this.linkAt(event.clientX, event.clientY);
       if (link) this.options.onLinkActivate(link, event);

@@ -39,8 +39,8 @@ describe("terminalLinkAtColumn", () => {
 
 describe("isTerminalCopyShortcut", () => {
   const event = (overrides: Partial<Parameters<typeof isTerminalCopyShortcut>[0]> = {}) => ({
-    code: "KeyC",
     ctrlKey: false,
+    key: "c",
     metaKey: false,
     shiftKey: false,
     ...overrides,
@@ -56,5 +56,10 @@ describe("isTerminalCopyShortcut", () => {
     expect(isTerminalCopyShortcut(event({ ctrlKey: true, shiftKey: true }), "Linux x86_64")).toBe(
       true,
     );
+  });
+
+  it("uses the produced character instead of the physical key position", () => {
+    expect(isTerminalCopyShortcut(event({ key: "C", metaKey: true }), "MacIntel")).toBe(true);
+    expect(isTerminalCopyShortcut(event({ key: "j", metaKey: true }), "MacIntel")).toBe(false);
   });
 });
