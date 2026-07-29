@@ -72,7 +72,8 @@ export class GhosttyTerminalSurface {
   private snapshot: GhosttySnapshot | null = null;
   private frame = 0;
   private cursorTimer: number | null = null;
-  private compositionCommitTimer: number | null = null;
+  private compositionInputToSuppress: string | null = null;
+  private compositionSuppressionTimer: number | null = null;
   private cursorOn = true;
   private forceFullRender = true;
   private disposed = false;
@@ -248,8 +249,8 @@ export class GhosttyTerminalSurface {
     this.resizeObserver.disconnect();
     if (this.frame !== 0) window.cancelAnimationFrame(this.frame);
     if (this.cursorTimer !== null) window.clearTimeout(this.cursorTimer);
-    if (this.compositionCommitTimer !== null) {
-      window.clearTimeout(this.compositionCommitTimer);
+    if (this.compositionSuppressionTimer !== null) {
+      window.clearTimeout(this.compositionSuppressionTimer);
     }
     this.removeEvents();
     this.core.dispose();
@@ -260,6 +261,7 @@ export class GhosttyTerminalSurface {
   }
 
   private readonly onKeyDown = (event: KeyboardEvent) => {
+    this.clearCompositionInputSuppression();
     if (!this.options.beforeKey(event)) return;
     if (isTerminalCopyShortcut(event) && this.hasSelection()) {
       event.preventDefault();
@@ -276,6 +278,7 @@ export class GhosttyTerminalSurface {
   };
 
   private readonly onPaste = (event: ClipboardEvent) => {
+    this.clearCompositionInputSuppression();
     const data = event.clipboardData?.getData("text/plain") ?? "";
     if (data.length === 0) return;
     event.preventDefault();
@@ -283,35 +286,43 @@ export class GhosttyTerminalSurface {
   };
 
   private readonly onCompositionStart = () => {
-    if (this.compositionCommitTimer !== null) {
-      window.clearTimeout(this.compositionCommitTimer);
-      this.compositionCommitTimer = null;
-    }
+    this.clearCompositionInputSuppression();
     this.composing = true;
   };
 
   private readonly onCompositionEnd = (event: CompositionEvent) => {
     this.composing = false;
-    const fallbackData = event.data;
-    this.compositionCommitTimer = window.setTimeout(() => {
-      this.compositionCommitTimer = null;
-      const data = this.input.value || fallbackData;
-      if (data.length > 0) this.options.onData(data);
-      this.input.value = "";
-    }, 0);
+    const data = this.input.value || event.data;
+    if (data.length > 0) this.options.onData(data);
+    this.input.value = "";
+    this.compositionInputToSuppress = data;
+    this.compositionSuppressionTimer = window.setTimeout(() => {
+      this.compositionInputToSuppress = null;
+      this.compositionSuppressionTimer = null;
+    }, 100);
   };
 
   private readonly onInput = (event: Event) => {
     const inputEvent = event as InputEvent;
     if (this.composing || inputEvent.isComposing) return;
-    if (this.compositionCommitTimer !== null) {
-      window.clearTimeout(this.compositionCommitTimer);
-      this.compositionCommitTimer = null;
-    }
     const data = this.input.value || inputEvent.data || "";
+    if (data === this.compositionInputToSuppress) {
+      this.clearCompositionInputSuppression();
+      this.input.value = "";
+      return;
+    }
+    this.clearCompositionInputSuppression();
     if (data.length > 0) this.options.onData(data);
     this.input.value = "";
   };
+
+  private clearCompositionInputSuppression(): void {
+    if (this.compositionSuppressionTimer !== null) {
+      window.clearTimeout(this.compositionSuppressionTimer);
+      this.compositionSuppressionTimer = null;
+    }
+    this.compositionInputToSuppress = null;
+  }
 
   private readonly onPointerDown = (event: PointerEvent) => {
     if (event.button !== 0) return;
