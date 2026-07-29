@@ -29,7 +29,7 @@ import {
 import { CommandId, type EnvironmentId, ProjectId } from "@t3tools/contracts";
 import { StackActions, useNavigation } from "@react-navigation/native";
 import { SymbolView } from "../../components/AppSymbol";
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ActivityIndicator, Alert, Pressable, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Arr from "effect/Array";
@@ -55,6 +55,7 @@ import {
   useRemoteEnvironmentRuntime,
   useSavedRemoteConnections,
 } from "../../state/use-remote-environment-registry";
+import { resolveAddProjectEnvironment } from "./AddProjectScreen.logic";
 
 interface EnvironmentOption {
   readonly environmentId: EnvironmentId;
@@ -236,10 +237,13 @@ function ProjectPathInput(props: {
 }
 
 function useBrowsePathInput(environment: EnvironmentOption | null) {
+  const environmentId = environment?.environmentId ?? null;
+  const environmentBaseDirectory = environment?.baseDirectory ?? null;
   const [pathInput, commitPathInput] = useState(() =>
-    getAddProjectInitialQuery(environment?.baseDirectory),
+    getAddProjectInitialQuery(environmentBaseDirectory),
   );
-  const environmentRuntime = useRemoteEnvironmentRuntime(environment?.environmentId ?? null);
+  const previousEnvironmentIdRef = useRef(environmentId);
+  const environmentRuntime = useRemoteEnvironmentRuntime(environmentId);
   const loadBrowsePath = useAtomQueryRunner(filesystemEnvironment.browse, {
     reportFailure: false,
     reportDefect: false,
@@ -277,10 +281,11 @@ function useBrowsePathInput(environment: EnvironmentOption | null) {
   );
 
   useEffect(() => {
-    if (environment) {
-      setPathInput(getAddProjectInitialQuery(environment.baseDirectory));
+    if (environmentId !== null && environmentId !== previousEnvironmentIdRef.current) {
+      previousEnvironmentIdRef.current = environmentId;
+      setPathInput(getAddProjectInitialQuery(environmentBaseDirectory));
     }
-  }, [environment, setPathInput]);
+  }, [environmentBaseDirectory, environmentId, setPathInput]);
 
   useEffect(
     () => () => {
@@ -583,17 +588,7 @@ function useEnvironmentFromParam(
 ): EnvironmentOption | null {
   const environmentOptions = useEnvironmentOptions();
   const environmentId = stringParam(environmentIdParam) as EnvironmentId | null;
-  return (
-    environmentOptions.find(
-      (environment) =>
-        environment.environmentId === environmentId &&
-        canCreateProjectInEnvironment(environment.connectionState),
-    ) ??
-    environmentOptions.find((environment) =>
-      canCreateProjectInEnvironment(environment.connectionState),
-    ) ??
-    null
-  );
+  return resolveAddProjectEnvironment(environmentOptions, environmentId);
 }
 
 export function AddProjectRepositoryScreen(props: {
@@ -657,26 +652,32 @@ export function AddProjectRepositoryScreen(props: {
   return (
     <AddProjectShell>
       {error ? <ErrorBanner message={error} /> : null}
-      <TextInput
-        className="h-12 min-h-12 rounded-[24px] px-4 py-0 text-base leading-snug"
-        value={repositoryInput}
-        onChangeText={setRepositoryInput}
-        autoCapitalize="none"
-        autoCorrect={false}
-        placeholder={
-          source === "url"
-            ? "https://github.com/org/repo.git"
-            : addProjectRemoteSourcePathHint(source)
-        }
-        returnKeyType="next"
-        onSubmitEditing={() => void lookupRepository()}
-      />
-      <PrimaryActionButton
-        label={source === "url" ? "Continue" : "Lookup repository"}
-        disabled={isSubmitting || repositoryInput.trim().length === 0}
-        onPress={() => void lookupRepository()}
-        loading={isSubmitting}
-      />
+      {environment ? (
+        <>
+          <TextInput
+            className="h-12 min-h-12 rounded-[24px] px-4 py-0 text-base leading-snug"
+            value={repositoryInput}
+            onChangeText={setRepositoryInput}
+            autoCapitalize="none"
+            autoCorrect={false}
+            placeholder={
+              source === "url"
+                ? "https://github.com/org/repo.git"
+                : addProjectRemoteSourcePathHint(source)
+            }
+            returnKeyType="next"
+            onSubmitEditing={() => void lookupRepository()}
+          />
+          <PrimaryActionButton
+            label={source === "url" ? "Continue" : "Lookup repository"}
+            disabled={isSubmitting || repositoryInput.trim().length === 0}
+            onPress={() => void lookupRepository()}
+            loading={isSubmitting}
+          />
+        </>
+      ) : (
+        <EmptyEnvironmentState />
+      )}
     </AddProjectShell>
   );
 }
