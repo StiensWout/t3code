@@ -4,6 +4,7 @@ import {
   resolveTerminalSelectionActionPosition,
   shouldHandleTerminalSelectionMouseUp,
   terminalSelectionActionDelayForClickCount,
+  terminalSelectionLineRange,
 } from "./ThreadTerminalDrawer";
 
 describe("resolveTerminalSelectionActionPosition", () => {
@@ -71,5 +72,14 @@ describe("resolveTerminalSelectionActionPosition", () => {
     expect(shouldHandleTerminalSelectionMouseUp(true, 0)).toBe(true);
     expect(shouldHandleTerminalSelectionMouseUp(false, 0)).toBe(false);
     expect(shouldHandleTerminalSelectionMouseUp(true, 1)).toBe(false);
+  });
+
+  it("uses Ghostty's physical screen range for visually wrapped selections", () => {
+    expect(
+      terminalSelectionLineRange({
+        start: { y: 4 },
+        end: { y: 6 },
+      }),
+    ).toEqual({ lineStart: 5, lineEnd: 7 });
   });
 });

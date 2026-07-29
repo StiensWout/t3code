@@ -233,6 +233,17 @@ export function shouldHandleTerminalSelectionMouseUp(
   return selectionGestureActive && button === 0;
 }
 
+export function terminalSelectionLineRange(position: {
+  start: { y: number };
+  end: { y: number };
+}): { lineStart: number; lineEnd: number } {
+  const lineStart = position.start.y + 1;
+  return {
+    lineStart,
+    lineEnd: Math.max(lineStart, position.end.y + 1),
+  };
+}
+
 interface TerminalViewportProps {
   threadRef: ScopedThreadRef;
   threadId: ThreadId;
@@ -356,6 +367,8 @@ export function TerminalViewport({
     const localApi = readLocalApi();
     let cancelled = false;
     let teardown: (() => void) | null = null;
+    let setupTerminal: GhosttyTerminalSurface | null = null;
+    let setupCleanups: Array<() => void> = [];
 
     const setup = async (): Promise<(() => void) | null> => {
       const terminalOptions: GhosttyTerminalSurfaceOptions = {
@@ -372,6 +385,7 @@ export function TerminalViewport({
         terminal.dispose();
         return null;
       }
+      setupTerminal = terminal;
       terminalRef.current = terminal;
       const latestSession = latestSessionRef.current;
       previousSessionRef.current = latestSession;
@@ -386,6 +400,7 @@ export function TerminalViewport({
           selectionActionTimerRef.current = null;
         }
       };
+      setupCleanups.push(clearSelectionAction);
 
       const readSelectionAction = (): {
         position: { x: number; y: number };
@@ -403,9 +418,7 @@ export function TerminalViewport({
         if (!selectionPosition || normalizedText.length === 0) {
           return null;
         }
-        const lineStart = selectionPosition.start.y + 1;
-        const lineCount = normalizedText.split("\n").length;
-        const lineEnd = Math.max(lineStart, lineStart + lineCount - 1);
+        const { lineStart, lineEnd } = terminalSelectionLineRange(selectionPosition);
         const bounds = mountElement.getBoundingClientRect();
         const selectionRect = getTerminalSelectionRect(mountElement);
         const position = resolveTerminalSelectionActionPosition({
@@ -631,6 +644,10 @@ export function TerminalViewport({
       };
       window.addEventListener("mouseup", handleMouseUp);
       mount.addEventListener("pointerdown", handlePointerDown);
+      setupCleanups.push(() => {
+        window.removeEventListener("mouseup", handleMouseUp);
+        mount.removeEventListener("pointerdown", handlePointerDown);
+      });
 
       const themeObserver = new MutationObserver(() => {
         const activeTerminal = terminalRef.current;
@@ -641,6 +658,7 @@ export function TerminalViewport({
         attributes: true,
         attributeFilter: ["class", "style"],
       });
+      setupCleanups.push(() => themeObserver.disconnect());
 
       const fitTimer = window.setTimeout(() => {
         const activeTerminal = terminalRef.current;
@@ -652,16 +670,14 @@ export function TerminalViewport({
         }
         void resizeTerminal(activeTerminal.cols, activeTerminal.rows);
       }, 30);
+      setupCleanups.push(() => window.clearTimeout(fitTimer));
 
+      const cleanups = setupCleanups;
+      setupCleanups = [];
+      setupTerminal = null;
       return () => {
-        window.clearTimeout(fitTimer);
-        if (selectionActionTimerRef.current !== null) {
-          window.clearTimeout(selectionActionTimerRef.current);
-        }
-        window.removeEventListener("mouseup", handleMouseUp);
-        mount.removeEventListener("pointerdown", handlePointerDown);
-        themeObserver.disconnect();
-        terminalRef.current = null;
+        for (const cleanup of cleanups.toReversed()) cleanup();
+        if (terminalRef.current === terminal) terminalRef.current = null;
         terminal.dispose();
       };
     };
@@ -675,6 +691,11 @@ export function TerminalViewport({
         teardown = nextTeardown;
       })
       .catch((error: unknown) => {
+        for (const cleanup of setupCleanups.toReversed()) cleanup();
+        setupCleanups = [];
+        if (terminalRef.current === setupTerminal) terminalRef.current = null;
+        setupTerminal?.dispose();
+        setupTerminal = null;
         if (cancelled) return;
         mount.textContent =
           error instanceof Error ? error.message : "Unable to initialize libghostty-vt";

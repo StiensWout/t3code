@@ -1,4 +1,5 @@
 import { isMacPlatform } from "../../lib/utils";
+import { collectWrappedTerminalLinkLine, extractTerminalLinks } from "../../terminal-links";
 import { GhosttyTerminalCore, type GhosttySnapshot, type GhosttyTheme } from "./core";
 import {
   measureGhosttyCell,
@@ -11,19 +12,45 @@ const FONT_SIZE = 12;
 const FONT_FAMILY =
   '"SF Mono", "SFMono-Regular", "JetBrains Mono", Consolas, "Liberation Mono", Menlo, monospace';
 const CONTENT_PADDING = 4;
-const linkPattern =
-  /https?:\/\/[^\s"'<>]+|(?:\.{0,2}\/)?[\w@+.,-]+(?:\/[\w@+.,-]+)+(?::\d+(?::\d+)?)?/gu;
+function terminalRowText(row: GhosttySnapshot["rowData"][number], trimRight: boolean): string {
+  const text = row.cells.map((cell) => cell.text || " ").join("");
+  return trimRight ? text.trimEnd() : text;
+}
 
-export function terminalLinkAtColumn(row: GhosttySnapshot["rowData"][number], column: number) {
+function terminalColumnOffset(row: GhosttySnapshot["rowData"][number], column: number): number {
   let offset = 0;
   for (let cellIndex = 0; cellIndex < column; cellIndex += 1) {
     offset += row.cells[cellIndex]?.text.length || 1;
   }
-  for (const match of row.text.matchAll(linkPattern)) {
-    const value = match[0];
-    if (offset >= match.index && offset < match.index + value.length) return value;
+  return offset;
+}
+
+export function terminalLinkAtPosition(
+  rows: GhosttySnapshot["rowData"],
+  rowIndex: number,
+  column: number,
+): string | null {
+  const wrappedLine = collectWrappedTerminalLinkLine(rowIndex + 1, (index) => {
+    const row = rows[index];
+    if (!row) return null;
+    return {
+      isWrapped: row.isWrapContinuation,
+      translateToString: (trimRight = false) => terminalRowText(row, trimRight),
+    };
+  });
+  if (!wrappedLine) return null;
+  const segment = wrappedLine.segments.find((value) => value.bufferLineNumber === rowIndex + 1);
+  const row = rows[rowIndex];
+  if (!segment || !row) return null;
+  const offset = segment.startIndex + terminalColumnOffset(row, column);
+  for (const match of extractTerminalLinks(wrappedLine.text)) {
+    if (offset >= match.start && offset < match.end) return match.text;
   }
   return null;
+}
+
+export function terminalLinkAtColumn(row: GhosttySnapshot["rowData"][number], column: number) {
+  return terminalLinkAtPosition([row], 0, column);
 }
 
 export function isTerminalCopyShortcut(
@@ -636,9 +663,7 @@ export class GhosttyTerminalSurface {
     const cell = this.cellAt(clientX, clientY);
     const explicitHyperlink = this.core.hyperlinkAt(cell.x, cell.y);
     if (explicitHyperlink) return explicitHyperlink;
-    const row = this.snapshot.rowData[cell.y];
-    if (!row) return null;
-    return terminalLinkAtColumn(row, cell.x);
+    return terminalLinkAtPosition(this.snapshot.rowData, cell.y, cell.x);
   }
 
   private sendMouse(

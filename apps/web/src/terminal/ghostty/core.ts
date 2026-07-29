@@ -27,6 +27,7 @@ const RENDER_DATA = {
 
 const ROW_DATA = {
   dirty: 1,
+  raw: 2,
   cells: 3,
 } as const;
 
@@ -67,6 +68,7 @@ export interface GhosttyCell {
 export interface GhosttyRow {
   readonly cells: readonly GhosttyCell[];
   readonly text: string;
+  readonly isWrapContinuation: boolean;
 }
 
 export interface GhosttySnapshot {
@@ -364,22 +366,18 @@ export class GhosttyTerminalCore {
     this.runtime.call("ghostty_key_event_set_utf8", this.keyEvent, textPointer, textBytes.length);
     if (textPointer !== 0) this.runtime.free(textPointer, textBytes.length);
 
-    const outputSize = 128;
-    const output = this.runtime.alloc(outputSize);
     const written = this.runtime.call("ghostty_wasm_alloc_usize");
-    const result = this.runtime.call(
-      "ghostty_key_encoder_encode",
-      this.keyEncoder,
-      this.keyEvent,
-      output,
-      outputSize,
-      written,
+    const encoded = this.encodeOutput(written, (output, outputSize) =>
+      this.runtime.call(
+        "ghostty_key_encoder_encode",
+        this.keyEncoder,
+        this.keyEvent,
+        output,
+        outputSize,
+        written,
+      ),
     );
-    const length = this.runtime.view(written, 4).getUint32(0, true);
-    const encoded =
-      result === GHOSTTY_SUCCESS ? decoder.decode(this.runtime.bytes(output, length)) : "";
     this.runtime.call("ghostty_wasm_free_usize", written);
-    this.runtime.free(output, outputSize);
     return encoded;
   }
 
@@ -474,21 +472,17 @@ export class GhosttyTerminalCore {
     this.runtime.free(position, positionLayout.size);
 
     const written = this.runtime.call("ghostty_wasm_alloc_usize");
-    const outputSize = 128;
-    const output = this.runtime.alloc(outputSize);
-    const result = this.runtime.call(
-      "ghostty_mouse_encoder_encode",
-      this.mouseEncoder,
-      this.mouseEvent,
-      output,
-      outputSize,
-      written,
+    const encoded = this.encodeOutput(written, (output, outputSize) =>
+      this.runtime.call(
+        "ghostty_mouse_encoder_encode",
+        this.mouseEncoder,
+        this.mouseEvent,
+        output,
+        outputSize,
+        written,
+      ),
     );
-    const outputLength = this.runtime.view(written, 4).getUint32(0, true);
-    const encoded =
-      result === GHOSTTY_SUCCESS ? decoder.decode(this.runtime.bytes(output, outputLength)) : "";
     this.runtime.call("ghostty_wasm_free_usize", written);
-    this.runtime.free(output, outputSize);
     return encoded;
   }
 
@@ -598,6 +592,7 @@ export class GhosttyTerminalCore {
       this.rows = Array.from({ length: rowCount }, () => ({
         cells: Array.from({ length: cols }, () => this.emptyCell(foreground, background)),
         text: "",
+        isWrapContinuation: false,
       }));
     }
 
@@ -748,12 +743,42 @@ export class GhosttyTerminalCore {
     }
   }
 
+  private encodeOutput(
+    written: number,
+    encode: (output: number, outputSize: number) => number,
+  ): string {
+    const sizeResult = encode(0, 0);
+    const outputSize = this.runtime.view(written, 4).getUint32(0, true);
+    if (sizeResult === GHOSTTY_SUCCESS && outputSize === 0) return "";
+    if (sizeResult !== GHOSTTY_OUT_OF_SPACE || outputSize === 0) return "";
+
+    const output = this.runtime.alloc(outputSize);
+    const result = encode(output, outputSize);
+    const outputLength = this.runtime.view(written, 4).getUint32(0, true);
+    const encoded =
+      result === GHOSTTY_SUCCESS ? decoder.decode(this.runtime.bytes(output, outputLength)) : "";
+    this.runtime.free(output, outputSize);
+    return encoded;
+  }
+
   private readRow(
     iterator: number,
     cols: number,
     defaultForeground: GhosttyColor,
     defaultBackground: GhosttyColor,
   ): GhosttyRow {
+    this.assertSuccess(
+      "ghostty_render_state_row_get(raw)",
+      this.runtime.call("ghostty_render_state_row_get", iterator, ROW_DATA.raw, this.scratch),
+    );
+    const rawRow = this.runtime.view(this.scratch, 8).getBigUint64(0, true);
+    this.runtime.bytes(this.scratch + 8, 1)[0] = 0;
+    this.assertSuccess(
+      "ghostty_row_get(wrap continuation)",
+      this.runtime.call("ghostty_row_get", rawRow, 2, this.scratch + 8),
+    );
+    const isWrapContinuation = this.runtime.bytes(this.scratch + 8, 1)[0] !== 0;
+
     this.assertSuccess(
       "ghostty_render_state_row_get(cells)",
       this.runtime.call(
@@ -824,6 +849,7 @@ export class GhosttyTerminalCore {
         .map((cell) => cell.text || " ")
         .join("")
         .trimEnd(),
+      isWrapContinuation,
     };
   }
 

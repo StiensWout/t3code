@@ -10,6 +10,7 @@ import {
   isTerminalPasteShortcut,
   shouldReportTerminalMouse,
   terminalLinkAtColumn,
+  terminalLinkAtPosition,
 } from "./surface";
 
 const cell = (text: string): GhosttyCell => ({
@@ -38,11 +39,31 @@ describe("terminalLinkAtColumn", () => {
         .map((value) => value.text || " ")
         .join("")
         .trimEnd(),
+      isWrapContinuation: false,
     };
 
     expect(terminalLinkAtColumn(row, 2)).toBe("https://t3.codes");
     expect(terminalLinkAtColumn(row, cells.length - 1)).toBe("https://t3.codes");
     expect(terminalLinkAtColumn(row, 0)).toBeNull();
+  });
+
+  it("uses shared path matching and reconstructs soft-wrapped links", () => {
+    const row = (text: string, isWrapContinuation: boolean): GhosttyRow => ({
+      cells: Array.from(text.padEnd(16), (character) => cell(character)),
+      text: text.trimEnd(),
+      isWrapContinuation,
+    });
+    const rows = [
+      row("https://example.", false),
+      row("com/reference", true),
+      row("~/project/file", false),
+      row("C:\\repo\\file.ts", false),
+    ];
+
+    expect(terminalLinkAtPosition(rows, 0, 8)).toBe("https://example.com/reference");
+    expect(terminalLinkAtPosition(rows, 1, 4)).toBe("https://example.com/reference");
+    expect(terminalLinkAtPosition(rows, 2, 2)).toBe("~/project/file");
+    expect(terminalLinkAtPosition(rows, 3, 4)).toBe("C:\\repo\\file.ts");
   });
 });
 

@@ -1,7 +1,7 @@
 import ghosttyWasmUrl from "./vendor/ghostty-vt.wasm?url";
 import ghosttyWritePtyWasmUrl from "./vendor/ghostty-write-pty.wasm?url&no-inline";
 
-type WasmFunction = (...args: number[]) => number;
+type WasmFunction = (...args: Array<number | bigint>) => number;
 
 interface TypeField {
   readonly offset: number;
@@ -65,7 +65,7 @@ export class GhosttyRuntime {
     return runtime;
   }
 
-  call(name: string, ...args: number[]): number {
+  call(name: string, ...args: Array<number | bigint>): number {
     const fn = this.exports[name];
     if (typeof fn !== "function") {
       throw new Error(`libghostty-vt export is unavailable: ${name}`);

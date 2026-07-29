@@ -68,6 +68,7 @@ ensure_zig() {
 ensure_ghostty_source() {
   if [[ ! -d "${GHOSTTY_SOURCE_DIR}/.git" ]]; then
     require_cmd git
+    mkdir -p "$(dirname "${GHOSTTY_SOURCE_DIR}")"
     log "cloning Ghostty ${GHOSTTY_REVISION}"
     git clone --filter=blob:none --no-checkout https://github.com/ghostty-org/ghostty.git \
       "${GHOSTTY_SOURCE_DIR}"
