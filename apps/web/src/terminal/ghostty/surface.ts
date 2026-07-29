@@ -71,6 +71,7 @@ export class GhosttyTerminalSurface {
   private snapshot: GhosttySnapshot | null = null;
   private frame = 0;
   private cursorTimer: number | null = null;
+  private compositionCommitTimer: number | null = null;
   private cursorOn = true;
   private forceFullRender = true;
   private disposed = false;
@@ -246,6 +247,9 @@ export class GhosttyTerminalSurface {
     this.resizeObserver.disconnect();
     if (this.frame !== 0) window.cancelAnimationFrame(this.frame);
     if (this.cursorTimer !== null) window.clearTimeout(this.cursorTimer);
+    if (this.compositionCommitTimer !== null) {
+      window.clearTimeout(this.compositionCommitTimer);
+    }
     this.removeEvents();
     this.core.dispose();
     if (this.canvas.parentElement === this.mount || this.input.parentElement === this.mount) {
@@ -278,12 +282,33 @@ export class GhosttyTerminalSurface {
   };
 
   private readonly onCompositionStart = () => {
+    if (this.compositionCommitTimer !== null) {
+      window.clearTimeout(this.compositionCommitTimer);
+      this.compositionCommitTimer = null;
+    }
     this.composing = true;
   };
 
   private readonly onCompositionEnd = (event: CompositionEvent) => {
     this.composing = false;
-    if (event.data.length > 0) this.options.onData(event.data);
+    const fallbackData = event.data;
+    this.compositionCommitTimer = window.setTimeout(() => {
+      this.compositionCommitTimer = null;
+      const data = this.input.value || fallbackData;
+      if (data.length > 0) this.options.onData(data);
+      this.input.value = "";
+    }, 0);
+  };
+
+  private readonly onInput = (event: Event) => {
+    const inputEvent = event as InputEvent;
+    if (this.composing || inputEvent.isComposing) return;
+    if (this.compositionCommitTimer !== null) {
+      window.clearTimeout(this.compositionCommitTimer);
+      this.compositionCommitTimer = null;
+    }
+    const data = this.input.value || inputEvent.data || "";
+    if (data.length > 0) this.options.onData(data);
     this.input.value = "";
   };
 
@@ -346,6 +371,7 @@ export class GhosttyTerminalSurface {
 
   private installEvents(): void {
     this.input.addEventListener("keydown", this.onKeyDown);
+    this.input.addEventListener("input", this.onInput);
     this.input.addEventListener("paste", this.onPaste);
     this.input.addEventListener("compositionstart", this.onCompositionStart);
     this.input.addEventListener("compositionend", this.onCompositionEnd);
@@ -359,6 +385,7 @@ export class GhosttyTerminalSurface {
 
   private removeEvents(): void {
     this.input.removeEventListener("keydown", this.onKeyDown);
+    this.input.removeEventListener("input", this.onInput);
     this.input.removeEventListener("paste", this.onPaste);
     this.input.removeEventListener("compositionstart", this.onCompositionStart);
     this.input.removeEventListener("compositionend", this.onCompositionEnd);
