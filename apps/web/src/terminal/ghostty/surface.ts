@@ -261,7 +261,6 @@ export class GhosttyTerminalSurface {
   }
 
   private readonly onKeyDown = (event: KeyboardEvent) => {
-    this.clearCompositionInputSuppression();
     if (!this.options.beforeKey(event)) return;
     if (isTerminalCopyShortcut(event) && this.hasSelection()) {
       event.preventDefault();
@@ -278,7 +277,6 @@ export class GhosttyTerminalSurface {
   };
 
   private readonly onPaste = (event: ClipboardEvent) => {
-    this.clearCompositionInputSuppression();
     const data = event.clipboardData?.getData("text/plain") ?? "";
     if (data.length === 0) return;
     event.preventDefault();
