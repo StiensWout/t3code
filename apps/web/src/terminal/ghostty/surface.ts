@@ -42,6 +42,10 @@ export function isTerminalPasteShortcut(
   return isMacPlatform(platform) ? event.metaKey : event.ctrlKey && event.shiftKey;
 }
 
+export function isTerminalCompositionCommitInput(event: Pick<InputEvent, "inputType">): boolean {
+  return event.inputType === "insertCompositionText" || event.inputType === "insertFromComposition";
+}
+
 export interface GhosttySelectionPosition {
   readonly start: { readonly x: number; readonly y: number };
   readonly end: { readonly x: number; readonly y: number };
@@ -304,7 +308,7 @@ export class GhosttyTerminalSurface {
     const inputEvent = event as InputEvent;
     if (this.composing || inputEvent.isComposing) return;
     const data = this.input.value || inputEvent.data || "";
-    if (data === this.compositionInputToSuppress) {
+    if (data === this.compositionInputToSuppress && isTerminalCompositionCommitInput(inputEvent)) {
       this.clearCompositionInputSuppression();
       this.input.value = "";
       return;

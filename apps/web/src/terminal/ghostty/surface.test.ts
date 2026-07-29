@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import type { GhosttyCell, GhosttyRow } from "./core";
-import { isTerminalCopyShortcut, isTerminalPasteShortcut, terminalLinkAtColumn } from "./surface";
+import {
+  isTerminalCompositionCommitInput,
+  isTerminalCopyShortcut,
+  isTerminalPasteShortcut,
+  terminalLinkAtColumn,
+} from "./surface";
 
 const cell = (text: string): GhosttyCell => ({
   text,
@@ -83,5 +88,16 @@ describe("isTerminalPasteShortcut", () => {
     expect(isTerminalPasteShortcut(event({ ctrlKey: true, shiftKey: true }), "Linux x86_64")).toBe(
       true,
     );
+  });
+});
+
+describe("isTerminalCompositionCommitInput", () => {
+  it("identifies browser composition follow-up input", () => {
+    expect(isTerminalCompositionCommitInput({ inputType: "insertCompositionText" })).toBe(true);
+    expect(isTerminalCompositionCommitInput({ inputType: "insertFromComposition" })).toBe(true);
+  });
+
+  it("keeps a fast repeated input as legitimate text", () => {
+    expect(isTerminalCompositionCommitInput({ inputType: "insertText" })).toBe(false);
   });
 });
