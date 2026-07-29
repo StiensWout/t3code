@@ -363,6 +363,7 @@ export function TerminalViewport({
         onData: (data) => handleData(data),
         onResize: (cols, rows) => void resizeTerminal(cols, rows),
         onSelectionChange: () => handleSelectionChange(),
+        onCopy: (text) => handleCopy(text),
         beforeKey: (event) => handleBeforeKey(event),
         onLinkActivate: (text, event) => handleLinkActivate(text, event),
       };
@@ -574,6 +575,17 @@ export function TerminalViewport({
             error instanceof Error ? error.message : "Unable to open path",
           );
         })();
+      }
+
+      function handleCopy(text: string): void {
+        void writeTextToClipboard(text, "terminal selection").catch((error: unknown) => {
+          const activeTerminal = terminalRef.current;
+          if (!activeTerminal) return;
+          writeSystemMessage(
+            activeTerminal,
+            error instanceof Error ? error.message : "Unable to copy terminal selection",
+          );
+        });
       }
 
       function handleData(data: string): void {

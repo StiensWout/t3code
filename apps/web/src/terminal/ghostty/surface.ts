@@ -52,6 +52,7 @@ export interface GhosttyTerminalSurfaceOptions {
   readonly onData: (data: string) => void;
   readonly onResize: (cols: number, rows: number) => void;
   readonly onSelectionChange: () => void;
+  readonly onCopy: (text: string) => void;
   readonly beforeKey: (event: KeyboardEvent) => boolean;
   readonly onLinkActivate: (text: string, event: MouseEvent) => void;
 }
@@ -262,7 +263,7 @@ export class GhosttyTerminalSurface {
     if (!this.options.beforeKey(event)) return;
     if (isTerminalCopyShortcut(event) && this.hasSelection()) {
       event.preventDefault();
-      void navigator.clipboard.writeText(this.getSelection());
+      this.options.onCopy(this.getSelection());
       return;
     }
     if (isTerminalPasteShortcut(event)) return;
