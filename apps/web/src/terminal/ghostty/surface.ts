@@ -43,7 +43,67 @@ export function isTerminalPasteShortcut(
 }
 
 export function isTerminalCompositionCommitInput(event: Pick<InputEvent, "inputType">): boolean {
-  return event.inputType === "insertCompositionText" || event.inputType === "insertFromComposition";
+  return (
+    event.inputType === "" ||
+    event.inputType === "insertCompositionText" ||
+    event.inputType === "insertFromComposition"
+  );
+}
+
+export function shouldReportTerminalMouse(
+  tracking: boolean,
+  event: Pick<MouseEvent, "ctrlKey" | "metaKey" | "shiftKey">,
+): boolean {
+  return tracking && !event.shiftKey && !event.ctrlKey && !event.metaKey;
+}
+
+export function isTerminalLinkPointerGesture(
+  event: Pick<MouseEvent, "ctrlKey" | "metaKey">,
+  platform = navigator.platform,
+): boolean {
+  return isMacPlatform(platform)
+    ? event.metaKey && !event.ctrlKey
+    : event.ctrlKey && !event.metaKey;
+}
+
+export function ghosttyMouseButton(button: number): number | null {
+  switch (button) {
+    case 0:
+      return 1;
+    case 1:
+      return 3;
+    case 2:
+      return 2;
+    case 3:
+      return 4;
+    case 4:
+      return 5;
+    default:
+      return null;
+  }
+}
+
+export interface TerminalSelectionClickSequence {
+  readonly count: number;
+  readonly time: number;
+  readonly x: number;
+  readonly y: number;
+}
+
+export function advanceTerminalSelectionClickSequence(
+  previous: TerminalSelectionClickSequence | null,
+  event: Pick<PointerEvent, "clientX" | "clientY" | "timeStamp">,
+): TerminalSelectionClickSequence {
+  const repeats =
+    previous !== null &&
+    event.timeStamp - previous.time <= 500 &&
+    Math.hypot(event.clientX - previous.x, event.clientY - previous.y) <= 4;
+  return {
+    count: repeats ? (previous.count >= 3 ? 1 : previous.count + 1) : 1,
+    time: event.timeStamp,
+    x: event.clientX,
+    y: event.clientY,
+  };
 }
 
 export interface GhosttySelectionPosition {
@@ -85,6 +145,15 @@ export class GhosttyTerminalSurface {
   private selectionEnd: { x: number; y: number } | null = null;
   private selectionAnchorScreen: { x: number; y: number } | null = null;
   private selectionEndScreen: { x: number; y: number } | null = null;
+  private selectionMode: "cell" | "word" | "line" = "cell";
+  private selectionBase: {
+    start: { x: number; y: number };
+    end: { x: number; y: number };
+  } | null = null;
+  private mouseReportingPointerId: number | null = null;
+  private mouseReportingButton: number | null = null;
+  private linkActivationPointerId: number | null = null;
+  private selectionClickSequence: TerminalSelectionClickSequence | null = null;
   private selectionMoved = false;
   private composing = false;
 
@@ -233,6 +302,8 @@ export class GhosttyTerminalSurface {
     this.selectionEnd = null;
     this.selectionAnchorScreen = null;
     this.selectionEndScreen = null;
+    this.selectionMode = "cell";
+    this.selectionBase = null;
     this.options.onSelectionChange();
     this.requestRender();
   }
@@ -327,44 +398,126 @@ export class GhosttyTerminalSurface {
   }
 
   private readonly onPointerDown = (event: PointerEvent) => {
-    if (event.button !== 0) return;
     this.focus();
+    if (shouldReportTerminalMouse(this.core.isMouseTracking(), event)) {
+      const button = ghosttyMouseButton(event.button);
+      if (button === null) return;
+      event.preventDefault();
+      event.stopPropagation();
+      this.mouseReportingPointerId = event.pointerId;
+      this.mouseReportingButton = button;
+      this.sendMouse("press", button, event);
+      this.canvas.setPointerCapture(event.pointerId);
+      return;
+    }
+    if (event.button !== 0) return;
+    if (isTerminalLinkPointerGesture(event)) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.linkActivationPointerId = event.pointerId;
+      this.canvas.setPointerCapture(event.pointerId);
+      return;
+    }
     const cell = this.cellAt(event.clientX, event.clientY);
-    this.selectionAnchor = cell;
-    this.selectionEnd = cell;
     this.selectionMoved = false;
-    this.core.setSelection(cell.x, cell.y, cell.x, cell.y);
-    this.selectionAnchorScreen = this.core.viewportPointToScreen(cell.x, cell.y);
-    this.selectionEndScreen = this.selectionAnchorScreen;
+    this.selectionClickSequence = advanceTerminalSelectionClickSequence(
+      this.selectionClickSequence,
+      event,
+    );
+    const clickCount = this.selectionClickSequence.count;
+    this.selectionMode = clickCount >= 3 ? "line" : clickCount === 2 ? "word" : "cell";
+    const range =
+      this.selectionMode === "line"
+        ? this.core.selectLine(cell.x, cell.y)
+        : this.selectionMode === "word"
+          ? this.core.selectWord(cell.x, cell.y)
+          : null;
+    if (range) {
+      this.selectionBase = range.viewport;
+      this.selectionAnchor = range.viewport.start;
+      this.selectionEnd = range.viewport.end;
+      this.selectionAnchorScreen = range.screen.start;
+      this.selectionEndScreen = range.screen.end;
+      this.options.onSelectionChange();
+    } else {
+      this.selectionMode = "cell";
+      this.selectionBase = null;
+      this.selectionAnchor = cell;
+      this.selectionEnd = cell;
+      this.core.setSelection(cell.x, cell.y, cell.x, cell.y);
+      this.selectionAnchorScreen = this.core.viewportPointToScreen(cell.x, cell.y);
+      this.selectionEndScreen = this.selectionAnchorScreen;
+    }
     this.canvas.setPointerCapture(event.pointerId);
     this.requestRender();
   };
 
   private readonly onPointerMove = (event: PointerEvent) => {
+    if (this.linkActivationPointerId === event.pointerId) return;
+    if (
+      this.mouseReportingPointerId === event.pointerId ||
+      shouldReportTerminalMouse(this.core.isMouseTracking(), event)
+    ) {
+      event.preventDefault();
+      this.canvas.style.cursor = "default";
+      this.sendMouse("motion", this.buttonFromButtons(event.buttons), event);
+      return;
+    }
     if (!this.selectionAnchor || !this.canvas.hasPointerCapture(event.pointerId)) return;
     const cell = this.cellAt(event.clientX, event.clientY);
     if (cell.x === this.selectionEnd?.x && cell.y === this.selectionEnd.y) return;
     this.selectionMoved = true;
-    this.selectionEnd = cell;
-    this.core.setSelection(this.selectionAnchor.x, this.selectionAnchor.y, cell.x, cell.y);
-    this.selectionAnchorScreen = this.core.viewportPointToScreen(
-      this.selectionAnchor.x,
-      this.selectionAnchor.y,
-    );
-    this.selectionEndScreen = this.core.viewportPointToScreen(cell.x, cell.y);
+    const range =
+      this.selectionMode === "line"
+        ? this.core.selectLine(cell.x, cell.y)
+        : this.selectionMode === "word"
+          ? this.core.selectWord(cell.x, cell.y)
+          : null;
+    const base = this.selectionBase;
+    const beforeBase =
+      base !== null &&
+      (cell.y < base.start.y || (cell.y === base.start.y && cell.x < base.start.x));
+    const anchor = base === null ? this.selectionAnchor : beforeBase ? base.end : base.start;
+    const end = range === null ? cell : beforeBase ? range.viewport.start : range.viewport.end;
+    this.selectionAnchor = anchor;
+    this.selectionEnd = end;
+    this.core.setSelection(anchor.x, anchor.y, end.x, end.y);
+    this.selectionAnchorScreen = this.core.viewportPointToScreen(anchor.x, anchor.y);
+    this.selectionEndScreen = this.core.viewportPointToScreen(end.x, end.y);
     this.options.onSelectionChange();
     this.requestRender();
   };
 
   private readonly onPointerUp = (event: PointerEvent) => {
+    if (this.linkActivationPointerId === event.pointerId) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.linkActivationPointerId = null;
+      if (this.canvas.hasPointerCapture(event.pointerId)) {
+        this.canvas.releasePointerCapture(event.pointerId);
+      }
+      if (event.type !== "pointercancel") {
+        const link = this.linkAt(event.clientX, event.clientY);
+        if (link) this.options.onLinkActivate(link, event);
+      }
+      return;
+    }
+    if (this.mouseReportingPointerId === event.pointerId) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.sendMouse("release", this.mouseReportingButton, event);
+      this.mouseReportingPointerId = null;
+      this.mouseReportingButton = null;
+      if (this.canvas.hasPointerCapture(event.pointerId)) {
+        this.canvas.releasePointerCapture(event.pointerId);
+      }
+      return;
+    }
     if (this.canvas.hasPointerCapture(event.pointerId)) {
       this.canvas.releasePointerCapture(event.pointerId);
     }
     if (event.button !== 0) return;
-    if (!this.selectionMoved && (event.metaKey || event.ctrlKey)) {
-      const link = this.linkAt(event.clientX, event.clientY);
-      if (link) this.options.onLinkActivate(link, event);
-    } else if (!this.selectionMoved) {
+    if (!this.selectionMoved && this.selectionMode === "cell") {
       this.clearSelection();
     }
     this.options.onSelectionChange();
@@ -374,6 +527,13 @@ export class GhosttyTerminalSurface {
     if (event.deltaY === 0) return;
     event.preventDefault();
     const rows = Math.max(1, Math.round(Math.abs(event.deltaY) / this.metrics.height));
+    if (shouldReportTerminalMouse(this.core.isMouseTracking(), event)) {
+      const button = event.deltaY < 0 ? 4 : 5;
+      for (let index = 0; index < rows; index += 1) {
+        this.sendMouse("press", button, event);
+      }
+      return;
+    }
     this.core.scroll(event.deltaY < 0 ? -rows : rows);
     this.forceFullRender = true;
     this.requestRender();
@@ -381,6 +541,12 @@ export class GhosttyTerminalSurface {
 
   private readonly onMouseDown = () => {
     this.focus();
+  };
+
+  private readonly onContextMenu = (event: MouseEvent) => {
+    if (shouldReportTerminalMouse(this.core.isMouseTracking(), event)) {
+      event.preventDefault();
+    }
   };
 
   private installEvents(): void {
@@ -395,6 +561,7 @@ export class GhosttyTerminalSurface {
     this.canvas.addEventListener("pointercancel", this.onPointerUp);
     this.canvas.addEventListener("wheel", this.onWheel, { passive: false });
     this.canvas.addEventListener("mousedown", this.onMouseDown);
+    this.canvas.addEventListener("contextmenu", this.onContextMenu);
   }
 
   private removeEvents(): void {
@@ -409,6 +576,7 @@ export class GhosttyTerminalSurface {
     this.canvas.removeEventListener("pointercancel", this.onPointerUp);
     this.canvas.removeEventListener("wheel", this.onWheel);
     this.canvas.removeEventListener("mousedown", this.onMouseDown);
+    this.canvas.removeEventListener("contextmenu", this.onContextMenu);
   }
 
   private requestRender(): void {
@@ -466,8 +634,45 @@ export class GhosttyTerminalSurface {
   private linkAt(clientX: number, clientY: number): string | null {
     if (!this.snapshot) return null;
     const cell = this.cellAt(clientX, clientY);
+    const explicitHyperlink = this.core.hyperlinkAt(cell.x, cell.y);
+    if (explicitHyperlink) return explicitHyperlink;
     const row = this.snapshot.rowData[cell.y];
     if (!row) return null;
     return terminalLinkAtColumn(row, cell.x);
+  }
+
+  private sendMouse(
+    action: "press" | "release" | "motion",
+    button: number | null,
+    event: MouseEvent,
+  ): void {
+    const bounds = this.canvas.getBoundingClientRect();
+    const data = this.core.encodeMouse({
+      action,
+      button,
+      mods:
+        (event.shiftKey ? 1 : 0) |
+        (event.ctrlKey ? 1 << 1 : 0) |
+        (event.altKey ? 1 << 2 : 0) |
+        (event.metaKey ? 1 << 3 : 0),
+      x: Math.max(0, event.clientX - bounds.left),
+      y: Math.max(0, event.clientY - bounds.top),
+      screenWidth: bounds.width,
+      screenHeight: bounds.height,
+      cellWidth: this.metrics.width,
+      cellHeight: this.metrics.height,
+      padding: CONTENT_PADDING,
+      anyButtonPressed: event.buttons !== 0,
+    });
+    if (data.length > 0) this.options.onData(data);
+  }
+
+  private buttonFromButtons(buttons: number): number | null {
+    if ((buttons & 1) !== 0) return 1;
+    if ((buttons & 4) !== 0) return 3;
+    if ((buttons & 2) !== 0) return 2;
+    if ((buttons & 8) !== 0) return 4;
+    if ((buttons & 16) !== 0) return 5;
+    return null;
   }
 }

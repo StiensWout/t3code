@@ -84,6 +84,31 @@ export interface GhosttySnapshot {
   readonly rowData: readonly GhosttyRow[];
 }
 
+export interface GhosttySelectionRange {
+  readonly viewport: {
+    readonly start: { readonly x: number; readonly y: number };
+    readonly end: { readonly x: number; readonly y: number };
+  };
+  readonly screen: {
+    readonly start: { readonly x: number; readonly y: number };
+    readonly end: { readonly x: number; readonly y: number };
+  };
+}
+
+export interface GhosttyMouseInput {
+  readonly action: "press" | "release" | "motion";
+  readonly button: number | null;
+  readonly mods: number;
+  readonly x: number;
+  readonly y: number;
+  readonly screenWidth: number;
+  readonly screenHeight: number;
+  readonly cellWidth: number;
+  readonly cellHeight: number;
+  readonly padding: number;
+  readonly anyButtonPressed: boolean;
+}
+
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
 
@@ -112,7 +137,12 @@ export class GhosttyTerminalCore {
   private keyEncoder = 0;
   private keyEventSlot = 0;
   private keyEvent = 0;
+  private mouseEncoderSlot = 0;
+  private mouseEncoder = 0;
+  private mouseEventSlot = 0;
+  private mouseEvent = 0;
   private ptyWriterId = 0;
+  private ptyWriter: ((data: string) => void) | null = null;
   private scratch = 0;
   private style = 0;
   private rows: GhosttyRow[] = [];
@@ -160,6 +190,7 @@ export class GhosttyTerminalCore {
     );
     this.runtime.free(options, optionsSize);
     this.terminal = this.runtime.readPointer(this.terminalSlot);
+    this.ptyWriter = onPtyData;
     this.ptyWriterId = this.runtime.attachPtyWriter(this.terminal, onPtyData);
 
     this.renderStateSlot = this.runtime.allocOpaque();
@@ -193,6 +224,19 @@ export class GhosttyTerminalCore {
     );
     this.keyEvent = this.runtime.readPointer(this.keyEventSlot);
 
+    this.mouseEncoderSlot = this.runtime.allocOpaque();
+    this.assertSuccess(
+      "ghostty_mouse_encoder_new",
+      this.runtime.call("ghostty_mouse_encoder_new", 0, this.mouseEncoderSlot),
+    );
+    this.mouseEncoder = this.runtime.readPointer(this.mouseEncoderSlot);
+    this.mouseEventSlot = this.runtime.allocOpaque();
+    this.assertSuccess(
+      "ghostty_mouse_event_new",
+      this.runtime.call("ghostty_mouse_event_new", 0, this.mouseEventSlot),
+    );
+    this.mouseEvent = this.runtime.readPointer(this.mouseEventSlot);
+
     this.scratch = this.runtime.alloc(16);
     const styleSize = this.runtime.layout("GhosttyStyle").size;
     this.style = this.runtime.alloc(styleSize);
@@ -215,7 +259,19 @@ export class GhosttyTerminalCore {
     this.ensureActive();
     this.runtime.call("ghostty_terminal_reset", this.terminal);
     this.rows = [];
-    this.write(data);
+    if (data.length === 0) return;
+    const writer = this.ptyWriter;
+    if (this.ptyWriterId !== 0) {
+      this.runtime.detachPtyWriter(this.terminal, this.ptyWriterId);
+      this.ptyWriterId = 0;
+    }
+    try {
+      this.write(data);
+    } finally {
+      if (writer !== null && !this.disposed) {
+        this.ptyWriterId = this.runtime.attachPtyWriter(this.terminal, writer);
+      }
+    }
   }
 
   resize(cols: number, rows: number, cellWidth: number, cellHeight: number): void {
@@ -272,6 +328,15 @@ export class GhosttyTerminalCore {
     this.runtime.bytes(this.scratch, 1)[0] = 0;
     return (
       this.runtime.call("ghostty_terminal_get", this.terminal, 32, this.scratch) ===
+        GHOSTTY_SUCCESS && this.runtime.bytes(this.scratch, 1)[0] !== 0
+    );
+  }
+
+  isMouseTracking(): boolean {
+    this.ensureActive();
+    this.runtime.bytes(this.scratch, 1)[0] = 0;
+    return (
+      this.runtime.call("ghostty_terminal_get", this.terminal, 11, this.scratch) ===
         GHOSTTY_SUCCESS && this.runtime.bytes(this.scratch, 1)[0] !== 0
     );
   }
@@ -358,6 +423,75 @@ export class GhosttyTerminalCore {
     return encoded;
   }
 
+  encodeMouse(input: GhosttyMouseInput): string {
+    this.ensureActive();
+    this.runtime.call(
+      "ghostty_mouse_encoder_setopt_from_terminal",
+      this.mouseEncoder,
+      this.terminal,
+    );
+
+    const sizeLayout = this.runtime.layout("GhosttyMouseEncoderSize");
+    const size = this.runtime.alloc(sizeLayout.size);
+    for (const [field, value] of [
+      ["size", sizeLayout.size],
+      ["screen_width", input.screenWidth],
+      ["screen_height", input.screenHeight],
+      ["cell_width", input.cellWidth],
+      ["cell_height", input.cellHeight],
+      ["padding_top", input.padding],
+      ["padding_bottom", input.padding],
+      ["padding_right", input.padding],
+      ["padding_left", input.padding],
+    ] as const) {
+      this.runtime.setField(size, "GhosttyMouseEncoderSize", field, Math.max(0, Math.round(value)));
+    }
+    this.runtime.call("ghostty_mouse_encoder_setopt", this.mouseEncoder, 2, size);
+    this.runtime.free(size, sizeLayout.size);
+
+    this.runtime.bytes(this.scratch, 1)[0] = input.anyButtonPressed ? 1 : 0;
+    this.runtime.call("ghostty_mouse_encoder_setopt", this.mouseEncoder, 3, this.scratch);
+    this.runtime.bytes(this.scratch, 1)[0] = 1;
+    this.runtime.call("ghostty_mouse_encoder_setopt", this.mouseEncoder, 4, this.scratch);
+
+    this.runtime.call(
+      "ghostty_mouse_event_set_action",
+      this.mouseEvent,
+      input.action === "press" ? 0 : input.action === "release" ? 1 : 2,
+    );
+    if (input.button === null) {
+      this.runtime.call("ghostty_mouse_event_clear_button", this.mouseEvent);
+    } else {
+      this.runtime.call("ghostty_mouse_event_set_button", this.mouseEvent, input.button);
+    }
+    this.runtime.call("ghostty_mouse_event_set_mods", this.mouseEvent, input.mods);
+    const positionLayout = this.runtime.layout("GhosttyMousePosition");
+    const position = this.runtime.alloc(positionLayout.size);
+    const positionView = this.runtime.view(position, positionLayout.size);
+    positionView.setFloat32(positionLayout.fields.x!.offset, input.x, true);
+    positionView.setFloat32(positionLayout.fields.y!.offset, input.y, true);
+    this.runtime.call("ghostty_mouse_event_set_position", this.mouseEvent, position);
+    this.runtime.free(position, positionLayout.size);
+
+    const written = this.runtime.call("ghostty_wasm_alloc_usize");
+    const outputSize = 128;
+    const output = this.runtime.alloc(outputSize);
+    const result = this.runtime.call(
+      "ghostty_mouse_encoder_encode",
+      this.mouseEncoder,
+      this.mouseEvent,
+      output,
+      outputSize,
+      written,
+    );
+    const outputLength = this.runtime.view(written, 4).getUint32(0, true);
+    const encoded =
+      result === GHOSTTY_SUCCESS ? decoder.decode(this.runtime.bytes(output, outputLength)) : "";
+    this.runtime.call("ghostty_wasm_free_usize", written);
+    this.runtime.free(output, outputSize);
+    return encoded;
+  }
+
   setSelection(anchorCol: number, anchorRow: number, col: number, row: number): void {
     this.ensureActive();
     const selectionLayout = this.runtime.layout("GhosttySelection");
@@ -390,6 +524,51 @@ export class GhosttyTerminalCore {
       this.runtime.call("ghostty_terminal_set", this.terminal, 21, selection);
     }
     this.runtime.free(selection, layout.size);
+  }
+
+  selectWord(col: number, row: number): GhosttySelectionRange | null {
+    return this.selectAt(
+      "GhosttyTerminalSelectWordOptions",
+      "ghostty_terminal_select_word",
+      col,
+      row,
+    );
+  }
+
+  selectLine(col: number, row: number): GhosttySelectionRange | null {
+    return this.selectAt(
+      "GhosttyTerminalSelectLineOptions",
+      "ghostty_terminal_select_line",
+      col,
+      row,
+    );
+  }
+
+  hyperlinkAt(col: number, row: number): string | null {
+    this.ensureActive();
+    const ref = this.gridRef(col, row);
+    const written = this.runtime.call("ghostty_wasm_alloc_usize");
+    const sizeResult = this.runtime.call("ghostty_grid_ref_hyperlink_uri", ref, 0, 0, written);
+    const outputSize = this.runtime.view(written, 4).getUint32(0, true);
+    let hyperlink: string | null = null;
+    if (sizeResult === GHOSTTY_OUT_OF_SPACE && outputSize > 0) {
+      const output = this.runtime.alloc(outputSize);
+      const result = this.runtime.call(
+        "ghostty_grid_ref_hyperlink_uri",
+        ref,
+        output,
+        outputSize,
+        written,
+      );
+      const outputLength = this.runtime.view(written, 4).getUint32(0, true);
+      if (result === GHOSTTY_SUCCESS && outputLength > 0) {
+        hyperlink = decoder.decode(this.runtime.bytes(output, outputLength));
+      }
+      this.runtime.free(output, outputSize);
+    }
+    this.runtime.call("ghostty_wasm_free_usize", written);
+    this.runtime.free(ref, this.runtime.layout("GhosttyGridRef").size);
+    return hyperlink;
   }
 
   clearSelection(): void {
@@ -536,6 +715,8 @@ export class GhosttyTerminalCore {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    if (this.mouseEvent) this.runtime.call("ghostty_mouse_event_free", this.mouseEvent);
+    if (this.mouseEncoder) this.runtime.call("ghostty_mouse_encoder_free", this.mouseEncoder);
     if (this.keyEvent) this.runtime.call("ghostty_key_event_free", this.keyEvent);
     if (this.keyEncoder) this.runtime.call("ghostty_key_encoder_free", this.keyEncoder);
     if (this.rowCellsSlot) {
@@ -554,6 +735,8 @@ export class GhosttyTerminalCore {
     if (this.style) this.runtime.free(this.style, this.runtime.layout("GhosttyStyle").size);
     if (this.scratch) this.runtime.free(this.scratch, 16);
     for (const slot of [
+      this.mouseEventSlot,
+      this.mouseEncoderSlot,
       this.keyEventSlot,
       this.keyEncoderSlot,
       this.rowCellsSlot,
@@ -662,6 +845,68 @@ export class GhosttyTerminalCore {
     );
     this.runtime.free(point, pointLayout.size);
     return gridRef;
+  }
+
+  private selectAt(
+    optionsName: "GhosttyTerminalSelectWordOptions" | "GhosttyTerminalSelectLineOptions",
+    operation: "ghostty_terminal_select_word" | "ghostty_terminal_select_line",
+    col: number,
+    row: number,
+  ): GhosttySelectionRange | null {
+    this.ensureActive();
+    const optionsLayout = this.runtime.layout(optionsName);
+    const options = this.runtime.alloc(optionsLayout.size);
+    this.runtime.setField(options, optionsName, "size", optionsLayout.size);
+    const ref = this.gridRef(col, row);
+    const refField = optionsLayout.fields.ref!;
+    this.runtime
+      .bytes(options + refField.offset, refField.size)
+      .set(this.runtime.bytes(ref, refField.size));
+    const selectionLayout = this.runtime.layout("GhosttySelection");
+    const selection = this.runtime.alloc(selectionLayout.size);
+    this.runtime.setField(selection, "GhosttySelection", "size", selectionLayout.size);
+    const result = this.runtime.call(operation, this.terminal, options, selection);
+    let range: GhosttySelectionRange | null = null;
+    if (result === GHOSTTY_SUCCESS) {
+      const start = selection + selectionLayout.fields.start!.offset;
+      const end = selection + selectionLayout.fields.end!.offset;
+      const viewportStart = this.pointFromGridRef(start, 1);
+      const viewportEnd = this.pointFromGridRef(end, 1);
+      const screenStart = this.pointFromGridRef(start, 2);
+      const screenEnd = this.pointFromGridRef(end, 2);
+      if (viewportStart && viewportEnd && screenStart && screenEnd) {
+        range = {
+          viewport: { start: viewportStart, end: viewportEnd },
+          screen: { start: screenStart, end: screenEnd },
+        };
+      }
+      this.runtime.call("ghostty_terminal_set", this.terminal, 21, selection);
+    }
+    this.runtime.free(selection, selectionLayout.size);
+    this.runtime.free(ref, this.runtime.layout("GhosttyGridRef").size);
+    this.runtime.free(options, optionsLayout.size);
+    return range;
+  }
+
+  private pointFromGridRef(ref: number, tag: 1 | 2): { x: number; y: number } | null {
+    const coordinateLayout = this.runtime.layout("GhosttyPointCoordinate");
+    const coordinate = this.runtime.alloc(coordinateLayout.size);
+    const result = this.runtime.call(
+      "ghostty_terminal_point_from_grid_ref",
+      this.terminal,
+      ref,
+      tag,
+      coordinate,
+    );
+    const point =
+      result === GHOSTTY_SUCCESS
+        ? {
+            x: this.runtime.readField(coordinate, "GhosttyPointCoordinate", "x"),
+            y: this.runtime.readField(coordinate, "GhosttyPointCoordinate", "y"),
+          }
+        : null;
+    this.runtime.free(coordinate, coordinateLayout.size);
+    return point;
   }
 
   private getU16(data: number): number {

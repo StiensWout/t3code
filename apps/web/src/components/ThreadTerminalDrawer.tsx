@@ -375,7 +375,7 @@ export function TerminalViewport({
       terminalRef.current = terminal;
       const latestSession = latestSessionRef.current;
       previousSessionRef.current = latestSession;
-      if (latestSession.buffer.length > 0) terminal.write(latestSession.buffer);
+      if (latestSession.buffer.length > 0) terminal.resetAndWrite(latestSession.buffer);
       if (latestSession.error !== null) writeSystemMessage(terminal, latestSession.error);
       if (autoFocus) window.requestAnimationFrame(() => terminal.focus());
 
