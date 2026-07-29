@@ -1,3 +1,4 @@
+import { isMacPlatform } from "../../lib/utils";
 import { GhosttyTerminalCore, type GhosttySnapshot, type GhosttyTheme } from "./core";
 import {
   measureGhosttyCell,
@@ -23,6 +24,14 @@ export function terminalLinkAtColumn(row: GhosttySnapshot["rowData"][number], co
     if (offset >= match.index && offset < match.index + value.length) return value;
   }
   return null;
+}
+
+export function isTerminalCopyShortcut(
+  event: Pick<KeyboardEvent, "code" | "ctrlKey" | "metaKey" | "shiftKey">,
+  platform = navigator.platform,
+) {
+  if (event.code !== "KeyC") return false;
+  return isMacPlatform(platform) ? event.metaKey : event.ctrlKey && event.shiftKey;
 }
 
 export interface GhosttySelectionPosition {
@@ -237,7 +246,7 @@ export class GhosttyTerminalSurface {
 
   private readonly onKeyDown = (event: KeyboardEvent) => {
     if (!this.options.beforeKey(event)) return;
-    if ((event.metaKey || event.ctrlKey) && event.code === "KeyC" && this.hasSelection()) {
+    if (isTerminalCopyShortcut(event) && this.hasSelection()) {
       event.preventDefault();
       void navigator.clipboard.writeText(this.getSelection());
       return;
@@ -291,6 +300,7 @@ export class GhosttyTerminalSurface {
   };
 
   private readonly onPointerUp = (event: PointerEvent) => {
+    if (event.button !== 0) return;
     if (this.canvas.hasPointerCapture(event.pointerId)) {
       this.canvas.releasePointerCapture(event.pointerId);
     }

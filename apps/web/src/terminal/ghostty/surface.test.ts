@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import type { GhosttyCell, GhosttyRow } from "./core";
-import { terminalLinkAtColumn } from "./surface";
+import { isTerminalCopyShortcut, terminalLinkAtColumn } from "./surface";
 
 const cell = (text: string): GhosttyCell => ({
   text,
@@ -34,5 +34,27 @@ describe("terminalLinkAtColumn", () => {
     expect(terminalLinkAtColumn(row, 2)).toBe("https://t3.codes");
     expect(terminalLinkAtColumn(row, cells.length - 1)).toBe("https://t3.codes");
     expect(terminalLinkAtColumn(row, 0)).toBeNull();
+  });
+});
+
+describe("isTerminalCopyShortcut", () => {
+  const event = (overrides: Partial<Parameters<typeof isTerminalCopyShortcut>[0]> = {}) => ({
+    code: "KeyC",
+    ctrlKey: false,
+    metaKey: false,
+    shiftKey: false,
+    ...overrides,
+  });
+
+  it("keeps Ctrl+C available for SIGINT on macOS", () => {
+    expect(isTerminalCopyShortcut(event({ ctrlKey: true }), "MacIntel")).toBe(false);
+    expect(isTerminalCopyShortcut(event({ metaKey: true }), "MacIntel")).toBe(true);
+  });
+
+  it("uses the conventional Ctrl+Shift+C shortcut elsewhere", () => {
+    expect(isTerminalCopyShortcut(event({ ctrlKey: true }), "Linux x86_64")).toBe(false);
+    expect(isTerminalCopyShortcut(event({ ctrlKey: true, shiftKey: true }), "Linux x86_64")).toBe(
+      true,
+    );
   });
 });
