@@ -13,6 +13,18 @@ const CONTENT_PADDING = 4;
 const linkPattern =
   /https?:\/\/[^\s"'<>]+|(?:\.{0,2}\/)?[\w@+.,-]+(?:\/[\w@+.,-]+)+(?::\d+(?::\d+)?)?/gu;
 
+export function terminalLinkAtColumn(row: GhosttySnapshot["rowData"][number], column: number) {
+  let offset = 0;
+  for (let cellIndex = 0; cellIndex < column; cellIndex += 1) {
+    offset += row.cells[cellIndex]?.text.length || 1;
+  }
+  for (const match of row.text.matchAll(linkPattern)) {
+    const value = match[0];
+    if (offset >= match.index && offset < match.index + value.length) return value;
+  }
+  return null;
+}
+
 export interface GhosttySelectionPosition {
   readonly start: { readonly x: number; readonly y: number };
   readonly end: { readonly x: number; readonly y: number };
@@ -21,6 +33,7 @@ export interface GhosttySelectionPosition {
 export interface GhosttyTerminalSurfaceOptions {
   readonly theme: GhosttyTheme;
   readonly onData: (data: string) => void;
+  readonly onResize: (cols: number, rows: number) => void;
   readonly onSelectionChange: () => void;
   readonly beforeKey: (event: KeyboardEvent) => boolean;
   readonly onLinkActivate: (text: string, event: MouseEvent) => void;
@@ -116,17 +129,20 @@ export class GhosttyTerminalSurface {
   }
 
   write(data: string): void {
+    if (this.disposed) return;
     this.core.write(data);
     this.requestRender();
   }
 
   resetAndWrite(data: string): void {
+    if (this.disposed) return;
     this.core.resetAndWrite(data);
     this.forceFullRender = true;
     this.requestRender();
   }
 
   setTheme(theme: GhosttyTheme): void {
+    if (this.disposed) return;
     this.core.setTheme(theme);
     this.forceFullRender = true;
     this.requestRender();
@@ -140,20 +156,24 @@ export class GhosttyTerminalSurface {
     const ratio = window.devicePixelRatio || 1;
     const pixelWidth = Math.max(1, Math.round(width * ratio));
     const pixelHeight = Math.max(1, Math.round(height * ratio));
+    let shouldRender = false;
     if (this.canvas.width !== pixelWidth || this.canvas.height !== pixelHeight) {
       this.canvas.width = pixelWidth;
       this.canvas.height = pixelHeight;
       this.context.setTransform(ratio, 0, 0, ratio, 0, 0);
       this.forceFullRender = true;
+      shouldRender = true;
     }
     const grid = terminalGridSize(width, height, this.metrics, CONTENT_PADDING);
     if (grid.cols !== this.cols || grid.rows !== this.rows) {
       this.cols = grid.cols;
       this.rows = grid.rows;
       this.core.resize(grid.cols, grid.rows, this.metrics.width, this.metrics.height);
+      this.options.onResize(grid.cols, grid.rows);
       this.forceFullRender = true;
-      this.requestRender();
+      shouldRender = true;
     }
+    if (shouldRender) this.requestRender();
     return true;
   }
 
@@ -175,9 +195,12 @@ export class GhosttyTerminalSurface {
       this.selectionAnchor.y < this.selectionEnd.y ||
       (this.selectionAnchor.y === this.selectionEnd.y &&
         this.selectionAnchor.x <= this.selectionEnd.x);
-    return before
+    const ordered = before
       ? { start: this.selectionAnchor, end: this.selectionEnd }
       : { start: this.selectionEnd, end: this.selectionAnchor };
+    const start = this.core.viewportPointToScreen(ordered.start.x, ordered.start.y);
+    const end = this.core.viewportPointToScreen(ordered.end.x, ordered.end.y);
+    return start && end ? { start, end } : null;
   }
 
   clearSelection(): void {
@@ -206,7 +229,10 @@ export class GhosttyTerminalSurface {
     if (this.cursorTimer !== null) window.clearTimeout(this.cursorTimer);
     this.removeEvents();
     this.core.dispose();
-    this.mount.replaceChildren();
+    if (this.canvas.parentElement === this.mount || this.input.parentElement === this.mount) {
+      this.canvas.remove();
+      this.input.remove();
+    }
   }
 
   private readonly onKeyDown = (event: KeyboardEvent) => {
@@ -321,6 +347,7 @@ export class GhosttyTerminalSurface {
     this.frame = window.requestAnimationFrame(() => {
       this.frame = 0;
       this.snapshot = this.core.snapshot();
+      if (!this.snapshot.cursorBlinking) this.cursorOn = true;
       renderGhosttySnapshot({
         context: this.context,
         snapshot: this.snapshot,
@@ -370,12 +397,8 @@ export class GhosttyTerminalSurface {
   private linkAt(clientX: number, clientY: number): string | null {
     if (!this.snapshot) return null;
     const cell = this.cellAt(clientX, clientY);
-    const text = this.snapshot.rowData[cell.y]?.text ?? "";
-    for (const match of text.matchAll(linkPattern)) {
-      const start = match.index;
-      const value = match[0];
-      if (cell.x >= start && cell.x < start + value.length) return value;
-    }
-    return null;
+    const row = this.snapshot.rowData[cell.y];
+    if (!row) return null;
+    return terminalLinkAtColumn(row, cell.x);
   }
 }

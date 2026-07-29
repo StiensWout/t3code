@@ -123,15 +123,19 @@ export function renderGhosttySnapshot(options: {
     while (runStart < row.cells.length) {
       const first = row.cells[runStart];
       if (!first) break;
+      if (first.text.length === 0) {
+        runStart += 1;
+        continue;
+      }
       let runEnd = runStart + 1;
       while (runEnd < row.cells.length) {
         const next = row.cells[runEnd];
-        if (!next || !sameTextStyle(next, first)) break;
+        if (!next || next.text.length === 0 || !sameTextStyle(next, first)) break;
         runEnd += 1;
       }
       const text = row.cells
         .slice(runStart, runEnd)
-        .map((cell) => cell.text || " ")
+        .map((cell) => cell.text)
         .join("");
       if (!first.invisible && text.trim().length > 0) {
         context.save();

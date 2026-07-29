@@ -328,6 +328,13 @@ export function TerminalViewport({
     status: terminalStatus,
     version: terminalVersion,
   });
+  const latestSessionRef = useRef(previousSessionRef.current);
+  latestSessionRef.current = {
+    buffer: terminalBuffer,
+    error: terminalError,
+    status: terminalStatus,
+    version: terminalVersion,
+  };
 
   useEffect(() => {
     keybindingsRef.current = keybindings;
@@ -345,6 +352,7 @@ export function TerminalViewport({
       const terminalOptions: GhosttyTerminalSurfaceOptions = {
         theme: terminalThemeFromApp(mount),
         onData: (data) => handleData(data),
+        onResize: (cols, rows) => void resizeTerminal(cols, rows),
         onSelectionChange: () => handleSelectionChange(),
         beforeKey: (event) => handleBeforeKey(event),
         onLinkActivate: (text, event) => handleLinkActivate(text, event),
@@ -355,14 +363,10 @@ export function TerminalViewport({
         return null;
       }
       terminalRef.current = terminal;
-      previousSessionRef.current = {
-        buffer: terminalBuffer,
-        status: terminalStatus,
-        error: terminalError,
-        version: terminalVersion,
-      };
-      if (terminalBuffer.length > 0) terminal.write(terminalBuffer);
-      if (terminalError !== null) writeSystemMessage(terminal, terminalError);
+      const latestSession = latestSessionRef.current;
+      previousSessionRef.current = latestSession;
+      if (latestSession.buffer.length > 0) terminal.write(latestSession.buffer);
+      if (latestSession.error !== null) writeSystemMessage(terminal, latestSession.error);
       if (autoFocus) window.requestAnimationFrame(() => terminal.focus());
 
       const clearSelectionAction = () => {
@@ -661,7 +665,6 @@ export function TerminalViewport({
     };
     // autoFocus is intentionally omitted;
     // it is only read at mount time and must not trigger terminal teardown/recreation.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cwd, environmentId, runtimeEnvKey, terminalId, threadId, worktreePath]);
 
   useEffect(() => {

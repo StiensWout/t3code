@@ -2,7 +2,11 @@ import { ghosttyKeyForCode } from "./keyCodes";
 import { GhosttyRuntime, loadGhosttyRuntime } from "./runtime";
 
 const GHOSTTY_SUCCESS = 0;
+const GHOSTTY_OUT_OF_SPACE = -3;
 const MAX_SCROLLBACK_ROWS = 10_000;
+// wasm32 C ABI layout for GhosttyTerminalSelectionFormatOptions at the
+// libghostty-vt revision pinned alongside this module.
+const SELECTION_FORMAT_OPTIONS_SIZE = 16;
 
 const RENDER_DATA = {
   cols: 1,
@@ -345,8 +349,9 @@ export class GhosttyTerminalCore {
       outputSize,
       written,
     );
+    const outputLength = this.runtime.view(written, 4).getUint32(0, true);
     const encoded =
-      result === GHOSTTY_SUCCESS ? decoder.decode(this.runtime.bytes(output, outputSize)) : "";
+      result === GHOSTTY_SUCCESS ? decoder.decode(this.runtime.bytes(output, outputLength)) : "";
     this.runtime.call("ghostty_wasm_free_usize", written);
     this.runtime.free(output, Math.max(1, outputSize));
     this.runtime.free(inputPointer, input.length);
@@ -464,15 +469,68 @@ export class GhosttyTerminalCore {
   }
 
   selectionText(): string {
-    const selectedLines = this.rows
-      .map((row) =>
-        row.cells
-          .map((cell) => (cell.selected ? cell.text || " " : ""))
-          .join("")
-          .replace(/\s+$/u, ""),
-      )
-      .filter((line) => line.length > 0);
-    return selectedLines.join("\n");
+    this.ensureActive();
+    const options = this.runtime.alloc(SELECTION_FORMAT_OPTIONS_SIZE);
+    const optionsView = this.runtime.view(options, SELECTION_FORMAT_OPTIONS_SIZE);
+    optionsView.setUint32(0, SELECTION_FORMAT_OPTIONS_SIZE, true);
+    optionsView.setUint32(4, 0, true);
+    optionsView.setUint8(8, 1);
+    optionsView.setUint8(9, 1);
+    optionsView.setUint32(12, 0, true);
+    const written = this.runtime.call("ghostty_wasm_alloc_usize");
+    const sizeResult = this.runtime.call(
+      "ghostty_terminal_selection_format_buf",
+      this.terminal,
+      options,
+      0,
+      0,
+      written,
+    );
+    const outputSize = this.runtime.view(written, 4).getUint32(0, true);
+    let text = "";
+    if (sizeResult === GHOSTTY_OUT_OF_SPACE && outputSize > 0) {
+      const output = this.runtime.alloc(outputSize);
+      const result = this.runtime.call(
+        "ghostty_terminal_selection_format_buf",
+        this.terminal,
+        options,
+        output,
+        outputSize,
+        written,
+      );
+      const outputLength = this.runtime.view(written, 4).getUint32(0, true);
+      if (result === GHOSTTY_SUCCESS) {
+        text = decoder.decode(this.runtime.bytes(output, outputLength));
+      }
+      this.runtime.free(output, outputSize);
+    }
+    this.runtime.call("ghostty_wasm_free_usize", written);
+    this.runtime.free(options, SELECTION_FORMAT_OPTIONS_SIZE);
+    return text;
+  }
+
+  viewportPointToScreen(col: number, row: number): { x: number; y: number } | null {
+    this.ensureActive();
+    const ref = this.gridRef(col, row);
+    const coordinateLayout = this.runtime.layout("GhosttyPointCoordinate");
+    const coordinate = this.runtime.alloc(coordinateLayout.size);
+    const result = this.runtime.call(
+      "ghostty_terminal_point_from_grid_ref",
+      this.terminal,
+      ref,
+      2,
+      coordinate,
+    );
+    const point =
+      result === GHOSTTY_SUCCESS
+        ? {
+            x: this.runtime.readField(coordinate, "GhosttyPointCoordinate", "x"),
+            y: this.runtime.readField(coordinate, "GhosttyPointCoordinate", "y"),
+          }
+        : null;
+    this.runtime.free(coordinate, coordinateLayout.size);
+    this.runtime.free(ref, this.runtime.layout("GhosttyGridRef").size);
+    return point;
   }
 
   dispose(): void {

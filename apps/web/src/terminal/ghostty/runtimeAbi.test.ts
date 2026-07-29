@@ -111,4 +111,64 @@ describe("vendored libghostty-vt WebAssembly", () => {
     call("ghostty_wasm_free_opaque", terminalSlot);
     call("ghostty_wasm_free_u8_array", options, 8);
   });
+
+  it("formats the active selection with Ghostty's copy semantics", async () => {
+    const result = await WebAssembly.instantiate(
+      decodeWasmDataUrl(wasmDataUrl).buffer as ArrayBuffer,
+      { env: { log: () => {} } },
+    );
+    const instance = result instanceof WebAssembly.Instance ? result : result.instance;
+    const memory = instance.exports.memory as WebAssembly.Memory;
+    const call = (name: string, ...args: number[]) =>
+      (instance.exports[name] as WasmFunction)(...args);
+    const options = call("ghostty_wasm_alloc_u8_array", 8);
+    const optionsView = new DataView(memory.buffer, options, 8);
+    optionsView.setUint16(0, 80, true);
+    optionsView.setUint16(2, 24, true);
+    const terminalSlot = call("ghostty_wasm_alloc_opaque");
+    expect(call("ghostty_terminal_new", 0, terminalSlot, options)).toBe(0);
+    const terminal = new DataView(memory.buffer).getUint32(terminalSlot, true);
+    const input = new TextEncoder().encode("a\r\n\r\nb");
+    const inputPointer = call("ghostty_wasm_alloc_u8_array", input.length);
+    new Uint8Array(memory.buffer, inputPointer, input.length).set(input);
+    call("ghostty_terminal_vt_write", terminal, inputPointer, input.length);
+
+    const selection = call("ghostty_wasm_alloc_u8_array", 32);
+    new DataView(memory.buffer, selection, 32).setUint32(0, 32, true);
+    expect(call("ghostty_terminal_select_all", terminal, selection)).toBe(0);
+    expect(call("ghostty_terminal_set", terminal, 21, selection)).toBe(0);
+    const formatOptions = call("ghostty_wasm_alloc_u8_array", 16);
+    const formatView = new DataView(memory.buffer, formatOptions, 16);
+    formatView.setUint32(0, 16, true);
+    formatView.setUint8(8, 1);
+    formatView.setUint8(9, 1);
+    const written = call("ghostty_wasm_alloc_usize");
+    expect(
+      call("ghostty_terminal_selection_format_buf", terminal, formatOptions, 0, 0, written),
+    ).toBe(-3);
+    const outputSize = new DataView(memory.buffer, written, 4).getUint32(0, true);
+    const output = call("ghostty_wasm_alloc_u8_array", outputSize);
+    expect(
+      call(
+        "ghostty_terminal_selection_format_buf",
+        terminal,
+        formatOptions,
+        output,
+        outputSize,
+        written,
+      ),
+    ).toBe(0);
+    expect(new TextDecoder().decode(new Uint8Array(memory.buffer, output, outputSize))).toBe(
+      "a\n\nb",
+    );
+
+    call("ghostty_wasm_free_u8_array", output, outputSize);
+    call("ghostty_wasm_free_usize", written);
+    call("ghostty_wasm_free_u8_array", formatOptions, 16);
+    call("ghostty_wasm_free_u8_array", selection, 32);
+    call("ghostty_wasm_free_u8_array", inputPointer, input.length);
+    call("ghostty_terminal_free", terminal);
+    call("ghostty_wasm_free_opaque", terminalSlot);
+    call("ghostty_wasm_free_u8_array", options, 8);
+  });
 });
