@@ -1,0 +1,381 @@
+import { GhosttyTerminalCore, type GhosttySnapshot, type GhosttyTheme } from "./core";
+import {
+  measureGhosttyCell,
+  renderGhosttySnapshot,
+  terminalGridSize,
+  type GhosttyCellMetrics,
+} from "./renderer";
+
+const FONT_SIZE = 12;
+const FONT_FAMILY =
+  '"SF Mono", "SFMono-Regular", "JetBrains Mono", Consolas, "Liberation Mono", Menlo, monospace';
+const CONTENT_PADDING = 4;
+const linkPattern =
+  /https?:\/\/[^\s"'<>]+|(?:\.{0,2}\/)?[\w@+.,-]+(?:\/[\w@+.,-]+)+(?::\d+(?::\d+)?)?/gu;
+
+export interface GhosttySelectionPosition {
+  readonly start: { readonly x: number; readonly y: number };
+  readonly end: { readonly x: number; readonly y: number };
+}
+
+export interface GhosttyTerminalSurfaceOptions {
+  readonly theme: GhosttyTheme;
+  readonly onData: (data: string) => void;
+  readonly onSelectionChange: () => void;
+  readonly beforeKey: (event: KeyboardEvent) => boolean;
+  readonly onLinkActivate: (text: string, event: MouseEvent) => void;
+}
+
+export class GhosttyTerminalSurface {
+  readonly canvas: HTMLCanvasElement;
+  readonly input: HTMLTextAreaElement;
+  cols = 1;
+  rows = 1;
+
+  private readonly mount: HTMLElement;
+  private readonly context: CanvasRenderingContext2D;
+  private readonly core: GhosttyTerminalCore;
+  private readonly options: GhosttyTerminalSurfaceOptions;
+  private readonly metrics: GhosttyCellMetrics;
+  private readonly resizeObserver: ResizeObserver;
+  private snapshot: GhosttySnapshot | null = null;
+  private frame = 0;
+  private cursorTimer: number | null = null;
+  private cursorOn = true;
+  private forceFullRender = true;
+  private disposed = false;
+  private selectionAnchor: { x: number; y: number } | null = null;
+  private selectionEnd: { x: number; y: number } | null = null;
+  private selectionMoved = false;
+  private composing = false;
+
+  private constructor(
+    mount: HTMLElement,
+    canvas: HTMLCanvasElement,
+    input: HTMLTextAreaElement,
+    context: CanvasRenderingContext2D,
+    core: GhosttyTerminalCore,
+    metrics: GhosttyCellMetrics,
+    options: GhosttyTerminalSurfaceOptions,
+  ) {
+    this.mount = mount;
+    this.canvas = canvas;
+    this.input = input;
+    this.context = context;
+    this.core = core;
+    this.metrics = metrics;
+    this.options = options;
+    this.resizeObserver = new ResizeObserver(() => this.fit());
+    this.installEvents();
+    this.resizeObserver.observe(mount);
+  }
+
+  static async create(
+    mount: HTMLElement,
+    options: GhosttyTerminalSurfaceOptions,
+  ): Promise<GhosttyTerminalSurface> {
+    const canvas = document.createElement("canvas");
+    canvas.className = "t3-ghostty-canvas";
+    canvas.style.cssText = "display:block;width:100%;height:100%;";
+    canvas.setAttribute("aria-hidden", "true");
+
+    const input = document.createElement("textarea");
+    input.className = "t3-ghostty-input";
+    input.setAttribute("aria-label", "Terminal input");
+    input.autocapitalize = "off";
+    input.autocomplete = "off";
+    input.spellcheck = false;
+    input.style.cssText =
+      "position:absolute;left:4px;bottom:4px;width:1px;height:1px;opacity:0;padding:0;border:0;resize:none;";
+    mount.replaceChildren(canvas, input);
+
+    const context = canvas.getContext("2d", { alpha: false });
+    if (!context) throw new Error("Canvas 2D is unavailable");
+    const metrics = measureGhosttyCell(context, FONT_SIZE, FONT_FAMILY);
+    const grid = terminalGridSize(mount.clientWidth, mount.clientHeight, metrics, CONTENT_PADDING);
+    const core = await GhosttyTerminalCore.create(
+      grid.cols,
+      grid.rows,
+      metrics.width,
+      metrics.height,
+      options.theme,
+      options.onData,
+    );
+    const surface = new GhosttyTerminalSurface(
+      mount,
+      canvas,
+      input,
+      context,
+      core,
+      metrics,
+      options,
+    );
+    surface.fit();
+    surface.requestRender();
+    return surface;
+  }
+
+  write(data: string): void {
+    this.core.write(data);
+    this.requestRender();
+  }
+
+  resetAndWrite(data: string): void {
+    this.core.resetAndWrite(data);
+    this.forceFullRender = true;
+    this.requestRender();
+  }
+
+  setTheme(theme: GhosttyTheme): void {
+    this.core.setTheme(theme);
+    this.forceFullRender = true;
+    this.requestRender();
+  }
+
+  fit(): boolean {
+    if (this.disposed) return false;
+    const width = this.mount.clientWidth;
+    const height = this.mount.clientHeight;
+    if (width <= 0 || height <= 0) return false;
+    const ratio = window.devicePixelRatio || 1;
+    const pixelWidth = Math.max(1, Math.round(width * ratio));
+    const pixelHeight = Math.max(1, Math.round(height * ratio));
+    if (this.canvas.width !== pixelWidth || this.canvas.height !== pixelHeight) {
+      this.canvas.width = pixelWidth;
+      this.canvas.height = pixelHeight;
+      this.context.setTransform(ratio, 0, 0, ratio, 0, 0);
+      this.forceFullRender = true;
+    }
+    const grid = terminalGridSize(width, height, this.metrics, CONTENT_PADDING);
+    if (grid.cols !== this.cols || grid.rows !== this.rows) {
+      this.cols = grid.cols;
+      this.rows = grid.rows;
+      this.core.resize(grid.cols, grid.rows, this.metrics.width, this.metrics.height);
+      this.forceFullRender = true;
+      this.requestRender();
+    }
+    return true;
+  }
+
+  focus(): void {
+    this.input.focus({ preventScroll: true });
+  }
+
+  hasSelection(): boolean {
+    return this.core.selectionText().length > 0;
+  }
+
+  getSelection(): string {
+    return this.core.selectionText();
+  }
+
+  getSelectionPosition(): GhosttySelectionPosition | null {
+    if (!this.selectionAnchor || !this.selectionEnd || !this.hasSelection()) return null;
+    const before =
+      this.selectionAnchor.y < this.selectionEnd.y ||
+      (this.selectionAnchor.y === this.selectionEnd.y &&
+        this.selectionAnchor.x <= this.selectionEnd.x);
+    return before
+      ? { start: this.selectionAnchor, end: this.selectionEnd }
+      : { start: this.selectionEnd, end: this.selectionAnchor };
+  }
+
+  clearSelection(): void {
+    this.core.clearSelection();
+    this.selectionAnchor = null;
+    this.selectionEnd = null;
+    this.options.onSelectionChange();
+    this.requestRender();
+  }
+
+  scrollToBottom(): void {
+    this.core.scrollToBottom();
+    this.forceFullRender = true;
+    this.requestRender();
+  }
+
+  isAtBottom(): boolean {
+    return this.core.isViewportActive();
+  }
+
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.resizeObserver.disconnect();
+    if (this.frame !== 0) window.cancelAnimationFrame(this.frame);
+    if (this.cursorTimer !== null) window.clearTimeout(this.cursorTimer);
+    this.removeEvents();
+    this.core.dispose();
+    this.mount.replaceChildren();
+  }
+
+  private readonly onKeyDown = (event: KeyboardEvent) => {
+    if (!this.options.beforeKey(event)) return;
+    if ((event.metaKey || event.ctrlKey) && event.code === "KeyC" && this.hasSelection()) {
+      event.preventDefault();
+      void navigator.clipboard.writeText(this.getSelection());
+      return;
+    }
+    if (event.isComposing || this.composing || event.key === "Process") return;
+    const data = this.core.encodeKey(event);
+    if (data.length === 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    this.options.onData(data);
+  };
+
+  private readonly onPaste = (event: ClipboardEvent) => {
+    const data = event.clipboardData?.getData("text/plain") ?? "";
+    if (data.length === 0) return;
+    event.preventDefault();
+    this.options.onData(this.core.encodePaste(data));
+  };
+
+  private readonly onCompositionStart = () => {
+    this.composing = true;
+  };
+
+  private readonly onCompositionEnd = (event: CompositionEvent) => {
+    this.composing = false;
+    if (event.data.length > 0) this.options.onData(event.data);
+    this.input.value = "";
+  };
+
+  private readonly onPointerDown = (event: PointerEvent) => {
+    if (event.button !== 0) return;
+    this.focus();
+    const cell = this.cellAt(event.clientX, event.clientY);
+    this.selectionAnchor = cell;
+    this.selectionEnd = cell;
+    this.selectionMoved = false;
+    this.core.setSelection(cell.x, cell.y, cell.x, cell.y);
+    this.canvas.setPointerCapture(event.pointerId);
+    this.requestRender();
+  };
+
+  private readonly onPointerMove = (event: PointerEvent) => {
+    if (!this.selectionAnchor || !this.canvas.hasPointerCapture(event.pointerId)) return;
+    const cell = this.cellAt(event.clientX, event.clientY);
+    if (cell.x === this.selectionEnd?.x && cell.y === this.selectionEnd.y) return;
+    this.selectionMoved = true;
+    this.selectionEnd = cell;
+    this.core.setSelection(this.selectionAnchor.x, this.selectionAnchor.y, cell.x, cell.y);
+    this.options.onSelectionChange();
+    this.requestRender();
+  };
+
+  private readonly onPointerUp = (event: PointerEvent) => {
+    if (this.canvas.hasPointerCapture(event.pointerId)) {
+      this.canvas.releasePointerCapture(event.pointerId);
+    }
+    if (!this.selectionMoved && (event.metaKey || event.ctrlKey)) {
+      const link = this.linkAt(event.clientX, event.clientY);
+      if (link) this.options.onLinkActivate(link, event);
+    } else if (!this.selectionMoved) {
+      this.clearSelection();
+    }
+    this.options.onSelectionChange();
+  };
+
+  private readonly onWheel = (event: WheelEvent) => {
+    if (event.deltaY === 0) return;
+    event.preventDefault();
+    const rows = Math.max(1, Math.round(Math.abs(event.deltaY) / this.metrics.height));
+    this.core.scroll(event.deltaY < 0 ? -rows : rows);
+    this.forceFullRender = true;
+    this.requestRender();
+  };
+
+  private readonly onMouseDown = () => {
+    this.focus();
+  };
+
+  private installEvents(): void {
+    this.input.addEventListener("keydown", this.onKeyDown);
+    this.input.addEventListener("paste", this.onPaste);
+    this.input.addEventListener("compositionstart", this.onCompositionStart);
+    this.input.addEventListener("compositionend", this.onCompositionEnd);
+    this.canvas.addEventListener("pointerdown", this.onPointerDown);
+    this.canvas.addEventListener("pointermove", this.onPointerMove);
+    this.canvas.addEventListener("pointerup", this.onPointerUp);
+    this.canvas.addEventListener("pointercancel", this.onPointerUp);
+    this.canvas.addEventListener("wheel", this.onWheel, { passive: false });
+    this.canvas.addEventListener("mousedown", this.onMouseDown);
+  }
+
+  private removeEvents(): void {
+    this.input.removeEventListener("keydown", this.onKeyDown);
+    this.input.removeEventListener("paste", this.onPaste);
+    this.input.removeEventListener("compositionstart", this.onCompositionStart);
+    this.input.removeEventListener("compositionend", this.onCompositionEnd);
+    this.canvas.removeEventListener("pointerdown", this.onPointerDown);
+    this.canvas.removeEventListener("pointermove", this.onPointerMove);
+    this.canvas.removeEventListener("pointerup", this.onPointerUp);
+    this.canvas.removeEventListener("pointercancel", this.onPointerUp);
+    this.canvas.removeEventListener("wheel", this.onWheel);
+    this.canvas.removeEventListener("mousedown", this.onMouseDown);
+  }
+
+  private requestRender(): void {
+    if (this.disposed || this.frame !== 0) return;
+    this.frame = window.requestAnimationFrame(() => {
+      this.frame = 0;
+      this.snapshot = this.core.snapshot();
+      renderGhosttySnapshot({
+        context: this.context,
+        snapshot: this.snapshot,
+        metrics: this.metrics,
+        fontSize: FONT_SIZE,
+        fontFamily: FONT_FAMILY,
+        padding: CONTENT_PADDING,
+        forceFull: this.forceFullRender,
+        cursorOn: this.cursorOn,
+      });
+      this.forceFullRender = false;
+      this.scheduleCursorBlink();
+    });
+  }
+
+  private scheduleCursorBlink(): void {
+    if (this.cursorTimer !== null) window.clearTimeout(this.cursorTimer);
+    this.cursorTimer = null;
+    if (!this.snapshot?.cursorBlinking || !this.snapshot.cursorVisible) return;
+    this.cursorTimer = window.setTimeout(() => {
+      this.cursorTimer = null;
+      this.cursorOn = !this.cursorOn;
+      this.requestRender();
+    }, 500);
+  }
+
+  private cellAt(clientX: number, clientY: number): { x: number; y: number } {
+    const bounds = this.canvas.getBoundingClientRect();
+    return {
+      x: Math.max(
+        0,
+        Math.min(
+          this.cols - 1,
+          Math.floor((clientX - bounds.left - CONTENT_PADDING) / this.metrics.width),
+        ),
+      ),
+      y: Math.max(
+        0,
+        Math.min(
+          this.rows - 1,
+          Math.floor((clientY - bounds.top - CONTENT_PADDING) / this.metrics.height),
+        ),
+      ),
+    };
+  }
+
+  private linkAt(clientX: number, clientY: number): string | null {
+    if (!this.snapshot) return null;
+    const cell = this.cellAt(clientX, clientY);
+    const text = this.snapshot.rowData[cell.y]?.text ?? "";
+    for (const match of text.matchAll(linkPattern)) {
+      const start = match.index;
+      const value = match[0];
+      if (cell.x >= start && cell.x < start + value.length) return value;
+    }
+    return null;
+  }
+}
