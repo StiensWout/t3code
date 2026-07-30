@@ -574,7 +574,7 @@ export class GhosttyTerminalSurface {
   };
 
   private readonly onMouseDown = (event: MouseEvent) => {
-    event.preventDefault();
+    if (event.button === 0) event.preventDefault();
     this.focus();
   };
 
