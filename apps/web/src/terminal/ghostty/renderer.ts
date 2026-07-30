@@ -94,12 +94,30 @@ export function renderGhosttySnapshot(options: {
   readonly padding: number;
   readonly forceFull: boolean;
   readonly cursorOn: boolean;
+  readonly previousCursorY?: number | null;
 }): void {
-  const { context, snapshot, metrics, fontSize, fontFamily, padding, forceFull, cursorOn } =
-    options;
+  const {
+    context,
+    snapshot,
+    metrics,
+    fontSize,
+    fontFamily,
+    padding,
+    forceFull,
+    cursorOn,
+    previousCursorY,
+  } = options;
   const rowsToDraw = forceFull
     ? Array.from({ length: snapshot.rows }, (_, index) => index)
     : [...snapshot.dirtyRows];
+  if (
+    previousCursorY !== null &&
+    previousCursorY !== undefined &&
+    previousCursorY >= 0 &&
+    !rowsToDraw.includes(previousCursorY)
+  ) {
+    rowsToDraw.push(previousCursorY);
+  }
   if (snapshot.cursorVisible && snapshot.cursorY >= 0 && !rowsToDraw.includes(snapshot.cursorY)) {
     rowsToDraw.push(snapshot.cursorY);
   }

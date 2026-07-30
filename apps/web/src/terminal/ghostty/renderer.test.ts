@@ -119,4 +119,56 @@ describe("renderGhosttySnapshot", () => {
       ["x", 18.4, 15, 7.2],
     ]);
   });
+
+  it("repaints the previous cursor row after the cursor moves", () => {
+    const clearedRows: number[] = [];
+    const context = {
+      canvas: { width: 200, height: 80 },
+      beginPath: () => {},
+      clip: () => {},
+      fillRect: (_left: number, top: number, _width: number, height: number) => {
+        if (height === 16) clearedRows.push(top);
+      },
+      fillText: () => {},
+      rect: () => {},
+      resetTransform: () => {},
+      restore: () => {},
+      save: () => {},
+      set fillStyle(_value: string) {},
+      set font(_value: string) {},
+      set textBaseline(_value: string) {},
+    } as unknown as CanvasRenderingContext2D;
+    const snapshot: GhosttySnapshot = {
+      cols: 1,
+      rows: 3,
+      foreground: { r: 255, g: 255, b: 255 },
+      background: { r: 0, g: 0, b: 0 },
+      cursor: { r: 255, g: 255, b: 255 },
+      cursorX: 0,
+      cursorY: 2,
+      cursorVisible: true,
+      cursorBlinking: false,
+      cursorStyle: 1,
+      dirtyRows: new Set(),
+      rowData: [0, 1, 2].map(() => ({
+        cells: [cell("")],
+        text: "",
+        isWrapContinuation: false,
+      })),
+    };
+
+    renderGhosttySnapshot({
+      context,
+      snapshot,
+      metrics: { width: 7.2, height: 16, baseline: 11 },
+      fontSize: 12,
+      fontFamily: "monospace",
+      padding: 4,
+      forceFull: false,
+      cursorOn: true,
+      previousCursorY: 0,
+    });
+
+    expect(clearedRows).toEqual([4, 36, 36]);
+  });
 });

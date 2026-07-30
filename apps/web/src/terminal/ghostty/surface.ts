@@ -222,6 +222,7 @@ export class GhosttyTerminalSurface {
   private compositionInputToSuppress: string | null = null;
   private compositionSuppressionTimer: number | null = null;
   private cursorOn = true;
+  private renderedCursorY: number | null = null;
   private forceFullRender = true;
   private scrollbarDirty = true;
   private scrollbarState: GhosttyScrollbar | null = null;
@@ -846,7 +847,12 @@ export class GhosttyTerminalSurface {
         padding: CONTENT_PADDING,
         forceFull: this.forceFullRender,
         cursorOn: this.cursorOn,
+        previousCursorY: this.renderedCursorY,
       });
+      this.renderedCursorY =
+        this.cursorOn && this.snapshot.cursorVisible && this.snapshot.cursorY >= 0
+          ? this.snapshot.cursorY
+          : null;
       if (this.scrollbarDirty) {
         this.scrollbarDirty = false;
         this.updateScrollbar();
