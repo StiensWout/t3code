@@ -674,9 +674,11 @@ export class GhosttyTerminalSurface {
   };
 
   private readonly onScrollbarPointerDown = (event: PointerEvent) => {
-    if (event.button !== 0 || this.scrollbarState === null) return;
+    if (event.button !== 0) return;
+    const state = this.readScrollbarState();
+    if (state === null) return;
     const bounds = this.scrollbar.getBoundingClientRect();
-    const geometry = terminalScrollbarGeometry(this.scrollbarState, bounds.height);
+    const geometry = terminalScrollbarGeometry(state, bounds.height);
     if (geometry === null) return;
     event.preventDefault();
     event.stopPropagation();
@@ -705,7 +707,7 @@ export class GhosttyTerminalSurface {
   };
 
   private readonly onScrollbarKeyDown = (event: KeyboardEvent) => {
-    const state = this.scrollbarState;
+    const state = this.readScrollbarState();
     if (state === null) return;
     let delta = 0;
     switch (event.key) {
@@ -777,7 +779,7 @@ export class GhosttyTerminalSurface {
 
   private scrollViewport(deltaRows: number): void {
     let delta = Math.trunc(deltaRows);
-    const state = this.scrollbarState;
+    const state = this.readScrollbarState();
     if (state !== null) {
       const maxOffset = Math.max(0, state.total - state.len);
       const offset = Math.max(0, Math.min(state.offset + delta, maxOffset));
@@ -804,8 +806,7 @@ export class GhosttyTerminalSurface {
   }
 
   private updateScrollbar(): void {
-    const state = this.core.scrollbarState();
-    this.scrollbarState = state;
+    const state = this.readScrollbarState();
     const geometry =
       state === null
         ? null
@@ -823,6 +824,12 @@ export class GhosttyTerminalSurface {
     );
     this.scrollbarThumb.style.height = `${geometry.thumbHeight}px`;
     this.scrollbarThumb.style.transform = `translateY(${geometry.thumbTop}px)`;
+  }
+
+  private readScrollbarState(): GhosttyScrollbar | null {
+    const state = this.core.scrollbarState();
+    this.scrollbarState = state;
+    return state;
   }
 
   private requestRender(): void {
