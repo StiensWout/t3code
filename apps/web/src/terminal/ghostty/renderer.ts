@@ -67,7 +67,7 @@ export function measureGhosttyCell(
   const glyphHeight = ascent + descent;
   const height = Math.max(1, Math.round(fontSize * 1.35), Math.ceil(glyphHeight));
   return {
-    width: Math.max(1, Math.ceil(widthMeasurement.width)),
+    width: Math.max(1, widthMeasurement.width),
     height,
     baseline: Math.round((height - glyphHeight) / 2 + ascent),
   };

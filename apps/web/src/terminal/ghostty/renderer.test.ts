@@ -45,7 +45,7 @@ describe("measureGhosttyCell", () => {
     } as unknown as CanvasRenderingContext2D;
 
     expect(measureGhosttyCell(context, 12, "monospace")).toEqual({
-      width: 8,
+      width: 7.2,
       height: 16,
       baseline: 11,
     });
