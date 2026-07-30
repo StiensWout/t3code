@@ -573,7 +573,8 @@ export class GhosttyTerminalSurface {
     this.requestRender();
   };
 
-  private readonly onMouseDown = () => {
+  private readonly onMouseDown = (event: MouseEvent) => {
+    event.preventDefault();
     this.focus();
   };
 

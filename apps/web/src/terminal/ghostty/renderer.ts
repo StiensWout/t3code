@@ -60,14 +60,16 @@ export function measureGhosttyCell(
   fontFamily: string,
 ): GhosttyCellMetrics {
   context.font = `normal 400 ${fontSize}px ${fontFamily}`;
-  const measurement = context.measureText("M");
-  const glyphHeight =
-    measurement.actualBoundingBoxAscent + measurement.actualBoundingBoxDescent || fontSize;
-  const height = Math.max(1, Math.ceil(glyphHeight * 1.12));
+  const widthMeasurement = context.measureText("M");
+  const verticalMeasurement = context.measureText("Mg");
+  const ascent = verticalMeasurement.actualBoundingBoxAscent || fontSize;
+  const descent = verticalMeasurement.actualBoundingBoxDescent;
+  const glyphHeight = ascent + descent;
+  const height = Math.max(1, Math.round(fontSize * 1.35), Math.ceil(glyphHeight));
   return {
-    width: Math.max(1, Math.ceil(measurement.width)),
+    width: Math.max(1, Math.ceil(widthMeasurement.width)),
     height,
-    baseline: Math.ceil((height - glyphHeight) / 2 + measurement.actualBoundingBoxAscent),
+    baseline: Math.round((height - glyphHeight) / 2 + ascent),
   };
 }
 

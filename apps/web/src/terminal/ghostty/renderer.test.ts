@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { GHOSTTY_CELL_WIDE, type GhosttyCell } from "./core";
-import { ghosttyTextRunEnd, terminalGridSize } from "./renderer";
+import { ghosttyTextRunEnd, measureGhosttyCell, terminalGridSize } from "./renderer";
 
 const cell = (text: string, wide = 0): GhosttyCell => ({
   text,
@@ -29,6 +29,25 @@ describe("terminalGridSize", () => {
     expect(terminalGridSize(0, 0, { width: 10, height: 20, baseline: 15 }, 4)).toEqual({
       cols: 1,
       rows: 1,
+    });
+  });
+});
+
+describe("measureGhosttyCell", () => {
+  it("uses descender-aware metrics and the mobile terminal line-height", () => {
+    const measureText = (text: string) =>
+      text === "M"
+        ? { width: 7.2, actualBoundingBoxAscent: 9, actualBoundingBoxDescent: 0 }
+        : { width: 14.4, actualBoundingBoxAscent: 9, actualBoundingBoxDescent: 3 };
+    const context = {
+      font: "",
+      measureText,
+    } as unknown as CanvasRenderingContext2D;
+
+    expect(measureGhosttyCell(context, 12, "monospace")).toEqual({
+      width: 8,
+      height: 16,
+      baseline: 11,
     });
   });
 });
