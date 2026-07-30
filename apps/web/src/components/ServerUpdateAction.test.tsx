@@ -5,9 +5,16 @@ import { AsyncResult } from "effect/unstable/reactivity";
 import type { EnvironmentId } from "@t3tools/contracts";
 
 const testState = vi.hoisted(() => ({
-  beginPendingServerUpdate: vi.fn(() => 1),
+  beginPendingServerUpdate: vi.fn(),
   clearPendingServerUpdate: vi.fn(),
+  markPendingServerUpdateInterrupted: vi.fn(),
   markPendingServerUpdateRestartAccepted: vi.fn(),
+  nextUpdateAttempt: 0,
+  pendingUpdate: null as {
+    readonly attempt: number;
+    readonly phase: "requesting" | "restarting" | "interrupted";
+    readonly targetVersion: string;
+  } | null,
   updateServer: vi.fn(),
   toast: vi.fn(),
 }));
@@ -87,8 +94,10 @@ vi.mock("~/state/server", () => ({
 vi.mock("~/state/serverUpdate", () => ({
   beginPendingServerUpdate: testState.beginPendingServerUpdate,
   clearPendingServerUpdate: testState.clearPendingServerUpdate,
+  markPendingServerUpdateInterrupted: testState.markPendingServerUpdateInterrupted,
   markPendingServerUpdateRestartAccepted: testState.markPendingServerUpdateRestartAccepted,
   SERVER_UPDATE_PENDING_EXPIRY_MS: 12 * 60_000,
+  usePendingServerUpdate: () => testState.pendingUpdate,
 }));
 vi.mock("~/state/use-atom-command", () => ({
   useAtomCommand: () => testState.updateServer,
@@ -134,9 +143,35 @@ describe("ServerUpdateAction", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     hooks.reset();
-    testState.beginPendingServerUpdate.mockClear();
-    testState.clearPendingServerUpdate.mockReset();
-    testState.markPendingServerUpdateRestartAccepted.mockReset();
+    testState.nextUpdateAttempt = 0;
+    testState.pendingUpdate = null;
+    testState.beginPendingServerUpdate.mockReset().mockImplementation((_, targetVersion) => {
+      if (testState.pendingUpdate?.phase !== "interrupted" && testState.pendingUpdate !== null) {
+        return null;
+      }
+      const attempt = ++testState.nextUpdateAttempt;
+      testState.pendingUpdate = { attempt, phase: "requesting", targetVersion };
+      return attempt;
+    });
+    testState.clearPendingServerUpdate.mockReset().mockImplementation((_, attempt) => {
+      if (testState.pendingUpdate?.attempt === attempt) {
+        testState.pendingUpdate = null;
+      }
+    });
+    testState.markPendingServerUpdateInterrupted.mockReset().mockImplementation((_, attempt) => {
+      const pendingUpdate = testState.pendingUpdate;
+      if (pendingUpdate !== null && pendingUpdate.attempt === attempt) {
+        testState.pendingUpdate = { ...pendingUpdate, phase: "interrupted" };
+      }
+    });
+    testState.markPendingServerUpdateRestartAccepted
+      .mockReset()
+      .mockImplementation((_, attempt) => {
+        const pendingUpdate = testState.pendingUpdate;
+        if (pendingUpdate !== null && pendingUpdate.attempt === attempt) {
+          testState.pendingUpdate = { ...pendingUpdate, phase: "restarting" };
+        }
+      });
     testState.updateServer.mockReset();
     testState.toast.mockReset();
   });
@@ -216,6 +251,7 @@ describe("ServerUpdateAction", () => {
       expect.objectContaining({ title: "Server update failed" }),
     );
     expect(testState.clearPendingServerUpdate).not.toHaveBeenCalled();
+    expect(testState.markPendingServerUpdateInterrupted).toHaveBeenCalledWith("env-test", 1);
   });
 
   it("clears the expected-restart state when the update fails", async () => {
@@ -258,5 +294,18 @@ describe("ServerUpdateAction", () => {
 
     expect(testState.markPendingServerUpdateRestartAccepted).toHaveBeenCalledWith("env-test", 1);
     expect(testState.toast).not.toHaveBeenCalled();
+  });
+
+  it("keeps the action disabled after remount while the shared request is in flight", async () => {
+    testState.updateServer.mockReturnValue(new Promise(() => {}));
+
+    renderAction().props.onClick?.();
+    await flushPromises();
+    hooks.unmount();
+    hooks.reset();
+
+    expect(renderAction().props.disabled).toBe(true);
+    renderAction().props.onClick?.();
+    expect(testState.updateServer).toHaveBeenCalledTimes(1);
   });
 });

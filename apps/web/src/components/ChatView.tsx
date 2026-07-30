@@ -207,7 +207,7 @@ import {
   primaryServerSettingsAtom,
   serverEnvironment,
 } from "../state/server";
-import { clearPendingServerUpdate, usePendingServerUpdate } from "../state/serverUpdate";
+import { usePendingServerUpdate } from "../state/serverUpdate";
 import { terminalEnvironment } from "../state/terminal";
 import { threadEnvironment } from "../state/threads";
 import { vcsEnvironment } from "../state/vcs";
@@ -1881,23 +1881,6 @@ function ChatViewContent(props: ChatViewProps) {
     versionMismatch && activeThread ? activeThread.environmentId : null;
   const versionMismatchSelfUpdate = resolveServerSelfUpdateCapability(serverConfig);
   const pendingServerUpdate = usePendingServerUpdate(activeThread?.environmentId ?? null);
-  useEffect(() => {
-    if (
-      pendingServerUpdate &&
-      activeThread &&
-      activeEnvironmentConnectionPhase === "connected" &&
-      serverConfig !== null &&
-      versionMismatch === null
-    ) {
-      clearPendingServerUpdate(activeThread.environmentId, pendingServerUpdate.attempt);
-    }
-  }, [
-    activeEnvironmentConnectionPhase,
-    activeThread,
-    pendingServerUpdate,
-    serverConfig,
-    versionMismatch,
-  ]);
   const systemComposerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
     const items: ComposerBannerStackItem[] = [];
     if (activeEnvironmentUnavailableState) {

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import type { EnvironmentId, ServerSelfUpdateCapability } from "@t3tools/contracts";
 import {
   isAtomCommandInterrupted,
@@ -10,8 +10,10 @@ import { serverEnvironment } from "~/state/server";
 import {
   beginPendingServerUpdate,
   clearPendingServerUpdate,
+  markPendingServerUpdateInterrupted,
   markPendingServerUpdateRestartAccepted,
   SERVER_UPDATE_PENDING_EXPIRY_MS,
+  usePendingServerUpdate,
 } from "~/state/serverUpdate";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { manualServerUpdateCommand } from "~/versionSkew";
@@ -45,8 +47,7 @@ export function ServerUpdateAction({
   const updateServer = useAtomCommand(serverEnvironment.updateServer, {
     reportFailure: false,
   });
-  const [pending, setPending] = useState(false);
-  const inFlightRef = useRef(false);
+  const pendingUpdate = usePendingServerUpdate(environmentId);
   const attemptRef = useRef(0);
   const expiryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { copyToClipboard } = useCopyToClipboard<{ command: string }>({
@@ -74,30 +75,23 @@ export function ServerUpdateAction({
         expiryRef.current = null;
       }
       attemptRef.current += 1;
-      inFlightRef.current = false;
     },
     [],
   );
 
   const handleUpdate = () => {
-    // Synchronous re-entry guard: setPending is async, so a rapid
-    // double-click would otherwise dispatch two updates.
-    if (inFlightRef.current) {
-      return;
-    }
-    inFlightRef.current = true;
+    const updateStateAttempt = beginPendingServerUpdate(environmentId, targetVersion);
+    if (updateStateAttempt === null) return;
+
     const attempt = attemptRef.current + 1;
     attemptRef.current = attempt;
-    const updateStateAttempt = beginPendingServerUpdate(environmentId, targetVersion);
     const ownsAttempt = () => attemptRef.current === attempt;
-    setPending(true);
     const armExpiry = () => {
       const expiry = setTimeout(() => {
         if (!ownsAttempt()) return;
         expiryRef.current = null;
+        clearPendingServerUpdate(environmentId, updateStateAttempt);
         attemptRef.current += 1;
-        inFlightRef.current = false;
-        setPending(false);
         toastManager.add({
           type: "error",
           title: "Server update timed out",
@@ -130,6 +124,7 @@ export function ServerUpdateAction({
           // Release the action quietly; version sync will remove it when a
           // successful replacement reconnects.
           if (isAtomCommandInterrupted(result)) {
+            markPendingServerUpdateInterrupted(environmentId, updateStateAttempt);
             return;
           }
           clearPendingServerUpdate(environmentId, updateStateAttempt);
@@ -170,8 +165,6 @@ export function ServerUpdateAction({
         expiryRef.current = null;
         clearTimeout(expiry);
         attemptRef.current += 1;
-        inFlightRef.current = false;
-        setPending(false);
       });
   };
 
@@ -192,7 +185,7 @@ export function ServerUpdateAction({
     );
   }
 
-  return pending ? (
+  return pendingUpdate !== null && pendingUpdate.phase !== "interrupted" ? (
     <Button size="xs" disabled>
       <Spinner className="size-3.5" />
       Updating...
