@@ -408,6 +408,31 @@ describe("vendored libghostty-vt WebAssembly", () => {
       "\u001b[99;5u",
     );
 
+    const remappedText = new TextEncoder().encode("j");
+    const remappedTextPointer = alloc(remappedText.length);
+    new Uint8Array(memory.buffer, remappedTextPointer, remappedText.length).set(remappedText);
+    call("ghostty_key_event_set_unshifted_codepoint", keyEvent, "j".codePointAt(0)!);
+    call("ghostty_key_event_set_utf8", keyEvent, remappedTextPointer, remappedText.length);
+    expect(call("ghostty_key_encoder_encode", keyEncoder, keyEvent, 0, 0, written)).toBe(-3);
+    const remappedOutputSize = new DataView(memory.buffer, written, 4).getUint32(0, true);
+    const remappedOutput = alloc(remappedOutputSize);
+    expect(
+      call(
+        "ghostty_key_encoder_encode",
+        keyEncoder,
+        keyEvent,
+        remappedOutput,
+        remappedOutputSize,
+        written,
+      ),
+    ).toBe(0);
+    const remappedOutputLength = new DataView(memory.buffer, written, 4).getUint32(0, true);
+    expect(
+      new TextDecoder().decode(new Uint8Array(memory.buffer, remappedOutput, remappedOutputLength)),
+    ).toBe("\u001b[106;5u");
+
+    free(remappedOutput, remappedOutputSize);
+    free(remappedTextPointer, remappedText.length);
     free(output, outputSize);
     call("ghostty_wasm_free_usize", written);
     free(textPointer, text.length);
