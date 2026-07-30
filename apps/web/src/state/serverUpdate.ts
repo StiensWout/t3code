@@ -4,6 +4,11 @@ import { Atom } from "effect/unstable/reactivity";
 
 import { appAtomRegistry } from "../rpc/atomRegistry";
 
+/**
+ * The npm install on the server side is capped at 10 minutes; expire the
+ * pending state a bit beyond that so a dead transport never leaves the client
+ * presenting an update indefinitely.
+ */
 export const SERVER_UPDATE_PENDING_EXPIRY_MS = 12 * 60_000;
 
 export interface PendingServerUpdate {

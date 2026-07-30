@@ -15,6 +15,7 @@ const testState = vi.hoisted(() => ({
 const hooks = vi.hoisted(() => {
   let cursor = 0;
   let slots: unknown[] = [];
+  let effectCleanups: Array<(() => void) | undefined> = [];
   const nextIndex = () => cursor++;
 
   return {
@@ -24,9 +25,17 @@ const hooks = vi.hoisted(() => {
     reset() {
       cursor = 0;
       slots = [];
+      effectCleanups = [];
     },
-    useEffect() {
-      nextIndex();
+    unmount() {
+      for (const cleanup of effectCleanups) cleanup?.();
+      effectCleanups = [];
+    },
+    useEffect(effect: () => void | (() => void)) {
+      const index = nextIndex();
+      if (index >= effectCleanups.length) {
+        effectCleanups[index] = effect() ?? undefined;
+      }
     },
     useMemoCache(size: number): unknown[] {
       const index = nextIndex();
@@ -218,5 +227,36 @@ describe("ServerUpdateAction", () => {
     await flushPromises();
 
     expect(testState.clearPendingServerUpdate).toHaveBeenCalledWith("env-test", 1);
+  });
+
+  it("clears the expected-restart state when the update fails after unmount", async () => {
+    const update = deferred<ReturnType<typeof AsyncResult.failure>>();
+    testState.updateServer.mockReturnValue(update.promise);
+
+    renderAction().props.onClick?.();
+    hooks.unmount();
+    update.resolve(AsyncResult.failure(Cause.fail(new Error("install failed"))));
+    await flushPromises();
+
+    expect(testState.clearPendingServerUpdate).toHaveBeenCalledWith("env-test", 1);
+    expect(testState.toast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Server update failed" }),
+    );
+  });
+
+  it("refreshes the expected-restart deadline without showing a toast after unmount", async () => {
+    const update =
+      deferred<
+        ReturnType<typeof AsyncResult.success<{ targetVersion: string; method: "boot-service" }>>
+      >();
+    testState.updateServer.mockReturnValue(update.promise);
+
+    renderAction().props.onClick?.();
+    hooks.unmount();
+    update.resolve(AsyncResult.success({ targetVersion: "0.0.29", method: "boot-service" }));
+    await flushPromises();
+
+    expect(testState.markPendingServerUpdateRestartAccepted).toHaveBeenCalledWith("env-test", 1);
+    expect(testState.toast).not.toHaveBeenCalled();
   });
 });

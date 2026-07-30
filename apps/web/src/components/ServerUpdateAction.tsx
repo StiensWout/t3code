@@ -19,11 +19,6 @@ import { Button } from "./ui/button";
 import { Spinner } from "./ui/spinner";
 import { toastManager } from "./ui/toast";
 
-/**
- * The npm install on the server side is capped at 10 minutes; expire the
- * spinner a bit beyond that so a dead transport never strands a disabled
- * button, while a legitimately slow install is never cut off.
- */
 function updateFailureMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Server update failed.";
 }
@@ -116,7 +111,6 @@ export function ServerUpdateAction({
     let restartAccepted = false;
     const keepPendingForRestart = () => {
       restartAccepted = true;
-      markPendingServerUpdateRestartAccepted(environmentId, updateStateAttempt);
       if (expiryRef.current === expiry) {
         clearTimeout(expiry);
         expiry = armExpiry();
@@ -130,7 +124,6 @@ export function ServerUpdateAction({
         }),
       )
       .then((result) => {
-        if (!ownsAttempt()) return;
         if (result._tag === "Failure") {
           // An interrupt may be the expected boot-service disconnect, but it
           // can also be client-side cancellation before restart was accepted.
@@ -140,6 +133,7 @@ export function ServerUpdateAction({
             return;
           }
           clearPendingServerUpdate(environmentId, updateStateAttempt);
+          if (!ownsAttempt()) return;
           toastManager.add({
             type: "error",
             title: "Server update failed",
@@ -147,6 +141,8 @@ export function ServerUpdateAction({
           });
           return;
         }
+        markPendingServerUpdateRestartAccepted(environmentId, updateStateAttempt);
+        if (!ownsAttempt()) return;
         keepPendingForRestart();
         // Installation can legitimately consume most of the request window.
         // Give restart/reconnect a fresh full window after the server accepts
@@ -158,8 +154,8 @@ export function ServerUpdateAction({
         });
       })
       .catch((error: unknown) => {
-        if (!ownsAttempt()) return;
         clearPendingServerUpdate(environmentId, updateStateAttempt);
+        if (!ownsAttempt()) return;
         toastManager.add({
           type: "error",
           title: "Server update failed",
