@@ -1,6 +1,11 @@
 import { isMacPlatform } from "../../lib/utils";
 import { collectWrappedTerminalLinkLine, extractTerminalLinks } from "../../terminal-links";
-import { GhosttyTerminalCore, type GhosttySnapshot, type GhosttyTheme } from "./core";
+import {
+  GhosttyTerminalCore,
+  type GhosttyScrollbar,
+  type GhosttySnapshot,
+  type GhosttyTheme,
+} from "./core";
 import {
   measureGhosttyCell,
   renderGhosttySnapshot,
@@ -12,6 +17,49 @@ const FONT_SIZE = 12;
 const FONT_FAMILY =
   '"SF Mono", "SFMono-Regular", "JetBrains Mono", Consolas, "Liberation Mono", Menlo, monospace';
 const CONTENT_PADDING = 4;
+const MIN_SCROLLBAR_THUMB_HEIGHT = 18;
+
+export interface TerminalScrollbarGeometry {
+  readonly thumbHeight: number;
+  readonly thumbTop: number;
+  readonly maxOffset: number;
+}
+
+export function terminalScrollbarGeometry(
+  state: GhosttyScrollbar,
+  trackHeight: number,
+): TerminalScrollbarGeometry | null {
+  const total = Math.max(0, state.total);
+  const len = Math.max(0, Math.min(state.len, total));
+  const maxOffset = Math.max(0, total - len);
+  if (trackHeight <= 0 || len <= 0 || maxOffset === 0) return null;
+  const thumbHeight = Math.min(
+    trackHeight,
+    Math.max(MIN_SCROLLBAR_THUMB_HEIGHT, (trackHeight * len) / total),
+  );
+  const travel = Math.max(0, trackHeight - thumbHeight);
+  const offset = Math.max(0, Math.min(state.offset, maxOffset));
+  return {
+    thumbHeight,
+    thumbTop: travel * (offset / maxOffset),
+    maxOffset,
+  };
+}
+
+export function terminalScrollbarOffsetAtPointer(
+  state: GhosttyScrollbar,
+  trackHeight: number,
+  pointerY: number,
+  pointerOffset: number,
+): number {
+  const geometry = terminalScrollbarGeometry(state, trackHeight);
+  if (geometry === null) return 0;
+  const travel = Math.max(0, trackHeight - geometry.thumbHeight);
+  if (travel === 0) return 0;
+  const thumbTop = Math.max(0, Math.min(pointerY - pointerOffset, travel));
+  return Math.round((thumbTop / travel) * geometry.maxOffset);
+}
+
 function terminalRowText(row: GhosttySnapshot["rowData"][number], trimRight: boolean): string {
   const text = row.cells.map((cell) => cell.text || " ").join("");
   return trimRight ? text.trimEnd() : text;
@@ -157,6 +205,7 @@ export interface GhosttyTerminalSurfaceOptions {
 export class GhosttyTerminalSurface {
   readonly canvas: HTMLCanvasElement;
   readonly input: HTMLTextAreaElement;
+  readonly scrollbar: HTMLDivElement;
   cols = 1;
   rows = 1;
 
@@ -166,6 +215,7 @@ export class GhosttyTerminalSurface {
   private readonly options: GhosttyTerminalSurfaceOptions;
   private readonly metrics: GhosttyCellMetrics;
   private readonly resizeObserver: ResizeObserver;
+  private readonly scrollbarThumb: HTMLDivElement;
   private snapshot: GhosttySnapshot | null = null;
   private frame = 0;
   private cursorTimer: number | null = null;
@@ -173,6 +223,10 @@ export class GhosttyTerminalSurface {
   private compositionSuppressionTimer: number | null = null;
   private cursorOn = true;
   private forceFullRender = true;
+  private scrollbarDirty = true;
+  private scrollbarState: GhosttyScrollbar | null = null;
+  private scrollbarPointerId: number | null = null;
+  private scrollbarPointerOffset = 0;
   private disposed = false;
   private pendingCanvasSize: {
     readonly width: number;
@@ -199,6 +253,8 @@ export class GhosttyTerminalSurface {
     mount: HTMLElement,
     canvas: HTMLCanvasElement,
     input: HTMLTextAreaElement,
+    scrollbar: HTMLDivElement,
+    scrollbarThumb: HTMLDivElement,
     context: CanvasRenderingContext2D,
     core: GhosttyTerminalCore,
     metrics: GhosttyCellMetrics,
@@ -207,6 +263,8 @@ export class GhosttyTerminalSurface {
     this.mount = mount;
     this.canvas = canvas;
     this.input = input;
+    this.scrollbar = scrollbar;
+    this.scrollbarThumb = scrollbarThumb;
     this.context = context;
     this.core = core;
     this.metrics = metrics;
@@ -233,7 +291,18 @@ export class GhosttyTerminalSurface {
     input.spellcheck = false;
     input.style.cssText =
       "position:absolute;left:4px;bottom:4px;width:1px;height:1px;opacity:0;padding:0;border:0;resize:none;";
-    mount.replaceChildren(canvas, input);
+
+    const scrollbar = document.createElement("div");
+    scrollbar.className = "t3-ghostty-scrollbar";
+    scrollbar.setAttribute("role", "scrollbar");
+    scrollbar.setAttribute("aria-label", "Terminal scrollback");
+    scrollbar.setAttribute("aria-orientation", "vertical");
+    scrollbar.tabIndex = 0;
+    scrollbar.hidden = true;
+    const scrollbarThumb = document.createElement("div");
+    scrollbarThumb.className = "t3-ghostty-scrollbar-thumb";
+    scrollbar.append(scrollbarThumb);
+    mount.replaceChildren(canvas, input, scrollbar);
 
     const context = canvas.getContext("2d", { alpha: false });
     if (!context) throw new Error("Canvas 2D is unavailable");
@@ -251,6 +320,8 @@ export class GhosttyTerminalSurface {
       mount,
       canvas,
       input,
+      scrollbar,
+      scrollbarThumb,
       context,
       core,
       metrics,
@@ -264,6 +335,7 @@ export class GhosttyTerminalSurface {
   write(data: string): void {
     if (this.disposed) return;
     this.core.write(data);
+    this.scrollbarDirty = true;
     this.requestRender();
   }
 
@@ -271,6 +343,7 @@ export class GhosttyTerminalSurface {
     if (this.disposed) return;
     this.core.resetAndWrite(data);
     this.forceFullRender = true;
+    this.scrollbarDirty = true;
     this.requestRender();
   }
 
@@ -297,6 +370,7 @@ export class GhosttyTerminalSurface {
         ratio,
       };
       this.forceFullRender = true;
+      this.scrollbarDirty = true;
       shouldRender = true;
     } else if (this.pendingCanvasSize !== null) {
       this.pendingCanvasSize = null;
@@ -308,6 +382,7 @@ export class GhosttyTerminalSurface {
       this.core.resize(grid.cols, grid.rows, this.metrics.width, this.metrics.height);
       this.options.onResize(grid.cols, grid.rows);
       this.forceFullRender = true;
+      this.scrollbarDirty = true;
       shouldRender = true;
     }
     if (shouldRender) this.requestRender();
@@ -353,6 +428,7 @@ export class GhosttyTerminalSurface {
   scrollToBottom(): void {
     this.core.scrollToBottom();
     this.forceFullRender = true;
+    this.scrollbarDirty = true;
     this.requestRender();
   }
 
@@ -371,9 +447,14 @@ export class GhosttyTerminalSurface {
     }
     this.removeEvents();
     this.core.dispose();
-    if (this.canvas.parentElement === this.mount || this.input.parentElement === this.mount) {
+    if (
+      this.canvas.parentElement === this.mount ||
+      this.input.parentElement === this.mount ||
+      this.scrollbar.parentElement === this.mount
+    ) {
       this.canvas.remove();
       this.input.remove();
+      this.scrollbar.remove();
     }
   }
 
@@ -577,9 +658,7 @@ export class GhosttyTerminalSurface {
       }
       return;
     }
-    this.core.scroll(event.deltaY < 0 ? -rows : rows);
-    this.forceFullRender = true;
-    this.requestRender();
+    this.scrollViewport(event.deltaY < 0 ? -rows : rows);
   };
 
   private readonly onMouseDown = (event: MouseEvent) => {
@@ -591,6 +670,68 @@ export class GhosttyTerminalSurface {
     if (shouldReportTerminalMouse(this.core.isMouseTracking(), event)) {
       event.preventDefault();
     }
+  };
+
+  private readonly onScrollbarPointerDown = (event: PointerEvent) => {
+    if (event.button !== 0 || this.scrollbarState === null) return;
+    const bounds = this.scrollbar.getBoundingClientRect();
+    const geometry = terminalScrollbarGeometry(this.scrollbarState, bounds.height);
+    if (geometry === null) return;
+    event.preventDefault();
+    event.stopPropagation();
+    this.scrollbarPointerId = event.pointerId;
+    this.scrollbarPointerOffset =
+      event.target === this.scrollbarThumb
+        ? event.clientY - bounds.top - geometry.thumbTop
+        : geometry.thumbHeight / 2;
+    this.scrollbar.setPointerCapture(event.pointerId);
+    this.scrollbarToPointer(event.clientY, bounds);
+  };
+
+  private readonly onScrollbarPointerMove = (event: PointerEvent) => {
+    if (event.pointerId !== this.scrollbarPointerId || this.scrollbarState === null) return;
+    event.preventDefault();
+    this.scrollbarToPointer(event.clientY, this.scrollbar.getBoundingClientRect());
+  };
+
+  private readonly onScrollbarPointerUp = (event: PointerEvent) => {
+    if (event.pointerId !== this.scrollbarPointerId) return;
+    event.preventDefault();
+    this.scrollbarPointerId = null;
+    if (this.scrollbar.hasPointerCapture(event.pointerId)) {
+      this.scrollbar.releasePointerCapture(event.pointerId);
+    }
+  };
+
+  private readonly onScrollbarKeyDown = (event: KeyboardEvent) => {
+    const state = this.scrollbarState;
+    if (state === null) return;
+    let delta = 0;
+    switch (event.key) {
+      case "ArrowUp":
+        delta = -1;
+        break;
+      case "ArrowDown":
+        delta = 1;
+        break;
+      case "PageUp":
+        delta = -Math.max(1, state.len);
+        break;
+      case "PageDown":
+        delta = Math.max(1, state.len);
+        break;
+      case "Home":
+        delta = -state.offset;
+        break;
+      case "End":
+        delta = state.total - state.len - state.offset;
+        break;
+      default:
+        return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    this.scrollViewport(delta);
   };
 
   private installEvents(): void {
@@ -606,6 +747,11 @@ export class GhosttyTerminalSurface {
     this.canvas.addEventListener("wheel", this.onWheel, { passive: false });
     this.canvas.addEventListener("mousedown", this.onMouseDown);
     this.canvas.addEventListener("contextmenu", this.onContextMenu);
+    this.scrollbar.addEventListener("pointerdown", this.onScrollbarPointerDown);
+    this.scrollbar.addEventListener("pointermove", this.onScrollbarPointerMove);
+    this.scrollbar.addEventListener("pointerup", this.onScrollbarPointerUp);
+    this.scrollbar.addEventListener("pointercancel", this.onScrollbarPointerUp);
+    this.scrollbar.addEventListener("keydown", this.onScrollbarKeyDown);
   }
 
   private removeEvents(): void {
@@ -621,6 +767,61 @@ export class GhosttyTerminalSurface {
     this.canvas.removeEventListener("wheel", this.onWheel);
     this.canvas.removeEventListener("mousedown", this.onMouseDown);
     this.canvas.removeEventListener("contextmenu", this.onContextMenu);
+    this.scrollbar.removeEventListener("pointerdown", this.onScrollbarPointerDown);
+    this.scrollbar.removeEventListener("pointermove", this.onScrollbarPointerMove);
+    this.scrollbar.removeEventListener("pointerup", this.onScrollbarPointerUp);
+    this.scrollbar.removeEventListener("pointercancel", this.onScrollbarPointerUp);
+    this.scrollbar.removeEventListener("keydown", this.onScrollbarKeyDown);
+  }
+
+  private scrollViewport(deltaRows: number): void {
+    let delta = Math.trunc(deltaRows);
+    const state = this.scrollbarState;
+    if (state !== null) {
+      const maxOffset = Math.max(0, state.total - state.len);
+      const offset = Math.max(0, Math.min(state.offset + delta, maxOffset));
+      delta = offset - state.offset;
+      this.scrollbarState = { ...state, offset };
+    }
+    if (delta === 0) return;
+    this.core.scroll(delta);
+    this.forceFullRender = true;
+    this.scrollbarDirty = true;
+    this.requestRender();
+  }
+
+  private scrollbarToPointer(clientY: number, bounds: DOMRect): void {
+    const state = this.scrollbarState;
+    if (state === null) return;
+    const offset = terminalScrollbarOffsetAtPointer(
+      state,
+      bounds.height,
+      clientY - bounds.top,
+      this.scrollbarPointerOffset,
+    );
+    this.scrollViewport(offset - state.offset);
+  }
+
+  private updateScrollbar(): void {
+    const state = this.core.scrollbarState();
+    this.scrollbarState = state;
+    const geometry =
+      state === null
+        ? null
+        : terminalScrollbarGeometry(
+            state,
+            Math.max(0, this.mount.clientHeight - CONTENT_PADDING * 2),
+          );
+    this.scrollbar.hidden = geometry === null;
+    if (state === null || geometry === null) return;
+    this.scrollbar.setAttribute("aria-valuemin", "0");
+    this.scrollbar.setAttribute("aria-valuemax", String(geometry.maxOffset));
+    this.scrollbar.setAttribute(
+      "aria-valuenow",
+      String(Math.max(0, Math.min(state.offset, geometry.maxOffset))),
+    );
+    this.scrollbarThumb.style.height = `${geometry.thumbHeight}px`;
+    this.scrollbarThumb.style.transform = `translateY(${geometry.thumbTop}px)`;
   }
 
   private requestRender(): void {
@@ -646,6 +847,10 @@ export class GhosttyTerminalSurface {
         forceFull: this.forceFullRender,
         cursorOn: this.cursorOn,
       });
+      if (this.scrollbarDirty) {
+        this.scrollbarDirty = false;
+        this.updateScrollbar();
+      }
       this.forceFullRender = false;
       this.scheduleCursorBlink();
     });

@@ -10,6 +10,8 @@ import {
   isTerminalLinkPointerGesture,
   isTerminalPasteShortcut,
   shouldReportTerminalMouse,
+  terminalScrollbarGeometry,
+  terminalScrollbarOffsetAtPointer,
   terminalLinkAtColumn,
   terminalLinkAtPosition,
 } from "./surface";
@@ -225,5 +227,26 @@ describe("advanceTerminalSelectionClickSequence", () => {
         timeStamp: 1_501,
       }).count,
     ).toBe(1);
+  });
+});
+
+describe("terminal scrollbar", () => {
+  it("maps Ghostty's viewport state to a proportional thumb", () => {
+    expect(terminalScrollbarGeometry({ total: 100, offset: 40, len: 20 }, 200)).toEqual({
+      thumbHeight: 40,
+      thumbTop: 80,
+      maxOffset: 80,
+    });
+    expect(terminalScrollbarGeometry({ total: 100, offset: 0, len: 100 }, 200)).toBeNull();
+  });
+
+  it("keeps the thumb usable for large scrollback and maps dragging back to rows", () => {
+    const state = { total: 10_000, offset: 0, len: 20 };
+    expect(terminalScrollbarGeometry(state, 200)).toEqual({
+      thumbHeight: 18,
+      thumbTop: 0,
+      maxOffset: 9_980,
+    });
+    expect(terminalScrollbarOffsetAtPointer(state, 200, 191, 9)).toBe(9_980);
   });
 });

@@ -66,6 +66,54 @@ describe("vendored libghostty-vt WebAssembly", () => {
     }
   });
 
+  it("reports and scrolls the viewport with Ghostty's scrollbar state", async () => {
+    const result = await WebAssembly.instantiate(
+      decodeWasmDataUrl(wasmDataUrl).buffer as ArrayBuffer,
+      { env: { log: () => {} } },
+    );
+    const instance = result instanceof WebAssembly.Instance ? result : result.instance;
+    const memory = instance.exports.memory as WebAssembly.Memory;
+    const call = (name: string, ...args: number[]) =>
+      (instance.exports[name] as WasmFunction)(...args);
+    const alloc = (size: number) => call("ghostty_wasm_alloc_u8_array", size);
+    const options = alloc(8);
+    const optionsView = new DataView(memory.buffer, options, 8);
+    optionsView.setUint16(0, 80, true);
+    optionsView.setUint16(2, 10, true);
+    optionsView.setUint32(4, 1_000, true);
+    const terminalSlot = call("ghostty_wasm_alloc_opaque");
+    expect(call("ghostty_terminal_new", 0, terminalSlot, options)).toBe(0);
+    const terminal = new DataView(memory.buffer).getUint32(terminalSlot, true);
+    const input = new TextEncoder().encode(
+      Array.from({ length: 50 }, (_, index) => `${index + 1}\r\n`).join(""),
+    );
+    const inputPointer = alloc(input.length);
+    new Uint8Array(memory.buffer, inputPointer, input.length).set(input);
+    call("ghostty_terminal_vt_write", terminal, inputPointer, input.length);
+
+    const scrollbar = alloc(24);
+    const scrollbarView = new DataView(memory.buffer, scrollbar, 24);
+    expect(call("ghostty_terminal_get", terminal, 9, scrollbar)).toBe(0);
+    expect([0, 8, 16].map((offset) => Number(scrollbarView.getBigUint64(offset, true)))).toEqual([
+      51, 41, 10,
+    ]);
+
+    const scroll = alloc(24);
+    const scrollView = new DataView(memory.buffer, scroll, 24);
+    scrollView.setUint32(0, 2, true);
+    scrollView.setInt32(8, -5, true);
+    call("ghostty_terminal_scroll_viewport", terminal, scroll);
+    expect(call("ghostty_terminal_get", terminal, 9, scrollbar)).toBe(0);
+    expect(Number(scrollbarView.getBigUint64(8, true))).toBe(36);
+
+    call("ghostty_wasm_free_u8_array", scroll, 24);
+    call("ghostty_wasm_free_u8_array", scrollbar, 24);
+    call("ghostty_wasm_free_u8_array", inputPointer, input.length);
+    call("ghostty_terminal_free", terminal);
+    call("ghostty_wasm_free_opaque", terminalSlot);
+    call("ghostty_wasm_free_u8_array", options, 8);
+  });
+
   it("routes terminal-generated replies through the shared callback table", async () => {
     const mainResult = await WebAssembly.instantiate(
       decodeWasmDataUrl(wasmDataUrl).buffer as ArrayBuffer,

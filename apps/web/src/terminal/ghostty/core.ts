@@ -115,6 +115,12 @@ export interface GhosttySelectionRange {
   };
 }
 
+export interface GhosttyScrollbar {
+  readonly total: number;
+  readonly offset: number;
+  readonly len: number;
+}
+
 export interface GhosttyMouseInput {
   readonly action: "press" | "release" | "motion";
   readonly button: number | null;
@@ -165,6 +171,7 @@ export class GhosttyTerminalCore {
   private ptyWriter: ((data: string) => void) | null = null;
   private scratch = 0;
   private style = 0;
+  private scrollbar = 0;
   private rows: GhosttyRow[] = [];
   private disposed = false;
   private keyboardLayoutMap: GhosttyKeyboardLayoutMap | undefined;
@@ -265,6 +272,7 @@ export class GhosttyTerminalCore {
     const styleSize = this.runtime.layout("GhosttyStyle").size;
     this.style = this.runtime.alloc(styleSize);
     this.runtime.setField(this.style, "GhosttyStyle", "size", styleSize);
+    this.scrollbar = this.runtime.alloc(this.runtime.layout("GhosttyTerminalScrollbar").size);
     this.setTheme(theme);
     this.resize(cols, rows, cellWidth, cellHeight);
   }
@@ -354,6 +362,23 @@ export class GhosttyTerminalCore {
       this.runtime.call("ghostty_terminal_get", this.terminal, 32, this.scratch) ===
         GHOSTTY_SUCCESS && this.runtime.bytes(this.scratch, 1)[0] !== 0
     );
+  }
+
+  scrollbarState(): GhosttyScrollbar | null {
+    this.ensureActive();
+    const layout = this.runtime.layout("GhosttyTerminalScrollbar");
+    this.runtime.bytes(this.scrollbar, layout.size).fill(0);
+    if (
+      this.runtime.call("ghostty_terminal_get", this.terminal, 9, this.scrollbar) !==
+      GHOSTTY_SUCCESS
+    ) {
+      return null;
+    }
+    return {
+      total: this.runtime.readField(this.scrollbar, "GhosttyTerminalScrollbar", "total"),
+      offset: this.runtime.readField(this.scrollbar, "GhosttyTerminalScrollbar", "offset"),
+      len: this.runtime.readField(this.scrollbar, "GhosttyTerminalScrollbar", "len"),
+    };
   }
 
   isMouseTracking(): boolean {
@@ -755,6 +780,9 @@ export class GhosttyTerminalCore {
       this.runtime.call("ghostty_terminal_free", this.terminal);
     }
     if (this.style) this.runtime.free(this.style, this.runtime.layout("GhosttyStyle").size);
+    if (this.scrollbar) {
+      this.runtime.free(this.scrollbar, this.runtime.layout("GhosttyTerminalScrollbar").size);
+    }
     if (this.scratch) this.runtime.free(this.scratch, 16);
     for (const slot of [
       this.mouseEventSlot,
