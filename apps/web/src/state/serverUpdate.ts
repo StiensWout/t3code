@@ -81,6 +81,7 @@ export function markPendingServerUpdateInterrupted(
   const next = new Map(updates);
   next.set(environmentId, { ...current, phase: "interrupted" });
   appAtomRegistry.set(pendingServerUpdatesAtom, next);
+  armExpiry(environmentId, attempt);
 }
 
 export function clearPendingServerUpdate(environmentId: EnvironmentId, attempt: number): void {

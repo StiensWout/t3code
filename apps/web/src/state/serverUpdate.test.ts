@@ -50,6 +50,18 @@ describe("serverUpdate", () => {
     expect(getPendingServerUpdateForTests(environmentId)).toBeNull();
   });
 
+  it("starts a fresh reconnect deadline after the update request is interrupted", () => {
+    const attempt = beginPendingServerUpdate(environmentId, "0.0.29");
+    vi.advanceTimersByTime(SERVER_UPDATE_PENDING_EXPIRY_MS - 1);
+
+    markPendingServerUpdateInterrupted(environmentId, attempt!);
+    vi.advanceTimersByTime(SERVER_UPDATE_PENDING_EXPIRY_MS - 1);
+    expect(getPendingServerUpdateForTests(environmentId)).not.toBeNull();
+
+    vi.advanceTimersByTime(1);
+    expect(getPendingServerUpdateForTests(environmentId)).toBeNull();
+  });
+
   it("does not let an older attempt clear a newer retry", () => {
     const firstAttempt = beginPendingServerUpdate(environmentId, "0.0.29");
     expect(firstAttempt).not.toBeNull();
