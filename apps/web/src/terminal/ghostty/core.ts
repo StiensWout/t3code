@@ -1,4 +1,9 @@
-import { ghosttyKeyForCode, ghosttyUnshiftedCodepoint } from "./keyCodes";
+import {
+  type GhosttyKeyboardLayoutMap,
+  ghosttyKeyForCode,
+  ghosttyUnshiftedCodepoint,
+  loadGhosttyKeyboardLayoutMap,
+} from "./keyCodes";
 import { GhosttyRuntime, loadGhosttyRuntime } from "./runtime";
 
 const GHOSTTY_SUCCESS = 0;
@@ -162,9 +167,13 @@ export class GhosttyTerminalCore {
   private style = 0;
   private rows: GhosttyRow[] = [];
   private disposed = false;
+  private keyboardLayoutMap: GhosttyKeyboardLayoutMap | undefined;
 
   private constructor(runtime: GhosttyRuntime) {
     this.runtime = runtime;
+    void loadGhosttyKeyboardLayoutMap().then((layoutMap) => {
+      if (!this.disposed) this.keyboardLayoutMap = layoutMap;
+    });
   }
 
   static async create(
@@ -374,7 +383,7 @@ export class GhosttyTerminalCore {
     this.runtime.call(
       "ghostty_key_event_set_unshifted_codepoint",
       this.keyEvent,
-      ghosttyUnshiftedCodepoint(event),
+      ghosttyUnshiftedCodepoint(event, this.keyboardLayoutMap),
     );
 
     const text = event.key.length === 1 ? event.key : "";

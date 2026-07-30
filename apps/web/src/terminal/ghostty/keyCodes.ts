@@ -188,25 +188,62 @@ export function ghosttyKeyForCode(code: string): number {
   return codeToGhosttyKey.get(code) ?? 0;
 }
 
-const codeToUnshiftedCharacter = new Map<string, string>([
-  ...Array.from({ length: 10 }, (_, digit) => [`Digit${digit}`, `${digit}`] as const),
-  ["Backquote", "`"],
-  ["Minus", "-"],
-  ["Equal", "="],
-  ["BracketLeft", "["],
-  ["BracketRight", "]"],
-  ["Backslash", "\\"],
-  ["Semicolon", ";"],
-  ["Quote", "'"],
-  ["Comma", ","],
-  ["Period", "."],
-  ["Slash", "/"],
+export interface GhosttyKeyboardLayoutMap {
+  get(code: string): string | undefined;
+}
+
+const shiftedToUnshiftedCharacter = new Map<string, string>([
+  ["!", "1"],
+  ["@", "2"],
+  ["#", "3"],
+  ["$", "4"],
+  ["%", "5"],
+  ["^", "6"],
+  ["&", "7"],
+  ["*", "8"],
+  ["(", "9"],
+  [")", "0"],
+  ["~", "`"],
+  ["_", "-"],
+  ["+", "="],
+  ["{", "["],
+  ["}", "]"],
+  ["|", "\\"],
+  [":", ";"],
+  ['"', "'"],
+  ["<", ","],
+  [">", "."],
+  ["?", "/"],
 ]);
 
-export function ghosttyUnshiftedCodepoint(event: Pick<KeyboardEvent, "code" | "key">): number {
+let keyboardLayoutMapPromise: Promise<GhosttyKeyboardLayoutMap | undefined> | undefined;
+
+export function loadGhosttyKeyboardLayoutMap(): Promise<GhosttyKeyboardLayoutMap | undefined> {
+  if (keyboardLayoutMapPromise) return keyboardLayoutMapPromise;
+  const browserNavigator = globalThis.navigator as
+    | (Navigator & {
+        readonly keyboard?: {
+          getLayoutMap(): Promise<GhosttyKeyboardLayoutMap>;
+        };
+      })
+    | undefined;
+  const keyboard = browserNavigator?.keyboard;
+  const promise = keyboard?.getLayoutMap().catch(() => undefined) ?? Promise.resolve(undefined);
+  keyboardLayoutMapPromise = promise;
+  return promise;
+}
+
+export function ghosttyUnshiftedCodepoint(
+  event: Pick<KeyboardEvent, "code" | "key">,
+  layoutMap?: GhosttyKeyboardLayoutMap,
+): number {
   if ([...event.key].length !== 1) return 0;
-  if (/^Key[A-Z]$/u.test(event.code)) return event.code.charCodeAt(3) + 32;
-  const unshiftedCharacter = codeToUnshiftedCharacter.get(event.code);
+  const layoutCharacter = layoutMap?.get(event.code);
+  if (layoutCharacter && [...layoutCharacter].length === 1) {
+    return layoutCharacter.codePointAt(0) ?? 0;
+  }
+  if (/^[A-Z]$/u.test(event.key)) return event.key.charCodeAt(0) + 32;
+  const unshiftedCharacter = shiftedToUnshiftedCharacter.get(event.key);
   if (unshiftedCharacter) return unshiftedCharacter.codePointAt(0) ?? 0;
   return event.key.codePointAt(0) ?? 0;
 }
