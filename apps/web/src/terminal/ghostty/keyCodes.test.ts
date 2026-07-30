@@ -15,6 +15,8 @@ describe("ghosttyUnshiftedCodepoint", () => {
   it("provides the logical base character for Kitty keyboard encoding", () => {
     expect(ghosttyUnshiftedCodepoint({ code: "KeyC", key: "c" })).toBe("c".codePointAt(0));
     expect(ghosttyUnshiftedCodepoint({ code: "KeyC", key: "C" })).toBe("c".codePointAt(0));
+    expect(ghosttyUnshiftedCodepoint({ code: "Digit1", key: "!" })).toBe("1".codePointAt(0));
+    expect(ghosttyUnshiftedCodepoint({ code: "Slash", key: "?" })).toBe("/".codePointAt(0));
     expect(ghosttyUnshiftedCodepoint({ code: "Enter", key: "Enter" })).toBe(0);
   });
 });

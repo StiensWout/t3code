@@ -188,8 +188,25 @@ export function ghosttyKeyForCode(code: string): number {
   return codeToGhosttyKey.get(code) ?? 0;
 }
 
+const codeToUnshiftedCharacter = new Map<string, string>([
+  ...Array.from({ length: 10 }, (_, digit) => [`Digit${digit}`, `${digit}`] as const),
+  ["Backquote", "`"],
+  ["Minus", "-"],
+  ["Equal", "="],
+  ["BracketLeft", "["],
+  ["BracketRight", "]"],
+  ["Backslash", "\\"],
+  ["Semicolon", ";"],
+  ["Quote", "'"],
+  ["Comma", ","],
+  ["Period", "."],
+  ["Slash", "/"],
+]);
+
 export function ghosttyUnshiftedCodepoint(event: Pick<KeyboardEvent, "code" | "key">): number {
   if ([...event.key].length !== 1) return 0;
   if (/^Key[A-Z]$/u.test(event.code)) return event.code.charCodeAt(3) + 32;
+  const unshiftedCharacter = codeToUnshiftedCharacter.get(event.code);
+  if (unshiftedCharacter) return unshiftedCharacter.codePointAt(0) ?? 0;
   return event.key.codePointAt(0) ?? 0;
 }
