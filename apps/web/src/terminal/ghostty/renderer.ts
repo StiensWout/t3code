@@ -174,7 +174,12 @@ export function renderGhosttySnapshot(options: {
         context.clip();
         context.font = fontForCell(first, fontSize, fontFamily);
         context.fillStyle = first.selected ? SELECTION_FOREGROUND : cssColor(first.foreground);
-        context.fillText(text, padding + runStart * metrics.width, top + metrics.baseline);
+        context.fillText(
+          text,
+          padding + runStart * metrics.width,
+          top + metrics.baseline,
+          (runEnd - runStart) * metrics.width,
+        );
         context.restore();
       }
       runStart = runEnd;
@@ -210,7 +215,7 @@ export function renderGhosttySnapshot(options: {
       if (cell?.text) {
         context.font = fontForCell(cell, fontSize, fontFamily);
         context.fillStyle = cssColor(snapshot.background);
-        context.fillText(cell.text, left, top + metrics.baseline);
+        context.fillText(cell.text, left, top + metrics.baseline, metrics.width);
       }
     }
   }

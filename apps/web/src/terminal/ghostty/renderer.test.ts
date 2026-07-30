@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { GHOSTTY_CELL_WIDE, type GhosttyCell } from "./core";
-import { ghosttyTextRunEnd, measureGhosttyCell, terminalGridSize } from "./renderer";
+import { GHOSTTY_CELL_WIDE, type GhosttyCell, type GhosttySnapshot } from "./core";
+import {
+  ghosttyTextRunEnd,
+  measureGhosttyCell,
+  renderGhosttySnapshot,
+  terminalGridSize,
+} from "./renderer";
 
 const cell = (text: string, wide = 0): GhosttyCell => ({
   text,
@@ -62,5 +67,56 @@ describe("ghosttyTextRunEnd", () => {
       cell(""),
     ];
     expect(ghosttyTextRunEnd(cells, 0, () => true)).toBe(4);
+  });
+});
+
+describe("renderGhosttySnapshot", () => {
+  it("constrains text runs and cursor glyphs to their terminal cells", () => {
+    const fillTextCalls: unknown[][] = [];
+    const context = {
+      canvas: { width: 200, height: 40 },
+      beginPath: () => {},
+      clip: () => {},
+      fillRect: () => {},
+      fillText: (...args: unknown[]) => fillTextCalls.push(args),
+      rect: () => {},
+      resetTransform: () => {},
+      restore: () => {},
+      save: () => {},
+      set fillStyle(_value: string) {},
+      set font(_value: string) {},
+      set textBaseline(_value: string) {},
+    } as unknown as CanvasRenderingContext2D;
+    const cells = [cell("a"), cell("b"), cell("x")];
+    const snapshot: GhosttySnapshot = {
+      cols: 3,
+      rows: 1,
+      foreground: { r: 255, g: 255, b: 255 },
+      background: { r: 0, g: 0, b: 0 },
+      cursor: { r: 255, g: 255, b: 255 },
+      cursorX: 2,
+      cursorY: 0,
+      cursorVisible: true,
+      cursorBlinking: false,
+      cursorStyle: 1,
+      dirtyRows: new Set([0]),
+      rowData: [{ cells, text: "abx", isWrapContinuation: false }],
+    };
+
+    renderGhosttySnapshot({
+      context,
+      snapshot,
+      metrics: { width: 7.2, height: 16, baseline: 11 },
+      fontSize: 12,
+      fontFamily: "monospace",
+      padding: 4,
+      forceFull: false,
+      cursorOn: true,
+    });
+
+    expect(fillTextCalls).toEqual([
+      ["abx", 4, 15, 21.6],
+      ["x", 18.4, 15, 7.2],
+    ]);
   });
 });
