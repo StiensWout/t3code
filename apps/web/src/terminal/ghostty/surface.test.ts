@@ -4,6 +4,7 @@ import type { GhosttyCell, GhosttyRow } from "./core";
 import {
   advanceTerminalSelectionClickSequence,
   ghosttyMouseButton,
+  isTerminalAltGraphText,
   isTerminalCompositionCommitInput,
   isTerminalCopyShortcut,
   isTerminalLinkPointerGesture,
@@ -15,6 +16,7 @@ import {
 
 const cell = (text: string): GhosttyCell => ({
   text,
+  wide: 0,
   foreground: { r: 255, g: 255, b: 255 },
   background: { r: 0, g: 0, b: 0 },
   bold: false,
@@ -24,6 +26,23 @@ const cell = (text: string): GhosttyCell => ({
   overline: false,
   underline: false,
   selected: false,
+});
+
+describe("isTerminalAltGraphText", () => {
+  it("defers printable AltGr output to the textarea input event", () => {
+    expect(
+      isTerminalAltGraphText({
+        key: "@",
+        getModifierState: (modifier) => modifier === "AltGraph",
+      }),
+    ).toBe(true);
+    expect(
+      isTerminalAltGraphText({
+        key: "ArrowRight",
+        getModifierState: (modifier) => modifier === "AltGraph",
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("terminalLinkAtColumn", () => {

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   resolveTerminalSelectionActionPosition,
+  shouldHandleTerminalExit,
   shouldHandleTerminalSelectionMouseUp,
   terminalSelectionActionDelayForClickCount,
   terminalSelectionLineRange,
@@ -81,5 +82,11 @@ describe("resolveTerminalSelectionActionPosition", () => {
         end: { y: 6 },
       }),
     ).toEqual({ lineStart: 5, lineEnd: 7 });
+  });
+
+  it("handles an exit that lands while the terminal surface is still loading", () => {
+    expect(shouldHandleTerminalExit("exited", "running", false)).toBe(true);
+    expect(shouldHandleTerminalExit("exited", "exited", false)).toBe(false);
+    expect(shouldHandleTerminalExit("closed", "running", true)).toBe(false);
   });
 });

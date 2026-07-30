@@ -77,6 +77,12 @@ export function isTerminalCompositionCommitInput(event: Pick<InputEvent, "inputT
   );
 }
 
+export function isTerminalAltGraphText(
+  event: Pick<KeyboardEvent, "getModifierState" | "key">,
+): boolean {
+  return event.getModifierState("AltGraph") && [...event.key].length === 1;
+}
+
 export function shouldReportTerminalMouse(
   tracking: boolean,
   event: Pick<MouseEvent, "ctrlKey" | "metaKey" | "shiftKey">,
@@ -363,6 +369,7 @@ export class GhosttyTerminalSurface {
   }
 
   private readonly onKeyDown = (event: KeyboardEvent) => {
+    if (isTerminalAltGraphText(event)) return;
     if (!this.options.beforeKey(event)) return;
     if (isTerminalCopyShortcut(event) && this.hasSelection()) {
       event.preventDefault();

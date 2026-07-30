@@ -3,6 +3,7 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
+import { type TerminalSessionState } from "@t3tools/client-runtime/state/terminal";
 import {
   Plus,
   SquareSplitHorizontal,
@@ -244,6 +245,16 @@ export function terminalSelectionLineRange(position: {
   };
 }
 
+export function shouldHandleTerminalExit(
+  current: TerminalSessionState["status"],
+  synchronized: TerminalSessionState["status"],
+  alreadyHandled: boolean,
+): boolean {
+  return (
+    (current === "closed" || current === "exited") && current !== synchronized && !alreadyHandled
+  );
+}
+
 interface TerminalViewportProps {
   threadRef: ScopedThreadRef;
   threadId: ThreadId;
@@ -341,6 +352,24 @@ export function TerminalViewport({
   const terminalBuffer = terminalSession.buffer;
   const terminalError = terminalSession.error;
   const terminalStatus = terminalSession.status;
+  const synchronizedStatusRef = useRef(terminalStatus);
+  const synchronizeTerminalStatus = useEffectEvent(
+    (terminal: GhosttyTerminalSurface, status: TerminalSessionState["status"]) => {
+      const synchronized = synchronizedStatusRef.current;
+      if (status === "running") {
+        hasHandledExitRef.current = false;
+      } else if (shouldHandleTerminalExit(status, synchronized, hasHandledExitRef.current)) {
+        hasHandledExitRef.current = true;
+        writeSystemMessage(terminal, status === "closed" ? "Terminal closed" : "Process exited");
+        window.setTimeout(() => {
+          if (hasHandledExitRef.current) {
+            handleSessionExited();
+          }
+        }, 0);
+      }
+      synchronizedStatusRef.current = status;
+    },
+  );
   const terminalVersion = terminalSession.version;
   const previousSessionRef = useRef({
     buffer: terminalBuffer,
@@ -391,6 +420,7 @@ export function TerminalViewport({
       previousSessionRef.current = latestSession;
       if (latestSession.buffer.length > 0) terminal.resetAndWrite(latestSession.buffer);
       if (latestSession.error !== null) writeSystemMessage(terminal, latestSession.error);
+      synchronizeTerminalStatus(terminal, latestSession.status);
       if (autoFocus) window.requestAnimationFrame(() => terminal.focus());
 
       const clearSelectionAction = () => {
@@ -723,6 +753,7 @@ export function TerminalViewport({
     }
 
     const previous = previousSessionRef.current;
+    synchronizeTerminalStatus(terminal, current.status);
     if (current.version === previous.version) {
       return;
     }
@@ -739,25 +770,6 @@ export function TerminalViewport({
 
     if (current.error !== null && current.error !== previous.error) {
       writeSystemMessage(terminal, current.error);
-    }
-
-    if (current.status === "running") {
-      hasHandledExitRef.current = false;
-    } else if (
-      (current.status === "closed" || current.status === "exited") &&
-      current.status !== previous.status &&
-      !hasHandledExitRef.current
-    ) {
-      hasHandledExitRef.current = true;
-      writeSystemMessage(
-        terminal,
-        current.status === "closed" ? "Terminal closed" : "Process exited",
-      );
-      window.setTimeout(() => {
-        if (hasHandledExitRef.current) {
-          handleSessionExited();
-        }
-      }, 0);
     }
 
     if (previous.version === 0 && autoFocus) {

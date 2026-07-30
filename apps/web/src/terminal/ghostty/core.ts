@@ -1,4 +1,4 @@
-import { ghosttyKeyForCode } from "./keyCodes";
+import { ghosttyKeyForCode, ghosttyUnshiftedCodepoint } from "./keyCodes";
 import { GhosttyRuntime, loadGhosttyRuntime } from "./runtime";
 
 const GHOSTTY_SUCCESS = 0;
@@ -32,12 +32,24 @@ const ROW_DATA = {
 } as const;
 
 const CELL_DATA = {
+  raw: 1,
   style: 2,
   graphemesLength: 3,
   graphemes: 4,
   background: 5,
   foreground: 6,
   selected: 7,
+} as const;
+
+const RAW_CELL_DATA = {
+  wide: 3,
+} as const;
+
+export const GHOSTTY_CELL_WIDE = {
+  narrow: 0,
+  wide: 1,
+  spacerTail: 2,
+  spacerHead: 3,
 } as const;
 
 export interface GhosttyColor {
@@ -54,6 +66,7 @@ export interface GhosttyTheme {
 
 export interface GhosttyCell {
   readonly text: string;
+  readonly wide: number;
   readonly foreground: GhosttyColor;
   readonly background: GhosttyColor;
   readonly bold: boolean;
@@ -358,6 +371,11 @@ export class GhosttyTerminalCore {
     this.runtime.call("ghostty_key_event_set_mods", this.keyEvent, mods);
     this.runtime.call("ghostty_key_event_set_consumed_mods", this.keyEvent, 0);
     this.runtime.call("ghostty_key_event_set_composing", this.keyEvent, event.isComposing ? 1 : 0);
+    this.runtime.call(
+      "ghostty_key_event_set_unshifted_codepoint",
+      this.keyEvent,
+      ghosttyUnshiftedCodepoint(event),
+    );
 
     const text = event.key.length === 1 ? event.key : "";
     const textBytes = encoder.encode(text);
@@ -829,8 +847,28 @@ export class GhosttyTerminalCore {
         }
         this.runtime.free(codepoints, bufferSize);
       }
+      let wide = 0;
+      if (text.length === 0 && cells.at(-1)?.text.length) {
+        this.assertSuccess(
+          "ghostty_render_state_row_cells_get(raw)",
+          this.runtime.call(
+            "ghostty_render_state_row_cells_get",
+            cellsIterator,
+            CELL_DATA.raw,
+            this.scratch,
+          ),
+        );
+        const rawCell = this.runtime.view(this.scratch, 8).getBigUint64(0, true);
+        this.runtime.view(this.scratch + 8, 4).setUint32(0, 0, true);
+        this.assertSuccess(
+          "ghostty_cell_get(wide)",
+          this.runtime.call("ghostty_cell_get", rawCell, RAW_CELL_DATA.wide, this.scratch + 8),
+        );
+        wide = this.runtime.view(this.scratch + 8, 4).getUint32(0, true);
+      }
       cells.push({
         text,
+        wide,
         foreground,
         background,
         bold: this.runtime.readField(this.style, "GhosttyStyle", "bold") !== 0,
@@ -1019,6 +1057,7 @@ export class GhosttyTerminalCore {
   private emptyCell(foreground: GhosttyColor, background: GhosttyColor): GhosttyCell {
     return {
       text: "",
+      wide: 0,
       foreground,
       background,
       bold: false,

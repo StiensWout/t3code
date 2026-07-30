@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { ghosttyKeyForCode } from "./keyCodes";
+import { ghosttyKeyForCode, ghosttyUnshiftedCodepoint } from "./keyCodes";
 
 describe("ghosttyKeyForCode", () => {
   it("keeps the tail of the pinned Ghostty key enum in order", () => {
@@ -8,5 +8,13 @@ describe("ghosttyKeyForCode", () => {
     expect(ghosttyKeyForCode("PrintScreen")).toBe(ghosttyKeyForCode("FnLock") + 1);
     expect(ghosttyKeyForCode("Pause")).toBe(ghosttyKeyForCode("ScrollLock") + 1);
     expect(ghosttyKeyForCode("Paste")).toBe(ghosttyKeyForCode("Cut") + 1);
+  });
+});
+
+describe("ghosttyUnshiftedCodepoint", () => {
+  it("provides the logical base character for Kitty keyboard encoding", () => {
+    expect(ghosttyUnshiftedCodepoint({ code: "KeyC", key: "c" })).toBe("c".codePointAt(0));
+    expect(ghosttyUnshiftedCodepoint({ code: "KeyC", key: "C" })).toBe("c".codePointAt(0));
+    expect(ghosttyUnshiftedCodepoint({ code: "Enter", key: "Enter" })).toBe(0);
   });
 });

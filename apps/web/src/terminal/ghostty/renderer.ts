@@ -1,4 +1,5 @@
 import {
+  GHOSTTY_CELL_WIDE,
   ghosttyColorsEqual,
   type GhosttyCell,
   type GhosttyColor,
@@ -26,6 +27,25 @@ function sameTextStyle(left: GhosttyCell, right: GhosttyCell): boolean {
     left.invisible === right.invisible &&
     left.selected === right.selected
   );
+}
+
+export function ghosttyTextRunEnd(
+  cells: readonly GhosttyCell[],
+  start: number,
+  sameStyle: (cell: GhosttyCell) => boolean,
+): number {
+  let end = start + 1;
+  while (end < cells.length) {
+    const next = cells[end];
+    if (!next) break;
+    if (next.wide === GHOSTTY_CELL_WIDE.spacerTail) {
+      end += 1;
+      continue;
+    }
+    if (next.text.length === 0 || !sameStyle(next)) break;
+    end += 1;
+  }
+  return end;
 }
 
 function fontForCell(cell: GhosttyCell, fontSize: number, fontFamily: string): string {
@@ -135,12 +155,7 @@ export function renderGhosttySnapshot(options: {
         runStart += 1;
         continue;
       }
-      let runEnd = runStart + 1;
-      while (runEnd < row.cells.length) {
-        const next = row.cells[runEnd];
-        if (!next || next.text.length === 0 || !sameTextStyle(next, first)) break;
-        runEnd += 1;
-      }
+      const runEnd = ghosttyTextRunEnd(row.cells, runStart, (cell) => sameTextStyle(cell, first));
       const text = row.cells
         .slice(runStart, runEnd)
         .map((cell) => cell.text)

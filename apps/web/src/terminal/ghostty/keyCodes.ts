@@ -187,3 +187,9 @@ const codeToGhosttyKey = new Map<string, number>(
 export function ghosttyKeyForCode(code: string): number {
   return codeToGhosttyKey.get(code) ?? 0;
 }
+
+export function ghosttyUnshiftedCodepoint(event: Pick<KeyboardEvent, "code" | "key">): number {
+  if ([...event.key].length !== 1) return 0;
+  if (/^Key[A-Z]$/u.test(event.code)) return event.code.charCodeAt(3) + 32;
+  return event.key.codePointAt(0) ?? 0;
+}
