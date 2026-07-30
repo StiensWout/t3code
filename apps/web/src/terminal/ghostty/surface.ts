@@ -174,6 +174,11 @@ export class GhosttyTerminalSurface {
   private cursorOn = true;
   private forceFullRender = true;
   private disposed = false;
+  private pendingCanvasSize: {
+    readonly width: number;
+    readonly height: number;
+    readonly ratio: number;
+  } | null = null;
   private selectionAnchor: { x: number; y: number } | null = null;
   private selectionEnd: { x: number; y: number } | null = null;
   private selectionAnchorScreen: { x: number; y: number } | null = null;
@@ -286,11 +291,15 @@ export class GhosttyTerminalSurface {
     const pixelHeight = Math.max(1, Math.round(height * ratio));
     let shouldRender = false;
     if (this.canvas.width !== pixelWidth || this.canvas.height !== pixelHeight) {
-      this.canvas.width = pixelWidth;
-      this.canvas.height = pixelHeight;
-      this.context.setTransform(ratio, 0, 0, ratio, 0, 0);
+      this.pendingCanvasSize = {
+        width: pixelWidth,
+        height: pixelHeight,
+        ratio,
+      };
       this.forceFullRender = true;
       shouldRender = true;
+    } else if (this.pendingCanvasSize !== null) {
+      this.pendingCanvasSize = null;
     }
     const grid = terminalGridSize(width, height, this.metrics, CONTENT_PADDING);
     if (grid.cols !== this.cols || grid.rows !== this.rows) {
@@ -618,6 +627,13 @@ export class GhosttyTerminalSurface {
     if (this.disposed || this.frame !== 0) return;
     this.frame = window.requestAnimationFrame(() => {
       this.frame = 0;
+      const canvasSize = this.pendingCanvasSize;
+      this.pendingCanvasSize = null;
+      if (canvasSize !== null) {
+        this.canvas.width = canvasSize.width;
+        this.canvas.height = canvasSize.height;
+        this.context.setTransform(canvasSize.ratio, 0, 0, canvasSize.ratio, 0, 0);
+      }
       this.snapshot = this.core.snapshot();
       if (!this.snapshot.cursorBlinking) this.cursorOn = true;
       renderGhosttySnapshot({
