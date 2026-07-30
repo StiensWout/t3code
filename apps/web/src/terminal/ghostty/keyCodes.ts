@@ -234,7 +234,7 @@ export function loadGhosttyKeyboardLayoutMap(): Promise<GhosttyKeyboardLayoutMap
 }
 
 export function ghosttyUnshiftedCodepoint(
-  event: Pick<KeyboardEvent, "code" | "key">,
+  event: Pick<KeyboardEvent, "code" | "key" | "shiftKey">,
   layoutMap?: GhosttyKeyboardLayoutMap,
 ): number {
   if ([...event.key].length !== 1) return 0;
@@ -243,7 +243,9 @@ export function ghosttyUnshiftedCodepoint(
     return layoutCharacter.codePointAt(0) ?? 0;
   }
   if (/^[A-Z]$/u.test(event.key)) return event.key.charCodeAt(0) + 32;
-  const unshiftedCharacter = shiftedToUnshiftedCharacter.get(event.key);
+  const unshiftedCharacter = event.shiftKey
+    ? shiftedToUnshiftedCharacter.get(event.key)
+    : undefined;
   if (unshiftedCharacter) return unshiftedCharacter.codePointAt(0) ?? 0;
   return event.key.codePointAt(0) ?? 0;
 }

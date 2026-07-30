@@ -13,11 +13,22 @@ describe("ghosttyKeyForCode", () => {
 
 describe("ghosttyUnshiftedCodepoint", () => {
   it("provides the logical base character for Kitty keyboard encoding", () => {
-    expect(ghosttyUnshiftedCodepoint({ code: "KeyC", key: "c" })).toBe("c".codePointAt(0));
-    expect(ghosttyUnshiftedCodepoint({ code: "KeyC", key: "C" })).toBe("c".codePointAt(0));
-    expect(ghosttyUnshiftedCodepoint({ code: "Digit1", key: "!" })).toBe("1".codePointAt(0));
-    expect(ghosttyUnshiftedCodepoint({ code: "Slash", key: "?" })).toBe("/".codePointAt(0));
-    expect(ghosttyUnshiftedCodepoint({ code: "Enter", key: "Enter" })).toBe(0);
+    expect(ghosttyUnshiftedCodepoint({ code: "KeyC", key: "c", shiftKey: false })).toBe(
+      "c".codePointAt(0),
+    );
+    expect(ghosttyUnshiftedCodepoint({ code: "KeyC", key: "C", shiftKey: true })).toBe(
+      "c".codePointAt(0),
+    );
+    expect(ghosttyUnshiftedCodepoint({ code: "Digit1", key: "!", shiftKey: true })).toBe(
+      "1".codePointAt(0),
+    );
+    expect(ghosttyUnshiftedCodepoint({ code: "Slash", key: "?", shiftKey: true })).toBe(
+      "/".codePointAt(0),
+    );
+    expect(ghosttyUnshiftedCodepoint({ code: "Digit1", key: "&", shiftKey: false })).toBe(
+      "&".codePointAt(0),
+    );
+    expect(ghosttyUnshiftedCodepoint({ code: "Enter", key: "Enter", shiftKey: false })).toBe(0);
   });
 
   it("prefers the active browser layout over US physical key positions", () => {
@@ -25,10 +36,10 @@ describe("ghosttyUnshiftedCodepoint", () => {
       ["Digit1", "&"],
       ["KeyC", "j"],
     ]);
-    expect(ghosttyUnshiftedCodepoint({ code: "Digit1", key: "1" }, layoutMap)).toBe(
+    expect(ghosttyUnshiftedCodepoint({ code: "Digit1", key: "1", shiftKey: true }, layoutMap)).toBe(
       "&".codePointAt(0),
     );
-    expect(ghosttyUnshiftedCodepoint({ code: "KeyC", key: "J" }, layoutMap)).toBe(
+    expect(ghosttyUnshiftedCodepoint({ code: "KeyC", key: "J", shiftKey: true }, layoutMap)).toBe(
       "j".codePointAt(0),
     );
   });
