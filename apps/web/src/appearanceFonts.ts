@@ -40,31 +40,25 @@ export function appearanceFontStack(custom: string, defaultStack: string): strin
 }
 
 export interface AppearanceFontPreferences {
-  readonly sans: string;
-  readonly code: string;
   readonly composer: string;
 }
 
 /**
  * Apply the preferences to the root element. Unset preferences remove the
  * override so the stylesheet defaults (and theme changes) stay in charge.
+ * Only the prompt textarea (and, separately, the terminal surface) are
+ * configurable; the interface and code fonts stay on the theme defaults.
  */
 export function applyAppearanceFontVariables(
   root: HTMLElement,
   preferences: AppearanceFontPreferences,
 ): void {
-  const assignments: ReadonlyArray<readonly [string, string | null, string]> = [
-    ["--font-sans", cssFontFamilies(preferences.sans), DEFAULT_SANS_FONT_STACK],
-    ["--font-mono", cssFontFamilies(preferences.code), DEFAULT_CODE_FONT_STACK],
-    // The composer falls back to whatever the sans preference resolves to.
-    ["--font-composer", cssFontFamilies(preferences.composer), "var(--font-sans)"],
-  ];
-  for (const [variable, families, defaultStack] of assignments) {
-    if (families === null) {
-      root.style.removeProperty(variable);
-    } else {
-      root.style.setProperty(variable, `${families}, ${defaultStack}`);
-    }
+  const families = cssFontFamilies(preferences.composer);
+  if (families === null) {
+    root.style.removeProperty("--font-composer");
+  } else {
+    // The textarea falls back to the interface font when the custom faces miss.
+    root.style.setProperty("--font-composer", `${families}, var(--font-sans)`);
   }
 }
 

@@ -605,13 +605,9 @@ export function useSettingsRestore(onRestored?: () => void) {
         ? ["Project Grouping"]
         : []),
       ...(settings.wordWrap !== DEFAULT_UNIFIED_SETTINGS.wordWrap ? ["Word wrap"] : []),
-      ...(settings.fontFamilySans !== DEFAULT_UNIFIED_SETTINGS.fontFamilySans
-        ? ["Interface font"]
-        : []),
       ...(settings.fontFamilyComposer !== DEFAULT_UNIFIED_SETTINGS.fontFamilyComposer
-        ? ["Composer font"]
+        ? ["Prompt textarea font"]
         : []),
-      ...(settings.fontFamilyCode !== DEFAULT_UNIFIED_SETTINGS.fontFamilyCode ? ["Code font"] : []),
       ...(settings.fontFamilyTerminal !== DEFAULT_UNIFIED_SETTINGS.fontFamilyTerminal
         ? ["Terminal font"]
         : []),
@@ -658,9 +654,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.newWorktreesStartFromOrigin,
       settings.diffIgnoreWhitespace,
       settings.environmentIdentificationMode,
-      settings.fontFamilyCode,
       settings.fontFamilyComposer,
-      settings.fontFamilySans,
       settings.fontFamilyTerminal,
       settings.glassOpacity,
       settings.enableAssistantStreaming,
@@ -705,9 +699,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       confirmThreadArchive: DEFAULT_UNIFIED_SETTINGS.confirmThreadArchive,
       confirmThreadDelete: DEFAULT_UNIFIED_SETTINGS.confirmThreadDelete,
       textGenerationModelSelection: DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection,
-      fontFamilySans: DEFAULT_UNIFIED_SETTINGS.fontFamilySans,
       fontFamilyComposer: DEFAULT_UNIFIED_SETTINGS.fontFamilyComposer,
-      fontFamilyCode: DEFAULT_UNIFIED_SETTINGS.fontFamilyCode,
       fontFamilyTerminal: DEFAULT_UNIFIED_SETTINGS.fontFamilyTerminal,
     });
     onRestored?.();
@@ -995,14 +987,7 @@ export function AppearanceSettingsPanel() {
     () => [...availableFontOptions(SANS_FONT_OPTIONS), ...availableFontOptions(MONO_FONT_OPTIONS)],
     [],
   );
-  const sansStack = appearanceFontStack(settings.fontFamilySans, DEFAULT_SANS_FONT_STACK);
-  // The composer falls back to the resolved interface stack (not the bare
-  // default) so the preview matches the runtime var(--font-composer) chain.
-  const composerStack =
-    settings.fontFamilyComposer.trim().length > 0
-      ? appearanceFontStack(settings.fontFamilyComposer, sansStack)
-      : sansStack;
-  const codeStack = appearanceFontStack(settings.fontFamilyCode, DEFAULT_CODE_FONT_STACK);
+  const composerStack = appearanceFontStack(settings.fontFamilyComposer, DEFAULT_SANS_FONT_STACK);
   const terminalStack = appearanceFontStack(settings.fontFamilyTerminal, DEFAULT_CODE_FONT_STACK);
   const environmentStageLabel = useEnvironmentStageLabel();
   const showEnvironmentIdentification =
@@ -1165,25 +1150,8 @@ export function AppearanceSettingsPanel() {
 
       <SettingsSection title="Fonts">
         <FontFamilySettingsRow
-          title="Interface font"
-          description="Used across the app interface."
-          options={fontOptions}
-          value={settings.fontFamilySans}
-          onValueChange={(fontFamilySans) => updateSettings({ fontFamilySans })}
-          preview={
-            <FontPreviewCard stack={sansStack}>
-              <p className="text-sm text-foreground">
-                The quick brown fox jumps over the lazy dog.
-              </p>
-              <p className="text-xs text-muted-foreground">
-                Messages, labels, and headings across the app.
-              </p>
-            </FontPreviewCard>
-          }
-        />
-        <FontFamilySettingsRow
-          title="Composer font"
-          description="Used in the message composer. Point it at a mono font if you prefer writing prompts in one."
+          title="Prompt textarea font"
+          description="Used only in the text area where you write prompts - point it at a mono font if you prefer. The rest of the composer follows the interface font."
           options={fontOptions}
           defaultOptionLabel="Same as interface font"
           showDefaultOption={false}
@@ -1199,39 +1167,6 @@ export function AppearanceSettingsPanel() {
                   Ask for follow-up changes or attach images
                 </p>
               </div>
-            </FontPreviewCard>
-          }
-        />
-        <FontFamilySettingsRow
-          title="Code font"
-          description="Used in code blocks, diffs, and file previews."
-          options={fontOptions}
-          value={settings.fontFamilyCode}
-          onValueChange={(fontFamilyCode) => updateSettings({ fontFamilyCode })}
-          preview={
-            <FontPreviewCard stack={codeStack}>
-              <pre
-                className="overflow-x-auto text-xs leading-relaxed"
-                style={{ fontFamily: "inherit" }}
-              >
-                <code style={{ fontFamily: "inherit" }}>
-                  <span className="text-muted-foreground">1</span>
-                  {"  "}
-                  <span className="text-info">function</span>{" "}
-                  <span className="text-foreground">formatUser</span>
-                  <span className="text-muted-foreground">(user) {"{"}</span>
-                  {"\n"}
-                  <span className="text-muted-foreground">2</span>
-                  {"    "}
-                  <span className="text-info">return</span>{" "}
-                  <span className="text-success">{"`${user.name} <${user.email}>`"}</span>{" "}
-                  <span className="text-muted-foreground">{"// 0O 1lI"}</span>
-                  {"\n"}
-                  <span className="text-muted-foreground">3</span>
-                  {"  "}
-                  <span className="text-muted-foreground">{"}"}</span>
-                </code>
-              </pre>
             </FontPreviewCard>
           }
         />

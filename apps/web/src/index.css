@@ -1059,9 +1059,10 @@ code {
   background: var(--app-scrollbar-thumb-hover);
 }
 
-/* Settings -> Appearance can point the composer at its own face (for example a
-   mono font); default follows the sans stack. Applied on the surface wrapper so
-   the editor and its placeholder inherit together. */
+/* Settings -> Appearance can point the prompt textarea at its own face (for
+   example a mono font); default follows the sans stack. The wrapper holds only
+   the editable text and its placeholder, so the rest of the composer chrome
+   stays on the interface font. */
 .composer-editor-surface {
   font-family: var(--font-composer, var(--font-sans));
 }
