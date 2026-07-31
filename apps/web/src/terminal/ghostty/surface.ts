@@ -325,11 +325,7 @@ export class GhosttyTerminalSurface {
   private scrollbarPointerId: number | null = null;
   private scrollbarPointerOffset = 0;
   private disposed = false;
-  private pendingCanvasSize: {
-    readonly width: number;
-    readonly height: number;
-    readonly ratio: number;
-  } | null = null;
+  private resizeNotifyTimer: number | null = null;
   private selectionEnd: { x: number; y: number } | null = null;
   private selectionAnchorScreen: { x: number; y: number } | null = null;
   private selectionEndScreen: { x: number; y: number } | null = null;
@@ -545,16 +541,13 @@ export class GhosttyTerminalSurface {
       this.canvas.height !== pixelHeight ||
       !this.canvasConfigured
     ) {
-      this.pendingCanvasSize = {
-        width: pixelWidth,
-        height: pixelHeight,
-        ratio,
-      };
+      this.canvas.width = pixelWidth;
+      this.canvas.height = pixelHeight;
+      this.context.setTransform(ratio, 0, 0, ratio, 0, 0);
+      this.canvasConfigured = true;
       this.forceFullRender = true;
       this.scrollbarDirty = true;
       shouldRender = true;
-    } else if (this.pendingCanvasSize !== null) {
-      this.pendingCanvasSize = null;
     }
     const grid = terminalGridSize(width, height, this.metrics, CONTENT_PADDING);
     // onResize is the only PTY resize channel, so the first successful fit must
@@ -562,15 +555,31 @@ export class GhosttyTerminalSurface {
     if (grid.cols !== this.cols || grid.rows !== this.rows || !this.resizeNotified) {
       this.cols = grid.cols;
       this.rows = grid.rows;
-      this.resizeNotified = true;
       this.core.resize(grid.cols, grid.rows, this.metrics.width, this.metrics.height);
-      this.options.onResize(grid.cols, grid.rows);
+      this.notifyResize();
       this.forceFullRender = true;
       this.scrollbarDirty = true;
       shouldRender = true;
     }
-    if (shouldRender) this.requestRender();
+    // Rendering synchronously keeps the repaint inside the same frame as the
+    // layout change: ResizeObserver fires before paint, so the browser never
+    // composites the old backing store stretched into the new element box.
+    if (shouldRender) this.renderFrame();
     return true;
+  }
+
+  /**
+   * The local grid reflows immediately, but the PTY only hears about settled
+   * dimensions: notifying on every drag step makes the shell reprint its
+   * prompt mid-drag, which reads as jitter.
+   */
+  private notifyResize(): void {
+    this.resizeNotified = true;
+    if (this.resizeNotifyTimer !== null) window.clearTimeout(this.resizeNotifyTimer);
+    this.resizeNotifyTimer = window.setTimeout(() => {
+      this.resizeNotifyTimer = null;
+      if (!this.disposed) this.options.onResize(this.cols, this.rows);
+    }, 150);
   }
 
   focus(): void {
@@ -642,6 +651,7 @@ export class GhosttyTerminalSurface {
     this.dprMedia?.removeEventListener("change", this.onDevicePixelRatioChange);
     this.dprMedia = null;
     if (this.selectionScrollTimer !== null) window.clearInterval(this.selectionScrollTimer);
+    if (this.resizeNotifyTimer !== null) window.clearTimeout(this.resizeNotifyTimer);
     if (this.frame !== 0) window.cancelAnimationFrame(this.frame);
     if (this.cursorTimer !== null) window.clearTimeout(this.cursorTimer);
     if (this.compositionSuppressionTimer !== null) {
@@ -1193,44 +1203,45 @@ export class GhosttyTerminalSurface {
     if (this.disposed || this.frame !== 0) return;
     this.frame = window.requestAnimationFrame(() => {
       this.frame = 0;
-      const canvasSize = this.pendingCanvasSize;
-      this.pendingCanvasSize = null;
-      if (canvasSize !== null) {
-        this.canvas.width = canvasSize.width;
-        this.canvas.height = canvasSize.height;
-        this.context.setTransform(canvasSize.ratio, 0, 0, canvasSize.ratio, 0, 0);
-        this.canvasConfigured = true;
-      }
-      this.snapshot = this.core.snapshot();
-      if (!this.snapshot.cursorBlinking) this.cursorOn = true;
-      renderGhosttySnapshot({
-        context: this.context,
-        snapshot: this.snapshot,
-        metrics: this.metrics,
-        fontSize: this.fontSize,
-        fontFamily: this.fontFamily,
-        padding: CONTENT_PADDING,
-        originY: this.contentOriginY(),
-        forceFull: this.forceFullRender,
-        cursorOn: this.cursorOn,
-        previousCursorY: this.renderedCursorY,
-        focused: this.focused,
-        ...(this.theme.selectionBackground !== undefined
-          ? { selectionBackground: this.theme.selectionBackground }
-          : {}),
-      });
-      this.positionInput();
-      this.renderedCursorY =
-        this.cursorOn && this.snapshot.cursorVisible && this.snapshot.cursorY >= 0
-          ? this.snapshot.cursorY
-          : null;
-      if (this.scrollbarDirty) {
-        this.scrollbarDirty = false;
-        this.updateScrollbar();
-      }
-      this.forceFullRender = false;
-      this.scheduleCursorBlink();
+      this.renderFrame();
     });
+  }
+
+  private renderFrame(): void {
+    if (this.disposed) return;
+    if (this.frame !== 0) {
+      window.cancelAnimationFrame(this.frame);
+      this.frame = 0;
+    }
+    this.snapshot = this.core.snapshot();
+    if (!this.snapshot.cursorBlinking) this.cursorOn = true;
+    renderGhosttySnapshot({
+      context: this.context,
+      snapshot: this.snapshot,
+      metrics: this.metrics,
+      fontSize: this.fontSize,
+      fontFamily: this.fontFamily,
+      padding: CONTENT_PADDING,
+      originY: this.contentOriginY(),
+      forceFull: this.forceFullRender,
+      cursorOn: this.cursorOn,
+      previousCursorY: this.renderedCursorY,
+      focused: this.focused,
+      ...(this.theme.selectionBackground !== undefined
+        ? { selectionBackground: this.theme.selectionBackground }
+        : {}),
+    });
+    this.positionInput();
+    this.renderedCursorY =
+      this.cursorOn && this.snapshot.cursorVisible && this.snapshot.cursorY >= 0
+        ? this.snapshot.cursorY
+        : null;
+    if (this.scrollbarDirty) {
+      this.scrollbarDirty = false;
+      this.updateScrollbar();
+    }
+    this.forceFullRender = false;
+    this.scheduleCursorBlink();
   }
 
   private scheduleCursorBlink(): void {
