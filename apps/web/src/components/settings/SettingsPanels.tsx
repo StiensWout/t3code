@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import type { CSSProperties, ReactNode } from "react";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import {
   defaultInstanceIdForDriver,
@@ -605,9 +605,13 @@ export function useSettingsRestore(onRestored?: () => void) {
         ? ["Project Grouping"]
         : []),
       ...(settings.wordWrap !== DEFAULT_UNIFIED_SETTINGS.wordWrap ? ["Word wrap"] : []),
+      ...(settings.fontFamilySans !== DEFAULT_UNIFIED_SETTINGS.fontFamilySans
+        ? ["Interface font"]
+        : []),
       ...(settings.fontFamilyComposer !== DEFAULT_UNIFIED_SETTINGS.fontFamilyComposer
         ? ["Prompt font"]
         : []),
+      ...(settings.fontFamilyCode !== DEFAULT_UNIFIED_SETTINGS.fontFamilyCode ? ["Code font"] : []),
       ...(settings.fontFamilyTerminal !== DEFAULT_UNIFIED_SETTINGS.fontFamilyTerminal
         ? ["Terminal font"]
         : []),
@@ -654,7 +658,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.newWorktreesStartFromOrigin,
       settings.diffIgnoreWhitespace,
       settings.environmentIdentificationMode,
+      settings.fontFamilyCode,
       settings.fontFamilyComposer,
+      settings.fontFamilySans,
       settings.fontFamilyTerminal,
       settings.glassOpacity,
       settings.enableAssistantStreaming,
@@ -699,7 +705,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       confirmThreadArchive: DEFAULT_UNIFIED_SETTINGS.confirmThreadArchive,
       confirmThreadDelete: DEFAULT_UNIFIED_SETTINGS.confirmThreadDelete,
       textGenerationModelSelection: DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection,
+      fontFamilySans: DEFAULT_UNIFIED_SETTINGS.fontFamilySans,
       fontFamilyComposer: DEFAULT_UNIFIED_SETTINGS.fontFamilyComposer,
+      fontFamilyCode: DEFAULT_UNIFIED_SETTINGS.fontFamilyCode,
       fontFamilyTerminal: DEFAULT_UNIFIED_SETTINGS.fontFamilyTerminal,
     });
     onRestored?.();
@@ -987,7 +995,14 @@ export function AppearanceSettingsPanel() {
     () => [...availableFontOptions(SANS_FONT_OPTIONS), ...availableFontOptions(MONO_FONT_OPTIONS)],
     [],
   );
-  const composerStack = appearanceFontStack(settings.fontFamilyComposer, DEFAULT_SANS_FONT_STACK);
+  const sansStack = appearanceFontStack(settings.fontFamilySans, DEFAULT_SANS_FONT_STACK);
+  // The composer falls back to the resolved interface stack (not the bare
+  // default) so the preview matches the runtime var(--font-composer) chain.
+  const composerStack =
+    settings.fontFamilyComposer.trim().length > 0
+      ? appearanceFontStack(settings.fontFamilyComposer, sansStack)
+      : sansStack;
+  const codeStack = appearanceFontStack(settings.fontFamilyCode, DEFAULT_CODE_FONT_STACK);
   const terminalStack = appearanceFontStack(settings.fontFamilyTerminal, DEFAULT_CODE_FONT_STACK);
   const environmentStageLabel = useEnvironmentStageLabel();
   const showEnvironmentIdentification =
@@ -1150,11 +1165,26 @@ export function AppearanceSettingsPanel() {
 
       <SettingsSection title="Fonts">
         <FontFamilySettingsRow
+          title="Interface font"
+          description="Used for labels, controls, and messages across the app."
+          options={fontOptions}
+          value={settings.fontFamilySans}
+          onValueChange={(fontFamilySans) => updateSettings({ fontFamilySans })}
+          preview={
+            <FontPreviewCard stack={sansStack}>
+              <p className="text-sm text-foreground">
+                The quick brown fox jumps over the lazy dog.
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Messages, labels, and headings across the app.
+              </p>
+            </FontPreviewCard>
+          }
+        />
+        <FontFamilySettingsRow
           title="Prompt font"
           description="Used when typing prompts in the composer."
           options={fontOptions}
-          defaultOptionLabel="Default"
-          showDefaultOption={false}
           value={settings.fontFamilyComposer}
           onValueChange={(fontFamilyComposer) => updateSettings({ fontFamilyComposer })}
           preview={
@@ -1167,6 +1197,39 @@ export function AppearanceSettingsPanel() {
                   Ask for follow-up changes or attach images
                 </p>
               </div>
+            </FontPreviewCard>
+          }
+        />
+        <FontFamilySettingsRow
+          title="Code font"
+          description="Used in code blocks, diffs, and file previews."
+          options={fontOptions}
+          value={settings.fontFamilyCode}
+          onValueChange={(fontFamilyCode) => updateSettings({ fontFamilyCode })}
+          preview={
+            <FontPreviewCard stack={codeStack}>
+              <pre
+                className="overflow-x-auto text-xs leading-relaxed"
+                style={{ fontFamily: "inherit" }}
+              >
+                <code style={{ fontFamily: "inherit" }}>
+                  <span className="text-muted-foreground">1</span>
+                  {"  "}
+                  <span className="text-info">function</span>{" "}
+                  <span className="text-foreground">formatUser</span>
+                  <span className="text-muted-foreground">(user) {"{"}</span>
+                  {"\n"}
+                  <span className="text-muted-foreground">2</span>
+                  {"    "}
+                  <span className="text-info">return</span>{" "}
+                  <span className="text-success">{"`${user.name} <${user.email}>`"}</span>{" "}
+                  <span className="text-muted-foreground">{"// 0O 1lI"}</span>
+                  {"\n"}
+                  <span className="text-muted-foreground">3</span>
+                  {"  "}
+                  <span className="text-muted-foreground">{"}"}</span>
+                </code>
+              </pre>
             </FontPreviewCard>
           }
         />
@@ -1216,8 +1279,6 @@ function FontFamilySettingsRow({
   title,
   description,
   options,
-  defaultOptionLabel = "Default",
-  showDefaultOption = true,
   preview,
   value,
   onValueChange,
@@ -1225,8 +1286,6 @@ function FontFamilySettingsRow({
   title: string;
   description: string;
   options: readonly FontOption[];
-  defaultOptionLabel?: string;
-  showDefaultOption?: boolean;
   preview: ReactNode;
   value: string;
   onValueChange: (value: string) => void;
@@ -1234,20 +1293,48 @@ function FontFamilySettingsRow({
   const trimmed = value.trim();
   const matchesOption = options.some((option) => option.family === trimmed);
   const [customMode, setCustomMode] = useState(false);
-  // The custom input edits a draft; the preference only commits once the text
-  // probes as an available font, so the current font holds while typing.
+  // The custom input edits a draft; the preference only commits once typing
+  // pauses and the text probes as an available font (or is an explicit
+  // clear), so the current font holds and nothing reflows mid-word.
   const [customDraft, setCustomDraft] = useState(value);
+  const [draftSettled, setDraftSettled] = useState(true);
+  const commitTimerRef = useRef<number | null>(null);
   const lastValueRef = useRef(value);
   if (lastValueRef.current !== value) {
-    // The committed value changed externally (hydration, reset); adopt it.
+    // The committed value changed externally (hydration, reset, dropdown
+    // pick); adopt it and drop any pending commit of a stale draft.
     lastValueRef.current = value;
+    if (commitTimerRef.current !== null) {
+      window.clearTimeout(commitTimerRef.current);
+      commitTimerRef.current = null;
+    }
     setCustomDraft(value);
+    setDraftSettled(true);
   }
+  useEffect(
+    () => () => {
+      if (commitTimerRef.current !== null) window.clearTimeout(commitTimerRef.current);
+    },
+    [],
+  );
+  const commitDraft = (next: string) => {
+    setDraftSettled(true);
+    if (next.trim().length === 0 || isFontFamilyAvailable(next)) {
+      onValueChange(next);
+    }
+  };
+  const flushDraft = () => {
+    if (commitTimerRef.current === null) return;
+    window.clearTimeout(commitTimerRef.current);
+    commitTimerRef.current = null;
+    commitDraft(customDraft);
+  };
   // Derived from the value, not just the picker state: client settings hydrate
   // after mount, so a persisted custom family must reveal the input on its own.
   const showCustomInput = customMode || (trimmed.length > 0 && !matchesOption);
   const draftTrimmed = customDraft.trim();
-  const draftPending = showCustomInput && draftTrimmed !== trimmed;
+  // Flag an unknown name only once typing pauses, not on every keystroke.
+  const draftPending = draftSettled && showCustomInput && draftTrimmed !== trimmed;
   const categories = fontOptionCategories(options);
   const selected =
     trimmed.length === 0 && !customMode
@@ -1292,18 +1379,16 @@ function FontFamilySettingsRow({
             <SelectTrigger className="w-full" aria-label={`${title} family`}>
               <SelectValue>
                 {selected === DEFAULT_FONT_VALUE
-                  ? defaultOptionLabel
+                  ? "Default"
                   : selected === CUSTOM_FONT_VALUE
                     ? "Custom"
                     : (options.find((option) => option.family === selected)?.label ?? selected)}
               </SelectValue>
             </SelectTrigger>
             <SelectPopup align="end" alignItemWithTrigger={false}>
-              {showDefaultOption ? (
-                <SelectItem hideIndicator value={DEFAULT_FONT_VALUE}>
-                  {defaultOptionLabel}
-                </SelectItem>
-              ) : null}
+              <SelectItem hideIndicator value={DEFAULT_FONT_VALUE}>
+                Default
+              </SelectItem>
               {categories.map(([category, categoryOptions]) => (
                 <SelectGroup key={category}>
                   {/* A lone section header is noise; label only mixed lists. */}
@@ -1330,18 +1415,23 @@ function FontFamilySettingsRow({
               aria-invalid={draftPending || undefined}
               autoCapitalize="off"
               autoComplete="off"
+              onBlur={flushDraft}
               onChange={(event) => {
                 const next = event.currentTarget.value;
                 // Latch custom mode so clearing the text keeps the field open.
                 setCustomMode(true);
                 setCustomDraft(next);
-                // Commit names that resolve to an installed font - the current
-                // font holds while a partial or unknown name is typed - and
-                // commit an explicit full clear so the preference resets
-                // instead of silently keeping the previous font.
-                if (next.trim().length === 0 || isFontFamilyAvailable(next)) {
-                  onValueChange(next);
+                setDraftSettled(false);
+                if (commitTimerRef.current !== null) {
+                  window.clearTimeout(commitTimerRef.current);
                 }
+                commitTimerRef.current = window.setTimeout(() => {
+                  commitTimerRef.current = null;
+                  commitDraft(next);
+                }, 400);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") flushDraft();
               }}
               placeholder="Font family name"
               spellCheck={false}

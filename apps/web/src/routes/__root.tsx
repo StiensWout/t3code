@@ -155,13 +155,17 @@ function GlassAppearanceSync() {
 }
 
 function FontAppearanceSync() {
+  const fontFamilySans = useClientSettings((settings) => settings.fontFamilySans);
+  const fontFamilyCode = useClientSettings((settings) => settings.fontFamilyCode);
   const fontFamilyComposer = useClientSettings((settings) => settings.fontFamilyComposer);
 
   useEffect(() => {
     applyAppearanceFontVariables(document.documentElement, {
+      sans: fontFamilySans,
+      code: fontFamilyCode,
       composer: fontFamilyComposer,
     });
-  }, [fontFamilyComposer]);
+  }, [fontFamilyCode, fontFamilyComposer, fontFamilySans]);
 
   return null;
 }
