@@ -291,6 +291,7 @@ export class GhosttyTerminalSurface {
   private selectionMoved = false;
   private composing = false;
   private focused = false;
+  private resizeNotified = false;
   private theme: GhosttyTheme;
   private readonly suppressedKeyCodes = new Set<string>();
   private wheelRemainder = 0;
@@ -438,9 +439,12 @@ export class GhosttyTerminalSurface {
       this.pendingCanvasSize = null;
     }
     const grid = terminalGridSize(width, height, this.metrics, CONTENT_PADDING);
-    if (grid.cols !== this.cols || grid.rows !== this.rows) {
+    // onResize is the only PTY resize channel, so the first successful fit must
+    // notify even when the measured grid equals the 1x1 construction sentinel.
+    if (grid.cols !== this.cols || grid.rows !== this.rows || !this.resizeNotified) {
       this.cols = grid.cols;
       this.rows = grid.rows;
+      this.resizeNotified = true;
       this.core.resize(grid.cols, grid.rows, this.metrics.width, this.metrics.height);
       this.options.onResize(grid.cols, grid.rows);
       this.forceFullRender = true;
@@ -591,8 +595,10 @@ export class GhosttyTerminalSurface {
 
   private readonly onBlur = () => {
     this.focused = false;
-    // Releases fire elsewhere once focus leaves; drop stale suppressions.
-    this.suppressedKeyCodes.clear();
+    // Suppressions survive blur deliberately: a shortcut that moves focus (for
+    // example terminal-toggle) must still swallow its own keyup if focus comes
+    // back before release. Stale entries are harmless — an encoding keydown
+    // always removes its code first.
     // The steady unfocused hollow cursor must not inherit an off blink phase.
     this.cursorOn = true;
     this.requestRender();
