@@ -28,12 +28,15 @@ detaches the PTY callback so historical device queries cannot emit replies into 
 
 ## Updating Ghostty
 
-Update and rebuild Android first, because mobile's `VERSION` file is canonical. Then run:
+Update and rebuild Android first, because mobile's `VERSION` file is the single source of truth for
+the upstream pin (the upstream `LICENSE` lives beside it). Then run:
 
 ```sh
 pnpm --dir apps/web build:ghostty-wasm
 ```
 
-Commit the web `wasm`, `VERSION`, and `LICENSE` together. The focused web ABI test verifies that the
-pins match, enforces the artifact budget, and exercises repeated create/write/free cycles with
-multi-codepoint graphemes.
+Commit the regenerated web `wasm` artifacts. The build embeds the pinned revision into the binary as
+semver build metadata, and the focused web ABI test reads it back through `ghostty_build_info` and
+compares it against mobile's `VERSION` — so the web vendor directory holds only the artifacts, drift
+cannot hide, and there is no second pin to keep in sync. The same test enforces the artifact budget
+and exercises repeated create/write/free cycles with multi-codepoint graphemes.

@@ -2,7 +2,6 @@ import { describe, expect, it } from "vite-plus/test";
 
 import wasmDataUrl from "./vendor/ghostty-vt.wasm?inline";
 import writePtyWasmDataUrl from "./vendor/ghostty-write-pty.wasm?inline";
-import webVersion from "./vendor/VERSION?raw";
 import mobileVersion from "../../../../mobile/modules/t3-terminal/Vendor/libghostty-vt/VERSION?raw";
 import { ghosttyKeyForCode } from "./keyCodes";
 
@@ -15,10 +14,28 @@ function decodeWasmDataUrl(dataUrl: string): Uint8Array {
 }
 
 describe("vendored libghostty-vt WebAssembly", () => {
-  it("stays pinned to mobile's canonical revision and size budget", () => {
+  it("stays pinned to mobile's canonical revision and size budget", async () => {
     const wasm = decodeWasmDataUrl(wasmDataUrl);
-    expect(webVersion.trim()).toBe(mobileVersion.trim());
     expect(wasm.byteLength).toBeLessThan(750_000);
+
+    // The artifact carries its own provenance: the build embeds the pinned
+    // revision as semver build metadata, so mobile's VERSION file is the
+    // single source of truth and drift is caught here without a copy.
+    const result = await WebAssembly.instantiate(wasm.buffer as ArrayBuffer, {
+      env: { log: () => {} },
+    });
+    const instance = result instanceof WebAssembly.Instance ? result : result.instance;
+    const memory = instance.exports.memory as WebAssembly.Memory;
+    const call = (name: string, ...args: number[]) =>
+      (instance.exports[name] as WasmFunction)(...args);
+    const out = call("ghostty_wasm_alloc_u8_array", 8);
+    expect(call("ghostty_build_info", 10, out)).toBe(0);
+    const view = new DataView(memory.buffer, out, 8);
+    const embeddedRevision = new TextDecoder().decode(
+      new Uint8Array(memory.buffer, view.getUint32(0, true), view.getUint32(4, true)),
+    );
+    call("ghostty_wasm_free_u8_array", out, 8);
+    expect(embeddedRevision).toBe(mobileVersion.trim());
   });
 
   it("creates, writes multi-codepoint graphemes, and frees repeated terminals", async () => {

@@ -98,11 +98,15 @@ trap 'rm -rf "${build_root}"' EXIT
 log "building ${GHOSTTY_REVISION} for wasm32-freestanding"
 (
   cd "${GHOSTTY_SOURCE_DIR}"
+  # The pinned revision rides along as semver build metadata so the artifact
+  # identifies its own provenance through ghostty_build_info(); mobile's
+  # VERSION file stays the single source of truth for the pin.
   "${GHOSTTY_ZIG}" build \
     -Demit-lib-vt \
     -Dtarget=wasm32-freestanding \
     -Doptimize=ReleaseSmall \
     -Dstrip=true \
+    -Dlib-version-string="0.1.0-dev+${GHOSTTY_REVISION}" \
     -p "${build_root}"
 )
 
@@ -116,6 +120,4 @@ cp "${build_root}/bin/ghostty-vt.wasm" "${VENDOR_DIR}/ghostty-vt.wasm"
   -rdynamic \
   -femit-bin="${VENDOR_DIR}/ghostty-write-pty.wasm"
 chmod 0644 "${VENDOR_DIR}/ghostty-write-pty.wasm"
-cp "${GHOSTTY_SOURCE_DIR}/LICENSE" "${VENDOR_DIR}/LICENSE"
-printf '%s\n' "${GHOSTTY_REVISION}" > "${VENDOR_DIR}/VERSION"
 log "wrote ${VENDOR_DIR}/ghostty-vt.wasm"
