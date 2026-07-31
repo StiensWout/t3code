@@ -103,13 +103,36 @@ export const MONO_FONT_OPTIONS: readonly FontOption[] = [
   { label: "Courier New", family: "Courier New" },
 ];
 
+const FONT_PROBE_TEXT = "mmmmmmmmMMWli1O0@# fjord";
+let fontProbeContext: CanvasRenderingContext2D | null | undefined;
+
+function probeWidth(fontList: string): number | null {
+  if (fontProbeContext === undefined) {
+    fontProbeContext = document.createElement("canvas").getContext("2d");
+  }
+  if (fontProbeContext === null) return null;
+  fontProbeContext.font = `16px ${fontList}`;
+  return fontProbeContext.measureText(FONT_PROBE_TEXT).width;
+}
+
+/**
+ * Canvas metric probing instead of document.fonts.check(): check() reports
+ * true for families that are not installed at all (nothing needs loading), so
+ * it cannot filter the dropdown. A family exists when falling back to at
+ * least one generic changes the measured advance.
+ */
 export function isFontFamilyAvailable(family: string): boolean {
   const families = cssFontFamilies(family);
   if (families === null) return false;
-  // Generic keywords always resolve.
   if (/^(system-ui|sans-serif|serif|monospace|ui-monospace)$/i.test(families)) return true;
   try {
-    return document.fonts.check(`12px ${families}`);
+    for (const generic of ["monospace", "serif", "sans-serif"]) {
+      const baseline = probeWidth(generic);
+      const candidate = probeWidth(`${families}, ${generic}`);
+      if (baseline === null || candidate === null) return false;
+      if (candidate !== baseline) return true;
+    }
+    return false;
   } catch {
     return false;
   }

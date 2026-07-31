@@ -1211,16 +1211,16 @@ export function AppearanceSettingsPanel() {
           value={settings.fontFamilyTerminal}
           onValueChange={(fontFamilyTerminal) => updateSettings({ fontFamilyTerminal })}
           preview={
-            <FontPreviewCard dark stack={terminalStack}>
+            <FontPreviewCard stack={terminalStack}>
               <pre className="text-xs leading-relaxed" style={{ fontFamily: "inherit" }}>
                 <code style={{ fontFamily: "inherit" }}>
-                  <span className="text-zinc-400">$</span>{" "}
-                  <span className="text-zinc-100">npm run dev</span>
+                  <span className="text-muted-foreground">$</span>{" "}
+                  <span className="text-foreground">npm run dev</span>
                   {"\n"}
-                  <span className="text-emerald-400">{"\u2713"} Ready in 430ms</span>
+                  <span className="text-success">{"\u2713"} Ready in 430ms</span>
                   {"\n"}
-                  <span className="text-zinc-400">Local:</span>{" "}
-                  <span className="text-sky-300">http://localhost:3000</span>
+                  <span className="text-muted-foreground">Local:</span>{" "}
+                  <span className="text-info">http://localhost:3000</span>
                 </code>
               </pre>
             </FontPreviewCard>
@@ -1234,23 +1234,11 @@ export function AppearanceSettingsPanel() {
 const CUSTOM_FONT_VALUE = "__custom__";
 const DEFAULT_FONT_VALUE = "__default__";
 
-function FontPreviewCard({
-  children,
-  dark = false,
-  stack,
-}: {
-  children: ReactNode;
-  dark?: boolean;
-  stack: string;
-}) {
+function FontPreviewCard({ children, stack }: { children: ReactNode; stack: string }) {
   return (
     <div
       aria-hidden
-      className={
-        dark
-          ? "mb-2 space-y-1 rounded-lg bg-zinc-900 px-3 py-2.5"
-          : "mb-2 space-y-1 rounded-lg bg-muted/60 px-3 py-2.5"
-      }
+      className="mb-2 space-y-1 rounded-lg bg-muted/60 px-3 py-2.5"
       style={{ fontFamily: stack }}
     >
       {children}
