@@ -1049,6 +1049,10 @@ code {
   background: var(--app-scrollbar-thumb-hover);
 }
 
+.t3-ghostty-canvas {
+  cursor: text;
+}
+
 .t3-ghostty-scrollbar {
   position: absolute;
   z-index: 1;

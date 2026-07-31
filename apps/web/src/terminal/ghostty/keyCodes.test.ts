@@ -31,6 +31,13 @@ describe("ghosttyUnshiftedCodepoint", () => {
     expect(ghosttyUnshiftedCodepoint({ code: "Enter", key: "Enter", shiftKey: false })).toBe(0);
   });
 
+  it("reports unknown instead of the shifted character without layout data", () => {
+    expect(ghosttyUnshiftedCodepoint({ code: "Digit7", key: "/", shiftKey: true })).toBe(0);
+    expect(ghosttyUnshiftedCodepoint({ code: "KeyD", key: "Д", shiftKey: true })).toBe(
+      "д".codePointAt(0),
+    );
+  });
+
   it("prefers the active browser layout over US physical key positions", () => {
     const layoutMap = new Map([
       ["Digit1", "&"],

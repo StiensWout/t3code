@@ -14,6 +14,8 @@ import {
   terminalScrollbarOffsetAtPointer,
   terminalLinkAtColumn,
   terminalLinkAtPosition,
+  terminalWheelArrowData,
+  terminalWheelDeltaRows,
 } from "./surface";
 
 const cell = (text: string): GhosttyCell => ({
@@ -167,6 +169,41 @@ describe("application mouse reporting", () => {
 
   it("maps browser buttons to Ghostty's button enum", () => {
     expect([0, 1, 2, 3, 4, 5].map(ghosttyMouseButton)).toEqual([1, 3, 2, 4, 5, null]);
+  });
+});
+
+describe("terminalWheelDeltaRows", () => {
+  it("converts line-mode deltas into whole rows", () => {
+    const result = terminalWheelDeltaRows({ deltaY: 3, deltaMode: 1 }, 16, 24, 0);
+    expect(result.rows).toBe(3);
+    expect(result.remainder).toBe(0);
+  });
+
+  it("accumulates fractional pixel deltas across events", () => {
+    let remainder = 0;
+    let scrolled = 0;
+    for (let index = 0; index < 4; index += 1) {
+      const result = terminalWheelDeltaRows({ deltaY: 5, deltaMode: 0 }, 16, 24, remainder);
+      remainder = result.remainder;
+      scrolled += result.rows;
+    }
+    expect(scrolled).toBe(1);
+    expect(remainder).toBeCloseTo(4 / 16);
+  });
+
+  it("keeps direction for negative page-mode deltas", () => {
+    const result = terminalWheelDeltaRows({ deltaY: -1, deltaMode: 2 }, 16, 24, 0);
+    expect(result.rows).toBe(-24);
+    expect(result.remainder).toBe(0);
+  });
+});
+
+describe("terminalWheelArrowData", () => {
+  it("emits one arrow per row honoring application cursor keys", () => {
+    expect(terminalWheelArrowData(-2, false)).toBe("\u001b[A\u001b[A");
+    expect(terminalWheelArrowData(3, false)).toBe("\u001b[B\u001b[B\u001b[B");
+    expect(terminalWheelArrowData(-1, true)).toBe("\u001bOA");
+    expect(terminalWheelArrowData(0, true)).toBe("");
   });
 });
 

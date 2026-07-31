@@ -12,8 +12,7 @@ export interface GhosttyCellMetrics {
   readonly baseline: number;
 }
 
-const SELECTION_BACKGROUND = "rgba(72, 122, 191, 0.72)";
-const SELECTION_FOREGROUND = "rgb(255, 255, 255)";
+const DEFAULT_SELECTION_BACKGROUND = "rgba(72, 122, 191, 0.35)";
 
 function cssColor(color: GhosttyColor): string {
   return `rgb(${color.r}, ${color.g}, ${color.b})`;
@@ -95,6 +94,8 @@ export function renderGhosttySnapshot(options: {
   readonly forceFull: boolean;
   readonly cursorOn: boolean;
   readonly previousCursorY?: number | null;
+  readonly focused?: boolean;
+  readonly selectionBackground?: string;
 }): void {
   const {
     context,
@@ -107,6 +108,8 @@ export function renderGhosttySnapshot(options: {
     cursorOn,
     previousCursorY,
   } = options;
+  const focused = options.focused ?? true;
+  const selectionBackground = options.selectionBackground ?? DEFAULT_SELECTION_BACKGROUND;
   const rowsToDraw = forceFull
     ? Array.from({ length: snapshot.rows }, (_, index) => index)
     : [...snapshot.dirtyRows];
@@ -156,13 +159,16 @@ export function renderGhosttySnapshot(options: {
         backgroundEnd += 1;
       }
       if (first.selected || !ghosttyColorsEqual(first.background, snapshot.background)) {
-        context.fillStyle = first.selected ? SELECTION_BACKGROUND : cssColor(first.background);
-        context.fillRect(
-          padding + backgroundStart * metrics.width,
-          top,
-          (backgroundEnd - backgroundStart) * metrics.width,
-          metrics.height,
-        );
+        const left = padding + backgroundStart * metrics.width;
+        const width = (backgroundEnd - backgroundStart) * metrics.width;
+        if (!ghosttyColorsEqual(first.background, snapshot.background)) {
+          context.fillStyle = cssColor(first.background);
+          context.fillRect(left, top, width, metrics.height);
+        }
+        if (first.selected) {
+          context.fillStyle = selectionBackground;
+          context.fillRect(left, top, width, metrics.height);
+        }
       }
       backgroundStart = backgroundEnd;
     }
@@ -191,7 +197,7 @@ export function renderGhosttySnapshot(options: {
         );
         context.clip();
         context.font = fontForCell(first, fontSize, fontFamily);
-        context.fillStyle = first.selected ? SELECTION_FOREGROUND : cssColor(first.foreground);
+        context.fillStyle = cssColor(first.foreground);
         context.fillText(
           text,
           padding + runStart * metrics.width,
@@ -206,7 +212,7 @@ export function renderGhosttySnapshot(options: {
     for (let column = 0; column < row.cells.length; column += 1) {
       const cell = row.cells[column];
       if (!cell || (!cell.underline && !cell.strikethrough && !cell.overline)) continue;
-      context.fillStyle = cell.selected ? SELECTION_FOREGROUND : cssColor(cell.foreground);
+      context.fillStyle = cssColor(cell.foreground);
       const left = padding + column * metrics.width;
       if (cell.underline) context.fillRect(left, top + metrics.height - 2, metrics.width, 1);
       if (cell.strikethrough) {
@@ -220,7 +226,11 @@ export function renderGhosttySnapshot(options: {
     const left = padding + snapshot.cursorX * metrics.width;
     const top = padding + snapshot.cursorY * metrics.height;
     context.fillStyle = cssColor(snapshot.cursor);
-    if (snapshot.cursorStyle === 0) {
+    if (!focused) {
+      // An unfocused terminal draws a hollow cursor so the active pane is obvious.
+      context.strokeStyle = cssColor(snapshot.cursor);
+      context.strokeRect(left + 0.5, top + 0.5, metrics.width - 1, metrics.height - 1);
+    } else if (snapshot.cursorStyle === 0) {
       context.fillRect(left, top, 2, metrics.height);
     } else if (snapshot.cursorStyle === 2) {
       context.fillRect(left, top + metrics.height - 2, metrics.width, 2);

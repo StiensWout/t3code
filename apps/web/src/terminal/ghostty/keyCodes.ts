@@ -243,9 +243,16 @@ export function ghosttyUnshiftedCodepoint(
     return layoutCharacter.codePointAt(0) ?? 0;
   }
   if (/^[A-Z]$/u.test(event.key)) return event.key.charCodeAt(0) + 32;
-  const unshiftedCharacter = event.shiftKey
-    ? shiftedToUnshiftedCharacter.get(event.key)
-    : undefined;
-  if (unshiftedCharacter) return unshiftedCharacter.codePointAt(0) ?? 0;
+  if (event.shiftKey) {
+    const unshiftedCharacter = shiftedToUnshiftedCharacter.get(event.key);
+    if (unshiftedCharacter) return unshiftedCharacter.codePointAt(0) ?? 0;
+    const lowercase = event.key.toLowerCase();
+    if (lowercase !== event.key && [...lowercase].length === 1) {
+      return lowercase.codePointAt(0) ?? 0;
+    }
+    // Without layout data the unshifted form of a shifted key is unknowable;
+    // reporting the shifted character as unshifted corrupts Kitty alternate keys.
+    return 0;
+  }
   return event.key.codePointAt(0) ?? 0;
 }

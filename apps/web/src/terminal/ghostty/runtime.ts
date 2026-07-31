@@ -93,6 +93,9 @@ export class GhosttyRuntime {
   allocOpaque(): number {
     const pointer = this.call("ghostty_wasm_alloc_opaque");
     if (pointer === 0) throw new Error("libghostty-vt failed to allocate an opaque pointer");
+    // The slot is uninitialized until a *_new call writes it; zero it so dispose
+    // paths that run after a partial initialization never free a garbage pointer.
+    new DataView(this.memory.buffer).setUint32(pointer, 0, true);
     return pointer;
   }
 

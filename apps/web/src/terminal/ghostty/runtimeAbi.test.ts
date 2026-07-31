@@ -502,6 +502,31 @@ describe("vendored libghostty-vt WebAssembly", () => {
       new TextDecoder().decode(new Uint8Array(memory.buffer, remappedOutput, remappedOutputLength)),
     ).toBe("\u001b[106;5u");
 
+    // Without the Kitty report-event-types flag a release encodes nothing, so
+    // the surface's keyup handler stays silent for legacy sessions.
+    call("ghostty_key_event_set_action", keyEvent, 0);
+    expect(call("ghostty_key_encoder_encode", keyEncoder, keyEvent, 0, 0, written)).toBe(0);
+    expect(new DataView(memory.buffer, written, 4).getUint32(0, true)).toBe(0);
+
+    // With report-event-types enabled the same release encodes an event-typed code.
+    const reportEvents = new TextEncoder().encode("\u001b[>3u");
+    const reportEventsPointer = alloc(reportEvents.length);
+    new Uint8Array(memory.buffer, reportEventsPointer, reportEvents.length).set(reportEvents);
+    call("ghostty_terminal_vt_write", terminal, reportEventsPointer, reportEvents.length);
+    call("ghostty_key_encoder_setopt_from_terminal", keyEncoder, terminal);
+    expect(call("ghostty_key_encoder_encode", keyEncoder, keyEvent, 0, 0, written)).toBe(-3);
+    const releaseSize = new DataView(memory.buffer, written, 4).getUint32(0, true);
+    const releaseOutput = alloc(releaseSize);
+    expect(
+      call("ghostty_key_encoder_encode", keyEncoder, keyEvent, releaseOutput, releaseSize, written),
+    ).toBe(0);
+    const releaseLength = new DataView(memory.buffer, written, 4).getUint32(0, true);
+    expect(
+      new TextDecoder().decode(new Uint8Array(memory.buffer, releaseOutput, releaseLength)),
+    ).toBe("\u001b[106;5:3u");
+    free(releaseOutput, releaseSize);
+    free(reportEventsPointer, reportEvents.length);
+
     free(remappedOutput, remappedOutputSize);
     free(remappedTextPointer, remappedText.length);
     free(output, outputSize);
