@@ -1335,9 +1335,11 @@ function FontFamilySettingsRow({
                 // Latch custom mode so clearing the text keeps the field open.
                 setCustomMode(true);
                 setCustomDraft(next);
-                // Commit only names that resolve to an installed font; the
-                // current font holds while a partial or unknown name is typed.
-                if (next.trim().length > 0 && isFontFamilyAvailable(next)) {
+                // Commit names that resolve to an installed font - the current
+                // font holds while a partial or unknown name is typed - and
+                // commit an explicit full clear so the preference resets
+                // instead of silently keeping the previous font.
+                if (next.trim().length === 0 || isFontFamilyAvailable(next)) {
                   onValueChange(next);
                 }
               }}
