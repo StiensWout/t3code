@@ -106,6 +106,7 @@ import {
   appearanceFontStack,
   availableFontOptions,
   fontOptionCategories,
+  isFontFamilyAvailable,
   type FontOption,
 } from "../../appearanceFonts";
 import {
@@ -970,11 +971,11 @@ export function AppearanceSettingsPanel() {
   const { theme, setTheme } = useTheme();
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
-  const sansOptions = useMemo(() => availableFontOptions(SANS_FONT_OPTIONS), []);
-  const monoOptions = useMemo(() => availableFontOptions(MONO_FONT_OPTIONS), []);
-  const composerOptions = useMemo(
-    () => [...sansOptions, ...monoOptions],
-    [monoOptions, sansOptions],
+  // Every dropdown offers the full catalog, split into category sections, so
+  // any surface can point at any face - the categories carry the guidance.
+  const fontOptions = useMemo(
+    () => [...availableFontOptions(SANS_FONT_OPTIONS), ...availableFontOptions(MONO_FONT_OPTIONS)],
+    [],
   );
   const sansStack = appearanceFontStack(settings.fontFamilySans, DEFAULT_SANS_FONT_STACK);
   const composerStack =
@@ -1146,7 +1147,7 @@ export function AppearanceSettingsPanel() {
         <FontFamilySettingsRow
           title="Interface font"
           description="Used across the app interface."
-          options={sansOptions}
+          options={fontOptions}
           value={settings.fontFamilySans}
           onValueChange={(fontFamilySans) => updateSettings({ fontFamilySans })}
           preview={
@@ -1163,7 +1164,7 @@ export function AppearanceSettingsPanel() {
         <FontFamilySettingsRow
           title="Composer font"
           description="Used in the message composer. Point it at a mono font if you prefer writing prompts in one."
-          options={composerOptions}
+          options={fontOptions}
           defaultOptionLabel="Same as interface font"
           showDefaultOption={false}
           value={settings.fontFamilyComposer}
@@ -1184,7 +1185,7 @@ export function AppearanceSettingsPanel() {
         <FontFamilySettingsRow
           title="Code font"
           description="Used in code blocks, diffs, and file previews."
-          options={monoOptions}
+          options={fontOptions}
           value={settings.fontFamilyCode}
           onValueChange={(fontFamilyCode) => updateSettings({ fontFamilyCode })}
           preview={
@@ -1217,7 +1218,7 @@ export function AppearanceSettingsPanel() {
         <FontFamilySettingsRow
           title="Terminal font"
           description="Used by the terminal renderer. Nerd Font symbols stay available through the bundled fallback."
-          options={monoOptions}
+          options={fontOptions}
           value={settings.fontFamilyTerminal}
           onValueChange={(fontFamilyTerminal) => updateSettings({ fontFamilyTerminal })}
           preview={
@@ -1278,9 +1279,20 @@ function FontFamilySettingsRow({
   const trimmed = value.trim();
   const matchesOption = options.some((option) => option.family === trimmed);
   const [customMode, setCustomMode] = useState(false);
+  // The custom input edits a draft; the preference only commits once the text
+  // probes as an available font, so the current font holds while typing.
+  const [customDraft, setCustomDraft] = useState(value);
+  const lastValueRef = useRef(value);
+  if (lastValueRef.current !== value) {
+    // The committed value changed externally (hydration, reset); adopt it.
+    lastValueRef.current = value;
+    setCustomDraft(value);
+  }
   // Derived from the value, not just the picker state: client settings hydrate
   // after mount, so a persisted custom family must reveal the input on its own.
   const showCustomInput = customMode || (trimmed.length > 0 && !matchesOption);
+  const draftTrimmed = customDraft.trim();
+  const draftPending = showCustomInput && draftTrimmed !== trimmed;
   const categories = fontOptionCategories(options);
   const selected =
     trimmed.length === 0 && !customMode
@@ -1340,7 +1352,11 @@ function FontFamilySettingsRow({
               {categories.map(([category, categoryOptions]) => (
                 <SelectGroup key={category}>
                   {/* A lone section header is noise; label only mixed lists. */}
-                  {categories.length > 1 ? <SelectGroupLabel>{category}</SelectGroupLabel> : null}
+                  {categories.length > 1 ? (
+                    <SelectGroupLabel className="px-2 py-1.5 font-semibold text-muted-foreground text-xs">
+                      {category}
+                    </SelectGroupLabel>
+                  ) : null}
                   {categoryOptions.map((option) => (
                     <SelectItem hideIndicator key={option.family} value={option.family}>
                       <span style={{ fontFamily: option.family }}>{option.label}</span>
@@ -1356,16 +1372,23 @@ function FontFamilySettingsRow({
           {showCustomInput ? (
             <Input
               aria-label={`${title} custom family`}
+              aria-invalid={draftPending || undefined}
               autoCapitalize="off"
               autoComplete="off"
               onChange={(event) => {
+                const next = event.currentTarget.value;
                 // Latch custom mode so clearing the text keeps the field open.
                 setCustomMode(true);
-                onValueChange(event.currentTarget.value);
+                setCustomDraft(next);
+                // Commit only names that resolve to an installed font; the
+                // current font holds while a partial or unknown name is typed.
+                if (next.trim().length > 0 && isFontFamilyAvailable(next)) {
+                  onValueChange(next);
+                }
               }}
               placeholder="Font family name"
               spellCheck={false}
-              value={value}
+              value={customDraft}
             />
           ) : null}
         </div>
