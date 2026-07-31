@@ -88,6 +88,23 @@ describe("terminalLinkAtColumn", () => {
     expect(terminalLinkAtPosition(rows, 2, 2)).toBe("~/project/file");
     expect(terminalLinkAtPosition(rows, 3, 4)).toBe("C:\\repo\\file.ts");
   });
+
+  it("refuses links truncated at the viewport edges instead of mis-resolving", () => {
+    const row = (text: string, isWrapContinuation: boolean): GhosttyRow => ({
+      cells: Array.from(text.padEnd(16), (character) => cell(character)),
+      text: text.trimEnd(),
+      isWrapContinuation,
+    });
+    // The head of the wrapped line scrolled above the viewport.
+    const headCut = [row("ple.com/missing", true), row("head", true)];
+    expect(terminalLinkAtPosition(headCut, 0, 4)).toBeNull();
+    // A full-width bottom row may wrap on below the viewport.
+    const tailCut = [row("https://t3.codes", false)];
+    expect(terminalLinkAtPosition(tailCut, 0, 8)).toBeNull();
+    // A partial bottom row is provably complete and still resolves.
+    const complete = [row("https://t3.codes", false), row("", false)];
+    expect(terminalLinkAtPosition(complete, 0, 8)).toBe("https://t3.codes");
+  });
 });
 
 describe("isTerminalCopyShortcut", () => {

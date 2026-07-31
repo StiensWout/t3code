@@ -93,12 +93,30 @@ export function terminalLinkAtPosition(
     };
   });
   if (!wrappedLine) return null;
+  // Only viewport rows are available: a wrapped line whose head scrolled above
+  // the viewport would resolve a truncated match into a wrong link.
+  const firstSegment = wrappedLine.segments[0];
+  if (firstSegment && rows[firstSegment.bufferLineNumber - 1]?.isWrapContinuation) {
+    return null;
+  }
   const segment = wrappedLine.segments.find((value) => value.bufferLineNumber === rowIndex + 1);
   const row = rows[rowIndex];
   if (!segment || !row) return null;
+  const lastSegment = wrappedLine.segments.at(-1);
+  const lastRow = lastSegment ? rows[lastSegment.bufferLineNumber - 1] : undefined;
+  const mayContinueBelowViewport =
+    lastSegment !== undefined &&
+    lastSegment.bufferLineNumber === rows.length &&
+    lastRow !== undefined &&
+    terminalRowText(lastRow, true).length === lastRow.cells.length;
   const offset = segment.startIndex + terminalColumnOffset(row, column);
   for (const match of extractTerminalLinks(wrappedLine.text)) {
-    if (offset >= match.start && offset < match.end) return match.text;
+    if (offset >= match.start && offset < match.end) {
+      // A match running to the end of a full bottom row may wrap on below the
+      // viewport; a truncated tail must not activate as a complete link.
+      if (match.end === wrappedLine.text.length && mayContinueBelowViewport) return null;
+      return match.text;
+    }
   }
   return null;
 }
@@ -566,6 +584,24 @@ export class GhosttyTerminalSurface {
     }
     if (isTerminalPasteShortcut(event)) {
       this.suppressedKeyCodes.add(event.code);
+      const clipboard = navigator.clipboard;
+      if (typeof clipboard?.readText === "function") {
+        // Reading the clipboard directly makes the shortcut deterministic:
+        // Ctrl+Shift+V's default action does not fire a paste event in every
+        // browser. Browsers without the API keep the native paste-event path.
+        event.preventDefault();
+        event.stopPropagation();
+        void clipboard.readText().then(
+          (text) => {
+            if (!this.disposed && text.length > 0) {
+              this.options.onData(this.core.encodePaste(text));
+            }
+          },
+          () => {
+            // Clipboard permission was denied; there is nothing to paste.
+          },
+        );
+      }
       return;
     }
     // keyCode 229 is Safari's only signal that this keydown opens an IME
