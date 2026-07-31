@@ -1179,8 +1179,11 @@ export function AppearanceSettingsPanel() {
           onValueChange={(fontFamilyCode) => updateSettings({ fontFamilyCode })}
           preview={
             <FontPreviewCard stack={codeStack}>
-              <pre className="overflow-x-auto text-xs leading-relaxed">
-                <code>
+              <pre
+                className="overflow-x-auto text-xs leading-relaxed"
+                style={{ fontFamily: "inherit" }}
+              >
+                <code style={{ fontFamily: "inherit" }}>
                   <span className="text-muted-foreground">1</span>
                   {"  "}
                   <span className="text-info">function</span>{" "}
@@ -1191,7 +1194,7 @@ export function AppearanceSettingsPanel() {
                   {"    "}
                   <span className="text-info">return</span>{" "}
                   <span className="text-success">{"`${user.name} <${user.email}>`"}</span>{" "}
-                  <span className="text-muted-foreground">// 0O 1lI</span>
+                  <span className="text-muted-foreground">{"// 0O 1lI"}</span>
                   {"\n"}
                   <span className="text-muted-foreground">3</span>
                   {"  "}
@@ -1209,8 +1212,8 @@ export function AppearanceSettingsPanel() {
           onValueChange={(fontFamilyTerminal) => updateSettings({ fontFamilyTerminal })}
           preview={
             <FontPreviewCard dark stack={terminalStack}>
-              <pre className="text-xs leading-relaxed">
-                <code>
+              <pre className="text-xs leading-relaxed" style={{ fontFamily: "inherit" }}>
+                <code style={{ fontFamily: "inherit" }}>
                   <span className="text-zinc-400">$</span>{" "}
                   <span className="text-zinc-100">npm run dev</span>
                   {"\n"}
