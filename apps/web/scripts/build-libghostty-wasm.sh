@@ -66,17 +66,24 @@ ensure_zig() {
 }
 
 ensure_ghostty_source() {
+  require_cmd git
   if [[ ! -d "${GHOSTTY_SOURCE_DIR}/.git" ]]; then
-    require_cmd git
     mkdir -p "$(dirname "${GHOSTTY_SOURCE_DIR}")"
     log "cloning Ghostty ${GHOSTTY_REVISION}"
     git clone --filter=blob:none --no-checkout https://github.com/ghostty-org/ghostty.git \
       "${GHOSTTY_SOURCE_DIR}"
+  fi
+
+  # A cached checkout may still be on a previously pinned revision; converge on
+  # the pinned one instead of failing the rebuild.
+  local actual_revision
+  actual_revision="$(git -C "${GHOSTTY_SOURCE_DIR}" rev-parse HEAD 2>/dev/null || echo none)"
+  if [[ "${actual_revision}" != "${GHOSTTY_REVISION}" ]]; then
+    log "checking out Ghostty ${GHOSTTY_REVISION}"
     git -C "${GHOSTTY_SOURCE_DIR}" fetch --depth=1 origin "${GHOSTTY_REVISION}"
     git -C "${GHOSTTY_SOURCE_DIR}" checkout --detach "${GHOSTTY_REVISION}"
   fi
 
-  local actual_revision
   actual_revision="$(git -C "${GHOSTTY_SOURCE_DIR}" rev-parse HEAD)"
   [[ "${actual_revision}" == "${GHOSTTY_REVISION}" ]] || \
     die "expected Ghostty ${GHOSTTY_REVISION}, found ${actual_revision}"
