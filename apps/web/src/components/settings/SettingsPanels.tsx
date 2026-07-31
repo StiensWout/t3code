@@ -606,7 +606,7 @@ export function useSettingsRestore(onRestored?: () => void) {
         : []),
       ...(settings.wordWrap !== DEFAULT_UNIFIED_SETTINGS.wordWrap ? ["Word wrap"] : []),
       ...(settings.fontFamilyComposer !== DEFAULT_UNIFIED_SETTINGS.fontFamilyComposer
-        ? ["Prompt textarea font"]
+        ? ["Prompt font"]
         : []),
       ...(settings.fontFamilyTerminal !== DEFAULT_UNIFIED_SETTINGS.fontFamilyTerminal
         ? ["Terminal font"]
@@ -1150,10 +1150,10 @@ export function AppearanceSettingsPanel() {
 
       <SettingsSection title="Fonts">
         <FontFamilySettingsRow
-          title="Prompt textarea font"
-          description="Used only in the text area where you write prompts - point it at a mono font if you prefer. The rest of the composer follows the interface font."
+          title="Prompt font"
+          description="Used when typing prompts in the composer."
           options={fontOptions}
-          defaultOptionLabel="Same as interface font"
+          defaultOptionLabel="Default"
           showDefaultOption={false}
           value={settings.fontFamilyComposer}
           onValueChange={(fontFamilyComposer) => updateSettings({ fontFamilyComposer })}
@@ -1172,7 +1172,7 @@ export function AppearanceSettingsPanel() {
         />
         <FontFamilySettingsRow
           title="Terminal font"
-          description="Used by the terminal renderer. Nerd Font symbols stay available through the bundled fallback."
+          description="Used in the built-in terminal."
           options={fontOptions}
           value={settings.fontFamilyTerminal}
           onValueChange={(fontFamilyTerminal) => updateSettings({ fontFamilyTerminal })}
