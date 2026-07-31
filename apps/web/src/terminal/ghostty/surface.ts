@@ -72,17 +72,20 @@ export function terminalFontSize(size?: number): number {
 }
 
 /**
- * Vertical origin of the grid inside the mount. The grid anchors to the
- * bottom edge so the sub-row remainder sits above the first row: while the
- * container resizes within a row boundary the prompt stays pinned to the
- * bottom instead of snapping up and down with the remainder.
+ * Vertical origin of the grid inside the mount. While content is shorter than
+ * the viewport the grid sits at the top like a fresh terminal. Once scrollback
+ * exists the prompt lives on the bottom row, so the grid anchors to the bottom
+ * edge instead: the sub-row remainder moves above row 0 and resizing within a
+ * row boundary keeps the prompt pinned instead of snapping up and down.
  */
 export function terminalContentOriginY(
   mountHeight: number,
   padding: number,
   rows: number,
   cellHeight: number,
+  anchorBottom: boolean,
 ): number {
+  if (!anchorBottom) return padding;
   const slack = mountHeight - padding * 2 - rows * cellHeight;
   return padding + Math.max(0, slack);
 }
@@ -349,6 +352,7 @@ export class GhosttyTerminalSurface {
   private disposed = false;
   private resizeNotifyTimer: number | null = null;
   private originY = CONTENT_PADDING;
+  private mountHeight = 0;
   private selectionEnd: { x: number; y: number } | null = null;
   private selectionAnchorScreen: { x: number; y: number } | null = null;
   private selectionEndScreen: { x: number; y: number } | null = null;
@@ -574,15 +578,7 @@ export class GhosttyTerminalSurface {
       shouldRender = true;
     }
     const grid = terminalGridSize(width, height, this.metrics, CONTENT_PADDING);
-    // The origin only moves together with a forced full repaint: partial
-    // dirty-row redraws must never composite rows at a shifted origin over
-    // rows painted at the previous one.
-    const originY = terminalContentOriginY(height, CONTENT_PADDING, grid.rows, this.metrics.height);
-    if (originY !== this.originY) {
-      this.originY = originY;
-      this.forceFullRender = true;
-      shouldRender = true;
-    }
+    this.mountHeight = height;
     // onResize is the only PTY resize channel, so the first successful fit must
     // notify even when the measured grid equals the 1x1 construction sentinel.
     if (grid.cols !== this.cols || grid.rows !== this.rows || !this.resizeNotified) {
@@ -1254,6 +1250,23 @@ export class GhosttyTerminalSurface {
     }
     this.snapshot = this.core.snapshot();
     if (!this.snapshot.cursorBlinking) this.cursorOn = true;
+    // The origin only moves together with a forced full repaint: partial
+    // dirty-row redraws must never composite rows at a shifted origin over
+    // rows painted at the previous one. Bottom anchoring starts once
+    // scrollback exists, i.e. when the prompt actually lives at the bottom.
+    const scrollState = this.readScrollbarState();
+    const anchorBottom = scrollState !== null && scrollState.total > scrollState.len;
+    const nextOriginY = terminalContentOriginY(
+      this.mountHeight,
+      CONTENT_PADDING,
+      this.rows,
+      this.metrics.height,
+      anchorBottom,
+    );
+    if (nextOriginY !== this.originY) {
+      this.originY = nextOriginY;
+      this.forceFullRender = true;
+    }
     renderGhosttySnapshot({
       context: this.context,
       snapshot: this.snapshot,
