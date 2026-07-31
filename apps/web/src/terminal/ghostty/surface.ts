@@ -12,6 +12,7 @@ import {
   terminalGridSize,
   type GhosttyCellMetrics,
 } from "./renderer";
+import symbolsFontUrl from "./fonts/SymbolsNerdFontMono-Regular.woff2?url";
 
 export const DEFAULT_TERMINAL_FONT_SIZE = 12;
 const MIN_TERMINAL_FONT_SIZE = 6;
@@ -35,6 +36,27 @@ const MIN_SCROLLBAR_THUMB_HEIGHT = 18;
 export interface GhosttyTerminalFont {
   readonly family?: string;
   readonly size?: number;
+}
+
+let symbolsFontLoad: Promise<void> | null = null;
+
+/**
+ * Register the bundled symbols-only Nerd Font once per page. It loads lazily
+ * with the first terminal, and because it carries no regular text glyphs it
+ * composes with any text face without changing metrics — prompt symbols and
+ * devicons render even on machines without a locally installed Nerd Font.
+ */
+function ensureTerminalSymbolsFont(): Promise<void> {
+  if (symbolsFontLoad !== null) return symbolsFontLoad;
+  symbolsFontLoad = (async () => {
+    try {
+      const face = new FontFace("Symbols Nerd Font Mono", `url(${symbolsFontUrl})`);
+      document.fonts.add(await face.load());
+    } catch {
+      // Locally installed fallback faces still apply.
+    }
+  })();
+  return symbolsFontLoad;
 }
 
 export function terminalFontFamily(family?: string): string {
@@ -423,6 +445,7 @@ export class GhosttyTerminalSurface {
     try {
       // Cell metrics must come from the faces that will render; measuring before
       // the bundled webfonts load would size the grid from a fallback font.
+      await ensureTerminalSymbolsFont();
       await document.fonts.load(`${fontSize}px ${fontFamily}`);
     } catch {
       // Metrics fall back to whichever faces are already available.
