@@ -67,3 +67,59 @@ export function applyAppearanceFontVariables(
     }
   }
 }
+
+export interface FontOption {
+  readonly label: string;
+  readonly family: string;
+}
+
+/**
+ * Curated choices for the Appearance dropdowns. The settings UI filters these
+ * through `isFontFamilyAvailable`, so platforms only offer faces that will
+ * actually render; "Custom" in the UI covers everything else.
+ */
+export const SANS_FONT_OPTIONS: readonly FontOption[] = [
+  { label: "DM Sans", family: "DM Sans" },
+  { label: "Inter", family: "Inter" },
+  { label: "SF Pro", family: "SF Pro Text" },
+  { label: "Segoe UI", family: "Segoe UI" },
+  { label: "Roboto", family: "Roboto" },
+  { label: "Helvetica Neue", family: "Helvetica Neue" },
+  { label: "Arial", family: "Arial" },
+  { label: "System UI", family: "system-ui" },
+];
+
+export const MONO_FONT_OPTIONS: readonly FontOption[] = [
+  { label: "SF Mono", family: "SF Mono" },
+  { label: "JetBrains Mono", family: "JetBrains Mono" },
+  { label: "Fira Code", family: "Fira Code" },
+  { label: "Cascadia Code", family: "Cascadia Code" },
+  { label: "Menlo", family: "Menlo" },
+  { label: "Monaco", family: "Monaco" },
+  { label: "Consolas", family: "Consolas" },
+  { label: "Source Code Pro", family: "Source Code Pro" },
+  { label: "IBM Plex Mono", family: "IBM Plex Mono" },
+  { label: "Ubuntu Mono", family: "Ubuntu Mono" },
+  { label: "Courier New", family: "Courier New" },
+];
+
+export function isFontFamilyAvailable(family: string): boolean {
+  const families = cssFontFamilies(family);
+  if (families === null) return false;
+  // Generic keywords always resolve.
+  if (/^(system-ui|sans-serif|serif|monospace|ui-monospace)$/i.test(families)) return true;
+  try {
+    return document.fonts.check(`12px ${families}`);
+  } catch {
+    return false;
+  }
+}
+
+/** Webfonts the app bundles; offered even before document.fonts has loaded them. */
+const BUNDLED_FAMILIES = new Set(["DM Sans", "JetBrains Mono"]);
+
+export function availableFontOptions(options: readonly FontOption[]): readonly FontOption[] {
+  return options.filter(
+    (option) => BUNDLED_FAMILIES.has(option.family) || isFontFamilyAvailable(option.family),
+  );
+}

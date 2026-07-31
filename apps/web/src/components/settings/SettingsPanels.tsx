@@ -8,7 +8,7 @@ import {
   SettingsIcon,
 } from "lucide-react";
 import { Link } from "@tanstack/react-router";
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import {
@@ -101,7 +101,11 @@ import { Input } from "../ui/input";
 import {
   DEFAULT_CODE_FONT_STACK,
   DEFAULT_SANS_FONT_STACK,
+  MONO_FONT_OPTIONS,
+  SANS_FONT_OPTIONS,
   appearanceFontStack,
+  availableFontOptions,
+  type FontOption,
 } from "../../appearanceFonts";
 import {
   NumberField,
@@ -957,6 +961,19 @@ export function AppearanceSettingsPanel() {
   const { theme, setTheme } = useTheme();
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
+  const sansOptions = useMemo(() => availableFontOptions(SANS_FONT_OPTIONS), []);
+  const monoOptions = useMemo(() => availableFontOptions(MONO_FONT_OPTIONS), []);
+  const composerOptions = useMemo(
+    () => [...sansOptions, ...monoOptions],
+    [monoOptions, sansOptions],
+  );
+  const sansStack = appearanceFontStack(settings.fontFamilySans, DEFAULT_SANS_FONT_STACK);
+  const composerStack =
+    settings.fontFamilyComposer.trim().length > 0
+      ? appearanceFontStack(settings.fontFamilyComposer, DEFAULT_SANS_FONT_STACK)
+      : sansStack;
+  const codeStack = appearanceFontStack(settings.fontFamilyCode, DEFAULT_CODE_FONT_STACK);
+  const terminalStack = appearanceFontStack(settings.fontFamilyTerminal, DEFAULT_CODE_FONT_STACK);
   const environmentStageLabel = useEnvironmentStageLabel();
   const showEnvironmentIdentification =
     resolveEnvironmentIdentificationPillLabel(environmentStageLabel) !== null;
@@ -1120,95 +1137,223 @@ export function AppearanceSettingsPanel() {
         <FontFamilySettingsRow
           title="Interface font"
           description="Used across the app interface."
-          placeholder="DM Sans (default)"
-          previewText="The quick brown fox jumps over the lazy dog."
-          previewStack={appearanceFontStack(settings.fontFamilySans, DEFAULT_SANS_FONT_STACK)}
+          options={sansOptions}
           value={settings.fontFamilySans}
           onValueChange={(fontFamilySans) => updateSettings({ fontFamilySans })}
+          preview={
+            <FontPreviewCard stack={sansStack}>
+              <p className="text-sm text-foreground">
+                The quick brown fox jumps over the lazy dog.
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Messages, labels, and headings across the app.
+              </p>
+            </FontPreviewCard>
+          }
         />
         <FontFamilySettingsRow
           title="Composer font"
           description="Used in the message composer. Point it at a mono font if you prefer writing prompts in one."
-          placeholder="Same as interface font"
-          previewText="Fix the flaky test in surface.test.ts and explain the race."
-          previewStack={
-            settings.fontFamilyComposer.trim().length > 0
-              ? appearanceFontStack(settings.fontFamilyComposer, DEFAULT_SANS_FONT_STACK)
-              : appearanceFontStack(settings.fontFamilySans, DEFAULT_SANS_FONT_STACK)
-          }
+          options={composerOptions}
+          defaultOptionLabel="Same as interface font"
           value={settings.fontFamilyComposer}
           onValueChange={(fontFamilyComposer) => updateSettings({ fontFamilyComposer })}
+          preview={
+            <FontPreviewCard stack={composerStack}>
+              <div className="rounded-lg border border-border bg-background px-3 py-2">
+                <p className="text-sm text-foreground">
+                  Fix the flaky test in surface.test.ts and explain the race.
+                </p>
+                <p className="pt-1 text-xs text-muted-foreground/60">
+                  Ask for follow-up changes or attach images
+                </p>
+              </div>
+            </FontPreviewCard>
+          }
         />
         <FontFamilySettingsRow
           title="Code font"
           description="Used in code blocks, diffs, and file previews."
-          placeholder="SF Mono (default)"
-          previewText="const answer = 42; // 0O 1lI"
-          previewStack={appearanceFontStack(settings.fontFamilyCode, DEFAULT_CODE_FONT_STACK)}
+          options={monoOptions}
           value={settings.fontFamilyCode}
           onValueChange={(fontFamilyCode) => updateSettings({ fontFamilyCode })}
+          preview={
+            <FontPreviewCard stack={codeStack}>
+              <pre className="overflow-x-auto text-xs leading-relaxed">
+                <code>
+                  <span className="text-muted-foreground">1</span>
+                  {"  "}
+                  <span className="text-info">function</span>{" "}
+                  <span className="text-foreground">formatUser</span>
+                  <span className="text-muted-foreground">(user) {"{"}</span>
+                  {"\n"}
+                  <span className="text-muted-foreground">2</span>
+                  {"    "}
+                  <span className="text-info">return</span>{" "}
+                  <span className="text-success">{"`${user.name} <${user.email}>`"}</span>{" "}
+                  <span className="text-muted-foreground">// 0O 1lI</span>
+                  {"\n"}
+                  <span className="text-muted-foreground">3</span>
+                  {"  "}
+                  <span className="text-muted-foreground">{"}"}</span>
+                </code>
+              </pre>
+            </FontPreviewCard>
+          }
         />
         <FontFamilySettingsRow
           title="Terminal font"
           description="Used by the terminal renderer. Nerd Font symbols stay available through the bundled fallback."
-          placeholder="SF Mono (default)"
-          previewText="❯ npm run dev · ready in 430ms ✓"
-          previewStack={appearanceFontStack(settings.fontFamilyTerminal, DEFAULT_CODE_FONT_STACK)}
+          options={monoOptions}
           value={settings.fontFamilyTerminal}
           onValueChange={(fontFamilyTerminal) => updateSettings({ fontFamilyTerminal })}
+          preview={
+            <FontPreviewCard dark stack={terminalStack}>
+              <pre className="text-xs leading-relaxed">
+                <code>
+                  <span className="text-zinc-400">$</span>{" "}
+                  <span className="text-zinc-100">npm run dev</span>
+                  {"\n"}
+                  <span className="text-emerald-400">{"\u2713"} Ready in 430ms</span>
+                  {"\n"}
+                  <span className="text-zinc-400">Local:</span>{" "}
+                  <span className="text-sky-300">http://localhost:3000</span>
+                </code>
+              </pre>
+            </FontPreviewCard>
+          }
         />
       </SettingsSection>
     </SettingsPageContainer>
   );
 }
 
+const CUSTOM_FONT_VALUE = "__custom__";
+const DEFAULT_FONT_VALUE = "__default__";
+
+function FontPreviewCard({
+  children,
+  dark = false,
+  stack,
+}: {
+  children: ReactNode;
+  dark?: boolean;
+  stack: string;
+}) {
+  return (
+    <div
+      aria-hidden
+      className={
+        dark
+          ? "mb-2 space-y-1 rounded-lg bg-zinc-900 px-3 py-2.5"
+          : "mb-2 space-y-1 rounded-lg bg-muted/60 px-3 py-2.5"
+      }
+      style={{ fontFamily: stack }}
+    >
+      {children}
+    </div>
+  );
+}
+
 function FontFamilySettingsRow({
   title,
   description,
-  placeholder,
-  previewText,
-  previewStack,
+  options,
+  defaultOptionLabel = "Default",
+  preview,
   value,
   onValueChange,
 }: {
   title: string;
   description: string;
-  placeholder: string;
-  previewText: string;
-  previewStack: string;
+  options: readonly FontOption[];
+  defaultOptionLabel?: string;
+  preview: ReactNode;
   value: string;
   onValueChange: (value: string) => void;
 }) {
+  const trimmed = value.trim();
+  const matchesOption = options.some((option) => option.family === trimmed);
+  const [customMode, setCustomMode] = useState(trimmed.length > 0 && !matchesOption);
+  const selected =
+    trimmed.length === 0 && !customMode
+      ? DEFAULT_FONT_VALUE
+      : customMode || !matchesOption
+        ? CUSTOM_FONT_VALUE
+        : trimmed;
   return (
     <SettingsRow
       title={title}
       description={description}
-      status={
-        <span aria-hidden style={{ fontFamily: previewStack }}>
-          {previewText}
-        </span>
-      }
       resetAction={
-        value.trim().length > 0 ? (
+        trimmed.length > 0 || customMode ? (
           <SettingResetButton
             label={`${title.toLowerCase()} family`}
-            onClick={() => onValueChange("")}
+            onClick={() => {
+              setCustomMode(false);
+              onValueChange("");
+            }}
           />
         ) : null
       }
       control={
-        <Input
-          aria-label={`${title} family`}
-          autoCapitalize="off"
-          autoComplete="off"
-          className="w-full sm:w-56"
-          onChange={(event) => onValueChange(event.currentTarget.value)}
-          placeholder={placeholder}
-          spellCheck={false}
-          value={value}
-        />
+        <div className="flex w-full flex-col items-stretch gap-2 sm:w-56">
+          <Select
+            value={selected}
+            onValueChange={(next) => {
+              if (typeof next !== "string") return;
+              if (next === DEFAULT_FONT_VALUE) {
+                setCustomMode(false);
+                onValueChange("");
+                return;
+              }
+              if (next === CUSTOM_FONT_VALUE) {
+                setCustomMode(true);
+                return;
+              }
+              setCustomMode(false);
+              onValueChange(next);
+            }}
+          >
+            <SelectTrigger className="w-full" aria-label={`${title} family`}>
+              <SelectValue>
+                {selected === DEFAULT_FONT_VALUE
+                  ? defaultOptionLabel
+                  : selected === CUSTOM_FONT_VALUE
+                    ? "Custom"
+                    : (options.find((option) => option.family === selected)?.label ?? selected)}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectPopup align="end" alignItemWithTrigger={false}>
+              <SelectItem hideIndicator value={DEFAULT_FONT_VALUE}>
+                {defaultOptionLabel}
+              </SelectItem>
+              {options.map((option) => (
+                <SelectItem hideIndicator key={option.family} value={option.family}>
+                  <span style={{ fontFamily: option.family }}>{option.label}</span>
+                </SelectItem>
+              ))}
+              <SelectItem hideIndicator value={CUSTOM_FONT_VALUE}>
+                Custom…
+              </SelectItem>
+            </SelectPopup>
+          </Select>
+          {customMode ? (
+            <Input
+              aria-label={`${title} custom family`}
+              autoCapitalize="off"
+              autoComplete="off"
+              onChange={(event) => onValueChange(event.currentTarget.value)}
+              placeholder="Font family name"
+              spellCheck={false}
+              value={value}
+            />
+          ) : null}
+        </div>
       }
-    />
+    >
+      {preview}
+    </SettingsRow>
   );
 }
 
