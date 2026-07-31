@@ -98,6 +98,8 @@ export function renderGhosttySnapshot(options: {
   readonly previousCursorY?: number | null;
   readonly focused?: boolean;
   readonly selectionBackground?: string;
+  /** Vertical origin of row 0; defaults to the horizontal padding. */
+  readonly originY?: number;
 }): void {
   const {
     context,
@@ -112,6 +114,7 @@ export function renderGhosttySnapshot(options: {
   } = options;
   const focused = options.focused ?? true;
   const selectionBackground = options.selectionBackground ?? DEFAULT_SELECTION_BACKGROUND;
+  const originY = options.originY ?? padding;
   const rowsToDraw = forceFull
     ? Array.from({ length: snapshot.rows }, (_, index) => index)
     : [...snapshot.dirtyRows];
@@ -139,7 +142,7 @@ export function renderGhosttySnapshot(options: {
   for (const rowIndex of rowsToDraw) {
     const row = snapshot.rowData[rowIndex];
     if (!row) continue;
-    const top = padding + rowIndex * metrics.height;
+    const top = originY + rowIndex * metrics.height;
 
     context.fillStyle = cssColor(snapshot.background);
     context.fillRect(padding, top, snapshot.cols * metrics.width, metrics.height);
@@ -226,7 +229,7 @@ export function renderGhosttySnapshot(options: {
 
   if (cursorOn && snapshot.cursorVisible && snapshot.cursorX >= 0 && snapshot.cursorY >= 0) {
     const left = padding + snapshot.cursorX * metrics.width;
-    const top = padding + snapshot.cursorY * metrics.height;
+    const top = originY + snapshot.cursorY * metrics.height;
     context.fillStyle = cssColor(snapshot.cursor);
     if (!focused) {
       // An unfocused terminal draws a hollow cursor so the active pane is obvious.

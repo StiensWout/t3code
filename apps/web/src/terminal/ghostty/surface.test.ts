@@ -16,6 +16,7 @@ import {
   terminalScrollbarOffsetAtPointer,
   terminalLinkAtColumn,
   terminalLinkAtPosition,
+  terminalContentOriginY,
   terminalFontFamily,
   terminalFontSize,
   terminalWheelArrowData,
@@ -237,6 +238,27 @@ describe("terminal font resolution", () => {
     expect(terminalFontSize(13.4)).toBe(13);
     expect(terminalFontSize(2)).toBe(6);
     expect(terminalFontSize(90)).toBe(32);
+  });
+});
+
+describe("terminalContentOriginY", () => {
+  it("pins the grid to the bottom by moving the sub-row slack above row 0", () => {
+    // 100px mount, 4px padding, 5 rows of 16px: 92 - 80 = 12px slack on top.
+    expect(terminalContentOriginY(100, 4, 5, 16)).toBe(16);
+    // Exact fit keeps the origin at the padding.
+    expect(terminalContentOriginY(88, 4, 5, 16)).toBe(4);
+    // A mount smaller than the grid never pushes the origin above the padding.
+    expect(terminalContentOriginY(80, 4, 5, 16)).toBe(4);
+  });
+
+  it("keeps the prompt stationary while a drag crosses row boundaries", () => {
+    // Growing the mount pixel by pixel: the bottom edge (origin + rows*cell)
+    // tracks the mount bottom exactly until a new row fits.
+    for (let height = 88; height < 104; height += 1) {
+      const rows = Math.max(1, Math.floor((height - 8) / 16));
+      const origin = terminalContentOriginY(height, 4, rows, 16);
+      expect(origin + rows * 16).toBe(height - 4);
+    }
   });
 });
 

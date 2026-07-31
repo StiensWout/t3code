@@ -142,7 +142,10 @@ export interface GhosttyMouseInput {
   readonly screenHeight: number;
   readonly cellWidth: number;
   readonly cellHeight: number;
-  readonly padding: number;
+  readonly paddingLeft: number;
+  readonly paddingRight: number;
+  readonly paddingTop: number;
+  readonly paddingBottom: number;
   readonly anyButtonPressed: boolean;
 }
 
@@ -532,10 +535,10 @@ export class GhosttyTerminalCore {
       ["screen_height", input.screenHeight],
       ["cell_width", input.cellWidth],
       ["cell_height", input.cellHeight],
-      ["padding_top", input.padding],
-      ["padding_bottom", input.padding],
-      ["padding_right", input.padding],
-      ["padding_left", input.padding],
+      ["padding_top", input.paddingTop],
+      ["padding_bottom", input.paddingBottom],
+      ["padding_right", input.paddingRight],
+      ["padding_left", input.paddingLeft],
     ] as const) {
       this.runtime.setField(size, "GhosttyMouseEncoderSize", field, Math.max(0, Math.round(value)));
     }

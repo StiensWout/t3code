@@ -49,6 +49,22 @@ export function terminalFontSize(size?: number): number {
   return Math.max(MIN_TERMINAL_FONT_SIZE, Math.min(MAX_TERMINAL_FONT_SIZE, Math.round(size)));
 }
 
+/**
+ * Vertical origin of the grid inside the mount. The grid anchors to the
+ * bottom edge so the sub-row remainder sits above the first row: while the
+ * container resizes within a row boundary the prompt stays pinned to the
+ * bottom instead of snapping up and down with the remainder.
+ */
+export function terminalContentOriginY(
+  mountHeight: number,
+  padding: number,
+  rows: number,
+  cellHeight: number,
+): number {
+  const slack = mountHeight - padding * 2 - rows * cellHeight;
+  return padding + Math.max(0, slack);
+}
+
 export interface TerminalScrollbarGeometry {
   readonly thumbHeight: number;
   readonly thumbTop: number;
@@ -293,6 +309,7 @@ export class GhosttyTerminalSurface {
   private metrics: GhosttyCellMetrics;
   private fontFamily: string;
   private fontSize: number;
+  private fontEpoch = 0;
   private readonly resizeObserver: ResizeObserver;
   private readonly scrollbarThumb: HTMLDivElement;
   private snapshot: GhosttySnapshot | null = null;
@@ -468,14 +485,19 @@ export class GhosttyTerminalSurface {
 
   async setFont(font: GhosttyTerminalFont): Promise<void> {
     if (this.disposed) return;
-    this.fontFamily = terminalFontFamily(font.family);
-    this.fontSize = terminalFontSize(font.size);
+    const fontFamily = terminalFontFamily(font.family);
+    const fontSize = terminalFontSize(font.size);
+    // The fields only change together with their metrics after the load, and
+    // the epoch lets the newest overlapping call win regardless of load order.
+    const epoch = ++this.fontEpoch;
     try {
-      await document.fonts.load(`${this.fontSize}px ${this.fontFamily}`);
+      await document.fonts.load(`${fontSize}px ${fontFamily}`);
     } catch {
       // Metrics fall back to whichever faces are already available.
     }
-    if (this.disposed) return;
+    if (this.disposed || epoch !== this.fontEpoch) return;
+    this.fontFamily = fontFamily;
+    this.fontSize = fontSize;
     this.applyFontMetrics();
   }
 
@@ -583,7 +605,7 @@ export class GhosttyTerminalSurface {
     const bounds = this.canvas.getBoundingClientRect();
     return {
       right: bounds.left + CONTENT_PADDING + (viewportEnd.x + 1) * this.metrics.width,
-      bottom: bounds.top + CONTENT_PADDING + (viewportEnd.y + 1) * this.metrics.height,
+      bottom: bounds.top + this.contentOriginY() + (viewportEnd.y + 1) * this.metrics.height,
     };
   }
 
@@ -1188,6 +1210,7 @@ export class GhosttyTerminalSurface {
         fontSize: this.fontSize,
         fontFamily: this.fontFamily,
         padding: CONTENT_PADDING,
+        originY: this.contentOriginY(),
         forceFull: this.forceFullRender,
         cursorOn: this.cursorOn,
         previousCursorY: this.renderedCursorY,
@@ -1222,6 +1245,15 @@ export class GhosttyTerminalSurface {
     }, 500);
   }
 
+  private contentOriginY(): number {
+    return terminalContentOriginY(
+      this.mount.clientHeight,
+      CONTENT_PADDING,
+      this.rows,
+      this.metrics.height,
+    );
+  }
+
   private positionInput(): void {
     const snapshot = this.snapshot;
     if (!snapshot || !snapshot.cursorVisible || snapshot.cursorX < 0 || snapshot.cursorY < 0) {
@@ -1230,7 +1262,7 @@ export class GhosttyTerminalSurface {
     // The IME candidate window anchors to the textarea, so it must follow the
     // terminal cursor for composition to appear where the user is typing.
     const left = CONTENT_PADDING + snapshot.cursorX * this.metrics.width;
-    const top = CONTENT_PADDING + snapshot.cursorY * this.metrics.height;
+    const top = this.contentOriginY() + snapshot.cursorY * this.metrics.height;
     if (left === this.inputLeft && top === this.inputTop) return;
     this.inputLeft = left;
     this.inputTop = top;
@@ -1253,7 +1285,7 @@ export class GhosttyTerminalSurface {
         0,
         Math.min(
           this.rows - 1,
-          Math.floor((clientY - bounds.top - CONTENT_PADDING) / this.metrics.height),
+          Math.floor((clientY - bounds.top - this.contentOriginY()) / this.metrics.height),
         ),
       ),
     };
@@ -1287,7 +1319,13 @@ export class GhosttyTerminalSurface {
       screenHeight: bounds.height,
       cellWidth: this.metrics.width,
       cellHeight: this.metrics.height,
-      padding: CONTENT_PADDING,
+      paddingLeft: CONTENT_PADDING,
+      paddingRight: CONTENT_PADDING,
+      paddingTop: this.contentOriginY(),
+      paddingBottom: Math.max(
+        0,
+        bounds.height - this.contentOriginY() - this.rows * this.metrics.height,
+      ),
       anyButtonPressed: event.buttons !== 0,
     });
     if (data.length > 0) this.options.onData(data);
