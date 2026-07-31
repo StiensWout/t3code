@@ -608,13 +608,7 @@ export class GhosttyTerminalSurface {
    */
   private notifyResize(): void {
     this.resizeNotified = true;
-    if (this.resizeNotifyTimer !== null) {
-      window.clearTimeout(this.resizeNotifyTimer);
-      this.resizeNotifyTimer = null;
-      // Flush the settled dimensions so the PTY keeps the final size even when
-      // the surface unmounts inside the debounce window.
-      this.options.onResize(this.cols, this.rows);
-    }
+    if (this.resizeNotifyTimer !== null) window.clearTimeout(this.resizeNotifyTimer);
     this.resizeNotifyTimer = window.setTimeout(() => {
       this.resizeNotifyTimer = null;
       if (!this.disposed) this.options.onResize(this.cols, this.rows);
