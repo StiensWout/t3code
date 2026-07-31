@@ -292,6 +292,7 @@ export class GhosttyTerminalSurface {
   private composing = false;
   private focused = false;
   private resizeNotified = false;
+  private canvasConfigured = false;
   private theme: GhosttyTheme;
   private readonly suppressedKeyCodes = new Set<string>();
   private wheelRemainder = 0;
@@ -426,7 +427,14 @@ export class GhosttyTerminalSurface {
     const pixelWidth = Math.max(1, Math.round(width * ratio));
     const pixelHeight = Math.max(1, Math.round(height * ratio));
     let shouldRender = false;
-    if (this.canvas.width !== pixelWidth || this.canvas.height !== pixelHeight) {
+    // The DPR transform must be installed even when the target size happens to
+    // equal the canvas default 300x150 backing store, so the first fit always
+    // schedules a canvas configuration.
+    if (
+      this.canvas.width !== pixelWidth ||
+      this.canvas.height !== pixelHeight ||
+      !this.canvasConfigured
+    ) {
       this.pendingCanvasSize = {
         width: pixelWidth,
         height: pixelHeight,
@@ -1055,6 +1063,7 @@ export class GhosttyTerminalSurface {
         this.canvas.width = canvasSize.width;
         this.canvas.height = canvasSize.height;
         this.context.setTransform(canvasSize.ratio, 0, 0, canvasSize.ratio, 0, 0);
+        this.canvasConfigured = true;
       }
       this.snapshot = this.core.snapshot();
       if (!this.snapshot.cursorBlinking) this.cursorOn = true;
