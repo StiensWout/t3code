@@ -661,12 +661,15 @@ export class GhosttyTerminalSurface {
   }
 
   private readonly onPaste = (event: ClipboardEvent) => {
+    // Always suppress the browser's default insertion: content the textarea
+    // would receive (for example an html-only clipboard converted to text)
+    // leaks through onInput without bracketed-paste encoding.
+    event.preventDefault();
     const data = event.clipboardData?.getData("text/plain") ?? "";
     if (data.length === 0) return;
     // The native paste won the race with actual text; a pending clipboard read
     // must not double. An empty native paste leaves the read as the only path.
     this.pasteShortcutToken += 1;
-    event.preventDefault();
     this.options.onData(this.core.encodePaste(data));
   };
 
