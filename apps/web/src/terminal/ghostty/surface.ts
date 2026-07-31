@@ -661,10 +661,11 @@ export class GhosttyTerminalSurface {
   }
 
   private readonly onPaste = (event: ClipboardEvent) => {
-    // The native paste won the race; a pending clipboard read must not double.
-    this.pasteShortcutToken += 1;
     const data = event.clipboardData?.getData("text/plain") ?? "";
     if (data.length === 0) return;
+    // The native paste won the race with actual text; a pending clipboard read
+    // must not double. An empty native paste leaves the read as the only path.
+    this.pasteShortcutToken += 1;
     event.preventDefault();
     this.options.onData(this.core.encodePaste(data));
   };
