@@ -257,6 +257,29 @@ describe("vendored libghostty-vt WebAssembly", () => {
     new Uint8Array(memory.buffer, inputPointer, input.length).set(input);
     call("ghostty_terminal_vt_write", terminal, inputPointer, input.length);
 
+    const modeFlag = alloc(1);
+    new Uint8Array(memory.buffer, modeFlag, 1)[0] = 0;
+    expect(call("ghostty_terminal_get", terminal, 11, modeFlag)).toBe(0);
+    expect(new Uint8Array(memory.buffer, modeFlag, 1)[0]).toBe(1);
+    new Uint8Array(memory.buffer, modeFlag, 1)[0] = 1;
+    expect(call("ghostty_terminal_mode_get", terminal, 1003, modeFlag)).toBe(0);
+    expect(new Uint8Array(memory.buffer, modeFlag, 1)[0]).toBe(0);
+    const anyEventInput = new TextEncoder().encode("\u001b[?1003h");
+    const anyEventPointer = alloc(anyEventInput.length);
+    new Uint8Array(memory.buffer, anyEventPointer, anyEventInput.length).set(anyEventInput);
+    call("ghostty_terminal_vt_write", terminal, anyEventPointer, anyEventInput.length);
+    expect(call("ghostty_terminal_mode_get", terminal, 1003, modeFlag)).toBe(0);
+    expect(new Uint8Array(memory.buffer, modeFlag, 1)[0]).toBe(1);
+    const anyEventReset = new TextEncoder().encode("\u001b[?1003l\u001b[?1000h");
+    const anyEventResetPointer = alloc(anyEventReset.length);
+    new Uint8Array(memory.buffer, anyEventResetPointer, anyEventReset.length).set(anyEventReset);
+    call("ghostty_terminal_vt_write", terminal, anyEventResetPointer, anyEventReset.length);
+    expect(call("ghostty_terminal_mode_get", terminal, 1003, modeFlag)).toBe(0);
+    expect(new Uint8Array(memory.buffer, modeFlag, 1)[0]).toBe(0);
+    free(anyEventResetPointer, anyEventReset.length);
+    free(anyEventPointer, anyEventInput.length);
+    free(modeFlag, 1);
+
     const point = alloc(24);
     const pointView = new DataView(memory.buffer, point, 24);
     pointView.setUint32(0, 1, true);

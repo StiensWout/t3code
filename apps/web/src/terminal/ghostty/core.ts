@@ -390,6 +390,15 @@ export class GhosttyTerminalCore {
     );
   }
 
+  isMouseAnyEventTracking(): boolean {
+    this.ensureActive();
+    this.runtime.bytes(this.scratch, 1)[0] = 0;
+    return (
+      this.runtime.call("ghostty_terminal_mode_get", this.terminal, 1003, this.scratch) ===
+        GHOSTTY_SUCCESS && this.runtime.bytes(this.scratch, 1)[0] !== 0
+    );
+  }
+
   encodeKey(event: KeyboardEvent): string {
     this.ensureActive();
     this.runtime.call("ghostty_key_encoder_setopt_from_terminal", this.keyEncoder, this.terminal);

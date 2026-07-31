@@ -579,9 +579,11 @@ export class GhosttyTerminalSurface {
 
   private readonly onPointerMove = (event: PointerEvent) => {
     if (this.linkActivationPointerId === event.pointerId) return;
+    // Hover motion is only reportable in any-event tracking (DEC 1003); normal and
+    // button-event tracking never report motion without a captured pressed button.
     if (
       this.mouseReportingPointerId === event.pointerId ||
-      shouldReportTerminalMouse(this.core.isMouseTracking(), event)
+      shouldReportTerminalMouse(this.core.isMouseAnyEventTracking(), event)
     ) {
       event.preventDefault();
       this.canvas.style.cursor = "default";
