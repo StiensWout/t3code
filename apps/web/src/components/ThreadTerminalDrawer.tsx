@@ -352,7 +352,7 @@ export function TerminalViewport({
   const terminalBuffer = terminalSession.buffer;
   const terminalError = terminalSession.error;
   const terminalStatus = terminalSession.status;
-  const synchronizedStatusRef = useRef(terminalStatus);
+  const synchronizedStatusRef = useRef<TerminalSessionState["status"]>("closed");
   const synchronizeTerminalStatus = useEffectEvent(
     (terminal: GhosttyTerminalSurface, status: TerminalSessionState["status"]) => {
       const synchronized = synchronizedStatusRef.current;
@@ -420,6 +420,9 @@ export function TerminalViewport({
       previousSessionRef.current = latestSession;
       if (latestSession.buffer.length > 0) terminal.resetAndWrite(latestSession.buffer);
       if (latestSession.error !== null) writeSystemMessage(terminal, latestSession.error);
+      // Attaching to a session that already finished must still run exit handling
+      // once, so mount synchronization starts from the empty "closed" state.
+      synchronizedStatusRef.current = "closed";
       synchronizeTerminalStatus(terminal, latestSession.status);
       if (autoFocus) window.requestAnimationFrame(() => terminal.focus());
 
