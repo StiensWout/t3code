@@ -118,6 +118,17 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   );
 }
 
+/* The font tokens are declared outside the inline theme so utilities reference
+   the variables and Settings -> Appearance can override them at runtime. The
+   default stacks are mirrored in `appearanceFonts.ts`. */
+@theme {
+  --font-sans:
+    "DM Sans Variable", "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui,
+    sans-serif;
+  --font-mono:
+    "SF Mono", "SFMono-Regular", "JetBrains Mono", Consolas, "Liberation Mono", Menlo, monospace;
+}
+
 @theme inline {
   --color-zinc-25: oklch(99.2% 0 0);
   --animate-skeleton: skeleton 2s -1s infinite linear;
@@ -126,11 +137,6 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --animate-status-pulse: status-pulse 2s infinite;
   --animate-status-ping: status-ping 2s infinite;
   --animate-sidebar-working-text: sidebar-working-text 3.4s infinite;
-  --font-sans:
-    "DM Sans Variable", "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui,
-    sans-serif;
-  --font-mono:
-    "SF Mono", "SFMono-Regular", "JetBrains Mono", Consolas, "Liberation Mono", Menlo, monospace;
   --color-warning-foreground: var(--warning-foreground);
   --color-warning: var(--warning);
   --color-success-foreground: var(--success-foreground);
@@ -1047,6 +1053,13 @@ code {
 
 ::-webkit-scrollbar-thumb:hover {
   background: var(--app-scrollbar-thumb-hover);
+}
+
+/* Settings -> Appearance can point the composer at its own face (for example a
+   mono font); default follows the sans stack. Applied on the surface wrapper so
+   the editor and its placeholder inherit together. */
+.composer-editor-surface {
+  font-family: var(--font-composer, var(--font-sans));
 }
 
 .t3-ghostty-canvas {

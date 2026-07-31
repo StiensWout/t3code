@@ -97,6 +97,12 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { DraftInput } from "../ui/draft-input";
+import { Input } from "../ui/input";
+import {
+  DEFAULT_CODE_FONT_STACK,
+  DEFAULT_SANS_FONT_STACK,
+  appearanceFontStack,
+} from "../../appearanceFonts";
 import {
   NumberField,
   NumberFieldDecrement,
@@ -1109,7 +1115,100 @@ export function AppearanceSettingsPanel() {
           }
         />
       </SettingsSection>
+
+      <SettingsSection title="Fonts">
+        <FontFamilySettingsRow
+          title="Interface font"
+          description="Used across the app interface."
+          placeholder="DM Sans (default)"
+          previewText="The quick brown fox jumps over the lazy dog."
+          previewStack={appearanceFontStack(settings.fontFamilySans, DEFAULT_SANS_FONT_STACK)}
+          value={settings.fontFamilySans}
+          onValueChange={(fontFamilySans) => updateSettings({ fontFamilySans })}
+        />
+        <FontFamilySettingsRow
+          title="Composer font"
+          description="Used in the message composer. Point it at a mono font if you prefer writing prompts in one."
+          placeholder="Same as interface font"
+          previewText="Fix the flaky test in surface.test.ts and explain the race."
+          previewStack={
+            settings.fontFamilyComposer.trim().length > 0
+              ? appearanceFontStack(settings.fontFamilyComposer, DEFAULT_SANS_FONT_STACK)
+              : appearanceFontStack(settings.fontFamilySans, DEFAULT_SANS_FONT_STACK)
+          }
+          value={settings.fontFamilyComposer}
+          onValueChange={(fontFamilyComposer) => updateSettings({ fontFamilyComposer })}
+        />
+        <FontFamilySettingsRow
+          title="Code font"
+          description="Used in code blocks, diffs, and file previews."
+          placeholder="SF Mono (default)"
+          previewText="const answer = 42; // 0O 1lI"
+          previewStack={appearanceFontStack(settings.fontFamilyCode, DEFAULT_CODE_FONT_STACK)}
+          value={settings.fontFamilyCode}
+          onValueChange={(fontFamilyCode) => updateSettings({ fontFamilyCode })}
+        />
+        <FontFamilySettingsRow
+          title="Terminal font"
+          description="Used by the terminal renderer. Nerd Font symbols stay available through the bundled fallback."
+          placeholder="SF Mono (default)"
+          previewText="❯ npm run dev · ready in 430ms ✓"
+          previewStack={appearanceFontStack(settings.fontFamilyTerminal, DEFAULT_CODE_FONT_STACK)}
+          value={settings.fontFamilyTerminal}
+          onValueChange={(fontFamilyTerminal) => updateSettings({ fontFamilyTerminal })}
+        />
+      </SettingsSection>
     </SettingsPageContainer>
+  );
+}
+
+function FontFamilySettingsRow({
+  title,
+  description,
+  placeholder,
+  previewText,
+  previewStack,
+  value,
+  onValueChange,
+}: {
+  title: string;
+  description: string;
+  placeholder: string;
+  previewText: string;
+  previewStack: string;
+  value: string;
+  onValueChange: (value: string) => void;
+}) {
+  return (
+    <SettingsRow
+      title={title}
+      description={description}
+      status={
+        <span aria-hidden style={{ fontFamily: previewStack }}>
+          {previewText}
+        </span>
+      }
+      resetAction={
+        value.trim().length > 0 ? (
+          <SettingResetButton
+            label={`${title.toLowerCase()} family`}
+            onClick={() => onValueChange("")}
+          />
+        ) : null
+      }
+      control={
+        <Input
+          aria-label={`${title} family`}
+          autoCapitalize="off"
+          autoComplete="off"
+          className="w-full sm:w-56"
+          onChange={(event) => onValueChange(event.currentTarget.value)}
+          placeholder={placeholder}
+          spellCheck={false}
+          value={value}
+        />
+      }
+    />
   );
 }
 

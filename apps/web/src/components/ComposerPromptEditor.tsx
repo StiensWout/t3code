@@ -1747,7 +1747,7 @@ function ComposerPromptEditorInner({
 
   return (
     <ComposerTerminalContextActionsContext value={terminalContextActions}>
-      <div className="relative">
+      <div className="composer-editor-surface relative">
         <PlainTextPlugin
           contentEditable={
             <ContentEditable

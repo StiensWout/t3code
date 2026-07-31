@@ -57,6 +57,7 @@ import {
   type ThreadTerminalGroup,
 } from "../types";
 import { readLocalApi } from "~/localApi";
+import { useClientSettings } from "../hooks/useSettings";
 import { useAttachedTerminalSession } from "../state/terminalSessions";
 import { serverEnvironment } from "../state/server";
 import { previewEnvironment } from "../state/preview";
@@ -305,6 +306,8 @@ export function TerminalViewport({
     onAddTerminalContext(selection);
   });
   const readTerminalLabel = useEffectEvent(() => terminalLabel);
+  const terminalFontFamily = useClientSettings((settings) => settings.fontFamilyTerminal);
+  const terminalFontFamilyRef = useRef(terminalFontFamily);
   const terminalSession = useAttachedTerminalSession({
     environmentId,
     terminal: {
@@ -368,6 +371,13 @@ export function TerminalViewport({
   }, [keybindings]);
 
   useEffect(() => {
+    if (terminalFontFamilyRef.current === terminalFontFamily) return;
+    terminalFontFamilyRef.current = terminalFontFamily;
+    const family = terminalFontFamily.trim();
+    void terminalRef.current?.setFont(family.length > 0 ? { family } : {});
+  }, [terminalFontFamily]);
+
+  useEffect(() => {
     const mount = containerRef.current;
     if (!mount) return;
 
@@ -380,6 +390,9 @@ export function TerminalViewport({
     const setup = async (): Promise<(() => void) | null> => {
       const terminalOptions: GhosttyTerminalSurfaceOptions = {
         theme: terminalThemeFromApp(mount),
+        ...(terminalFontFamilyRef.current.length > 0
+          ? { font: { family: terminalFontFamilyRef.current } }
+          : {}),
         onData: (data) => handleData(data),
         onResize: (cols, rows) => void resizeTerminal(cols, rows),
         onSelectionChange: () => handleSelectionChange(),
