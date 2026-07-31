@@ -14,8 +14,14 @@ import {
 } from "./renderer";
 
 const FONT_SIZE = 12;
+// The trailing Nerd Font faces only supply glyphs the regular monospace faces are
+// missing (powerline separators, devicons, and other private-use prompt symbols),
+// so shells configured for a locally installed Nerd Font keep their prompt glyphs.
 const FONT_FAMILY =
-  '"SF Mono", "SFMono-Regular", "JetBrains Mono", Consolas, "Liberation Mono", Menlo, monospace';
+  '"SF Mono", "SFMono-Regular", "JetBrains Mono", Consolas, "Liberation Mono", Menlo, ' +
+  '"Symbols Nerd Font Mono", "Symbols Nerd Font", "JetBrainsMono Nerd Font", ' +
+  '"JetBrainsMono NF", "FiraCode Nerd Font", "Hack Nerd Font", "MesloLGS NF", ' +
+  '"CaskaydiaCove Nerd Font", "PowerlineSymbols", monospace';
 const CONTENT_PADDING = 4;
 const MIN_SCROLLBAR_THUMB_HEIGHT = 18;
 
