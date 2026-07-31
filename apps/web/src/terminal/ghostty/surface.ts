@@ -292,6 +292,7 @@ export class GhosttyTerminalSurface {
   private composing = false;
   private focused = false;
   private theme: GhosttyTheme;
+  private readonly suppressedKeyCodes = new Set<string>();
   private wheelRemainder = 0;
   private dprMedia: MediaQueryList | null = null;
   private inputLeft = -1;
@@ -537,14 +538,24 @@ export class GhosttyTerminalSurface {
   }
 
   private readonly onKeyDown = (event: KeyboardEvent) => {
-    if (isTerminalAltGraphText(event)) return;
-    if (!this.options.beforeKey(event)) return;
+    // Presses handled outside the terminal must also swallow their release:
+    // beforeKey runs side effects (keybindings, navigation sends), so it cannot
+    // be consulted again on keyup, and Kitty report-event-types sessions would
+    // otherwise receive a release for a press the shell never saw.
+    if (isTerminalAltGraphText(event) || !this.options.beforeKey(event)) {
+      this.suppressedKeyCodes.add(event.code);
+      return;
+    }
     if (isTerminalCopyShortcut(event) && this.hasSelection()) {
       event.preventDefault();
+      this.suppressedKeyCodes.add(event.code);
       this.options.onCopy(this.getSelection());
       return;
     }
-    if (isTerminalPasteShortcut(event)) return;
+    if (isTerminalPasteShortcut(event)) {
+      this.suppressedKeyCodes.add(event.code);
+      return;
+    }
     // keyCode 229 is Safari's only signal that this keydown opens an IME
     // composition; encoding it would double the committed text.
     if (event.isComposing || this.composing || event.key === "Process" || event.keyCode === 229) {
@@ -552,12 +563,14 @@ export class GhosttyTerminalSurface {
     }
     const data = this.core.encodeKey(event);
     if (data.length === 0) return;
+    this.suppressedKeyCodes.delete(event.code);
     event.preventDefault();
     event.stopPropagation();
     this.options.onData(data);
   };
 
   private readonly onKeyUp = (event: KeyboardEvent) => {
+    if (this.suppressedKeyCodes.delete(event.code)) return;
     if (event.isComposing || this.composing || event.key === "Process" || event.keyCode === 229) {
       return;
     }
@@ -578,6 +591,8 @@ export class GhosttyTerminalSurface {
 
   private readonly onBlur = () => {
     this.focused = false;
+    // Releases fire elsewhere once focus leaves; drop stale suppressions.
+    this.suppressedKeyCodes.clear();
     // The steady unfocused hollow cursor must not inherit an off blink phase.
     this.cursorOn = true;
     this.requestRender();
