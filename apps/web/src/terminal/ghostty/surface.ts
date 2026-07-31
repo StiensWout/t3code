@@ -13,17 +13,41 @@ import {
   type GhosttyCellMetrics,
 } from "./renderer";
 
-const FONT_SIZE = 12;
-// The trailing Nerd Font faces only supply glyphs the regular monospace faces are
-// missing (powerline separators, devicons, and other private-use prompt symbols),
-// so shells configured for a locally installed Nerd Font keep their prompt glyphs.
-const FONT_FAMILY =
-  '"SF Mono", "SFMono-Regular", "JetBrains Mono", Consolas, "Liberation Mono", Menlo, ' +
+export const DEFAULT_TERMINAL_FONT_SIZE = 12;
+const MIN_TERMINAL_FONT_SIZE = 6;
+const MAX_TERMINAL_FONT_SIZE = 32;
+// The glyph fallbacks only supply symbols the text faces are missing (powerline
+// separators, devicons, and other private-use prompt symbols), so shells
+// configured for a locally installed Nerd Font keep their prompt glyphs no
+// matter which text face is active.
+const TERMINAL_GLYPH_FALLBACKS =
   '"Symbols Nerd Font Mono", "Symbols Nerd Font", "JetBrainsMono Nerd Font", ' +
   '"JetBrainsMono NF", "FiraCode Nerd Font", "Hack Nerd Font", "MesloLGS NF", ' +
   '"CaskaydiaCove Nerd Font", "PowerlineSymbols", monospace';
+// SF Mono where the platform has it (macOS), otherwise the bundled JetBrains
+// Mono webfont, so the default rendering is identical everywhere else.
+export const DEFAULT_TERMINAL_FONT_FAMILY =
+  '"SF Mono", "SFMono-Regular", "JetBrains Mono", ' + TERMINAL_GLYPH_FALLBACKS;
 const CONTENT_PADDING = 4;
 const MIN_SCROLLBAR_THUMB_HEIGHT = 18;
+
+/** Requested terminal font; omitted fields fall back to the defaults. */
+export interface GhosttyTerminalFont {
+  readonly family?: string;
+  readonly size?: number;
+}
+
+export function terminalFontFamily(family?: string): string {
+  const custom = family?.trim();
+  if (!custom) return DEFAULT_TERMINAL_FONT_FAMILY;
+  // A custom face keeps the glyph fallbacks so prompt symbols stay covered.
+  return `${custom}, ${TERMINAL_GLYPH_FALLBACKS}`;
+}
+
+export function terminalFontSize(size?: number): number {
+  if (size === undefined || !Number.isFinite(size)) return DEFAULT_TERMINAL_FONT_SIZE;
+  return Math.max(MIN_TERMINAL_FONT_SIZE, Math.min(MAX_TERMINAL_FONT_SIZE, Math.round(size)));
+}
 
 export interface TerminalScrollbarGeometry {
   readonly thumbHeight: number;
@@ -246,6 +270,7 @@ export interface GhosttySelectionPosition {
 
 export interface GhosttyTerminalSurfaceOptions {
   readonly theme: GhosttyTheme;
+  readonly font?: GhosttyTerminalFont;
   readonly onData: (data: string) => void;
   readonly onResize: (cols: number, rows: number) => void;
   readonly onSelectionChange: () => void;
@@ -265,7 +290,9 @@ export class GhosttyTerminalSurface {
   private readonly context: CanvasRenderingContext2D;
   private readonly core: GhosttyTerminalCore;
   private readonly options: GhosttyTerminalSurfaceOptions;
-  private readonly metrics: GhosttyCellMetrics;
+  private metrics: GhosttyCellMetrics;
+  private fontFamily: string;
+  private fontSize: number;
   private readonly resizeObserver: ResizeObserver;
   private readonly scrollbarThumb: HTMLDivElement;
   private snapshot: GhosttySnapshot | null = null;
@@ -337,6 +364,8 @@ export class GhosttyTerminalSurface {
     this.metrics = metrics;
     this.options = options;
     this.theme = options.theme;
+    this.fontFamily = terminalFontFamily(options.font?.family);
+    this.fontSize = terminalFontSize(options.font?.size);
     this.resizeObserver = new ResizeObserver(() => this.fit());
     this.installEvents();
     this.watchDevicePixelRatio();
@@ -375,14 +404,16 @@ export class GhosttyTerminalSurface {
 
     const context = canvas.getContext("2d", { alpha: false });
     if (!context) throw new Error("Canvas 2D is unavailable");
+    const fontFamily = terminalFontFamily(options.font?.family);
+    const fontSize = terminalFontSize(options.font?.size);
     try {
       // Cell metrics must come from the faces that will render; measuring before
       // the bundled webfonts load would size the grid from a fallback font.
-      await document.fonts.load(`${FONT_SIZE}px ${FONT_FAMILY}`);
+      await document.fonts.load(`${fontSize}px ${fontFamily}`);
     } catch {
       // Metrics fall back to whichever faces are already available.
     }
-    const metrics = measureGhosttyCell(context, FONT_SIZE, FONT_FAMILY);
+    const metrics = measureGhosttyCell(context, fontSize, fontFamily);
     const grid = terminalGridSize(mount.clientWidth, mount.clientHeight, metrics, CONTENT_PADDING);
     const core = await GhosttyTerminalCore.create(
       grid.cols,
@@ -431,6 +462,27 @@ export class GhosttyTerminalSurface {
     this.theme = theme;
     this.core.setTheme(theme);
     this.forceFullRender = true;
+    this.requestRender();
+  }
+
+  async setFont(font: GhosttyTerminalFont): Promise<void> {
+    if (this.disposed) return;
+    this.fontFamily = terminalFontFamily(font.family);
+    this.fontSize = terminalFontSize(font.size);
+    try {
+      await document.fonts.load(`${this.fontSize}px ${this.fontFamily}`);
+    } catch {
+      // Metrics fall back to whichever faces are already available.
+    }
+    if (this.disposed) return;
+    this.metrics = measureGhosttyCell(this.context, this.fontSize, this.fontFamily);
+    this.core.resize(this.cols, this.rows, this.metrics.width, this.metrics.height);
+    // Cached IME textarea coordinates are stale in the new cell geometry.
+    this.inputLeft = -1;
+    this.inputTop = -1;
+    this.forceFullRender = true;
+    this.scrollbarDirty = true;
+    this.fit();
     this.requestRender();
   }
 
@@ -1112,8 +1164,8 @@ export class GhosttyTerminalSurface {
         context: this.context,
         snapshot: this.snapshot,
         metrics: this.metrics,
-        fontSize: FONT_SIZE,
-        fontFamily: FONT_FAMILY,
+        fontSize: this.fontSize,
+        fontFamily: this.fontFamily,
         padding: CONTENT_PADDING,
         forceFull: this.forceFullRender,
         cursorOn: this.cursorOn,

@@ -2,6 +2,8 @@ import { describe, expect, it } from "vite-plus/test";
 
 import type { GhosttyCell, GhosttyRow } from "./core";
 import {
+  DEFAULT_TERMINAL_FONT_FAMILY,
+  DEFAULT_TERMINAL_FONT_SIZE,
   advanceTerminalSelectionClickSequence,
   ghosttyMouseButton,
   isTerminalAltGraphText,
@@ -14,6 +16,8 @@ import {
   terminalScrollbarOffsetAtPointer,
   terminalLinkAtColumn,
   terminalLinkAtPosition,
+  terminalFontFamily,
+  terminalFontSize,
   terminalWheelArrowData,
   terminalWheelDeltaRows,
 } from "./surface";
@@ -214,6 +218,25 @@ describe("application mouse reporting", () => {
 
   it("maps browser buttons to Ghostty's button enum", () => {
     expect([0, 1, 2, 3, 4, 5].map(ghosttyMouseButton)).toEqual([1, 3, 2, 4, 5, null]);
+  });
+});
+
+describe("terminal font resolution", () => {
+  it("keeps the glyph fallbacks behind a custom text face", () => {
+    expect(terminalFontFamily()).toBe(DEFAULT_TERMINAL_FONT_FAMILY);
+    expect(terminalFontFamily("  ")).toBe(DEFAULT_TERMINAL_FONT_FAMILY);
+    const custom = terminalFontFamily('"Fira Code"');
+    expect(custom.startsWith('"Fira Code", ')).toBe(true);
+    expect(custom).toContain('"Symbols Nerd Font Mono"');
+    expect(custom.endsWith("monospace")).toBe(true);
+  });
+
+  it("clamps requested font sizes to the supported range", () => {
+    expect(terminalFontSize()).toBe(DEFAULT_TERMINAL_FONT_SIZE);
+    expect(terminalFontSize(Number.NaN)).toBe(DEFAULT_TERMINAL_FONT_SIZE);
+    expect(terminalFontSize(13.4)).toBe(13);
+    expect(terminalFontSize(2)).toBe(6);
+    expect(terminalFontSize(90)).toBe(32);
   });
 });
 
