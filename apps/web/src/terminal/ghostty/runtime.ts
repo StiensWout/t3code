@@ -201,7 +201,11 @@ export class GhosttyRuntime {
       throw new Error("libghostty-vt did not expose its callback table");
     }
     const index = table.length;
-    table.grow(1, trampoline);
+    // grow-then-set instead of grow(1, fn): WebKit stores a grow init value
+    // with broken type information and every later call_indirect through the
+    // entry traps with a signature mismatch. table.set canonicalizes correctly.
+    table.grow(1);
+    table.set(index, trampoline);
     this.writePtyFunctionIndex = index;
   }
 }

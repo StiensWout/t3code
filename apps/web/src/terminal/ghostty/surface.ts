@@ -369,6 +369,7 @@ export class GhosttyTerminalSurface {
     this.resizeObserver = new ResizeObserver(() => this.fit());
     this.installEvents();
     this.watchDevicePixelRatio();
+    document.fonts.addEventListener("loadingdone", this.onFontsLoaded);
     this.resizeObserver.observe(mount);
   }
 
@@ -475,6 +476,10 @@ export class GhosttyTerminalSurface {
       // Metrics fall back to whichever faces are already available.
     }
     if (this.disposed) return;
+    this.applyFontMetrics();
+  }
+
+  private applyFontMetrics(): void {
     this.metrics = measureGhosttyCell(this.context, this.fontSize, this.fontFamily);
     this.core.resize(this.cols, this.rows, this.metrics.width, this.metrics.height);
     // Cached IME textarea coordinates are stale in the new cell geometry.
@@ -485,6 +490,21 @@ export class GhosttyTerminalSurface {
     this.fit();
     this.requestRender();
   }
+
+  private readonly onFontsLoaded = () => {
+    if (this.disposed) return;
+    // A face that finished loading after the initial measurement changes glyph
+    // advances; re-measure and refit so the grid matches what actually renders.
+    const metrics = measureGhosttyCell(this.context, this.fontSize, this.fontFamily);
+    if (
+      metrics.width === this.metrics.width &&
+      metrics.height === this.metrics.height &&
+      metrics.baseline === this.metrics.baseline
+    ) {
+      return;
+    }
+    this.applyFontMetrics();
+  };
 
   fit(): boolean {
     if (this.disposed) return false;
@@ -596,6 +616,7 @@ export class GhosttyTerminalSurface {
     if (this.disposed) return;
     this.disposed = true;
     this.resizeObserver.disconnect();
+    document.fonts.removeEventListener("loadingdone", this.onFontsLoaded);
     this.dprMedia?.removeEventListener("change", this.onDevicePixelRatioChange);
     this.dprMedia = null;
     if (this.selectionScrollTimer !== null) window.clearInterval(this.selectionScrollTimer);

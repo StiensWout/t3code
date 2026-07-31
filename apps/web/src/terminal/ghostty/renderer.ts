@@ -19,12 +19,14 @@ function cssColor(color: GhosttyColor): string {
 }
 
 function sameTextStyle(left: GhosttyCell, right: GhosttyCell): boolean {
+  // Selection deliberately does not participate: it only tints the background
+  // overlay, and splitting a text run at a selection boundary visibly shifts
+  // glyph spacing whenever the face's true advance differs from the cell width.
   return (
     ghosttyColorsEqual(left.foreground, right.foreground) &&
     left.bold === right.bold &&
     left.italic === right.italic &&
-    left.invisible === right.invisible &&
-    left.selected === right.selected
+    left.invisible === right.invisible
   );
 }
 
