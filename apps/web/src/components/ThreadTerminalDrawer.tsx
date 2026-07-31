@@ -388,11 +388,10 @@ export function TerminalViewport({
     let setupCleanups: Array<() => void> = [];
 
     const setup = async (): Promise<(() => void) | null> => {
+      const setupFontFamily = terminalFontFamilyRef.current;
       const terminalOptions: GhosttyTerminalSurfaceOptions = {
         theme: terminalThemeFromApp(mount),
-        ...(terminalFontFamilyRef.current.length > 0
-          ? { font: { family: terminalFontFamilyRef.current } }
-          : {}),
+        ...(setupFontFamily.length > 0 ? { font: { family: setupFontFamily } } : {}),
         onData: (data) => handleData(data),
         onResize: (cols, rows) => void resizeTerminal(cols, rows),
         onSelectionChange: () => handleSelectionChange(),
@@ -410,6 +409,13 @@ export function TerminalViewport({
       terminal.setTheme(terminalThemeFromApp(mount));
       setupTerminal = terminal;
       terminalRef.current = terminal;
+      // Client settings hydrate asynchronously; a font preference that landed
+      // while the surface was loading found terminalRef null, so its setFont
+      // was dropped. Re-apply whatever is current once the terminal exists.
+      if (terminalFontFamilyRef.current !== setupFontFamily) {
+        const family = terminalFontFamilyRef.current.trim();
+        void terminal.setFont(family.length > 0 ? { family } : {});
+      }
       const latestSession = latestSessionRef.current;
       previousSessionRef.current = latestSession;
       if (latestSession.buffer.length > 0) terminal.resetAndWrite(latestSession.buffer);

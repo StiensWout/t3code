@@ -68,17 +68,28 @@ export function applyAppearanceFontVariables(
   }
 }
 
+export type FontCategory = "Sans serif" | "Monospace";
+
 export interface FontOption {
   readonly label: string;
   readonly family: string;
+  readonly category: FontCategory;
+}
+
+function fontCatalog(
+  category: FontCategory,
+  entries: ReadonlyArray<Omit<FontOption, "category">>,
+): readonly FontOption[] {
+  return entries.map((entry) => ({ ...entry, category }));
 }
 
 /**
  * Curated choices for the Appearance dropdowns. The settings UI filters these
  * through `isFontFamilyAvailable`, so platforms only offer faces that will
- * actually render; "Custom" in the UI covers everything else.
+ * actually render; "Custom" in the UI covers everything else. The category
+ * groups mixed dropdowns (composer) into labeled sections.
  */
-export const SANS_FONT_OPTIONS: readonly FontOption[] = [
+export const SANS_FONT_OPTIONS: readonly FontOption[] = fontCatalog("Sans serif", [
   { label: "DM Sans", family: "DM Sans" },
   { label: "Inter", family: "Inter" },
   { label: "SF Pro", family: "SF Pro Text" },
@@ -87,9 +98,9 @@ export const SANS_FONT_OPTIONS: readonly FontOption[] = [
   { label: "Helvetica Neue", family: "Helvetica Neue" },
   { label: "Arial", family: "Arial" },
   { label: "System UI", family: "system-ui" },
-];
+]);
 
-export const MONO_FONT_OPTIONS: readonly FontOption[] = [
+export const MONO_FONT_OPTIONS: readonly FontOption[] = fontCatalog("Monospace", [
   { label: "SF Mono", family: "SF Mono" },
   { label: "JetBrains Mono", family: "JetBrains Mono" },
   { label: "Fira Code", family: "Fira Code" },
@@ -101,7 +112,23 @@ export const MONO_FONT_OPTIONS: readonly FontOption[] = [
   { label: "IBM Plex Mono", family: "IBM Plex Mono" },
   { label: "Ubuntu Mono", family: "Ubuntu Mono" },
   { label: "Courier New", family: "Courier New" },
-];
+]);
+
+/** The options split into their labeled category sections, in catalog order. */
+export function fontOptionCategories(
+  options: readonly FontOption[],
+): ReadonlyArray<readonly [FontCategory, readonly FontOption[]]> {
+  const sections = new Map<FontCategory, FontOption[]>();
+  for (const option of options) {
+    const section = sections.get(option.category);
+    if (section === undefined) {
+      sections.set(option.category, [option]);
+    } else {
+      section.push(option);
+    }
+  }
+  return [...sections.entries()];
+}
 
 const FONT_PROBE_TEXT = "mmmmmmmmMMWli1O0@# fjord";
 let fontProbeContext: CanvasRenderingContext2D | null | undefined;

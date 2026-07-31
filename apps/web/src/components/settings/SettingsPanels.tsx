@@ -105,6 +105,7 @@ import {
   SANS_FONT_OPTIONS,
   appearanceFontStack,
   availableFontOptions,
+  fontOptionCategories,
   type FontOption,
 } from "../../appearanceFonts";
 import {
@@ -114,7 +115,15 @@ import {
   NumberFieldIncrement,
   NumberFieldInput,
 } from "../ui/number-field";
-import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
+import {
+  Select,
+  SelectGroup,
+  SelectGroupLabel,
+  SelectItem,
+  SelectPopup,
+  SelectTrigger,
+  SelectValue,
+} from "../ui/select";
 import { Switch } from "../ui/switch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -1156,6 +1165,7 @@ export function AppearanceSettingsPanel() {
           description="Used in the message composer. Point it at a mono font if you prefer writing prompts in one."
           options={composerOptions}
           defaultOptionLabel="Same as interface font"
+          showDefaultOption={false}
           value={settings.fontFamilyComposer}
           onValueChange={(fontFamilyComposer) => updateSettings({ fontFamilyComposer })}
           preview={
@@ -1251,6 +1261,7 @@ function FontFamilySettingsRow({
   description,
   options,
   defaultOptionLabel = "Default",
+  showDefaultOption = true,
   preview,
   value,
   onValueChange,
@@ -1259,13 +1270,18 @@ function FontFamilySettingsRow({
   description: string;
   options: readonly FontOption[];
   defaultOptionLabel?: string;
+  showDefaultOption?: boolean;
   preview: ReactNode;
   value: string;
   onValueChange: (value: string) => void;
 }) {
   const trimmed = value.trim();
   const matchesOption = options.some((option) => option.family === trimmed);
-  const [customMode, setCustomMode] = useState(trimmed.length > 0 && !matchesOption);
+  const [customMode, setCustomMode] = useState(false);
+  // Derived from the value, not just the picker state: client settings hydrate
+  // after mount, so a persisted custom family must reveal the input on its own.
+  const showCustomInput = customMode || (trimmed.length > 0 && !matchesOption);
+  const categories = fontOptionCategories(options);
   const selected =
     trimmed.length === 0 && !customMode
       ? DEFAULT_FONT_VALUE
@@ -1316,25 +1332,37 @@ function FontFamilySettingsRow({
               </SelectValue>
             </SelectTrigger>
             <SelectPopup align="end" alignItemWithTrigger={false}>
-              <SelectItem hideIndicator value={DEFAULT_FONT_VALUE}>
-                {defaultOptionLabel}
-              </SelectItem>
-              {options.map((option) => (
-                <SelectItem hideIndicator key={option.family} value={option.family}>
-                  <span style={{ fontFamily: option.family }}>{option.label}</span>
+              {showDefaultOption ? (
+                <SelectItem hideIndicator value={DEFAULT_FONT_VALUE}>
+                  {defaultOptionLabel}
                 </SelectItem>
+              ) : null}
+              {categories.map(([category, categoryOptions]) => (
+                <SelectGroup key={category}>
+                  {/* A lone section header is noise; label only mixed lists. */}
+                  {categories.length > 1 ? <SelectGroupLabel>{category}</SelectGroupLabel> : null}
+                  {categoryOptions.map((option) => (
+                    <SelectItem hideIndicator key={option.family} value={option.family}>
+                      <span style={{ fontFamily: option.family }}>{option.label}</span>
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
               ))}
               <SelectItem hideIndicator value={CUSTOM_FONT_VALUE}>
                 Custom…
               </SelectItem>
             </SelectPopup>
           </Select>
-          {customMode ? (
+          {showCustomInput ? (
             <Input
               aria-label={`${title} custom family`}
               autoCapitalize="off"
               autoComplete="off"
-              onChange={(event) => onValueChange(event.currentTarget.value)}
+              onChange={(event) => {
+                // Latch custom mode so clearing the text keeps the field open.
+                setCustomMode(true);
+                onValueChange(event.currentTarget.value);
+              }}
               placeholder="Font family name"
               spellCheck={false}
               value={value}
