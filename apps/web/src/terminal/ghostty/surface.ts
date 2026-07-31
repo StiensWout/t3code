@@ -348,6 +348,7 @@ export class GhosttyTerminalSurface {
   private scrollbarPointerOffset = 0;
   private disposed = false;
   private resizeNotifyTimer: number | null = null;
+  private originY = CONTENT_PADDING;
   private selectionEnd: { x: number; y: number } | null = null;
   private selectionAnchorScreen: { x: number; y: number } | null = null;
   private selectionEndScreen: { x: number; y: number } | null = null;
@@ -573,6 +574,15 @@ export class GhosttyTerminalSurface {
       shouldRender = true;
     }
     const grid = terminalGridSize(width, height, this.metrics, CONTENT_PADDING);
+    // The origin only moves together with a forced full repaint: partial
+    // dirty-row redraws must never composite rows at a shifted origin over
+    // rows painted at the previous one.
+    const originY = terminalContentOriginY(height, CONTENT_PADDING, grid.rows, this.metrics.height);
+    if (originY !== this.originY) {
+      this.originY = originY;
+      this.forceFullRender = true;
+      shouldRender = true;
+    }
     // onResize is the only PTY resize channel, so the first successful fit must
     // notify even when the measured grid equals the 1x1 construction sentinel.
     if (grid.cols !== this.cols || grid.rows !== this.rows || !this.resizeNotified) {
@@ -637,7 +647,7 @@ export class GhosttyTerminalSurface {
     const bounds = this.canvas.getBoundingClientRect();
     return {
       right: bounds.left + CONTENT_PADDING + (viewportEnd.x + 1) * this.metrics.width,
-      bottom: bounds.top + this.contentOriginY() + (viewportEnd.y + 1) * this.metrics.height,
+      bottom: bounds.top + this.originY + (viewportEnd.y + 1) * this.metrics.height,
     };
   }
 
@@ -1245,7 +1255,7 @@ export class GhosttyTerminalSurface {
       fontSize: this.fontSize,
       fontFamily: this.fontFamily,
       padding: CONTENT_PADDING,
-      originY: this.contentOriginY(),
+      originY: this.originY,
       forceFull: this.forceFullRender,
       cursorOn: this.cursorOn,
       previousCursorY: this.renderedCursorY,
@@ -1279,15 +1289,6 @@ export class GhosttyTerminalSurface {
     }, 500);
   }
 
-  private contentOriginY(): number {
-    return terminalContentOriginY(
-      this.mount.clientHeight,
-      CONTENT_PADDING,
-      this.rows,
-      this.metrics.height,
-    );
-  }
-
   private positionInput(): void {
     const snapshot = this.snapshot;
     if (!snapshot || !snapshot.cursorVisible || snapshot.cursorX < 0 || snapshot.cursorY < 0) {
@@ -1296,7 +1297,7 @@ export class GhosttyTerminalSurface {
     // The IME candidate window anchors to the textarea, so it must follow the
     // terminal cursor for composition to appear where the user is typing.
     const left = CONTENT_PADDING + snapshot.cursorX * this.metrics.width;
-    const top = this.contentOriginY() + snapshot.cursorY * this.metrics.height;
+    const top = this.originY + snapshot.cursorY * this.metrics.height;
     if (left === this.inputLeft && top === this.inputTop) return;
     this.inputLeft = left;
     this.inputTop = top;
@@ -1319,7 +1320,7 @@ export class GhosttyTerminalSurface {
         0,
         Math.min(
           this.rows - 1,
-          Math.floor((clientY - bounds.top - this.contentOriginY()) / this.metrics.height),
+          Math.floor((clientY - bounds.top - this.originY) / this.metrics.height),
         ),
       ),
     };
@@ -1355,11 +1356,8 @@ export class GhosttyTerminalSurface {
       cellHeight: this.metrics.height,
       paddingLeft: CONTENT_PADDING,
       paddingRight: CONTENT_PADDING,
-      paddingTop: this.contentOriginY(),
-      paddingBottom: Math.max(
-        0,
-        bounds.height - this.contentOriginY() - this.rows * this.metrics.height,
-      ),
+      paddingTop: this.originY,
+      paddingBottom: Math.max(0, bounds.height - this.originY - this.rows * this.metrics.height),
       anyButtonPressed: event.buttons !== 0,
     });
     if (data.length > 0) this.options.onData(data);
