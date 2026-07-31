@@ -160,32 +160,10 @@ function terminalThemeFromApp(mountElement?: HTMLElement | null): GhosttyTheme {
       isDark ? { r: 237, g: 241, b: 247 } : { r: 28, g: 33, b: 41 },
     ),
     cursor: isDark ? { r: 180, g: 203, b: 255 } : { r: 38, g: 56, b: 78 },
+    // Matches the xterm selection overlays this renderer replaced; the text
+    // color underneath is left unchanged for contrast in both themes.
+    selectionBackground: isDark ? "rgba(180, 203, 255, 0.25)" : "rgba(37, 63, 99, 0.2)",
   };
-}
-
-function getTerminalSelectionRect(mountElement: HTMLElement): DOMRect | null {
-  const selection = window.getSelection();
-  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
-    return null;
-  }
-
-  const range = selection.getRangeAt(0);
-  const commonAncestor = range.commonAncestorContainer;
-  const selectionRoot =
-    commonAncestor instanceof Element ? commonAncestor : commonAncestor.parentElement;
-  if (!(selectionRoot instanceof Element) || !mountElement.contains(selectionRoot)) {
-    return null;
-  }
-
-  const rects = Array.from(range.getClientRects()).filter(
-    (rect) => rect.width > 0 || rect.height > 0,
-  );
-  if (rects.length > 0) {
-    return rects[rects.length - 1] ?? null;
-  }
-
-  const boundingRect = range.getBoundingClientRect();
-  return boundingRect.width > 0 || boundingRect.height > 0 ? boundingRect : null;
 }
 
 export function resolveTerminalSelectionActionPosition(options: {
@@ -414,14 +392,19 @@ export function TerminalViewport({
         terminal.dispose();
         return null;
       }
+      // The theme observer is not installed yet, so re-read the theme in case
+      // the app toggled light/dark while the WASM surface was loading.
+      terminal.setTheme(terminalThemeFromApp(mount));
       setupTerminal = terminal;
       terminalRef.current = terminal;
       const latestSession = latestSessionRef.current;
       previousSessionRef.current = latestSession;
       if (latestSession.buffer.length > 0) terminal.resetAndWrite(latestSession.buffer);
       if (latestSession.error !== null) writeSystemMessage(terminal, latestSession.error);
-      // Attaching to a session that already finished must still run exit handling
+      // Attaching to a session that already exited must still run exit handling
       // once, so mount synchronization starts from the empty "closed" state.
+      // (A session that is "closed" at mount is indistinguishable from one that
+      // never started, so only "exited" triggers the message — as with xterm.)
       synchronizedStatusRef.current = "closed";
       synchronizeTerminalStatus(terminal, latestSession.status);
       if (autoFocus) window.requestAnimationFrame(() => terminal.focus());
@@ -453,13 +436,9 @@ export function TerminalViewport({
         }
         const { lineStart, lineEnd } = terminalSelectionLineRange(selectionPosition);
         const bounds = mountElement.getBoundingClientRect();
-        const selectionRect = getTerminalSelectionRect(mountElement);
         const position = resolveTerminalSelectionActionPosition({
           bounds,
-          selectionRect:
-            selectionRect === null
-              ? null
-              : { right: selectionRect.right, bottom: selectionRect.bottom },
+          selectionRect: activeTerminal.getSelectionEndClientRect(),
           pointer: selectionPointerRef.current,
         });
         return {
@@ -701,7 +680,6 @@ export function TerminalViewport({
         if (wasAtBottom) {
           activeTerminal.scrollToBottom();
         }
-        void resizeTerminal(activeTerminal.cols, activeTerminal.rows);
       }, 30);
       setupCleanups.push(() => window.clearTimeout(fitTimer));
 
@@ -730,8 +708,9 @@ export function TerminalViewport({
         setupTerminal?.dispose();
         setupTerminal = null;
         if (cancelled) return;
-        mount.textContent =
+        const message =
           error instanceof Error ? error.message : "Unable to initialize libghostty-vt";
+        mount.textContent = `${message} — close and reopen the terminal to retry.`;
       });
 
     return () => {
@@ -799,12 +778,13 @@ export function TerminalViewport({
     const terminal = terminalRef.current;
     if (!terminal) return;
     const wasAtBottom = terminal.isAtBottom();
+    // The surface reports grid changes through onResize, which is the single
+    // channel for PTY resize RPCs; fitting here only refreshes the layout.
     const frame = window.requestAnimationFrame(() => {
       terminal.fit();
       if (wasAtBottom) {
         terminal.scrollToBottom();
       }
-      void resizeTerminal(terminal.cols, terminal.rows);
     });
     return () => {
       window.cancelAnimationFrame(frame);
