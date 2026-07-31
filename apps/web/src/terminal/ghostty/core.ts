@@ -89,6 +89,8 @@ export interface GhosttyRow {
   readonly cells: readonly GhosttyCell[];
   readonly text: string;
   readonly isWrapContinuation: boolean;
+  /** Whether this row soft-wraps onto the next row. */
+  readonly wrapsToNext: boolean;
 }
 
 export interface GhosttySnapshot {
@@ -692,6 +694,7 @@ export class GhosttyTerminalCore {
         cells: Array.from({ length: cols }, () => this.emptyCell(foreground, background)),
         text: "",
         isWrapContinuation: false,
+        wrapsToNext: false,
       }));
     }
 
@@ -877,6 +880,12 @@ export class GhosttyTerminalCore {
       this.runtime.call("ghostty_row_get", rawRow, 2, this.scratch + 8),
     );
     const isWrapContinuation = this.runtime.bytes(this.scratch + 8, 1)[0] !== 0;
+    this.runtime.bytes(this.scratch + 8, 1)[0] = 0;
+    this.assertSuccess(
+      "ghostty_row_get(wrap)",
+      this.runtime.call("ghostty_row_get", rawRow, 1, this.scratch + 8),
+    );
+    const wrapsToNext = this.runtime.bytes(this.scratch + 8, 1)[0] !== 0;
 
     this.assertSuccess(
       "ghostty_render_state_row_get(cells)",
@@ -974,6 +983,7 @@ export class GhosttyTerminalCore {
         .join("")
         .trimEnd(),
       isWrapContinuation,
+      wrapsToNext,
     };
   }
 

@@ -100,7 +100,7 @@ describe("renderGhosttySnapshot", () => {
       cursorBlinking: false,
       cursorStyle: 1,
       dirtyRows: new Set([0]),
-      rowData: [{ cells, text: "abx", isWrapContinuation: false }],
+      rowData: [{ cells, text: "abx", isWrapContinuation: false, wrapsToNext: false }],
     };
 
     renderGhosttySnapshot({
@@ -154,6 +154,7 @@ describe("renderGhosttySnapshot", () => {
         cells: [cell("")],
         text: "",
         isWrapContinuation: false,
+        wrapsToNext: false,
       })),
     };
 

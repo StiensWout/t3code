@@ -104,17 +104,14 @@ export function terminalLinkAtPosition(
   if (!segment || !row) return null;
   const lastSegment = wrappedLine.segments.at(-1);
   const lastRow = lastSegment ? rows[lastSegment.bufferLineNumber - 1] : undefined;
-  const mayContinueBelowViewport =
-    lastSegment !== undefined &&
-    lastSegment.bufferLineNumber === rows.length &&
-    lastRow !== undefined &&
-    terminalRowText(lastRow, true).length === lastRow.cells.length;
+  // Ghostty's soft-wrap flag is authoritative: when the last collected row
+  // still wraps onward, its continuation is outside the viewport.
+  const continuesBelowViewport = lastRow !== undefined && lastRow.wrapsToNext;
   const offset = segment.startIndex + terminalColumnOffset(row, column);
   for (const match of extractTerminalLinks(wrappedLine.text)) {
     if (offset >= match.start && offset < match.end) {
-      // A match running to the end of a full bottom row may wrap on below the
-      // viewport; a truncated tail must not activate as a complete link.
-      if (match.end === wrappedLine.text.length && mayContinueBelowViewport) return null;
+      // A truncated tail must not activate as a complete link.
+      if (match.end === wrappedLine.text.length && continuesBelowViewport) return null;
       return match.text;
     }
   }
@@ -313,6 +310,7 @@ export class GhosttyTerminalSurface {
   private canvasConfigured = false;
   private theme: GhosttyTheme;
   private readonly suppressedKeyCodes = new Set<string>();
+  private pasteShortcutToken = 0;
   private wheelRemainder = 0;
   private dprMedia: MediaQueryList | null = null;
   private inputLeft = -1;
@@ -586,19 +584,20 @@ export class GhosttyTerminalSurface {
       this.suppressedKeyCodes.add(event.code);
       const clipboard = navigator.clipboard;
       if (typeof clipboard?.readText === "function") {
-        // Reading the clipboard directly makes the shortcut deterministic:
-        // Ctrl+Shift+V's default action does not fire a paste event in every
-        // browser. Browsers without the API keep the native paste-event path.
-        event.preventDefault();
-        event.stopPropagation();
+        // Race the async clipboard read against the browser's own paste event:
+        // the native event (dispatched synchronously with the default action)
+        // always claims the token first when it fires, and the read covers
+        // browsers whose paste shortcut produces no paste event. Not preventing
+        // the default keeps the native path alive when the read is denied.
+        const token = ++this.pasteShortcutToken;
         void clipboard.readText().then(
           (text) => {
-            if (!this.disposed && text.length > 0) {
-              this.options.onData(this.core.encodePaste(text));
-            }
+            if (this.disposed || this.pasteShortcutToken !== token) return;
+            this.pasteShortcutToken += 1;
+            if (text.length > 0) this.options.onData(this.core.encodePaste(text));
           },
           () => {
-            // Clipboard permission was denied; there is nothing to paste.
+            // Clipboard read denied; the native paste event remains the path.
           },
         );
       }
@@ -662,6 +661,8 @@ export class GhosttyTerminalSurface {
   }
 
   private readonly onPaste = (event: ClipboardEvent) => {
+    // The native paste won the race; a pending clipboard read must not double.
+    this.pasteShortcutToken += 1;
     const data = event.clipboardData?.getData("text/plain") ?? "";
     if (data.length === 0) return;
     event.preventDefault();

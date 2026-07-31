@@ -63,6 +63,7 @@ describe("terminalLinkAtColumn", () => {
         .join("")
         .trimEnd(),
       isWrapContinuation: false,
+      wrapsToNext: false,
     };
 
     expect(terminalLinkAtColumn(row, 2)).toBe("https://t3.codes");
@@ -71,10 +72,11 @@ describe("terminalLinkAtColumn", () => {
   });
 
   it("uses shared path matching and reconstructs soft-wrapped links", () => {
-    const row = (text: string, isWrapContinuation: boolean): GhosttyRow => ({
+    const row = (text: string, isWrapContinuation: boolean, wrapsToNext = false): GhosttyRow => ({
       cells: Array.from(text.padEnd(16), (character) => cell(character)),
       text: text.trimEnd(),
       isWrapContinuation,
+      wrapsToNext,
     });
     const rows = [
       row("https://example.", false),
@@ -90,20 +92,46 @@ describe("terminalLinkAtColumn", () => {
   });
 
   it("refuses links truncated at the viewport edges instead of mis-resolving", () => {
-    const row = (text: string, isWrapContinuation: boolean): GhosttyRow => ({
+    const row = (text: string, isWrapContinuation: boolean, wrapsToNext = false): GhosttyRow => ({
       cells: Array.from(text.padEnd(16), (character) => cell(character)),
       text: text.trimEnd(),
       isWrapContinuation,
+      wrapsToNext,
     });
     // The head of the wrapped line scrolled above the viewport.
     const headCut = [row("ple.com/missing", true), row("head", true)];
     expect(terminalLinkAtPosition(headCut, 0, 4)).toBeNull();
-    // A full-width bottom row may wrap on below the viewport.
-    const tailCut = [row("https://t3.codes", false)];
+    // The bottom row soft-wraps on below the viewport.
+    const tailCut = [row("https://t3.codes", false, true)];
     expect(terminalLinkAtPosition(tailCut, 0, 8)).toBeNull();
     // A partial bottom row is provably complete and still resolves.
     const complete = [row("https://t3.codes", false), row("", false)];
     expect(terminalLinkAtPosition(complete, 0, 8)).toBe("https://t3.codes");
+    // A wide grapheme earlier in the row must not break truncation detection:
+    // the soft-wrap flag decides, not string-length-versus-cell-count.
+    const wideFull: GhosttyRow = {
+      cells: [
+        { ...cell("🙂"), wide: 1 },
+        { ...cell(""), wide: 2 },
+        ...Array.from("https://t3.code", (character) => cell(character)),
+      ],
+      text: "🙂 https://t3.code",
+      isWrapContinuation: false,
+      wrapsToNext: true,
+    };
+    expect(terminalLinkAtPosition([wideFull], 0, 8)).toBeNull();
+    // Unwritten trailing cells prove the bottom row is complete.
+    const unwrittenTail: GhosttyRow = {
+      cells: [
+        ...Array.from("https://t3.codes", (character) => cell(character)),
+        cell(""),
+        cell(""),
+      ],
+      text: "https://t3.codes",
+      isWrapContinuation: false,
+      wrapsToNext: false,
+    };
+    expect(terminalLinkAtPosition([unwrittenTail], 0, 8)).toBe("https://t3.codes");
   });
 });
 
