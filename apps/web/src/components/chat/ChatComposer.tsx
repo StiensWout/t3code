@@ -2433,15 +2433,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     text: string,
     options?: { ensureLeadingBoundary?: boolean },
   ): boolean => {
-    if (
-      text.length === 0 ||
-      isConnecting ||
-      isComposerApprovalState ||
-      pendingUserInputs.length > 0 ||
-      projectSelectionRequired
-    ) {
+    if (text.length === 0 || isConnecting || isComposerApprovalState || projectSelectionRequired) {
       return false;
     }
+    // Pending user-input prompts remain editable: applyPromptReplacement
+    // routes this text into the active custom answer instead of the thread draft.
     const prompt = promptRef.current;
     const needsLeadingSpace =
       (options?.ensureLeadingBoundary ?? false) && prompt.length > 0 && !/\s$/.test(prompt);
@@ -2645,7 +2641,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       composerReviewComments,
       isConnecting,
       isComposerApprovalState,
-      pendingUserInputs.length,
       projectSelectionRequired,
       applyPromptReplacement,
       isComposerModelPickerOpen,
