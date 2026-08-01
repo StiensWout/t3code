@@ -232,6 +232,15 @@ describe("terminal font resolution", () => {
     expect(custom.endsWith("monospace")).toBe(true);
   });
 
+  it("quotes families the canvas font shorthand would otherwise reject", () => {
+    expect(terminalFontFamily("3270 Nerd Font").startsWith('"3270 Nerd Font", ')).toBe(true);
+    expect(terminalFontFamily("M+ 1m").startsWith('"M+ 1m", ')).toBe(true);
+    expect(terminalFontFamily("Cascadia Code, Menlo").startsWith('"Cascadia Code", Menlo, ')).toBe(
+      true,
+    );
+    expect(terminalFontFamily(" , ")).toBe(DEFAULT_TERMINAL_FONT_FAMILY);
+  });
+
   it("clamps requested font sizes to the supported range", () => {
     expect(terminalFontSize()).toBe(DEFAULT_TERMINAL_FONT_SIZE);
     expect(terminalFontSize(Number.NaN)).toBe(DEFAULT_TERMINAL_FONT_SIZE);

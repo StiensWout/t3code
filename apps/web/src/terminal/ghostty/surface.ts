@@ -59,9 +59,25 @@ function ensureTerminalSymbolsFont(): Promise<void> {
   return symbolsFontLoad;
 }
 
+function quoteTerminalFontFamilies(list: string): string {
+  return list
+    .split(",")
+    .map((name) => {
+      const bare = name.trim();
+      if (bare.length === 0) return "";
+      if (/^(['"]).*\1$/.test(bare)) return bare;
+      if (/^[a-zA-Z][a-zA-Z0-9-]*$/.test(bare)) return bare;
+      return `"${bare.replaceAll('"', "")}"`;
+    })
+    .filter((name) => name.length > 0)
+    .join(", ");
+}
+
 export function terminalFontFamily(family?: string): string {
-  const custom = family?.trim();
-  if (!custom) return DEFAULT_TERMINAL_FONT_FAMILY;
+  // Quote non-ident names ("3270 Nerd Font", "M+ 1m"): an unquoted one makes
+  // the whole canvas font string invalid and the assignment silently no-ops.
+  const custom = family === undefined ? "" : quoteTerminalFontFamilies(family);
+  if (custom.length === 0) return DEFAULT_TERMINAL_FONT_FAMILY;
   // A custom face keeps the glyph fallbacks so prompt symbols stay covered.
   return `${custom}, ${TERMINAL_GLYPH_FALLBACKS}`;
 }

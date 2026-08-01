@@ -1433,6 +1433,7 @@ function FontFamilySettingsRow({
               onKeyDown={(event) => {
                 if (event.key === "Enter") flushDraft();
               }}
+              maxLength={200}
               placeholder="Font family name"
               spellCheck={false}
               value={customDraft}

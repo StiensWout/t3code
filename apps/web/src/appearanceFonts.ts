@@ -90,7 +90,9 @@ function fontCatalog(
  * groups mixed dropdowns (composer) into labeled sections.
  */
 export const SANS_FONT_OPTIONS: readonly FontOption[] = fontCatalog("Sans serif", [
-  { label: "DM Sans", family: "DM Sans" },
+  // The bundled webfont registers as "DM Sans Variable", not "DM Sans"; the
+  // option must reference the registered name to resolve on every machine.
+  { label: "DM Sans", family: "DM Sans Variable" },
   { label: "Inter", family: "Inter" },
   { label: "SF Pro", family: "SF Pro Text" },
   { label: "Segoe UI", family: "Segoe UI" },
@@ -166,7 +168,7 @@ export function isFontFamilyAvailable(family: string): boolean {
 }
 
 /** Webfonts the app bundles; offered even before document.fonts has loaded them. */
-const BUNDLED_FAMILIES = new Set(["DM Sans", "JetBrains Mono"]);
+const BUNDLED_FAMILIES = new Set(["DM Sans Variable", "JetBrains Mono"]);
 
 export function availableFontOptions(options: readonly FontOption[]): readonly FontOption[] {
   return options.filter(
