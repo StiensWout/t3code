@@ -52,9 +52,9 @@ export interface AppearanceFontPreferences {
  * Alongside each family we set a `font-size-adjust` value: typefaces differ in
  * x-height at the same pixel size (DM Sans 0.51 vs JetBrains Mono 0.55), so a
  * chosen font otherwise reads noticeably larger or smaller than the default.
- * The adjust is the *default stack's* own ratio measured at runtime, which
- * keeps the platform default rendering byte-identical (the ratio matches the
- * face already in use) while scaling any chosen font to match it.
+ * The value is measured at runtime against the default stack and capped by
+ * `clampSizeAdjust`; an unset preference removes it entirely, so the platform
+ * default always renders exactly as it did before.
  */
 export function applyAppearanceFontVariables(
   root: HTMLElement,
