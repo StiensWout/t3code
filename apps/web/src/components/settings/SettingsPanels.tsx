@@ -1380,8 +1380,10 @@ function FontFamilySettingsRow({
   // after mount, so a persisted custom family must reveal the input on its own.
   const showCustomInput = customMode || (trimmed.length > 0 && !matchesOption);
   const draftTrimmed = customDraft.trim();
-  // Flag an unknown name only once typing pauses, not on every keystroke.
-  const draftPending = draftSettled && showCustomInput && draftTrimmed !== trimmed;
+  // Flag an unknown name only once typing pauses, and never for an empty
+  // field - that is the starting state, not a rejected entry.
+  const draftPending =
+    draftSettled && showCustomInput && draftTrimmed.length > 0 && draftTrimmed !== trimmed;
   const categories = fontOptionCategories(options);
   const selected =
     trimmed.length === 0 && !customMode
@@ -1483,6 +1485,14 @@ function FontFamilySettingsRow({
                   return;
                 }
                 if (next === CUSTOM_FONT_VALUE) {
+                  // Start from an empty field rather than the outgoing family;
+                  // the applied font holds until a valid name is entered.
+                  if (commitTimerRef.current !== null) {
+                    window.clearTimeout(commitTimerRef.current);
+                    commitTimerRef.current = null;
+                  }
+                  setCustomDraft("");
+                  setDraftSettled(true);
                   setCustomMode(true);
                   return;
                 }
