@@ -48,24 +48,93 @@ export interface AppearanceFontPreferences {
 /**
  * Apply the preferences to the root element. Unset preferences remove the
  * override so the stylesheet defaults (and theme changes) stay in charge.
+ *
+ * Alongside each family we set a `font-size-adjust` value: typefaces differ in
+ * x-height at the same pixel size (DM Sans 0.51 vs JetBrains Mono 0.55), so a
+ * chosen font otherwise reads noticeably larger or smaller than the default.
+ * The adjust is the *default stack's* own ratio measured at runtime, which
+ * keeps the platform default rendering byte-identical (the ratio matches the
+ * face already in use) while scaling any chosen font to match it.
  */
 export function applyAppearanceFontVariables(
   root: HTMLElement,
   preferences: AppearanceFontPreferences,
 ): void {
-  const assignments: ReadonlyArray<readonly [string, string | null, string]> = [
-    ["--font-sans", cssFontFamilies(preferences.sans), DEFAULT_SANS_FONT_STACK],
-    ["--font-mono", cssFontFamilies(preferences.code), DEFAULT_CODE_FONT_STACK],
+  const assignments: ReadonlyArray<
+    readonly [family: string, adjust: string, custom: string, defaultStack: string]
+  > = [
+    ["--font-sans", "--font-sans-adjust", preferences.sans, DEFAULT_SANS_FONT_STACK],
+    ["--font-mono", "--font-mono-adjust", preferences.code, DEFAULT_CODE_FONT_STACK],
     // The composer falls back to whatever the sans preference resolves to.
-    ["--font-composer", cssFontFamilies(preferences.composer), "var(--font-sans)"],
+    ["--font-composer", "--font-composer-adjust", preferences.composer, "var(--font-sans)"],
   ];
-  for (const [variable, families, defaultStack] of assignments) {
+  for (const [variable, adjustVariable, custom, defaultStack] of assignments) {
+    const families = cssFontFamilies(custom);
     if (families === null) {
       root.style.removeProperty(variable);
-    } else {
-      root.style.setProperty(variable, `${families}, ${defaultStack}`);
+      root.style.removeProperty(adjustVariable);
+      continue;
     }
+    root.style.setProperty(variable, `${families}, ${defaultStack}`);
+    // Normalize against the stock stack: the composer's nominal default is the
+    // sans variable, but that may itself be overridden (and already adjusted).
+    const reference = defaultStack === "var(--font-sans)" ? DEFAULT_SANS_FONT_STACK : defaultStack;
+    const ratio = fontXHeightRatio(reference);
+    root.style.setProperty(adjustVariable, ratio === null ? "none" : String(ratio));
   }
+}
+
+const X_HEIGHT_PROBE_SIZE = 100;
+const xHeightCache = new Map<string, number | null>();
+let fontLoadInvalidationHooked = false;
+
+/**
+ * Measurements taken before the bundled webfonts finish loading describe the
+ * fallback face, not the real default (DM Sans 0.51 vs a generic 0.55), so
+ * drop the cache whenever a face finishes loading and let callers re-measure.
+ */
+function hookFontLoadInvalidation(): void {
+  if (fontLoadInvalidationHooked) return;
+  if (typeof document === "undefined" || document.fonts === undefined) return;
+  fontLoadInvalidationHooked = true;
+  document.fonts.addEventListener("loadingdone", () => {
+    xHeightCache.clear();
+  });
+}
+
+/**
+ * The x-height of a font list as a fraction of its em size, or null when it
+ * cannot be measured (no canvas, or a font that reports no glyph bounds).
+ */
+export function fontXHeightRatio(fontList: string): number | null {
+  const families = cssFontFamilies(fontList);
+  if (families === null) return null;
+  hookFontLoadInvalidation();
+  const cached = xHeightCache.get(families);
+  if (cached !== undefined) return cached;
+  try {
+    if (fontProbeContext === undefined) {
+      fontProbeContext = document.createElement("canvas").getContext("2d");
+    }
+    if (fontProbeContext === null) return null;
+    fontProbeContext.font = `${X_HEIGHT_PROBE_SIZE}px ${families}`;
+    const ascent = fontProbeContext.measureText("x").actualBoundingBoxAscent;
+    const ratio =
+      Number.isFinite(ascent) && ascent > 0
+        ? Math.round((ascent / X_HEIGHT_PROBE_SIZE) * 1000) / 1000
+        : null;
+    xHeightCache.set(families, ratio);
+    return ratio;
+  } catch {
+    return null;
+  }
+}
+
+/** Re-run `handler` whenever a font finishes loading and metrics may change. */
+export function subscribeToFontLoads(handler: () => void): () => void {
+  if (typeof document === "undefined" || document.fonts === undefined) return () => {};
+  document.fonts.addEventListener("loadingdone", handler);
+  return () => document.fonts.removeEventListener("loadingdone", handler);
 }
 
 export type FontCategory = "Sans serif" | "Monospace";

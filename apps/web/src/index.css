@@ -963,8 +963,11 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 
 body {
   /* Reference the theme token (not a literal stack) so the Settings ->
-     Appearance runtime override of --font-sans reaches all interface text. */
+     Appearance runtime override of --font-sans reaches all interface text.
+     The adjust normalizes a chosen font's x-height to the default stack's, so
+     switching family does not also change apparent text size. */
   font-family: var(--font-sans);
+  font-size-adjust: var(--font-sans-adjust, none);
   margin: 0;
   padding: 0;
 }
@@ -1016,6 +1019,7 @@ body {
 pre,
 code {
   font-family: var(--font-mono);
+  font-size-adjust: var(--font-mono-adjust, none);
 }
 
 /* @pierre/diffs surfaces (diffs, file previews, annotatable code, search
@@ -1064,6 +1068,7 @@ code {
    the editor and its placeholder inherit together. */
 .composer-editor-surface {
   font-family: var(--font-composer, var(--font-sans));
+  font-size-adjust: var(--font-composer-adjust, var(--font-sans-adjust, none));
 }
 
 .t3-ghostty-canvas {

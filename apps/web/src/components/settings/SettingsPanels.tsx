@@ -2,6 +2,7 @@ import {
   ArchiveIcon,
   ArchiveX,
   InfoIcon,
+  ListIcon,
   LoaderIcon,
   PlusIcon,
   RefreshCwIcon,
@@ -106,7 +107,9 @@ import {
   appearanceFontStack,
   availableFontOptions,
   fontOptionCategories,
+  fontXHeightRatio,
   isFontFamilyAvailable,
+  subscribeToFontLoads,
   type FontOption,
 } from "../../appearanceFonts";
 import {
@@ -1004,6 +1007,18 @@ export function AppearanceSettingsPanel() {
       : sansStack;
   const codeStack = appearanceFontStack(settings.fontFamilyCode, DEFAULT_CODE_FONT_STACK);
   const terminalStack = appearanceFontStack(settings.fontFamilyTerminal, DEFAULT_CODE_FONT_STACK);
+  // Referenced so the memoized adjusts re-resolve after webfonts load.
+  const fontMetricsEpoch = useFontMetricsEpoch();
+  const sansAdjust = useMemo(
+    () => sizeAdjustFor(DEFAULT_SANS_FONT_STACK),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- epoch is the invalidation signal
+    [fontMetricsEpoch],
+  );
+  const codeAdjust = useMemo(
+    () => sizeAdjustFor(DEFAULT_CODE_FONT_STACK),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- epoch is the invalidation signal
+    [fontMetricsEpoch],
+  );
   const environmentStageLabel = useEnvironmentStageLabel();
   const showEnvironmentIdentification =
     resolveEnvironmentIdentificationPillLabel(environmentStageLabel) !== null;
@@ -1171,7 +1186,7 @@ export function AppearanceSettingsPanel() {
           value={settings.fontFamilySans}
           onValueChange={(fontFamilySans) => updateSettings({ fontFamilySans })}
           preview={
-            <FontPreviewCard stack={sansStack}>
+            <FontPreviewCard stack={sansStack} adjust={sansAdjust}>
               <p className="text-sm text-foreground">
                 The quick brown fox jumps over the lazy dog.
               </p>
@@ -1188,7 +1203,7 @@ export function AppearanceSettingsPanel() {
           value={settings.fontFamilyComposer}
           onValueChange={(fontFamilyComposer) => updateSettings({ fontFamilyComposer })}
           preview={
-            <FontPreviewCard stack={composerStack}>
+            <FontPreviewCard stack={composerStack} adjust={sansAdjust}>
               <div className="rounded-lg border border-border bg-background px-3 py-2">
                 <p className="text-sm text-foreground">
                   Fix the flaky test in surface.test.ts and explain the race.
@@ -1207,7 +1222,7 @@ export function AppearanceSettingsPanel() {
           value={settings.fontFamilyCode}
           onValueChange={(fontFamilyCode) => updateSettings({ fontFamilyCode })}
           preview={
-            <FontPreviewCard stack={codeStack}>
+            <FontPreviewCard stack={codeStack} adjust={codeAdjust}>
               <pre
                 className="overflow-x-auto text-xs leading-relaxed"
                 style={{ fontFamily: "inherit" }}
@@ -1240,7 +1255,7 @@ export function AppearanceSettingsPanel() {
           value={settings.fontFamilyTerminal}
           onValueChange={(fontFamilyTerminal) => updateSettings({ fontFamilyTerminal })}
           preview={
-            <FontPreviewCard stack={terminalStack}>
+            <FontPreviewCard stack={terminalStack} adjust={codeAdjust}>
               <pre className="text-xs leading-relaxed" style={{ fontFamily: "inherit" }}>
                 <code style={{ fontFamily: "inherit" }}>
                   <span className="text-muted-foreground">$</span>{" "}
@@ -1263,12 +1278,44 @@ export function AppearanceSettingsPanel() {
 const CUSTOM_FONT_VALUE = "__custom__";
 const DEFAULT_FONT_VALUE = "__default__";
 
-function FontPreviewCard({ children, stack }: { children: ReactNode; stack: string }) {
+/**
+ * Every font renders at the default stack's x-height, so switching family in a
+ * preview (or scanning the dropdown) shows the typeface changing without the
+ * apparent text size jumping with it. Mirrors the runtime `font-size-adjust`.
+ */
+function sizeAdjustFor(defaultStack: string): string {
+  const ratio = fontXHeightRatio(defaultStack);
+  return ratio === null ? "none" : String(ratio);
+}
+
+function optionSizeAdjust(): string {
+  return sizeAdjustFor(DEFAULT_SANS_FONT_STACK);
+}
+
+/**
+ * Re-render once webfonts load: metrics measured before then describe the
+ * fallback face, so the adjust values would be stale.
+ */
+function useFontMetricsEpoch(): number {
+  const [epoch, setEpoch] = useState(0);
+  useEffect(() => subscribeToFontLoads(() => setEpoch((value) => value + 1)), []);
+  return epoch;
+}
+
+function FontPreviewCard({
+  children,
+  stack,
+  adjust,
+}: {
+  children: ReactNode;
+  stack: string;
+  adjust: string;
+}) {
   return (
     <div
       aria-hidden
       className="mb-2 space-y-1 rounded-lg bg-muted/60 px-3 py-2.5"
-      style={{ fontFamily: stack }}
+      style={{ fontFamily: stack, fontSizeAdjust: adjust }}
     >
       {children}
     </div>
@@ -1358,87 +1405,130 @@ function FontFamilySettingsRow({
         ) : null
       }
       control={
-        <div className="flex w-full flex-col items-stretch gap-2 sm:w-56">
-          <Select
-            value={selected}
-            onValueChange={(next) => {
-              if (typeof next !== "string") return;
-              if (next === DEFAULT_FONT_VALUE) {
-                setCustomMode(false);
-                onValueChange("");
-                return;
-              }
-              if (next === CUSTOM_FONT_VALUE) {
-                setCustomMode(true);
-                return;
-              }
-              setCustomMode(false);
-              onValueChange(next);
-            }}
-          >
-            <SelectTrigger className="w-full" aria-label={`${title} family`}>
-              <SelectValue>
-                {selected === DEFAULT_FONT_VALUE
-                  ? "Default"
-                  : selected === CUSTOM_FONT_VALUE
-                    ? "Custom"
-                    : (options.find((option) => option.family === selected)?.label ?? selected)}
-              </SelectValue>
-            </SelectTrigger>
-            <SelectPopup align="end" alignItemWithTrigger={false}>
-              <SelectItem hideIndicator value={DEFAULT_FONT_VALUE}>
-                Default
-              </SelectItem>
-              {categories.map(([category, categoryOptions]) => (
-                <SelectGroup key={category}>
-                  {/* A lone section header is noise; label only mixed lists. */}
-                  {categories.length > 1 ? (
-                    <SelectGroupLabel className="px-2 py-1.5 font-semibold text-muted-foreground text-xs">
-                      {category}
-                    </SelectGroupLabel>
-                  ) : null}
-                  {categoryOptions.map((option) => (
-                    <SelectItem hideIndicator key={option.family} value={option.family}>
-                      <span style={{ fontFamily: option.family }}>{option.label}</span>
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              ))}
-              <SelectItem hideIndicator value={CUSTOM_FONT_VALUE}>
-                Custom…
-              </SelectItem>
-            </SelectPopup>
-          </Select>
+        // The custom input replaces the dropdown rather than stacking under it,
+        // so entering custom mode does not change the row height.
+        <div className="flex w-full items-center gap-1.5 sm:w-56">
           {showCustomInput ? (
-            <Input
-              aria-label={`${title} custom family`}
-              aria-invalid={draftPending || undefined}
-              autoCapitalize="off"
-              autoComplete="off"
-              onBlur={flushDraft}
-              onChange={(event) => {
-                const next = event.currentTarget.value;
-                // Latch custom mode so clearing the text keeps the field open.
-                setCustomMode(true);
-                setCustomDraft(next);
-                setDraftSettled(false);
-                if (commitTimerRef.current !== null) {
-                  window.clearTimeout(commitTimerRef.current);
+            <>
+              <Input
+                aria-label={`${title} custom family`}
+                aria-invalid={draftPending || undefined}
+                autoCapitalize="off"
+                autoComplete="off"
+                autoFocus
+                className="min-w-0 flex-1"
+                maxLength={200}
+                onBlur={flushDraft}
+                onChange={(event) => {
+                  const next = event.currentTarget.value;
+                  setCustomDraft(next);
+                  setDraftSettled(false);
+                  if (commitTimerRef.current !== null) {
+                    window.clearTimeout(commitTimerRef.current);
+                  }
+                  commitTimerRef.current = window.setTimeout(() => {
+                    commitTimerRef.current = null;
+                    commitDraft(next);
+                  }, 400);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") flushDraft();
+                  if (event.key === "Escape") {
+                    // Discard uncommitted typing without leaving the settings
+                    // page (Escape closes it), and drop back to the list only
+                    // when there is no committed family to return to.
+                    event.preventDefault();
+                    event.stopPropagation();
+                    if (commitTimerRef.current !== null) {
+                      window.clearTimeout(commitTimerRef.current);
+                      commitTimerRef.current = null;
+                    }
+                    setCustomDraft(value);
+                    setDraftSettled(true);
+                    if (trimmed.length === 0) setCustomMode(false);
+                  }
+                }}
+                placeholder="Font family name"
+                spellCheck={false}
+                value={customDraft}
+              />
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      aria-label={`Choose ${title.toLowerCase()} from the list`}
+                      className="size-8 shrink-0 text-muted-foreground hover:text-foreground"
+                      onClick={() => {
+                        setCustomMode(false);
+                        onValueChange("");
+                      }}
+                      size="icon-sm"
+                      variant="ghost"
+                    >
+                      <ListIcon />
+                    </Button>
+                  }
+                />
+                <TooltipPopup>Choose from the list</TooltipPopup>
+              </Tooltip>
+            </>
+          ) : (
+            <Select
+              value={selected}
+              onValueChange={(next) => {
+                if (typeof next !== "string") return;
+                if (next === DEFAULT_FONT_VALUE) {
+                  setCustomMode(false);
+                  onValueChange("");
+                  return;
                 }
-                commitTimerRef.current = window.setTimeout(() => {
-                  commitTimerRef.current = null;
-                  commitDraft(next);
-                }, 400);
+                if (next === CUSTOM_FONT_VALUE) {
+                  setCustomMode(true);
+                  return;
+                }
+                setCustomMode(false);
+                onValueChange(next);
               }}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") flushDraft();
-              }}
-              maxLength={200}
-              placeholder="Font family name"
-              spellCheck={false}
-              value={customDraft}
-            />
-          ) : null}
+            >
+              <SelectTrigger className="w-full" aria-label={`${title} family`}>
+                <SelectValue>
+                  {selected === DEFAULT_FONT_VALUE
+                    ? "Default"
+                    : (options.find((option) => option.family === selected)?.label ?? selected)}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                <SelectItem hideIndicator value={DEFAULT_FONT_VALUE}>
+                  Default
+                </SelectItem>
+                {categories.map(([category, categoryOptions]) => (
+                  <SelectGroup key={category}>
+                    {/* A lone section header is noise; label only mixed lists. */}
+                    {categories.length > 1 ? (
+                      <SelectGroupLabel className="px-2 py-1.5 font-semibold text-muted-foreground text-xs">
+                        {category}
+                      </SelectGroupLabel>
+                    ) : null}
+                    {categoryOptions.map((option) => (
+                      <SelectItem hideIndicator key={option.family} value={option.family}>
+                        <span
+                          style={{
+                            fontFamily: option.family,
+                            fontSizeAdjust: optionSizeAdjust(),
+                          }}
+                        >
+                          {option.label}
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                ))}
+                <SelectItem hideIndicator value={CUSTOM_FONT_VALUE}>
+                  Custom…
+                </SelectItem>
+              </SelectPopup>
+            </Select>
+          )}
         </div>
       }
     >
