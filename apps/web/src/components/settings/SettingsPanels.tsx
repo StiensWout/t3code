@@ -35,8 +35,16 @@ import {
   DEFAULT_ENVIRONMENT_IDENTIFICATION_MODE,
   DEFAULT_UNIFIED_SETTINGS,
   type EnvironmentIdentificationMode,
+  MAX_CODE_FONT_SIZE,
   MAX_GLASS_OPACITY,
+  MAX_INTERFACE_FONT_SIZE,
+  MAX_PROMPT_FONT_SIZE,
+  MAX_TERMINAL_FONT_SIZE,
+  MIN_CODE_FONT_SIZE,
   MIN_GLASS_OPACITY,
+  MIN_INTERFACE_FONT_SIZE,
+  MIN_PROMPT_FONT_SIZE,
+  MIN_TERMINAL_FONT_SIZE,
 } from "@t3tools/contracts/settings";
 import {
   getBackgroundActivityBaseProfile,
@@ -107,9 +115,7 @@ import {
   appearanceFontStack,
   availableFontOptions,
   fontOptionCategories,
-  fontSizeAdjustValue,
   isFontFamilyAvailable,
-  subscribeToFontLoads,
   type FontOption,
 } from "../../appearanceFonts";
 import {
@@ -665,6 +671,10 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.fontFamilyComposer,
       settings.fontFamilySans,
       settings.fontFamilyTerminal,
+      settings.fontSizeCode,
+      settings.fontSizeInterface,
+      settings.fontSizePrompt,
+      settings.fontSizeTerminal,
       settings.glassOpacity,
       settings.enableAssistantStreaming,
       settings.enableProviderUpdateChecks,
@@ -1007,37 +1017,14 @@ export function AppearanceSettingsPanel() {
       : sansStack;
   const codeStack = appearanceFontStack(settings.fontFamilyCode, DEFAULT_CODE_FONT_STACK);
   const terminalStack = appearanceFontStack(settings.fontFamilyTerminal, DEFAULT_CODE_FONT_STACK);
-  // Each preview normalizes its own stack, so it shows exactly the size the
-  // app will render. The epoch re-resolves them once webfonts have loaded.
-  const fontMetricsEpoch = useFontMetricsEpoch();
-  const sansAdjust = useMemo(
-    () => fontSizeAdjustValue(sansStack, DEFAULT_SANS_FONT_STACK),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- epoch is the invalidation signal
-    [sansStack, fontMetricsEpoch],
-  );
-  const composerAdjust = useMemo(
-    () => fontSizeAdjustValue(composerStack, DEFAULT_SANS_FONT_STACK),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- epoch is the invalidation signal
-    [composerStack, fontMetricsEpoch],
-  );
-  const codeAdjust = useMemo(
-    () => fontSizeAdjustValue(codeStack, DEFAULT_CODE_FONT_STACK),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- epoch is the invalidation signal
-    [codeStack, fontMetricsEpoch],
-  );
-  const terminalAdjust = useMemo(
-    () => fontSizeAdjustValue(terminalStack, DEFAULT_CODE_FONT_STACK),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- epoch is the invalidation signal
-    [terminalStack, fontMetricsEpoch],
-  );
   const environmentStageLabel = useEnvironmentStageLabel();
   const showEnvironmentIdentification =
     resolveEnvironmentIdentificationPillLabel(environmentStageLabel) !== null;
   const glassOpacityRatio =
     (settings.glassOpacity - MIN_GLASS_OPACITY) / (MAX_GLASS_OPACITY - MIN_GLASS_OPACITY);
   const glassOpacitySliderStyle = {
-    "--glass-slider-progress": `${glassOpacityRatio * 100}%`,
-    "--glass-slider-fill-offset": `${0.5 - glassOpacityRatio}rem`,
+    "--settings-slider-progress": `${glassOpacityRatio * 100}%`,
+    "--settings-slider-fill-offset": `${0.5 - glassOpacityRatio}rem`,
   } as CSSProperties;
 
   return (
@@ -1099,7 +1086,7 @@ export function AppearanceSettingsPanel() {
               </output>
               <input
                 aria-label="Glass opacity"
-                className="glass-opacity-slider min-w-0 flex-1"
+                className="settings-slider min-w-0 flex-1"
                 id="glass-opacity"
                 max={MAX_GLASS_OPACITY}
                 min={MIN_GLASS_OPACITY}
@@ -1196,12 +1183,19 @@ export function AppearanceSettingsPanel() {
           options={fontOptions}
           value={settings.fontFamilySans}
           onValueChange={(fontFamilySans) => updateSettings({ fontFamilySans })}
+          size={{
+            label: "Interface font size",
+            min: MIN_INTERFACE_FONT_SIZE,
+            max: MAX_INTERFACE_FONT_SIZE,
+            value: settings.fontSizeInterface,
+            onChange: (fontSizeInterface) => updateSettings({ fontSizeInterface }),
+          }}
           preview={
-            <FontPreviewCard stack={sansStack} adjust={sansAdjust}>
-              <p className="text-sm text-foreground">
+            <FontPreviewCard stack={sansStack} size={settings.fontSizeInterface}>
+              <p className="text-[1em] text-foreground">
                 The quick brown fox jumps over the lazy dog.
               </p>
-              <p className="text-xs text-muted-foreground">
+              <p className="text-[0.85em] text-muted-foreground">
                 Messages, labels, and headings across the app.
               </p>
             </FontPreviewCard>
@@ -1213,13 +1207,20 @@ export function AppearanceSettingsPanel() {
           options={fontOptions}
           value={settings.fontFamilyComposer}
           onValueChange={(fontFamilyComposer) => updateSettings({ fontFamilyComposer })}
+          size={{
+            label: "Prompt font size",
+            min: MIN_PROMPT_FONT_SIZE,
+            max: MAX_PROMPT_FONT_SIZE,
+            value: settings.fontSizePrompt,
+            onChange: (fontSizePrompt) => updateSettings({ fontSizePrompt }),
+          }}
           preview={
-            <FontPreviewCard stack={composerStack} adjust={composerAdjust}>
+            <FontPreviewCard stack={composerStack} size={settings.fontSizePrompt}>
               <div className="rounded-lg border border-border bg-background px-3 py-2">
-                <p className="text-sm text-foreground">
+                <p className="text-[1em] text-foreground">
                   Fix the flaky test in surface.test.ts and explain the race.
                 </p>
-                <p className="pt-1 text-xs text-muted-foreground/60">
+                <p className="pt-1 text-[0.85em] text-muted-foreground/60">
                   Ask for follow-up changes or attach images
                 </p>
               </div>
@@ -1232,12 +1233,16 @@ export function AppearanceSettingsPanel() {
           options={fontOptions}
           value={settings.fontFamilyCode}
           onValueChange={(fontFamilyCode) => updateSettings({ fontFamilyCode })}
+          size={{
+            label: "Code font size",
+            min: MIN_CODE_FONT_SIZE,
+            max: MAX_CODE_FONT_SIZE,
+            value: settings.fontSizeCode,
+            onChange: (fontSizeCode) => updateSettings({ fontSizeCode }),
+          }}
           preview={
-            <FontPreviewCard stack={codeStack} adjust={codeAdjust}>
-              <pre
-                className="overflow-x-auto text-xs leading-relaxed"
-                style={{ fontFamily: "inherit" }}
-              >
+            <FontPreviewCard stack={codeStack} size={settings.fontSizeCode}>
+              <pre className="overflow-x-auto leading-relaxed" style={{ fontFamily: "inherit" }}>
                 <code style={{ fontFamily: "inherit" }}>
                   <span className="text-muted-foreground">1</span>
                   {"  "}
@@ -1265,9 +1270,16 @@ export function AppearanceSettingsPanel() {
           options={fontOptions}
           value={settings.fontFamilyTerminal}
           onValueChange={(fontFamilyTerminal) => updateSettings({ fontFamilyTerminal })}
+          size={{
+            label: "Terminal font size",
+            min: MIN_TERMINAL_FONT_SIZE,
+            max: MAX_TERMINAL_FONT_SIZE,
+            value: settings.fontSizeTerminal,
+            onChange: (fontSizeTerminal) => updateSettings({ fontSizeTerminal }),
+          }}
           preview={
-            <FontPreviewCard stack={terminalStack} adjust={terminalAdjust}>
-              <pre className="text-xs leading-relaxed" style={{ fontFamily: "inherit" }}>
+            <FontPreviewCard stack={terminalStack} size={settings.fontSizeTerminal}>
+              <pre className="leading-relaxed" style={{ fontFamily: "inherit" }}>
                 <code style={{ fontFamily: "inherit" }}>
                   <span className="text-muted-foreground">$</span>{" "}
                   <span className="text-foreground">npm run dev</span>
@@ -1289,39 +1301,63 @@ export function AppearanceSettingsPanel() {
 const CUSTOM_FONT_VALUE = "__custom__";
 const DEFAULT_FONT_VALUE = "__default__";
 
-/**
- * Every font renders at the default stack's x-height, so switching family in a
- * preview (or scanning the dropdown) shows the typeface changing without the
- * apparent text size jumping with it. Mirrors the runtime `font-size-adjust`.
- */
-function optionSizeAdjust(family: string): string {
-  return fontSizeAdjustValue(family, DEFAULT_SANS_FONT_STACK);
+/** Mirrors the mobile Appearance sliders: a labelled value and a filled track. */
+function FontSizeSlider({
+  label,
+  max,
+  min,
+  onChange,
+  value,
+}: {
+  label: string;
+  max: number;
+  min: number;
+  onChange: (value: number) => void;
+  value: number;
+}) {
+  const ratio = (value - min) / (max - min);
+  const style = {
+    "--settings-slider-progress": `${ratio * 100}%`,
+    "--settings-slider-fill-offset": `${0.5 - ratio}rem`,
+  } as CSSProperties;
+  return (
+    <div className="flex w-full items-center gap-3">
+      <input
+        aria-label={label}
+        className="settings-slider min-w-0 flex-1"
+        max={max}
+        min={min}
+        onChange={(event) => {
+          const next = Number(event.currentTarget.value);
+          if (Number.isInteger(next) && next >= min && next <= max) onChange(next);
+        }}
+        step={1}
+        style={style}
+        type="range"
+        value={value}
+      />
+      <output className="min-w-11 rounded-md bg-muted px-1.5 py-0.5 text-center text-xs font-medium tabular-nums text-foreground">
+        {value} px
+      </output>
+    </div>
+  );
 }
 
-/**
- * Re-render once webfonts load: metrics measured before then describe the
- * fallback face, so the adjust values would be stale.
- */
-function useFontMetricsEpoch(): number {
-  const [epoch, setEpoch] = useState(0);
-  useEffect(() => subscribeToFontLoads(() => setEpoch((value) => value + 1)), []);
-  return epoch;
-}
-
+/** Renders in the family and size the surface will actually use. */
 function FontPreviewCard({
   children,
   stack,
-  adjust,
+  size,
 }: {
   children: ReactNode;
   stack: string;
-  adjust: string;
+  size: number;
 }) {
   return (
     <div
       aria-hidden
       className="mb-2 space-y-1 rounded-lg bg-muted/60 px-3 py-2.5"
-      style={{ fontFamily: stack, fontSizeAdjust: adjust }}
+      style={{ fontFamily: stack, fontSize: `${size}px` }}
     >
       {children}
     </div>
@@ -1335,6 +1371,7 @@ function FontFamilySettingsRow({
   preview,
   value,
   onValueChange,
+  size,
 }: {
   title: string;
   description: string;
@@ -1342,6 +1379,7 @@ function FontFamilySettingsRow({
   preview: ReactNode;
   value: string;
   onValueChange: (value: string) => void;
+  size: { label: string; min: number; max: number; value: number; onChange: (v: number) => void };
 }) {
   const trimmed = value.trim();
   const matchesOption = options.some((option) => option.family === trimmed);
@@ -1413,138 +1451,140 @@ function FontFamilySettingsRow({
         ) : null
       }
       control={
-        // The custom input replaces the dropdown rather than stacking under it,
-        // so entering custom mode does not change the row height.
-        <div className="flex w-full items-center gap-1.5 sm:w-56">
-          {showCustomInput ? (
-            <>
-              <Input
-                aria-label={`${title} custom family`}
-                aria-invalid={draftPending || undefined}
-                autoCapitalize="off"
-                autoComplete="off"
-                autoFocus
-                className="min-w-0 flex-1"
-                maxLength={200}
-                onBlur={flushDraft}
-                onChange={(event) => {
-                  const next = event.currentTarget.value;
-                  setCustomDraft(next);
-                  setDraftSettled(false);
-                  if (commitTimerRef.current !== null) {
-                    window.clearTimeout(commitTimerRef.current);
+        <div className="flex w-full flex-col gap-2 sm:w-56">
+          {/* The custom input replaces the dropdown rather than stacking under
+              it, so entering custom mode does not change the row height. */}
+          <div className="flex w-full items-center gap-1.5">
+            {showCustomInput ? (
+              <>
+                <Input
+                  aria-label={`${title} custom family`}
+                  aria-invalid={draftPending || undefined}
+                  autoCapitalize="off"
+                  autoComplete="off"
+                  autoFocus
+                  className="min-w-0 flex-1"
+                  maxLength={200}
+                  onBlur={flushDraft}
+                  onChange={(event) => {
+                    const next = event.currentTarget.value;
+                    setCustomDraft(next);
+                    setDraftSettled(false);
+                    if (commitTimerRef.current !== null) {
+                      window.clearTimeout(commitTimerRef.current);
+                    }
+                    commitTimerRef.current = window.setTimeout(() => {
+                      commitTimerRef.current = null;
+                      commitDraft(next);
+                    }, 400);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") flushDraft();
+                    if (event.key === "Escape") {
+                      // Discard uncommitted typing without leaving the settings
+                      // page (Escape closes it), and drop back to the list only
+                      // when there is no committed family to return to.
+                      event.preventDefault();
+                      event.stopPropagation();
+                      if (commitTimerRef.current !== null) {
+                        window.clearTimeout(commitTimerRef.current);
+                        commitTimerRef.current = null;
+                      }
+                      setCustomDraft(value);
+                      setDraftSettled(true);
+                      if (trimmed.length === 0) setCustomMode(false);
+                    }
+                  }}
+                  placeholder="Font family name"
+                  spellCheck={false}
+                  value={customDraft}
+                />
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        aria-label={`Choose ${title.toLowerCase()} from the list`}
+                        className="size-8 shrink-0 text-muted-foreground hover:text-foreground"
+                        onClick={() => {
+                          setCustomMode(false);
+                          onValueChange("");
+                        }}
+                        size="icon-sm"
+                        variant="ghost"
+                      >
+                        <ListIcon />
+                      </Button>
+                    }
+                  />
+                  <TooltipPopup>Choose from the list</TooltipPopup>
+                </Tooltip>
+              </>
+            ) : (
+              <Select
+                value={selected}
+                onValueChange={(next) => {
+                  if (typeof next !== "string") return;
+                  if (next === DEFAULT_FONT_VALUE) {
+                    setCustomMode(false);
+                    onValueChange("");
+                    return;
                   }
-                  commitTimerRef.current = window.setTimeout(() => {
-                    commitTimerRef.current = null;
-                    commitDraft(next);
-                  }, 400);
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") flushDraft();
-                  if (event.key === "Escape") {
-                    // Discard uncommitted typing without leaving the settings
-                    // page (Escape closes it), and drop back to the list only
-                    // when there is no committed family to return to.
-                    event.preventDefault();
-                    event.stopPropagation();
+                  if (next === CUSTOM_FONT_VALUE) {
+                    // Start from an empty field rather than the outgoing family;
+                    // the applied font holds until a valid name is entered.
                     if (commitTimerRef.current !== null) {
                       window.clearTimeout(commitTimerRef.current);
                       commitTimerRef.current = null;
                     }
-                    setCustomDraft(value);
+                    setCustomDraft("");
                     setDraftSettled(true);
-                    if (trimmed.length === 0) setCustomMode(false);
+                    setCustomMode(true);
+                    return;
                   }
-                }}
-                placeholder="Font family name"
-                spellCheck={false}
-                value={customDraft}
-              />
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <Button
-                      aria-label={`Choose ${title.toLowerCase()} from the list`}
-                      className="size-8 shrink-0 text-muted-foreground hover:text-foreground"
-                      onClick={() => {
-                        setCustomMode(false);
-                        onValueChange("");
-                      }}
-                      size="icon-sm"
-                      variant="ghost"
-                    >
-                      <ListIcon />
-                    </Button>
-                  }
-                />
-                <TooltipPopup>Choose from the list</TooltipPopup>
-              </Tooltip>
-            </>
-          ) : (
-            <Select
-              value={selected}
-              onValueChange={(next) => {
-                if (typeof next !== "string") return;
-                if (next === DEFAULT_FONT_VALUE) {
                   setCustomMode(false);
-                  onValueChange("");
-                  return;
-                }
-                if (next === CUSTOM_FONT_VALUE) {
-                  // Start from an empty field rather than the outgoing family;
-                  // the applied font holds until a valid name is entered.
-                  if (commitTimerRef.current !== null) {
-                    window.clearTimeout(commitTimerRef.current);
-                    commitTimerRef.current = null;
-                  }
-                  setCustomDraft("");
-                  setDraftSettled(true);
-                  setCustomMode(true);
-                  return;
-                }
-                setCustomMode(false);
-                onValueChange(next);
-              }}
-            >
-              <SelectTrigger className="w-full" aria-label={`${title} family`}>
-                <SelectValue>
-                  {selected === DEFAULT_FONT_VALUE
-                    ? "Default"
-                    : (options.find((option) => option.family === selected)?.label ?? selected)}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectPopup align="end" alignItemWithTrigger={false}>
-                <SelectItem hideIndicator value={DEFAULT_FONT_VALUE}>
-                  Default
-                </SelectItem>
-                {categories.map(([category, categoryOptions]) => (
-                  <SelectGroup key={category}>
-                    {/* A lone section header is noise; label only mixed lists. */}
-                    {categories.length > 1 ? (
-                      <SelectGroupLabel className="px-2 py-1.5 font-semibold text-muted-foreground text-xs">
-                        {category}
-                      </SelectGroupLabel>
-                    ) : null}
-                    {categoryOptions.map((option) => (
-                      <SelectItem hideIndicator key={option.family} value={option.family}>
-                        <span
-                          style={{
-                            fontFamily: option.family,
-                            fontSizeAdjust: optionSizeAdjust(option.family),
-                          }}
-                        >
-                          {option.label}
-                        </span>
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                ))}
-                <SelectItem hideIndicator value={CUSTOM_FONT_VALUE}>
-                  Custom…
-                </SelectItem>
-              </SelectPopup>
-            </Select>
-          )}
+                  onValueChange(next);
+                }}
+              >
+                <SelectTrigger className="w-full" aria-label={`${title} family`}>
+                  <SelectValue>
+                    {selected === DEFAULT_FONT_VALUE
+                      ? "Default"
+                      : (options.find((option) => option.family === selected)?.label ?? selected)}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectPopup align="end" alignItemWithTrigger={false}>
+                  <SelectItem hideIndicator value={DEFAULT_FONT_VALUE}>
+                    Default
+                  </SelectItem>
+                  {categories.map(([category, categoryOptions]) => (
+                    <SelectGroup key={category}>
+                      {/* A lone section header is noise; label only mixed lists. */}
+                      {categories.length > 1 ? (
+                        <SelectGroupLabel className="px-2 py-1.5 font-semibold text-muted-foreground text-xs">
+                          {category}
+                        </SelectGroupLabel>
+                      ) : null}
+                      {categoryOptions.map((option) => (
+                        <SelectItem hideIndicator key={option.family} value={option.family}>
+                          <span style={{ fontFamily: option.family }}>{option.label}</span>
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  ))}
+                  <SelectItem hideIndicator value={CUSTOM_FONT_VALUE}>
+                    Custom…
+                  </SelectItem>
+                </SelectPopup>
+              </Select>
+            )}
+          </div>
+          <FontSizeSlider
+            label={size.label}
+            max={size.max}
+            min={size.min}
+            onChange={size.onChange}
+            value={size.value}
+          />
         </div>
       }
     >

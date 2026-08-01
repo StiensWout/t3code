@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  clampCodeFontSize,
+  clampInterfaceFontSize,
+  clampPromptFontSize,
   DEFAULT_CODE_FONT_STACK,
   DEFAULT_SANS_FONT_STACK,
   MONO_FONT_OPTIONS,
   SANS_FONT_OPTIONS,
-  clampSizeAdjust,
   appearanceFontStack,
   cssFontFamilies,
   fontOptionCategories,
@@ -35,30 +37,6 @@ describe("cssFontFamilies", () => {
   });
 });
 
-describe("clampSizeAdjust", () => {
-  it("matches the target when the face is close to it", () => {
-    // Arial 0.54 against a 0.51 target: a 5.6% correction is within range.
-    expect(clampSizeAdjust(0.51, 0.54)).toBe(0.51);
-  });
-
-  it("caps the correction for faces with an unusual x-height", () => {
-    // Courier New (~0.42) would scale 21% up to reach 0.51; cap it at 6%.
-    const adjust = clampSizeAdjust(0.51, 0.42);
-    expect(adjust).toBe(0.445);
-    expect(adjust / 0.42).toBeLessThanOrEqual(1.061);
-  });
-
-  it("caps oversized faces symmetrically", () => {
-    const adjust = clampSizeAdjust(0.42, 0.55);
-    expect(adjust).toBe(0.517);
-    expect(adjust / 0.55).toBeGreaterThanOrEqual(0.939);
-  });
-
-  it("leaves a face that already matches untouched", () => {
-    expect(clampSizeAdjust(0.51, 0.51)).toBe(0.51);
-  });
-});
-
 describe("fontOptionCategories", () => {
   it("splits a mixed list into labeled sections preserving catalog order", () => {
     const mixed = [...SANS_FONT_OPTIONS.slice(0, 2), ...MONO_FONT_OPTIONS.slice(0, 2)];
@@ -84,5 +62,21 @@ describe("appearanceFontStack", () => {
 
   it("falls back to the default stack when unset", () => {
     expect(appearanceFontStack("", DEFAULT_SANS_FONT_STACK)).toBe(DEFAULT_SANS_FONT_STACK);
+  });
+});
+
+describe("font size clamping", () => {
+  it("keeps sizes inside the ranges the UI can absorb", () => {
+    expect(clampInterfaceFontSize(16)).toBe(16);
+    expect(clampInterfaceFontSize(2)).toBe(12);
+    expect(clampInterfaceFontSize(96)).toBe(20);
+    expect(clampPromptFontSize(40)).toBe(20);
+    expect(clampCodeFontSize(1)).toBe(10);
+  });
+
+  it("rounds fractional values and falls back for unusable input", () => {
+    expect(clampCodeFontSize(13.4)).toBe(13);
+    expect(clampInterfaceFontSize(Number.NaN)).toBe(16);
+    expect(clampPromptFontSize(Number.POSITIVE_INFINITY)).toBe(14);
   });
 });

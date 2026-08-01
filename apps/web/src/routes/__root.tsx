@@ -27,7 +27,7 @@ import {
   toastManager,
 } from "../components/ui/toast";
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
-import { applyAppearanceFontVariables, subscribeToFontLoads } from "~/appearanceFonts";
+import { applyAppearanceFontVariables } from "~/appearanceFonts";
 import { useClientSettings } from "../hooks/useSettings";
 import {
   deriveLogicalProjectKeyFromSettings,
@@ -158,19 +158,27 @@ function FontAppearanceSync() {
   const fontFamilySans = useClientSettings((settings) => settings.fontFamilySans);
   const fontFamilyCode = useClientSettings((settings) => settings.fontFamilyCode);
   const fontFamilyComposer = useClientSettings((settings) => settings.fontFamilyComposer);
+  const fontSizeInterface = useClientSettings((settings) => settings.fontSizeInterface);
+  const fontSizePrompt = useClientSettings((settings) => settings.fontSizePrompt);
+  const fontSizeCode = useClientSettings((settings) => settings.fontSizeCode);
 
   useEffect(() => {
-    const apply = () =>
-      applyAppearanceFontVariables(document.documentElement, {
-        sans: fontFamilySans,
-        code: fontFamilyCode,
-        composer: fontFamilyComposer,
-      });
-    apply();
-    // The size adjust is measured from the default stack; a webfont that loads
-    // after the first pass changes that measurement, so re-apply once settled.
-    return subscribeToFontLoads(apply);
-  }, [fontFamilyCode, fontFamilyComposer, fontFamilySans]);
+    applyAppearanceFontVariables(document.documentElement, {
+      sans: fontFamilySans,
+      code: fontFamilyCode,
+      composer: fontFamilyComposer,
+      sizeInterface: fontSizeInterface,
+      sizePrompt: fontSizePrompt,
+      sizeCode: fontSizeCode,
+    });
+  }, [
+    fontFamilyCode,
+    fontFamilyComposer,
+    fontFamilySans,
+    fontSizeCode,
+    fontSizeInterface,
+    fontSizePrompt,
+  ]);
 
   return null;
 }
