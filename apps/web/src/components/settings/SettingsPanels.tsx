@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import type { CSSProperties, ReactNode } from "react";
-import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import {
   defaultInstanceIdForDriver,
@@ -1332,14 +1332,22 @@ function FontSizeSlider({
   // would resize the interface - and this very slider - under the pointer.
   const [draft, setDraft] = useState<number | null>(null);
   const shown = draft ?? value;
-  const commitDraft = useEffectEvent(() => {
-    if (draft !== null && draft !== value) onChange(draft);
-    setDraft(null);
-  });
+  // Refs, written in the same turn as the events: input and change can land in
+  // one task (track clicks, keyboard steps), before any re-render, so a
+  // state-reading closure would still see the previous draft and drop the
+  // commit.
+  const draftRef = useRef<number | null>(null);
+  const latestRef = useRef({ value, onChange });
+  latestRef.current = { value, onChange };
   useEffect(() => {
     const element = inputRef.current;
     if (!element) return;
-    const handle = () => commitDraft();
+    const handle = () => {
+      const next = draftRef.current;
+      draftRef.current = null;
+      setDraft(null);
+      if (next !== null && next !== latestRef.current.value) latestRef.current.onChange(next);
+    };
     element.addEventListener("change", handle);
     return () => element.removeEventListener("change", handle);
   }, []);
@@ -1358,7 +1366,10 @@ function FontSizeSlider({
         min={min}
         onChange={(event) => {
           const next = Number(event.currentTarget.value);
-          if (Number.isInteger(next) && next >= min && next <= max) setDraft(next);
+          if (Number.isInteger(next) && next >= min && next <= max) {
+            draftRef.current = next;
+            setDraft(next);
+          }
         }}
         step={1}
         style={style}

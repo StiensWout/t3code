@@ -1018,13 +1018,11 @@ code {
   font-family: var(--font-mono);
 }
 
-/* Code text carries the size preference too. Block code and highlighted chat
-   blocks take it directly; inline code stays relative to its sentence so it
-   never towers over the prose around it. */
-pre {
-  font-size: var(--font-size-code, inherit);
-}
-
+/* Code blocks in chat carry the size preference. Scoped to chat markdown
+   rather than every pre: a global rule would beat text-size utilities and
+   inherited sizes on unrelated pre surfaces (terminal previews, approvals).
+   Inline code stays relative to its sentence so it never towers over prose;
+   diffs and file previews take the size through --diffs-font-size. */
 .chat-markdown .chat-markdown-shiki .shiki,
 .chat-markdown pre code {
   font-size: var(--font-size-code, inherit);
