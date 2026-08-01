@@ -51,7 +51,7 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
         )}
         <span
           data-composer-label
-          className="truncate group-data-[compact]/composer-context:invisible group-data-[compact]/composer-context:absolute"
+          className="min-w-0 max-w-[240px] truncate transition-[max-width,opacity] duration-300 ease-out group-data-[compact]/composer-context:max-w-0 group-data-[compact]/composer-context:opacity-0"
         >
           {activeEnvironment?.label ?? "Run on"}
         </span>

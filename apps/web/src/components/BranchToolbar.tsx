@@ -266,8 +266,9 @@ function useLabelsOverflow(element: HTMLDivElement | null): boolean {
     needed += stripGap * Math.max(0, groups - 1);
     for (const label of current.querySelectorAll<HTMLElement>("[data-composer-label]")) {
       if (compact) {
-        // Compact: the label sits outside the flow at its natural width.
-        needed += label.offsetWidth;
+        // Compact: the label is squeezed to zero width, but scrollWidth still
+        // reports the full text it would need when expanded.
+        needed += label.scrollWidth;
       } else {
         // Expanded: the label is in flow but truncates; only the clipped
         // remainder is missing from the content sum.
