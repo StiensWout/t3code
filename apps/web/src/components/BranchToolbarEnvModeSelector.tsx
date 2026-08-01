@@ -82,7 +82,7 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
       <SelectTrigger
         variant="ghost"
         size="xs"
-        className="shrink-0 font-medium"
+        className="min-w-0 shrink font-medium"
         aria-label="Workspace"
       >
         {effectiveEnvMode === "worktree" ? (
@@ -92,7 +92,10 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
         ) : (
           <FolderIcon className="size-3" />
         )}
-        <span data-composer-label className="group-data-[compact]/composer-context:hidden">
+        <span
+          data-composer-label
+          className="min-w-0 truncate group-data-[compact]/composer-context:invisible group-data-[compact]/composer-context:absolute"
+        >
           <SelectValue />
         </span>
       </SelectTrigger>

@@ -49,7 +49,10 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
         ) : (
           <CloudIcon className="size-3 shrink-0" />
         )}
-        <span data-composer-label className="truncate group-data-[compact]/composer-context:hidden">
+        <span
+          data-composer-label
+          className="truncate group-data-[compact]/composer-context:invisible group-data-[compact]/composer-context:absolute"
+        >
           {activeEnvironment?.label ?? "Run on"}
         </span>
       </span>

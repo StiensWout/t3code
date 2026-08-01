@@ -9,7 +9,7 @@ import {
   HistoryIcon,
   MonitorIcon,
 } from "lucide-react";
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useComposerDraftStore, type DraftId } from "../composerDraftStore";
 import { useProject, useThread, useThreadShellsForProjectRefs } from "../state/entities";
@@ -215,45 +215,85 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
 });
 
 /**
- * Collapse the strip's labels to icons only once they actually stop fitting.
- * The natural width is remembered from the last expanded measurement, so the
- * hidden labels cannot shrink the content and flip the decision straight back.
+ * Collapse the strip's labels to icons only when the text no longer fits.
+ *
+ * Hidden labels stay measurable (they collapse to invisible absolute boxes,
+ * which keep their natural width), so the required width can be recomputed in
+ * either state on every pass - no remembered widths that could go stale or
+ * latch the strip compact. A small hysteresis keeps the boundary from
+ * flapping between states.
  */
-function useLabelsOverflow(ref: RefObject<HTMLDivElement | null>): boolean {
+const COMPACT_EXPAND_HYSTERESIS_PX = 16;
+
+function useLabelsOverflow(element: HTMLDivElement | null): boolean {
   const [overflows, setOverflows] = useState(false);
-  const naturalWidthRef = useRef(0);
+  // A render-synced mirror instead of useEffectEvent: the compiler memoizes
+  // the event callback, which left observers reading the first render's null
+  // element forever.
+  const stateRef = useRef({ element, overflows });
+  stateRef.current = { element, overflows };
+
+  const measure = useCallback(() => {
+    const { element: current, overflows: compact } = stateRef.current;
+    if (!current) return;
+    const available = current.clientWidth;
+    if (available === 0) return;
+    // flex-1 stretches the groups to fill the strip, so their own boxes always
+    // measure "full". Sum the laid-out content instead, skipping hidden form
+    // artifacts and absolutely-positioned nodes (the compact-hidden labels).
+    const contentWidth = (parent: Element): number => {
+      const gap = Number.parseFloat(getComputedStyle(parent).columnGap) || 0;
+      let width = 0;
+      let counted = 0;
+      for (const child of parent.children) {
+        if (!(child instanceof HTMLElement)) continue;
+        if (child.offsetWidth <= 1) continue;
+        const position = getComputedStyle(child).position;
+        if (position === "absolute" || position === "fixed") continue;
+        width += child.offsetWidth;
+        counted += 1;
+      }
+      return width + gap * Math.max(0, counted - 1);
+    };
+    const stripGap = Number.parseFloat(getComputedStyle(current).columnGap) || 0;
+    let needed = 0;
+    let groups = 0;
+    for (const child of current.children) {
+      if (!(child instanceof HTMLElement) || child.offsetWidth <= 1) continue;
+      needed += contentWidth(child);
+      groups += 1;
+    }
+    needed += stripGap * Math.max(0, groups - 1);
+    for (const label of current.querySelectorAll<HTMLElement>("[data-composer-label]")) {
+      if (compact) {
+        // Compact: the label sits outside the flow at its natural width.
+        needed += label.offsetWidth;
+      } else {
+        // Expanded: the label is in flow but truncates; only the clipped
+        // remainder is missing from the content sum.
+        needed += Math.max(0, label.scrollWidth - label.clientWidth);
+      }
+    }
+    setOverflows(compact ? needed > available - COMPACT_EXPAND_HYSTERESIS_PX : needed > available);
+  }, []);
+
+  // Label widths can change without the strip box moving (font family or
+  // size preferences), so re-measure on every render as well as on resize
+  // and font loads.
+  useEffect(() => {
+    measure();
+  });
 
   useEffect(() => {
-    const element = ref.current;
     if (!element) return;
-
-    const measure = () => {
-      const available = element.clientWidth;
-      if (available === 0) return;
-      if (!overflows) {
-        // Labels truncate rather than overflow, so the strip's own scrollWidth
-        // never grows. Sum how much each label is clipped by instead: that
-        // deficit plus the current width is what the row really needs.
-        let deficit = 0;
-        for (const label of element.querySelectorAll<HTMLElement>("[data-composer-label]")) {
-          deficit += Math.max(0, label.scrollWidth - label.clientWidth);
-        }
-        naturalWidthRef.current = available + deficit;
-      }
-      if (naturalWidthRef.current === 0) return;
-      setOverflows(naturalWidthRef.current > available + 1);
-    };
-
-    measure();
     const observer = new ResizeObserver(measure);
     observer.observe(element);
-    // A font that finishes loading, or a size preference change, moves labels.
     document.fonts.addEventListener("loadingdone", measure);
     return () => {
       observer.disconnect();
       document.fonts.removeEventListener("loadingdone", measure);
     };
-  }, [overflows, ref]);
+  }, [element, measure]);
 
   return overflows;
 }
@@ -344,14 +384,14 @@ export const BranchToolbar = memo(function BranchToolbar({
     canPickEnvironment: showEnvironmentPicker,
   });
   const isMobile = useIsMobile();
-  const stripRef = useRef<HTMLDivElement>(null);
-  const labelsOverflow = useLabelsOverflow(stripRef);
+  const [stripElement, setStripElement] = useState<HTMLDivElement | null>(null);
+  const labelsOverflow = useLabelsOverflow(stripElement);
 
   if (!hasActiveThread || !activeProject) return null;
 
   return (
     <div
-      ref={stripRef}
+      ref={setStripElement}
       data-compact={labelsOverflow ? "" : undefined}
       className="chat-composer-context-strip group/composer-context -mt-4 mx-auto flex w-[calc(100%-2.75rem)] max-w-[calc(48rem-2.75rem)] items-center gap-2 px-1 pt-5 pb-1"
     >

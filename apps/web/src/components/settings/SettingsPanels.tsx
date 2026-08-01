@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import type { CSSProperties, ReactNode } from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import {
   defaultInstanceIdForDriver,
@@ -1318,7 +1318,24 @@ function FontSizeSlider({
   onChange: (value: number) => void;
   value: number;
 }) {
-  const ratio = (value - min) / (max - min);
+  const inputRef = useRef<HTMLInputElement>(null);
+  // The thumb and value label follow a local draft while dragging; the
+  // preference commits on the native change event (release). Applying it live
+  // would resize the interface - and this very slider - under the pointer.
+  const [draft, setDraft] = useState<number | null>(null);
+  const shown = draft ?? value;
+  const commitDraft = useEffectEvent(() => {
+    if (draft !== null && draft !== value) onChange(draft);
+    setDraft(null);
+  });
+  useEffect(() => {
+    const element = inputRef.current;
+    if (!element) return;
+    const handle = () => commitDraft();
+    element.addEventListener("change", handle);
+    return () => element.removeEventListener("change", handle);
+  }, []);
+  const ratio = (shown - min) / (max - min);
   const style = {
     "--settings-slider-progress": `${ratio * 100}%`,
     "--settings-slider-fill-offset": `${0.5 - ratio}rem`,
@@ -1326,21 +1343,22 @@ function FontSizeSlider({
   return (
     <div className="flex w-full items-center gap-3">
       <input
+        ref={inputRef}
         aria-label={label}
         className="settings-slider min-w-0 flex-1"
         max={max}
         min={min}
         onChange={(event) => {
           const next = Number(event.currentTarget.value);
-          if (Number.isInteger(next) && next >= min && next <= max) onChange(next);
+          if (Number.isInteger(next) && next >= min && next <= max) setDraft(next);
         }}
         step={1}
         style={style}
         type="range"
-        value={value}
+        value={shown}
       />
       <output className="min-w-11 rounded-md bg-muted px-1.5 py-0.5 text-center text-xs font-medium tabular-nums text-foreground">
-        {value} px
+        {shown} px
       </output>
     </div>
   );
