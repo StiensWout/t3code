@@ -79,8 +79,10 @@ export function applyAppearanceFontVariables(
     // Normalize against the stock stack: the composer's nominal default is the
     // sans variable, but that may itself be overridden (and already adjusted).
     const reference = defaultStack === "var(--font-sans)" ? DEFAULT_SANS_FONT_STACK : defaultStack;
-    const ratio = fontXHeightRatio(reference);
-    root.style.setProperty(adjustVariable, ratio === null ? "none" : String(ratio));
+    root.style.setProperty(
+      adjustVariable,
+      fontSizeAdjustValue(`${families}, ${reference}`, reference),
+    );
   }
 }
 
@@ -128,6 +130,34 @@ export function fontXHeightRatio(fontList: string): number | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Matching x-heights exactly is too aggressive for faces with unusual
+ * proportions: Courier New's x-height is ~0.42 em against DM Sans' ~0.51, so
+ * an exact match scales it 21% up and its capitals and ascenders tower. Cap
+ * the correction so a font still reads at a comparable size without the rest
+ * of its design being blown out of proportion.
+ */
+const MIN_SIZE_ADJUST_SCALE = 0.94;
+const MAX_SIZE_ADJUST_SCALE = 1.06;
+
+export function clampSizeAdjust(targetRatio: number, actualRatio: number): number {
+  const lower = actualRatio * MIN_SIZE_ADJUST_SCALE;
+  const upper = actualRatio * MAX_SIZE_ADJUST_SCALE;
+  return Math.round(Math.min(Math.max(targetRatio, lower), upper) * 1000) / 1000;
+}
+
+/**
+ * The `font-size-adjust` value that brings `fontList` closest to the apparent
+ * size of `defaultStack`, or "none" when either cannot be measured. Identical
+ * stacks resolve to the default's own ratio, leaving rendering untouched.
+ */
+export function fontSizeAdjustValue(fontList: string, defaultStack: string): string {
+  const target = fontXHeightRatio(defaultStack);
+  const actual = fontXHeightRatio(fontList);
+  if (target === null || actual === null || actual <= 0) return "none";
+  return String(clampSizeAdjust(target, actual));
 }
 
 /** Re-run `handler` whenever a font finishes loading and metrics may change. */

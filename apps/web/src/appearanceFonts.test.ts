@@ -5,6 +5,7 @@ import {
   DEFAULT_SANS_FONT_STACK,
   MONO_FONT_OPTIONS,
   SANS_FONT_OPTIONS,
+  clampSizeAdjust,
   appearanceFontStack,
   cssFontFamilies,
   fontOptionCategories,
@@ -31,6 +32,30 @@ describe("cssFontFamilies", () => {
   it("quotes names that are not single CSS idents", () => {
     expect(cssFontFamilies("3270 Nerd Font")).toBe('"3270 Nerd Font"');
     expect(cssFontFamilies("M+ 1m")).toBe('"M+ 1m"');
+  });
+});
+
+describe("clampSizeAdjust", () => {
+  it("matches the target when the face is close to it", () => {
+    // Arial 0.54 against a 0.51 target: a 5.6% correction is within range.
+    expect(clampSizeAdjust(0.51, 0.54)).toBe(0.51);
+  });
+
+  it("caps the correction for faces with an unusual x-height", () => {
+    // Courier New (~0.42) would scale 21% up to reach 0.51; cap it at 6%.
+    const adjust = clampSizeAdjust(0.51, 0.42);
+    expect(adjust).toBe(0.445);
+    expect(adjust / 0.42).toBeLessThanOrEqual(1.061);
+  });
+
+  it("caps oversized faces symmetrically", () => {
+    const adjust = clampSizeAdjust(0.42, 0.55);
+    expect(adjust).toBe(0.517);
+    expect(adjust / 0.55).toBeGreaterThanOrEqual(0.939);
+  });
+
+  it("leaves a face that already matches untouched", () => {
+    expect(clampSizeAdjust(0.51, 0.51)).toBe(0.51);
   });
 });
 

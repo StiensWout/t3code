@@ -107,7 +107,7 @@ import {
   appearanceFontStack,
   availableFontOptions,
   fontOptionCategories,
-  fontXHeightRatio,
+  fontSizeAdjustValue,
   isFontFamilyAvailable,
   subscribeToFontLoads,
   type FontOption,
@@ -1007,17 +1007,28 @@ export function AppearanceSettingsPanel() {
       : sansStack;
   const codeStack = appearanceFontStack(settings.fontFamilyCode, DEFAULT_CODE_FONT_STACK);
   const terminalStack = appearanceFontStack(settings.fontFamilyTerminal, DEFAULT_CODE_FONT_STACK);
-  // Referenced so the memoized adjusts re-resolve after webfonts load.
+  // Each preview normalizes its own stack, so it shows exactly the size the
+  // app will render. The epoch re-resolves them once webfonts have loaded.
   const fontMetricsEpoch = useFontMetricsEpoch();
   const sansAdjust = useMemo(
-    () => sizeAdjustFor(DEFAULT_SANS_FONT_STACK),
+    () => fontSizeAdjustValue(sansStack, DEFAULT_SANS_FONT_STACK),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- epoch is the invalidation signal
-    [fontMetricsEpoch],
+    [sansStack, fontMetricsEpoch],
+  );
+  const composerAdjust = useMemo(
+    () => fontSizeAdjustValue(composerStack, DEFAULT_SANS_FONT_STACK),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- epoch is the invalidation signal
+    [composerStack, fontMetricsEpoch],
   );
   const codeAdjust = useMemo(
-    () => sizeAdjustFor(DEFAULT_CODE_FONT_STACK),
+    () => fontSizeAdjustValue(codeStack, DEFAULT_CODE_FONT_STACK),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- epoch is the invalidation signal
-    [fontMetricsEpoch],
+    [codeStack, fontMetricsEpoch],
+  );
+  const terminalAdjust = useMemo(
+    () => fontSizeAdjustValue(terminalStack, DEFAULT_CODE_FONT_STACK),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- epoch is the invalidation signal
+    [terminalStack, fontMetricsEpoch],
   );
   const environmentStageLabel = useEnvironmentStageLabel();
   const showEnvironmentIdentification =
@@ -1203,7 +1214,7 @@ export function AppearanceSettingsPanel() {
           value={settings.fontFamilyComposer}
           onValueChange={(fontFamilyComposer) => updateSettings({ fontFamilyComposer })}
           preview={
-            <FontPreviewCard stack={composerStack} adjust={sansAdjust}>
+            <FontPreviewCard stack={composerStack} adjust={composerAdjust}>
               <div className="rounded-lg border border-border bg-background px-3 py-2">
                 <p className="text-sm text-foreground">
                   Fix the flaky test in surface.test.ts and explain the race.
@@ -1255,7 +1266,7 @@ export function AppearanceSettingsPanel() {
           value={settings.fontFamilyTerminal}
           onValueChange={(fontFamilyTerminal) => updateSettings({ fontFamilyTerminal })}
           preview={
-            <FontPreviewCard stack={terminalStack} adjust={codeAdjust}>
+            <FontPreviewCard stack={terminalStack} adjust={terminalAdjust}>
               <pre className="text-xs leading-relaxed" style={{ fontFamily: "inherit" }}>
                 <code style={{ fontFamily: "inherit" }}>
                   <span className="text-muted-foreground">$</span>{" "}
@@ -1283,13 +1294,8 @@ const DEFAULT_FONT_VALUE = "__default__";
  * preview (or scanning the dropdown) shows the typeface changing without the
  * apparent text size jumping with it. Mirrors the runtime `font-size-adjust`.
  */
-function sizeAdjustFor(defaultStack: string): string {
-  const ratio = fontXHeightRatio(defaultStack);
-  return ratio === null ? "none" : String(ratio);
-}
-
-function optionSizeAdjust(): string {
-  return sizeAdjustFor(DEFAULT_SANS_FONT_STACK);
+function optionSizeAdjust(family: string): string {
+  return fontSizeAdjustValue(family, DEFAULT_SANS_FONT_STACK);
 }
 
 /**
@@ -1524,7 +1530,7 @@ function FontFamilySettingsRow({
                         <span
                           style={{
                             fontFamily: option.family,
-                            fontSizeAdjust: optionSizeAdjust(),
+                            fontSizeAdjust: optionSizeAdjust(option.family),
                           }}
                         >
                           {option.label}
