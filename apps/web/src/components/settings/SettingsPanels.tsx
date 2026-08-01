@@ -1004,10 +1004,13 @@ export function AppearanceSettingsPanel() {
   const updateSettings = useUpdatePrimarySettings();
   // Every dropdown offers the full catalog, split into category sections, so
   // any surface can point at any face - the categories carry the guidance.
-  const fontOptions = useMemo(
+  // Text surfaces take any face; the terminal and code render on a fixed cell
+  // grid, where a proportional font cannot line up, so they stay monospace.
+  const textFontOptions = useMemo(
     () => [...availableFontOptions(SANS_FONT_OPTIONS), ...availableFontOptions(MONO_FONT_OPTIONS)],
     [],
   );
+  const monoFontOptions = useMemo(() => availableFontOptions(MONO_FONT_OPTIONS), []);
   const sansStack = appearanceFontStack(settings.fontFamilySans, DEFAULT_SANS_FONT_STACK);
   // The composer falls back to the resolved interface stack (not the bare
   // default) so the preview matches the runtime var(--font-composer) chain.
@@ -1180,7 +1183,7 @@ export function AppearanceSettingsPanel() {
         <FontFamilySettingsRow
           title="Interface font"
           description="Everything outside code blocks and the terminal."
-          options={fontOptions}
+          options={textFontOptions}
           value={settings.fontFamilySans}
           onValueChange={(fontFamilySans) => updateSettings({ fontFamilySans })}
           size={{
@@ -1204,7 +1207,7 @@ export function AppearanceSettingsPanel() {
         <FontFamilySettingsRow
           title="Prompt font"
           description="Only the box you write prompts in. Mono works well here."
-          options={fontOptions}
+          options={textFontOptions}
           value={settings.fontFamilyComposer}
           onValueChange={(fontFamilyComposer) => updateSettings({ fontFamilyComposer })}
           size={{
@@ -1230,7 +1233,7 @@ export function AppearanceSettingsPanel() {
         <FontFamilySettingsRow
           title="Code font"
           description="Code blocks, diffs, and file previews."
-          options={fontOptions}
+          options={monoFontOptions}
           value={settings.fontFamilyCode}
           onValueChange={(fontFamilyCode) => updateSettings({ fontFamilyCode })}
           size={{
@@ -1267,7 +1270,7 @@ export function AppearanceSettingsPanel() {
         <FontFamilySettingsRow
           title="Terminal font"
           description="Terminal output."
-          options={fontOptions}
+          options={monoFontOptions}
           value={settings.fontFamilyTerminal}
           onValueChange={(fontFamilyTerminal) => updateSettings({ fontFamilyTerminal })}
           size={{

@@ -9,7 +9,7 @@ import {
   HistoryIcon,
   MonitorIcon,
 } from "lucide-react";
-import { memo, useCallback, useMemo } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 
 import { useComposerDraftStore, type DraftId } from "../composerDraftStore";
 import { useProject, useThread, useThreadShellsForProjectRefs } from "../state/entities";
@@ -214,6 +214,50 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
   );
 });
 
+/**
+ * Collapse the strip's labels to icons only once they actually stop fitting.
+ * The natural width is remembered from the last expanded measurement, so the
+ * hidden labels cannot shrink the content and flip the decision straight back.
+ */
+function useLabelsOverflow(ref: RefObject<HTMLDivElement | null>): boolean {
+  const [overflows, setOverflows] = useState(false);
+  const naturalWidthRef = useRef(0);
+
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+
+    const measure = () => {
+      const available = element.clientWidth;
+      if (available === 0) return;
+      if (!overflows) {
+        // Labels truncate rather than overflow, so the strip's own scrollWidth
+        // never grows. Sum how much each label is clipped by instead: that
+        // deficit plus the current width is what the row really needs.
+        let deficit = 0;
+        for (const label of element.querySelectorAll<HTMLElement>("[data-composer-label]")) {
+          deficit += Math.max(0, label.scrollWidth - label.clientWidth);
+        }
+        naturalWidthRef.current = available + deficit;
+      }
+      if (naturalWidthRef.current === 0) return;
+      setOverflows(naturalWidthRef.current > available + 1);
+    };
+
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    // A font that finishes loading, or a size preference change, moves labels.
+    document.fonts.addEventListener("loadingdone", measure);
+    return () => {
+      observer.disconnect();
+      document.fonts.removeEventListener("loadingdone", measure);
+    };
+  }, [overflows, ref]);
+
+  return overflows;
+}
+
 export const BranchToolbar = memo(function BranchToolbar({
   environmentId,
   threadId,
@@ -300,11 +344,17 @@ export const BranchToolbar = memo(function BranchToolbar({
     canPickEnvironment: showEnvironmentPicker,
   });
   const isMobile = useIsMobile();
+  const stripRef = useRef<HTMLDivElement>(null);
+  const labelsOverflow = useLabelsOverflow(stripRef);
 
   if (!hasActiveThread || !activeProject) return null;
 
   return (
-    <div className="chat-composer-context-strip @container/composer-context -mt-4 mx-auto flex w-[calc(100%-2.75rem)] max-w-[calc(48rem-2.75rem)] items-center gap-2 px-1 pt-5 pb-1">
+    <div
+      ref={stripRef}
+      data-compact={labelsOverflow ? "" : undefined}
+      className="chat-composer-context-strip group/composer-context -mt-4 mx-auto flex w-[calc(100%-2.75rem)] max-w-[calc(48rem-2.75rem)] items-center gap-2 px-1 pt-5 pb-1"
+    >
       {isMobile ? (
         <MobileRunContextSelector
           envLocked={envLocked}
