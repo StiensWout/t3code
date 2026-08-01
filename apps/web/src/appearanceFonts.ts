@@ -216,6 +216,35 @@ export function isFontFamilyAvailable(family: string): boolean {
   }
 }
 
+/**
+ * Whether a family renders every character on the same advance. Cell-grid
+ * surfaces (the terminal) require this: a proportional face draws its text
+ * narrower than the lattice the cursor and selection are placed on, which
+ * reads as ragged gaps and a cursor stranded to the right of the text.
+ *
+ * Unmeasurable environments answer true, so a missing canvas never blocks a
+ * legitimate font.
+ */
+export function isMonospaceFamily(family: string): boolean {
+  const families = cssFontFamilies(family);
+  if (families === null) return true;
+  try {
+    if (fontProbeContext === undefined) {
+      fontProbeContext = document.createElement("canvas").getContext("2d");
+    }
+    if (fontProbeContext === null) return true;
+    // Fall back to a generic mono so an absent face measures as monospace and
+    // is left for the normal fallback chain to resolve.
+    fontProbeContext.font = `32px ${families}, monospace`;
+    const narrow = fontProbeContext.measureText("i").width;
+    const wide = fontProbeContext.measureText("M").width;
+    if (!Number.isFinite(narrow) || !Number.isFinite(wide) || wide === 0) return true;
+    return Math.abs(wide - narrow) < 0.5;
+  } catch {
+    return true;
+  }
+}
+
 /** Webfonts the app bundles; offered even before document.fonts has loaded them. */
 const BUNDLED_FAMILIES = new Set(["DM Sans Variable", "JetBrains Mono"]);
 

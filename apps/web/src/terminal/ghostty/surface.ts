@@ -13,6 +13,7 @@ import {
   type GhosttyCellMetrics,
 } from "./renderer";
 import symbolsFontUrl from "./fonts/SymbolsNerdFontMono-Regular.woff2?url";
+import { isMonospaceFamily } from "../../appearanceFonts";
 
 export const DEFAULT_TERMINAL_FONT_SIZE = 12;
 const MIN_TERMINAL_FONT_SIZE = 6;
@@ -78,6 +79,10 @@ export function terminalFontFamily(family?: string): string {
   // the whole canvas font string invalid and the assignment silently no-ops.
   const custom = family === undefined ? "" : quoteTerminalFontFamilies(family);
   if (custom.length === 0) return DEFAULT_TERMINAL_FONT_FAMILY;
+  // The grid places the cursor and selection on one cell advance, so a
+  // proportional face would draw its text narrower than its own cells. Refuse
+  // it here rather than render a ragged grid with a stranded cursor.
+  if (!isMonospaceFamily(custom)) return DEFAULT_TERMINAL_FONT_FAMILY;
   // A custom face keeps the glyph fallbacks so prompt symbols stay covered.
   return `${custom}, ${TERMINAL_GLYPH_FALLBACKS}`;
 }
