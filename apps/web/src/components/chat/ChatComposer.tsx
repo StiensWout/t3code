@@ -2436,9 +2436,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     if (text.length === 0 || isConnecting || isComposerApprovalState || projectSelectionRequired) {
       return false;
     }
-    // Pending user-input prompts remain editable: applyPromptReplacement
-    // routes this text into the active custom answer instead of the thread draft.
-    const prompt = promptRef.current;
+    // A pending question replaces the thread draft in the controlled editor,
+    // but promptRef can still contain that draft during the transition.
+    const prompt = activePendingProgress?.activeQuestion
+      ? activePendingProgress.customAnswer
+      : promptRef.current;
+    promptRef.current = prompt;
     const needsLeadingSpace =
       (options?.ensureLeadingBoundary ?? false) && prompt.length > 0 && !/\s$/.test(prompt);
     return applyPromptReplacement(
