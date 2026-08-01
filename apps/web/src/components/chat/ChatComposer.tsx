@@ -2631,6 +2631,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       }),
     }),
     [
+      activePendingProgress?.activeQuestion,
+      activePendingProgress?.customAnswer,
       activeThread,
       composerDraftTarget,
       composerCursor,
