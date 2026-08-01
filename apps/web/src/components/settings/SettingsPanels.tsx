@@ -1181,7 +1181,7 @@ export function AppearanceSettingsPanel() {
       <SettingsSection title="Fonts">
         <FontFamilySettingsRow
           title="Interface font"
-          description="Used for labels, controls, and messages across the app."
+          description="Everything outside code blocks and the terminal."
           options={fontOptions}
           value={settings.fontFamilySans}
           onValueChange={(fontFamilySans) => updateSettings({ fontFamilySans })}
@@ -1198,7 +1198,7 @@ export function AppearanceSettingsPanel() {
         />
         <FontFamilySettingsRow
           title="Prompt font"
-          description="Used when typing prompts in the composer."
+          description="Only the box you write prompts in. Mono works well here."
           options={fontOptions}
           value={settings.fontFamilyComposer}
           onValueChange={(fontFamilyComposer) => updateSettings({ fontFamilyComposer })}
@@ -1217,7 +1217,7 @@ export function AppearanceSettingsPanel() {
         />
         <FontFamilySettingsRow
           title="Code font"
-          description="Used in code blocks, diffs, and file previews."
+          description="Code blocks, diffs, and file previews."
           options={fontOptions}
           value={settings.fontFamilyCode}
           onValueChange={(fontFamilyCode) => updateSettings({ fontFamilyCode })}
@@ -1250,7 +1250,7 @@ export function AppearanceSettingsPanel() {
         />
         <FontFamilySettingsRow
           title="Terminal font"
-          description="Used in the built-in terminal."
+          description="Terminal output."
           options={fontOptions}
           value={settings.fontFamilyTerminal}
           onValueChange={(fontFamilyTerminal) => updateSettings({ fontFamilyTerminal })}
