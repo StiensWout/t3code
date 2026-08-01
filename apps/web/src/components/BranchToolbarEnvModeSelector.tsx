@@ -92,7 +92,9 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
         ) : (
           <FolderIcon className="size-3" />
         )}
-        <SelectValue />
+        <span className="@max-[38rem]/composer-context:hidden">
+          <SelectValue />
+        </span>
       </SelectTrigger>
       <SelectPopup>
         <SelectGroup>
