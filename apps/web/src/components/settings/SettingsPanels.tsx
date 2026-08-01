@@ -1242,6 +1242,7 @@ export function AppearanceSettingsPanel() {
           options={monoFontOptions}
           value={settings.fontFamilyCode}
           onValueChange={(fontFamilyCode) => updateSettings({ fontFamilyCode })}
+          requireMonospace
           size={{
             label: "Code font size",
             min: MIN_CODE_FONT_SIZE,
