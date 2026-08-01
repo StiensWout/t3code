@@ -1077,9 +1077,11 @@ code {
   font-size: var(--font-size-prompt, 0.875rem);
 }
 
-/* Phone browsers zoom the page when a focused field is under 16px, so keep the
-   floor there regardless of the preference. */
-@media (max-width: 39.999rem) {
+/* Touch browsers zoom the page when a focused field is under 16px, so keep
+   the floor there regardless of the preference. Gated on a coarse pointer:
+   the zoom quirk does not exist on desktop, where a narrow window must not
+   silently override a smaller chosen prompt size. */
+@media (max-width: 39.999rem) and (pointer: coarse) {
   .composer-editor-surface {
     font-size: max(var(--font-size-prompt, 1rem), 16px);
   }
