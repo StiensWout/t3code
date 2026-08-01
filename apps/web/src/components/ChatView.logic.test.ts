@@ -28,8 +28,33 @@ import {
   resolveSendEnvMode,
   startNewThreadForProject,
   shouldShowBranchMismatchBanner,
+  shouldReconcilePendingUserInputCursor,
   shouldWriteThreadErrorToCurrentServerThread,
 } from "./ChatView.logic";
+
+describe("shouldReconcilePendingUserInputCursor", () => {
+  it("does not focus a stale editor snapshot over a controlled replacement", () => {
+    expect(
+      shouldReconcilePendingUserInputCursor({
+        snapshot: { value: "$", cursor: 1, expandedCursor: 1 },
+        value: "$test-t3-app ",
+        cursor: 13,
+        expandedCursor: 13,
+      }),
+    ).toBe(false);
+  });
+
+  it("reconciles cursor drift after the editor has the current value", () => {
+    expect(
+      shouldReconcilePendingUserInputCursor({
+        snapshot: { value: "$test-t3-app ", cursor: 1, expandedCursor: 1 },
+        value: "$test-t3-app ",
+        cursor: 13,
+        expandedCursor: 13,
+      }),
+    ).toBe(true);
+  });
+});
 
 const environmentId = EnvironmentId.make("environment-local");
 const projectId = ProjectId.make("project-1");

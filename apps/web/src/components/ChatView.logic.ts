@@ -28,6 +28,26 @@ export const MAX_HIDDEN_MOUNTED_PREVIEW_THREADS = 3;
 
 export const LastInvokedScriptByProjectSchema = Schema.Record(ProjectId, Schema.String);
 
+export function shouldReconcilePendingUserInputCursor(input: {
+  snapshot:
+    | {
+        value: string;
+        cursor: number;
+        expandedCursor: number;
+      }
+    | null
+    | undefined;
+  value: string;
+  cursor: number;
+  expandedCursor: number;
+}): boolean {
+  return Boolean(
+    input.snapshot?.value === input.value &&
+    (input.snapshot.cursor !== input.cursor ||
+      input.snapshot.expandedCursor !== input.expandedCursor),
+  );
+}
+
 export function startNewThreadForProject(
   projectRef: ScopedProjectRef | null,
   handleNewThread: (projectRef: ScopedProjectRef) => Promise<void>,

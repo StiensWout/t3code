@@ -261,6 +261,7 @@ import {
   hasServerAcknowledgedLocalDispatch,
   isBranchMismatchDismissedForSession,
   shouldShowBranchMismatchBanner,
+  shouldReconcilePendingUserInputCursor,
   getStartedThreadModelChangeBlockReason,
   LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
   LastInvokedScriptByProjectSchema,
@@ -5091,10 +5092,16 @@ function ChatViewContent(props: ChatViewProps) {
       }));
       const snapshot = composerRef.current?.readSnapshot();
       if (
-        snapshot?.value !== value ||
-        snapshot.cursor !== nextCursor ||
-        snapshot.expandedCursor !== expandedCursor
+        shouldReconcilePendingUserInputCursor({
+          snapshot,
+          value,
+          cursor: nextCursor,
+          expandedCursor,
+        })
       ) {
+        // A controlled replacement reaches this callback before the editor has
+        // rendered its new value. Focusing that stale snapshot would emit the
+        // previous text and undo the replacement.
         composerRef.current?.focusAt(nextCursor);
       }
     },
