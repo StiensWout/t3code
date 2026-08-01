@@ -1018,6 +1018,18 @@ code {
   font-family: var(--font-mono);
 }
 
+/* Code text carries the size preference too. Block code and highlighted chat
+   blocks take it directly; inline code stays relative to its sentence so it
+   never towers over the prose around it. */
+pre {
+  font-size: var(--font-size-code, inherit);
+}
+
+.chat-markdown .chat-markdown-shiki .shiki,
+.chat-markdown pre code {
+  font-size: var(--font-size-code, inherit);
+}
+
 /* @pierre/diffs surfaces (diffs, file previews, annotatable code, search
    lines) render inside shadow roots but consult these hooks with their own
    literal stacks as fallback. Custom properties inherit across the shadow

@@ -116,6 +116,7 @@ import {
   availableFontOptions,
   fontOptionCategories,
   isFontFamilyAvailable,
+  isMonospaceFamily,
   type FontOption,
 } from "../../appearanceFonts";
 import {
@@ -1019,7 +1020,12 @@ export function AppearanceSettingsPanel() {
       ? appearanceFontStack(settings.fontFamilyComposer, sansStack)
       : sansStack;
   const codeStack = appearanceFontStack(settings.fontFamilyCode, DEFAULT_CODE_FONT_STACK);
-  const terminalStack = appearanceFontStack(settings.fontFamilyTerminal, DEFAULT_CODE_FONT_STACK);
+  // The renderer refuses proportional faces, so the preview must show the
+  // fallback the terminal will actually draw rather than the stored name.
+  const terminalStack = appearanceFontStack(
+    isMonospaceFamily(settings.fontFamilyTerminal) ? settings.fontFamilyTerminal : "",
+    DEFAULT_CODE_FONT_STACK,
+  );
   const environmentStageLabel = useEnvironmentStageLabel();
   const showEnvironmentIdentification =
     resolveEnvironmentIdentificationPillLabel(environmentStageLabel) !== null;
@@ -1273,6 +1279,7 @@ export function AppearanceSettingsPanel() {
           options={monoFontOptions}
           value={settings.fontFamilyTerminal}
           onValueChange={(fontFamilyTerminal) => updateSettings({ fontFamilyTerminal })}
+          requireMonospace
           size={{
             label: "Terminal font size",
             min: MIN_TERMINAL_FONT_SIZE,
@@ -1392,6 +1399,7 @@ function FontFamilySettingsRow({
   preview,
   value,
   onValueChange,
+  requireMonospace = false,
   size,
 }: {
   title: string;
@@ -1400,6 +1408,7 @@ function FontFamilySettingsRow({
   preview: ReactNode;
   value: string;
   onValueChange: (value: string) => void;
+  requireMonospace?: boolean;
   size: { label: string; min: number; max: number; value: number; onChange: (v: number) => void };
 }) {
   const trimmed = value.trim();
@@ -1429,9 +1438,13 @@ function FontFamilySettingsRow({
     },
     [],
   );
+  const acceptsFamily = (candidate: string) =>
+    isFontFamilyAvailable(candidate) && (!requireMonospace || isMonospaceFamily(candidate));
   const commitDraft = (next: string) => {
     setDraftSettled(true);
-    if (next.trim().length === 0 || isFontFamilyAvailable(next)) {
+    // A rejected name stays in the field, flagged: the terminal would silently
+    // fall back to its default, so the row must not claim it took the value.
+    if (next.trim().length === 0 || acceptsFamily(next)) {
       onValueChange(next);
     }
   };
@@ -1441,6 +1454,16 @@ function FontFamilySettingsRow({
     commitTimerRef.current = null;
     commitDraft(customDraft);
   };
+  // Focus only when the user picked Custom from the dropdown. The field also
+  // appears for a persisted non-catalog family, and stealing focus on arrival
+  // would hijack the keyboard from whoever just opened Appearance.
+  const focusOnCustomEntry = useRef(false);
+  const customInputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (!focusOnCustomEntry.current) return;
+    focusOnCustomEntry.current = false;
+    customInputRef.current?.focus();
+  });
   // Derived from the value, not just the picker state: client settings hydrate
   // after mount, so a persisted custom family must reveal the input on its own.
   const showCustomInput = customMode || (trimmed.length > 0 && !matchesOption);
@@ -1483,9 +1506,9 @@ function FontFamilySettingsRow({
                   aria-invalid={draftPending || undefined}
                   autoCapitalize="off"
                   autoComplete="off"
-                  autoFocus
                   className="min-w-0 flex-1"
                   maxLength={200}
+                  ref={customInputRef}
                   onBlur={flushDraft}
                   onChange={(event) => {
                     const next = event.currentTarget.value;
@@ -1560,6 +1583,7 @@ function FontFamilySettingsRow({
                     setCustomDraft("");
                     setDraftSettled(true);
                     setCustomMode(true);
+                    focusOnCustomEntry.current = true;
                     return;
                   }
                   setCustomMode(false);
