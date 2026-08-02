@@ -124,6 +124,10 @@ function normalizeComputedColor(value: string | null | undefined, fallback: stri
   return value ?? fallback;
 }
 
+function readThemeColor(styles: CSSStyleDeclaration, variable: string, fallback: string): string {
+  return normalizeComputedColor(styles.getPropertyValue(variable), fallback);
+}
+
 function terminalThemeFromApp(mountElement?: HTMLElement | null): ITheme {
   const isDark = document.documentElement.classList.contains("dark");
   const fallbackBackground = isDark ? "rgb(14, 18, 24)" : "rgb(255, 255, 255)";
@@ -134,6 +138,7 @@ function terminalThemeFromApp(mountElement?: HTMLElement | null): ITheme {
     document.body;
   const drawerStyles = getComputedStyle(drawerSurface);
   const bodyStyles = getComputedStyle(document.body);
+  const themeStyles = getComputedStyle(document.documentElement);
   const background = normalizeComputedColor(
     drawerStyles.backgroundColor,
     normalizeComputedColor(bodyStyles.backgroundColor, fallbackBackground),
@@ -142,16 +147,38 @@ function terminalThemeFromApp(mountElement?: HTMLElement | null): ITheme {
     drawerStyles.color,
     normalizeComputedColor(bodyStyles.color, fallbackForeground),
   );
+  const terminalBackground = readThemeColor(themeStyles, "--terminal-background", background);
+  const terminalForeground = readThemeColor(themeStyles, "--terminal-foreground", foreground);
+  const terminalCursor = readThemeColor(
+    themeStyles,
+    "--terminal-cursor",
+    isDark ? "rgb(180, 203, 255)" : "rgb(38, 56, 78)",
+  );
+  const terminalSelection = readThemeColor(
+    themeStyles,
+    "--terminal-selection-background",
+    isDark ? "rgba(180, 203, 255, 0.25)" : "rgba(37, 63, 99, 0.2)",
+  );
+  const terminalScrollbar = readThemeColor(
+    themeStyles,
+    "--terminal-scrollbar",
+    isDark ? "rgba(255, 255, 255, 0.1)" : "rgba(0, 0, 0, 0.15)",
+  );
+  const terminalScrollbarHover = readThemeColor(
+    themeStyles,
+    "--terminal-scrollbar-hover",
+    isDark ? "rgba(255, 255, 255, 0.18)" : "rgba(0, 0, 0, 0.25)",
+  );
 
   if (isDark) {
     return {
-      background,
-      foreground,
-      cursor: "rgb(180, 203, 255)",
-      selectionBackground: "rgba(180, 203, 255, 0.25)",
-      scrollbarSliderBackground: "rgba(255, 255, 255, 0.1)",
-      scrollbarSliderHoverBackground: "rgba(255, 255, 255, 0.18)",
-      scrollbarSliderActiveBackground: "rgba(255, 255, 255, 0.22)",
+      background: terminalBackground,
+      foreground: terminalForeground,
+      cursor: terminalCursor,
+      selectionBackground: terminalSelection,
+      scrollbarSliderBackground: terminalScrollbar,
+      scrollbarSliderHoverBackground: terminalScrollbarHover,
+      scrollbarSliderActiveBackground: terminalScrollbarHover,
       black: "rgb(24, 30, 38)",
       red: "rgb(255, 122, 142)",
       green: "rgb(134, 231, 149)",
@@ -172,13 +199,13 @@ function terminalThemeFromApp(mountElement?: HTMLElement | null): ITheme {
   }
 
   return {
-    background,
-    foreground,
-    cursor: "rgb(38, 56, 78)",
-    selectionBackground: "rgba(37, 63, 99, 0.2)",
-    scrollbarSliderBackground: "rgba(0, 0, 0, 0.15)",
-    scrollbarSliderHoverBackground: "rgba(0, 0, 0, 0.25)",
-    scrollbarSliderActiveBackground: "rgba(0, 0, 0, 0.3)",
+    background: terminalBackground,
+    foreground: terminalForeground,
+    cursor: terminalCursor,
+    selectionBackground: terminalSelection,
+    scrollbarSliderBackground: terminalScrollbar,
+    scrollbarSliderHoverBackground: terminalScrollbarHover,
+    scrollbarSliderActiveBackground: terminalScrollbarHover,
     black: "rgb(44, 53, 66)",
     red: "rgb(191, 70, 87)",
     green: "rgb(60, 126, 86)",

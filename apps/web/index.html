@@ -15,20 +15,185 @@
       (() => {
         const LIGHT_BACKGROUND = "#ffffff";
         const DARK_BACKGROUND = "#161616";
+        const T3_CHAT_BACKGROUND = "#fffaff";
+        const T3_CHAT_DARK_BACKGROUND = "#180f1b";
+        const CUSTOM_THEMES_STORAGE_KEY = "t3code:themes:v1";
+        const THEME_FOLLOW_SYSTEM_STORAGE_KEY = "t3code:theme-follow-system";
+        const SPLASH_COLORS = {
+          light: {
+            background: "#ffffff",
+            foreground: "#262626",
+            accent: "#4f46e5",
+          },
+          dark: {
+            background: "#161616",
+            foreground: "#f5f5f5",
+            accent: "#818cf8",
+          },
+          t3Chat: {
+            background: "#fffaff",
+            foreground: "#5c205f",
+            accent: "#c52d7b",
+          },
+          t3ChatDark: {
+            background: "#180f1b",
+            foreground: "#faeaf9",
+            accent: "#f06cab",
+          },
+        };
         const themeColorMeta = document.querySelector('meta[name="theme-color"]');
+
+        const isHexColor = (value) =>
+          typeof value === "string" &&
+          /^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(value);
+        const isThemePreferenceMode = (value) =>
+          value === "light" || value === "dark" || value === "system";
+        const isThemeAppearance = (value) => value === "light" || value === "dark";
+        const splitThemePreference = (preference) => {
+          const separatorIndex = preference.lastIndexOf(":");
+          if (separatorIndex <= 0) {
+            return { id: preference, mode: null, invalidMode: false };
+          }
+          const rawMode = preference.slice(separatorIndex + 1);
+          return {
+            id: preference.slice(0, separatorIndex),
+            mode: isThemePreferenceMode(rawMode) ? rawMode : null,
+            invalidMode: !isThemePreferenceMode(rawMode),
+          };
+        };
+        const readCustomTheme = (themePreference, systemDark, followSystem) => {
+          if (!themePreference) return null;
+          const preference = splitThemePreference(themePreference);
+          if (preference.invalidMode) return null;
+          try {
+            const parsed = JSON.parse(
+              window.localStorage.getItem(CUSTOM_THEMES_STORAGE_KEY) ?? "null",
+            );
+            if (!Array.isArray(parsed)) return null;
+            const candidate = parsed.find(
+              (value) =>
+                value &&
+                value.id === preference.id &&
+                isThemeAppearance(value.appearance) &&
+                value.colors,
+            );
+            if (!candidate) return null;
+
+            const preferredMode =
+              followSystem || preference.mode === "system"
+                ? systemDark
+                  ? "dark"
+                  : "light"
+                : (preference.mode ?? candidate.appearance);
+            const mode =
+              preferredMode === candidate.appearance || candidate.variants?.[preferredMode]
+                ? preferredMode
+                : candidate.appearance;
+            const colors =
+              mode === candidate.appearance
+                ? candidate.colors
+                : (candidate.variants?.[mode] ?? candidate.colors);
+            if (
+              !colors ||
+              !isHexColor(colors.canvas) ||
+              !isHexColor(colors.text) ||
+              !isHexColor(colors.accent)
+            ) {
+              return null;
+            }
+            return { theme: candidate, colors, mode };
+          } catch {
+            return null;
+          }
+        };
+
         try {
           const storedTheme = window.localStorage.getItem("t3code:theme");
-          const theme =
-            storedTheme === "light" || storedTheme === "dark" || storedTheme === "system"
-              ? storedTheme
-              : "system";
           const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-          const isDark = theme === "dark" || (theme === "system" && prefersDark);
+          const preference = splitThemePreference(storedTheme ?? "");
+          const storedFollowSystem = window.localStorage.getItem(THEME_FOLLOW_SYSTEM_STORAGE_KEY);
+          const followSystem =
+            storedFollowSystem === "true" ||
+            (storedFollowSystem === null &&
+              (storedTheme === null || storedTheme === "system" || preference.mode === "system"));
+          const customTheme = readCustomTheme(storedTheme, prefersDark, followSystem);
+          const isLegacyT3ChatDark = storedTheme === "t3-chat-dark";
+          const isT3Chat =
+            isLegacyT3ChatDark ||
+            (!preference.invalidMode &&
+              (preference.id === "t3-chat" || preference.id === "t3-chat-dark"));
+          const t3ChatMode = isLegacyT3ChatDark
+            ? followSystem
+              ? prefersDark
+                ? "dark"
+                : "light"
+              : "dark"
+            : followSystem || preference.mode === "system"
+              ? prefersDark
+                ? "dark"
+                : "light"
+              : preference.id === "t3-chat-dark"
+                ? "dark"
+                : (preference.mode ?? "light");
+          const hasStoredTheme =
+            storedTheme === "light" ||
+            storedTheme === "dark" ||
+            storedTheme === "system" ||
+            isT3Chat ||
+            customTheme !== null;
+          const theme = hasStoredTheme && storedTheme ? storedTheme : "system";
+          const isDark = customTheme
+            ? customTheme.mode === "dark"
+            : isT3Chat
+              ? t3ChatMode === "dark"
+              : followSystem
+                ? prefersDark
+                : theme === "dark";
+          if (isT3Chat || customTheme !== null) {
+            document.documentElement.dataset.themeId = isT3Chat ? "t3-chat" : customTheme.theme.id;
+          } else {
+            delete document.documentElement.dataset.themeId;
+          }
+          if (hasStoredTheme) {
+            document.documentElement.dataset.themeSelected = "true";
+          } else {
+            delete document.documentElement.dataset.themeSelected;
+          }
           document.documentElement.classList.toggle("dark", isDark);
-          const chromeColor = isDark ? DARK_BACKGROUND : LIGHT_BACKGROUND;
+          const chromeColor =
+            customTheme !== null
+              ? customTheme.colors.canvas
+              : isT3Chat
+                ? t3ChatMode === "dark"
+                  ? T3_CHAT_DARK_BACKGROUND
+                  : T3_CHAT_BACKGROUND
+                : isDark
+                  ? DARK_BACKGROUND
+                  : LIGHT_BACKGROUND;
           document.documentElement.style.backgroundColor = chromeColor;
+          if (hasStoredTheme) {
+            const splashColors =
+              customTheme !== null
+                ? {
+                    background: customTheme.colors.canvas,
+                    foreground: customTheme.colors.text,
+                    accent: customTheme.colors.accent,
+                  }
+                : isT3Chat
+                  ? t3ChatMode === "dark"
+                    ? SPLASH_COLORS.t3ChatDark
+                    : SPLASH_COLORS.t3Chat
+                  : isDark
+                    ? SPLASH_COLORS.dark
+                    : SPLASH_COLORS.light;
+            for (const [name, value] of Object.entries(splashColors)) {
+              document.documentElement.style.setProperty(`--boot-${name}`, value);
+            }
+          }
           themeColorMeta?.setAttribute("content", chromeColor);
         } catch {
+          delete document.documentElement.dataset.themeId;
+          delete document.documentElement.dataset.themeSelected;
           document.documentElement.classList.add("dark");
           document.documentElement.style.backgroundColor = DARK_BACKGROUND;
           themeColorMeta?.setAttribute("content", DARK_BACKGROUND);
@@ -63,14 +228,35 @@
       }
 
       #boot-shell {
+        position: relative;
+        overflow: hidden;
         display: flex;
         min-height: 100%;
         align-items: center;
         justify-content: center;
         background: inherit;
+        color: inherit;
+      }
+
+      html[data-theme-selected="true"] #boot-shell {
+        background: var(--boot-background);
+        color: var(--boot-foreground);
+      }
+
+      html[data-theme-selected="true"] #boot-shell::before {
+        position: absolute;
+        inset: -20%;
+        content: "";
+        background: radial-gradient(
+          circle at 50% 38%,
+          color-mix(in srgb, var(--boot-accent) 18%, transparent),
+          transparent 42%
+        );
       }
 
       #boot-shell-card {
+        position: relative;
+        z-index: 1;
         display: flex;
         align-items: center;
         justify-content: center;
