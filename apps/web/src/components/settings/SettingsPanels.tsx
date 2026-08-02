@@ -14,7 +14,7 @@ import {
   UploadIcon,
 } from "lucide-react";
 import { Link } from "@tanstack/react-router";
-import type { ChangeEvent, CSSProperties, UIEvent } from "react";
+import type { ChangeEvent, CSSProperties, KeyboardEvent, PointerEvent, UIEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import {
@@ -141,6 +141,7 @@ import {
   NumberFieldIncrement,
   NumberFieldInput,
 } from "../ui/number-field";
+import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
@@ -1116,6 +1117,345 @@ function getThemeRoleLabel(role: ThemeColorRole): string {
   return role.replace(/([A-Z])/g, " $1").replace(/^./, (character) => character.toUpperCase());
 }
 
+type ThemeColorHsv = {
+  h: number;
+  s: number;
+  v: number;
+};
+
+function clampThemeColor(value: number, min = 0, max = 1) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function normalizeThemePickerColor(value: string): string {
+  const trimmed = value.trim();
+  if (/^#[0-9a-f]{3}$/i.test(trimmed)) {
+    return `#${trimmed
+      .slice(1)
+      .split("")
+      .map((character) => `${character}${character}`)
+      .join("")}`;
+  }
+  if (/^#[0-9a-f]{4}$/i.test(trimmed)) {
+    return `#${trimmed
+      .slice(1, 4)
+      .split("")
+      .map((character) => `${character}${character}`)
+      .join("")}`;
+  }
+  if (/^#[0-9a-f]{6}$/i.test(trimmed)) return trimmed;
+  if (/^#[0-9a-f]{8}$/i.test(trimmed)) return trimmed.slice(0, 7);
+  return "#000000";
+}
+
+function themeHexToHsv(hex: string): ThemeColorHsv {
+  const normalized = normalizeThemePickerColor(hex);
+  const numeric = Number.parseInt(normalized.slice(1), 16);
+  const red = ((numeric >> 16) & 255) / 255;
+  const green = ((numeric >> 8) & 255) / 255;
+  const blue = (numeric & 255) / 255;
+  const max = Math.max(red, green, blue);
+  const min = Math.min(red, green, blue);
+  const delta = max - min;
+
+  let hue = 0;
+  if (delta !== 0) {
+    if (max === red) {
+      hue = ((green - blue) / delta) % 6;
+    } else if (max === green) {
+      hue = (blue - red) / delta + 2;
+    } else {
+      hue = (red - green) / delta + 4;
+    }
+    hue *= 60;
+    if (hue < 0) hue += 360;
+  }
+
+  return {
+    h: hue,
+    s: max === 0 ? 0 : delta / max,
+    v: max,
+  };
+}
+
+function themeHsvToHex(hue: number, saturation: number, value: number) {
+  const normalizedHue = ((hue % 360) + 360) % 360;
+  const chroma = value * saturation;
+  const x = chroma * (1 - Math.abs(((normalizedHue / 60) % 2) - 1));
+  const match = value - chroma;
+  const [red, green, blue] =
+    normalizedHue < 60
+      ? [chroma, x, 0]
+      : normalizedHue < 120
+        ? [x, chroma, 0]
+        : normalizedHue < 180
+          ? [0, chroma, x]
+          : normalizedHue < 240
+            ? [0, x, chroma]
+            : normalizedHue < 300
+              ? [x, 0, chroma]
+              : [chroma, 0, x];
+
+  return `#${[red, green, blue]
+    .map((channel) =>
+      Math.round((channel + match) * 255)
+        .toString(16)
+        .padStart(2, "0"),
+    )
+    .join("")}`;
+}
+
+function themeHexToRgb(hex: string) {
+  const numeric = Number.parseInt(normalizeThemePickerColor(hex).slice(1), 16);
+  return [numeric >> 16, (numeric >> 8) & 255, numeric & 255] as const;
+}
+
+function themeRgbToHex(value: string): string | null {
+  const normalized = value
+    .trim()
+    .replace(/^rgb\(\s*/i, "")
+    .replace(/\s*\)$/, "");
+  const channels = normalized
+    .split(/[,\s]+/)
+    .filter(Boolean)
+    .map(Number);
+  if (
+    channels.length !== 3 ||
+    channels.some((channel) => !Number.isInteger(channel) || channel < 0 || channel > 255)
+  ) {
+    return null;
+  }
+
+  return `#${channels.map((channel) => channel.toString(16).padStart(2, "0")).join("")}`;
+}
+
+function themeRgbValue(hex: string) {
+  return themeHexToRgb(hex).join(", ");
+}
+
+function ThemeColorPickerPanel({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const normalizedValue = normalizeThemePickerColor(value);
+  const [hsv, setHsv] = useState(() => themeHexToHsv(normalizedValue));
+  const [hexDraft, setHexDraft] = useState(normalizedValue);
+  const [rgbDraft, setRgbDraft] = useState(() => themeRgbValue(normalizedValue));
+  const currentColor = themeHsvToHex(hsv.h, hsv.s, hsv.v);
+  const currentRgb = themeRgbValue(currentColor);
+
+  useEffect(() => {
+    const nextHsv = themeHexToHsv(normalizedValue);
+    setHsv(nextHsv);
+    setHexDraft(normalizedValue);
+    setRgbDraft(themeRgbValue(normalizedValue));
+  }, [normalizedValue]);
+
+  const commitHsv = useCallback(
+    (nextHsv: ThemeColorHsv) => {
+      setHsv(nextHsv);
+      const nextColor = themeHsvToHex(nextHsv.h, nextHsv.s, nextHsv.v);
+      setHexDraft(nextColor);
+      setRgbDraft(themeRgbValue(nextColor));
+      onChange(nextColor);
+    },
+    [onChange],
+  );
+
+  const updateFromPlane = useCallback(
+    (event: PointerEvent<HTMLDivElement>) => {
+      const bounds = event.currentTarget.getBoundingClientRect();
+      const saturation = clampThemeColor((event.clientX - bounds.left) / bounds.width);
+      const value = 1 - clampThemeColor((event.clientY - bounds.top) / bounds.height);
+      commitHsv({ ...hsv, s: saturation, v: value });
+    },
+    [commitHsv, hsv],
+  );
+
+  const updateFromHue = useCallback(
+    (event: PointerEvent<HTMLDivElement>) => {
+      const bounds = event.currentTarget.getBoundingClientRect();
+      const hue = clampThemeColor((event.clientX - bounds.left) / bounds.width) * 360;
+      commitHsv({ ...hsv, h: hue });
+    },
+    [commitHsv, hsv],
+  );
+
+  const handleHueKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const step = event.shiftKey ? 10 : 1;
+    const direction = event.key === "ArrowRight" || event.key === "ArrowUp" ? 1 : -1;
+    if (!["ArrowDown", "ArrowLeft", "ArrowRight", "ArrowUp"].includes(event.key)) return;
+    event.preventDefault();
+    commitHsv({ ...hsv, h: (hsv.h + direction * step + 360) % 360 });
+  };
+
+  const handlePointerDown = (handler: (event: PointerEvent<HTMLDivElement>) => void) => {
+    return (event: PointerEvent<HTMLDivElement>) => {
+      event.currentTarget.setPointerCapture(event.pointerId);
+      handler(event);
+    };
+  };
+
+  const handleHexChange = (nextValue: string) => {
+    setHexDraft(nextValue);
+    if (!/^#[0-9a-f]{6}$/i.test(nextValue)) return;
+    const nextHsv = themeHexToHsv(nextValue);
+    setHsv(nextHsv);
+    setRgbDraft(themeRgbValue(nextValue));
+    onChange(nextValue.toLowerCase());
+  };
+
+  const handleRgbChange = (nextValue: string) => {
+    setRgbDraft(nextValue);
+    const nextColor = themeRgbToHex(nextValue);
+    if (!nextColor) return;
+    setHsv(themeHexToHsv(nextColor));
+    setHexDraft(nextColor);
+    onChange(nextColor);
+  };
+
+  return (
+    <div className="w-64 bg-popover">
+      <div className="flex items-center justify-between border-b border-border/70 px-4 py-3">
+        <div className="min-w-0">
+          <p className="truncate text-xs font-semibold text-foreground">{label}</p>
+          <p className="text-[11px] text-muted-foreground">Choose a color</p>
+        </div>
+        <span
+          className="size-7 shrink-0 rounded-full border border-black/10 shadow-[inset_0_0_0_1px_rgb(255_255_255_/_28%),0_1px_2px_rgb(0_0_0_/_18%)] dark:border-white/15 dark:shadow-[inset_0_0_0_1px_rgb(255_255_255_/_18%),0_1px_2px_rgb(0_0_0_/_35%)]"
+          style={{ backgroundColor: currentColor }}
+        />
+      </div>
+      <div className="grid gap-3 px-3 pb-3 pt-3">
+        <div
+          className="relative h-32 cursor-crosshair touch-none overflow-hidden rounded-lg"
+          style={{
+            backgroundColor: `hsl(${hsv.h} 100% 50%)`,
+            backgroundImage:
+              "linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, transparent)",
+          }}
+          onPointerDown={handlePointerDown(updateFromPlane)}
+          onPointerMove={(event) => {
+            if (event.currentTarget.hasPointerCapture(event.pointerId)) updateFromPlane(event);
+          }}
+        >
+          <span
+            className="pointer-events-none absolute size-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white shadow-[0_0_0_1px_rgb(0_0_0/0.4)]"
+            style={{ left: `${hsv.s * 100}%`, top: `${(1 - hsv.v) * 100}%` }}
+          />
+        </div>
+        <div
+          aria-label={`${label} hue`}
+          aria-valuemax={360}
+          aria-valuemin={0}
+          aria-valuenow={Math.round(hsv.h)}
+          className="relative h-2.5 cursor-pointer touch-none rounded-full shadow-[inset_0_0_0_1px_rgb(0_0_0_/_12%)]"
+          role="slider"
+          style={{
+            background: "linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00)",
+          }}
+          tabIndex={0}
+          onKeyDown={handleHueKeyDown}
+          onPointerDown={handlePointerDown(updateFromHue)}
+          onPointerMove={(event) => {
+            if (event.currentTarget.hasPointerCapture(event.pointerId)) updateFromHue(event);
+          }}
+        >
+          <span
+            className="pointer-events-none absolute top-1/2 size-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white shadow-[0_0_0_1px_rgb(0_0_0/0.4)]"
+            style={{ left: `${(hsv.h / 360) * 100}%`, backgroundColor: currentColor }}
+          />
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <label className="grid min-w-0 gap-1">
+            <span className="px-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+              HEX
+            </span>
+            <span className="flex min-w-0 items-center gap-2 rounded-lg border border-input bg-background px-2 focus-within:border-ring">
+              <span
+                className="size-3.5 shrink-0 rounded-full"
+                style={{ backgroundColor: currentColor }}
+              />
+              <input
+                aria-label={`${label} picker hex value`}
+                className="h-8 min-w-0 flex-1 bg-transparent font-mono text-xs text-foreground outline-none"
+                onBlur={() => {
+                  setHexDraft(currentColor);
+                  setRgbDraft(currentRgb);
+                }}
+                onChange={(event) => handleHexChange(event.currentTarget.value)}
+                spellCheck={false}
+                value={hexDraft}
+              />
+            </span>
+          </label>
+          <label className="grid min-w-0 gap-1">
+            <span className="px-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+              RGB
+            </span>
+            <span className="flex min-w-0 items-center rounded-lg border border-input bg-background px-2 focus-within:border-ring">
+              <input
+                aria-label={`${label} picker RGB value`}
+                className="h-8 min-w-0 flex-1 bg-transparent font-mono text-xs text-foreground outline-none"
+                onBlur={() => {
+                  setHexDraft(currentColor);
+                  setRgbDraft(currentRgb);
+                }}
+                onChange={(event) => handleRgbChange(event.currentTarget.value)}
+                spellCheck={false}
+                value={rgbDraft}
+              />
+            </span>
+          </label>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ThemeColorPicker({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <Popover>
+      <PopoverTrigger
+        render={
+          <button
+            aria-label={`Choose ${label} color`}
+            className="relative flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-full border border-black/10 transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/70 focus-visible:ring-offset-2 focus-visible:ring-offset-background dark:border-white/15 dark:focus-visible:ring-blue-400/70"
+            title={`Choose ${label} color`}
+            type="button"
+          >
+            <span
+              className="absolute inset-0.5 rounded-full shadow-[inset_0_0_0_1px_rgb(255_255_255_/_28%),0_1px_2px_rgb(0_0_0_/_14%)] dark:shadow-[inset_0_0_0_1px_rgb(255_255_255_/_18%),0_1px_2px_rgb(0_0_0_/_30%)]"
+              style={{ backgroundColor: value }}
+            />
+          </button>
+        }
+      />
+      <PopoverPopup
+        align="start"
+        className="overflow-hidden rounded-2xl border border-border/70 p-0 shadow-2xl [--viewport-inline-padding:0px] [&_[data-slot=popover-viewport]]:p-0"
+        side="bottom"
+        sideOffset={10}
+      >
+        <ThemeColorPickerPanel label={label} onChange={onChange} value={value} />
+      </PopoverPopup>
+    </Popover>
+  );
+}
+
 function ThemeColorField({
   role,
   value,
@@ -1127,27 +1467,11 @@ function ThemeColorField({
 }) {
   const label = getThemeRoleLabel(role);
   const isColorValue = /^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(value);
-  const pickerValue = /^#[0-9a-f]{6}$/i.test(value) ? value : "#000000";
   const swatchValue = isColorValue ? value : "#000000";
 
   return (
     <div className="group flex min-h-11 min-w-0 items-center gap-2 border-b border-zinc-200/70 px-1.5 py-1.5 transition-colors hover:bg-zinc-100/60 dark:border-zinc-800/70 dark:hover:bg-zinc-900/60">
-      <label
-        className="relative flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-full transition-transform hover:scale-105 focus-within:ring-2 focus-within:ring-blue-500/70 focus-within:ring-offset-2 focus-within:ring-offset-background dark:focus-within:ring-blue-400/70"
-        title={`Choose ${label} color`}
-      >
-        <span
-          className="absolute inset-0.5 rounded-full shadow-[inset_0_0_0_1px_rgb(0_0_0_/_14%),0_1px_2px_rgb(0_0_0_/_14%)] dark:shadow-[inset_0_0_0_1px_rgb(255_255_255_/_18%),0_1px_2px_rgb(0_0_0_/_30%)]"
-          style={{ backgroundColor: swatchValue }}
-        />
-        <input
-          aria-label={`Choose ${label} color`}
-          className="absolute inset-0 size-full cursor-pointer opacity-0"
-          onChange={(event) => onChange(event.currentTarget.value)}
-          type="color"
-          value={pickerValue}
-        />
-      </label>
+      <ThemeColorPicker label={label} onChange={onChange} value={swatchValue} />
       <span className="min-w-0 flex-1 truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">
         {label}
       </span>
@@ -1234,7 +1558,9 @@ function ThemeEditorDialog({
 
     try {
       const baseAppearance =
-        editingTheme && modeSelection === "both" ? editingTheme.appearance : activeAppearance;
+        editingTheme && getThemeModes(editingTheme).length > 1
+          ? editingTheme.appearance
+          : activeAppearance;
       const variantAppearance = baseAppearance === "light" ? "dark" : "light";
       const variants =
         modeSelection === "both"
@@ -1920,10 +2246,12 @@ function ThemeLibrary({
 
   const handleConfirmRemoveTheme = useCallback(() => {
     if (!themeToRemove) return;
-    if (getThemeDefinition(theme)?.id === themeToRemove.id) setTheme("system");
+    if (getThemeDefinition(theme)?.id === themeToRemove.id) {
+      setTheme(followSystem ? "system" : initialAppearance);
+    }
     removeCustomTheme(themeToRemove.id);
     setThemeToRemove(null);
-  }, [setTheme, theme, themeToRemove]);
+  }, [followSystem, initialAppearance, setTheme, theme, themeToRemove]);
 
   const handleCreatedTheme = useCallback(
     (createdTheme: ThemeDefinition) => {
@@ -1941,7 +2269,8 @@ function ThemeLibrary({
 
   const handleEditedTheme = useCallback(
     (updatedTheme: ThemeDefinition) => {
-      if (getThemeDefinition(theme)?.id === updatedTheme.id) {
+      const wasActive = getThemeDefinition(theme)?.id === updatedTheme.id;
+      if (wasActive) {
         const selectedMode = followSystem ? null : getThemePreferenceMode(theme);
         const nextTheme =
           selectedMode && getThemeColorsForMode(updatedTheme, selectedMode)
@@ -1955,7 +2284,7 @@ function ThemeLibrary({
         stackedThreadToast({
           type: "success",
           title: `${updatedTheme.label} saved`,
-          description: "Your changes are now active.",
+          description: wasActive ? "Your changes are now active." : "Your changes are saved.",
         }),
       );
     },
