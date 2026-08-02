@@ -113,6 +113,15 @@ import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
 import { formatRelativeTimeLabel, getRelativeTimeState } from "../../timestampFormat";
 import { Button } from "../ui/button";
 import {
+  AlertDialog,
+  AlertDialogClose,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogPopup,
+  AlertDialogTitle,
+} from "../ui/alert-dialog";
+import {
   Dialog,
   DialogDescription,
   DialogFooter,
@@ -1822,6 +1831,7 @@ function ThemeLibrary({
 }) {
   const [isImportOpen, setIsImportOpen] = useState(false);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [themeToRemove, setThemeToRemove] = useState<ThemeDefinition | null>(null);
   const activeTheme = getThemeDefinition(theme);
   const standardThemes = getStandardThemeCards();
   const maintainerThemes = [T3_CHAT_THEME];
@@ -1840,14 +1850,16 @@ function ThemeLibrary({
     [activeTheme, initialAppearance, setFollowSystem, setTheme],
   );
 
-  const handleRemoveTheme = useCallback(
-    (customTheme: ThemeDefinition) => {
-      if (!window.confirm(`Remove the “${customTheme.label}” theme?`)) return;
-      if (getThemeDefinition(theme)?.id === customTheme.id) setTheme("system");
-      removeCustomTheme(customTheme.id);
-    },
-    [setTheme, theme],
-  );
+  const handleRemoveTheme = useCallback((customTheme: ThemeDefinition) => {
+    setThemeToRemove(customTheme);
+  }, []);
+
+  const handleConfirmRemoveTheme = useCallback(() => {
+    if (!themeToRemove) return;
+    if (getThemeDefinition(theme)?.id === themeToRemove.id) setTheme("system");
+    removeCustomTheme(themeToRemove.id);
+    setThemeToRemove(null);
+  }, [setTheme, theme, themeToRemove]);
 
   const handleCreatedTheme = useCallback(
     (createdTheme: ThemeDefinition) => {
@@ -1983,6 +1995,28 @@ function ThemeLibrary({
         onOpenChange={setIsImportOpen}
         open={isImportOpen}
       />
+      <AlertDialog
+        open={themeToRemove !== null}
+        onOpenChange={(open) => {
+          if (!open) setThemeToRemove(null);
+        }}
+      >
+        <AlertDialogPopup>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove “{themeToRemove?.label}”?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This removes the theme from your saved themes. You can add it again by importing its
+              JSON file.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
+            <Button variant="destructive" onClick={handleConfirmRemoveTheme}>
+              Remove theme
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogPopup>
+      </AlertDialog>
     </div>
   );
 }
