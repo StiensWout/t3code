@@ -1056,6 +1056,8 @@ const THEME_EDITOR_PRIMARY_ROLES: ReadonlyArray<ThemeColorRole> = [
   "messageAction",
 ];
 
+const THEME_EDITOR_SIMPLE_ROLES: ReadonlyArray<ThemeColorRole> = ["canvas", "accent"];
+
 const THEME_EDITOR_STATUS_ROLES: ReadonlyArray<ThemeColorRole> = [
   "error",
   "errorForeground",
@@ -1089,6 +1091,8 @@ function getThemeEditorColorsByAppearance(): ThemeEditorColorsByAppearance {
 
 function getThemeRoleLabel(role: ThemeColorRole): string {
   const labels: Partial<Record<ThemeColorRole, string>> = {
+    canvas: "Background",
+    accent: "Accent color",
     errorForeground: "Error text",
     errorSurface: "Error background",
     warningForeground: "Warning text",
@@ -1156,6 +1160,7 @@ function CreateThemeDialog({
   const [name, setName] = useState("");
   const [modeSelection, setModeSelection] = useState<ThemeEditorModeSelection>("single");
   const [activeAppearance, setActiveAppearance] = useState<ThemeAppearance>(initialAppearance);
+  const [isAdvanced, setIsAdvanced] = useState(false);
   const [colorsByAppearance, setColorsByAppearance] = useState<ThemeEditorColorsByAppearance>(() =>
     getThemeEditorColorsByAppearance(),
   );
@@ -1167,6 +1172,7 @@ function CreateThemeDialog({
       setName("");
       setModeSelection("single");
       setActiveAppearance(initialAppearance);
+      setIsAdvanced(false);
       setColorsByAppearance(getThemeEditorColorsByAppearance());
       setError(null);
     }
@@ -1286,62 +1292,100 @@ function CreateThemeDialog({
             </div>
           </div>
 
-          <div className="space-y-2">
-            <div>
-              <h3 className="text-sm font-medium">Main colors</h3>
-              <p className="text-xs leading-relaxed text-muted-foreground">
-                Surfaces, text, accents, and message actions.
-              </p>
-            </div>
-            <div className="grid gap-2 sm:grid-cols-2">
-              {THEME_EDITOR_PRIMARY_ROLES.map((role) => (
-                <ThemeColorField
-                  key={role}
-                  onChange={(value) => updateColor(role, value)}
-                  role={role}
-                  value={colorsByAppearance[activeAppearance][role]}
+          <div className="space-y-3">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-medium">
+                  {isAdvanced ? "Theme colors" : "Basic colors"}
+                </h3>
+                <p className="text-xs leading-relaxed text-muted-foreground">
+                  {isAdvanced
+                    ? "Customize every color role used by T3 Code."
+                    : "Choose a background and accent. T3 Code fills in the rest."}
+                </p>
+              </div>
+              <label className="flex shrink-0 cursor-pointer items-center gap-2 pt-0.5 text-sm font-medium">
+                <span>Advanced</span>
+                <Switch
+                  aria-label="Use advanced theme colors"
+                  checked={isAdvanced}
+                  onCheckedChange={(checked) => setIsAdvanced(Boolean(checked))}
                 />
-              ))}
+              </label>
             </div>
-          </div>
 
-          <div className="space-y-2">
-            <div>
-              <h3 className="text-sm font-medium">Status colors</h3>
-              <p className="text-xs leading-relaxed text-muted-foreground">
-                Errors, warnings, and update notices.
-              </p>
-            </div>
-            <div className="grid gap-2 sm:grid-cols-2">
-              {THEME_EDITOR_STATUS_ROLES.map((role) => (
-                <ThemeColorField
-                  key={role}
-                  onChange={(value) => updateColor(role, value)}
-                  role={role}
-                  value={colorsByAppearance[activeAppearance][role]}
-                />
-              ))}
-            </div>
-          </div>
+            {isAdvanced ? (
+              <>
+                <div className="space-y-2">
+                  <div>
+                    <h4 className="text-sm font-medium">Main colors</h4>
+                    <p className="text-xs leading-relaxed text-muted-foreground">
+                      Surfaces, text, accents, and message actions.
+                    </p>
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {THEME_EDITOR_PRIMARY_ROLES.map((role) => (
+                      <ThemeColorField
+                        key={role}
+                        onChange={(value) => updateColor(role, value)}
+                        role={role}
+                        value={colorsByAppearance[activeAppearance][role]}
+                      />
+                    ))}
+                  </div>
+                </div>
 
-          <details className="group rounded-xl border border-border/70 bg-muted/20">
-            <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-3 text-sm font-medium [&::-webkit-details-marker]:hidden">
-              <span>Advanced colors</span>
-              <span className="text-xs font-normal text-muted-foreground">
-                {THEME_EDITOR_ADVANCED_ROLES.length} more roles
-              </span>
-            </summary>
-            <div className="grid gap-2 border-t border-border/70 p-3 sm:grid-cols-2">
-              {THEME_EDITOR_ADVANCED_ROLES.map((role) => (
-                <ThemeColorField
-                  key={role}
-                  onChange={(value) => updateColor(role, value)}
-                  role={role}
-                  value={colorsByAppearance[activeAppearance][role]}
-                />
-              ))}
-            </div>
-          </details>
+                <div className="space-y-2">
+                  <div>
+                    <h4 className="text-sm font-medium">Status colors</h4>
+                    <p className="text-xs leading-relaxed text-muted-foreground">
+                      Errors, warnings, and update notices.
+                    </p>
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {THEME_EDITOR_STATUS_ROLES.map((role) => (
+                      <ThemeColorField
+                        key={role}
+                        onChange={(value) => updateColor(role, value)}
+                        role={role}
+                        value={colorsByAppearance[activeAppearance][role]}
+                      />
+                    ))}
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <div>
+                    <h4 className="text-sm font-medium">Additional colors</h4>
+                    <p className="text-xs leading-relaxed text-muted-foreground">
+                      Fine-tune the remaining interface, code, and terminal roles.
+                    </p>
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {THEME_EDITOR_ADVANCED_ROLES.map((role) => (
+                      <ThemeColorField
+                        key={role}
+                        onChange={(value) => updateColor(role, value)}
+                        role={role}
+                        value={colorsByAppearance[activeAppearance][role]}
+                      />
+                    ))}
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="grid gap-2 sm:grid-cols-2">
+                {THEME_EDITOR_SIMPLE_ROLES.map((role) => (
+                  <ThemeColorField
+                    key={role}
+                    onChange={(value) => updateColor(role, value)}
+                    role={role}
+                    value={colorsByAppearance[activeAppearance][role]}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
 
           {error ? (
             <div
