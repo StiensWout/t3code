@@ -131,7 +131,11 @@ function normalizeComputedColor(value: string | null | undefined, fallback: stri
   return value ?? fallback;
 }
 
-function terminalThemeFromApp(mountElement?: HTMLElement | null): GhosttyTheme {
+function readThemeColor(styles: CSSStyleDeclaration, variable: string, fallback: string): string {
+  return normalizeComputedColor(styles.getPropertyValue(variable), fallback);
+}
+
+function terminalThemeFromApp(mountElement?: HTMLElement | null): ITheme {
   const isDark = document.documentElement.classList.contains("dark");
   const fallbackBackground = isDark ? "rgb(14, 18, 24)" : "rgb(255, 255, 255)";
   const fallbackForeground = isDark ? "rgb(237, 241, 247)" : "rgb(28, 33, 41)";
@@ -141,6 +145,7 @@ function terminalThemeFromApp(mountElement?: HTMLElement | null): GhosttyTheme {
     document.body;
   const drawerStyles = getComputedStyle(drawerSurface);
   const bodyStyles = getComputedStyle(document.body);
+  const themeStyles = getComputedStyle(document.documentElement);
   const background = normalizeComputedColor(
     drawerStyles.backgroundColor,
     normalizeComputedColor(bodyStyles.backgroundColor, fallbackBackground),
@@ -149,20 +154,81 @@ function terminalThemeFromApp(mountElement?: HTMLElement | null): GhosttyTheme {
     drawerStyles.color,
     normalizeComputedColor(bodyStyles.color, fallbackForeground),
   );
+  const terminalBackground = readThemeColor(themeStyles, "--terminal-background", background);
+  const terminalForeground = readThemeColor(themeStyles, "--terminal-foreground", foreground);
+  const terminalCursor = readThemeColor(
+    themeStyles,
+    "--terminal-cursor",
+    isDark ? "rgb(180, 203, 255)" : "rgb(38, 56, 78)",
+  );
+  const terminalSelection = readThemeColor(
+    themeStyles,
+    "--terminal-selection-background",
+    isDark ? "rgba(180, 203, 255, 0.25)" : "rgba(37, 63, 99, 0.2)",
+  );
+  const terminalScrollbar = readThemeColor(
+    themeStyles,
+    "--terminal-scrollbar",
+    isDark ? "rgba(255, 255, 255, 0.1)" : "rgba(0, 0, 0, 0.15)",
+  );
+  const terminalScrollbarHover = readThemeColor(
+    themeStyles,
+    "--terminal-scrollbar-hover",
+    isDark ? "rgba(255, 255, 255, 0.18)" : "rgba(0, 0, 0, 0.25)",
+  );
+
+  if (isDark) {
+    return {
+      background: terminalBackground,
+      foreground: terminalForeground,
+      cursor: terminalCursor,
+      selectionBackground: terminalSelection,
+      scrollbarSliderBackground: terminalScrollbar,
+      scrollbarSliderHoverBackground: terminalScrollbarHover,
+      scrollbarSliderActiveBackground: terminalScrollbarHover,
+      black: "rgb(24, 30, 38)",
+      red: "rgb(255, 122, 142)",
+      green: "rgb(134, 231, 149)",
+      yellow: "rgb(244, 205, 114)",
+      blue: "rgb(137, 190, 255)",
+      magenta: "rgb(208, 176, 255)",
+      cyan: "rgb(124, 232, 237)",
+      white: "rgb(210, 218, 230)",
+      brightBlack: "rgb(110, 120, 136)",
+      brightRed: "rgb(255, 168, 180)",
+      brightGreen: "rgb(176, 245, 186)",
+      brightYellow: "rgb(255, 224, 149)",
+      brightBlue: "rgb(174, 210, 255)",
+      brightMagenta: "rgb(229, 203, 255)",
+      brightCyan: "rgb(167, 244, 247)",
+      brightWhite: "rgb(244, 247, 252)",
+    };
+  }
 
   return {
-    background: parseTerminalColor(
-      background,
-      isDark ? { r: 14, g: 18, b: 24 } : { r: 255, g: 255, b: 255 },
-    ),
-    foreground: parseTerminalColor(
-      foreground,
-      isDark ? { r: 237, g: 241, b: 247 } : { r: 28, g: 33, b: 41 },
-    ),
-    cursor: isDark ? { r: 180, g: 203, b: 255 } : { r: 38, g: 56, b: 78 },
-    // Matches the xterm selection overlays this renderer replaced; the text
-    // color underneath is left unchanged for contrast in both themes.
-    selectionBackground: isDark ? "rgba(180, 203, 255, 0.25)" : "rgba(37, 63, 99, 0.2)",
+    background: terminalBackground,
+    foreground: terminalForeground,
+    cursor: terminalCursor,
+    selectionBackground: terminalSelection,
+    scrollbarSliderBackground: terminalScrollbar,
+    scrollbarSliderHoverBackground: terminalScrollbarHover,
+    scrollbarSliderActiveBackground: terminalScrollbarHover,
+    black: "rgb(44, 53, 66)",
+    red: "rgb(191, 70, 87)",
+    green: "rgb(60, 126, 86)",
+    yellow: "rgb(146, 112, 35)",
+    blue: "rgb(72, 102, 163)",
+    magenta: "rgb(132, 86, 149)",
+    cyan: "rgb(53, 127, 141)",
+    white: "rgb(210, 215, 223)",
+    brightBlack: "rgb(112, 123, 140)",
+    brightRed: "rgb(212, 95, 112)",
+    brightGreen: "rgb(85, 148, 111)",
+    brightYellow: "rgb(173, 133, 45)",
+    brightBlue: "rgb(91, 124, 194)",
+    brightMagenta: "rgb(153, 107, 172)",
+    brightCyan: "rgb(70, 149, 164)",
+    brightWhite: "rgb(236, 240, 246)",
   };
 }
 

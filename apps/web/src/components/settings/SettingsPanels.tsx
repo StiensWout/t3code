@@ -1,15 +1,20 @@
 import {
   ArchiveIcon,
   ArchiveX,
+  DownloadIcon,
   InfoIcon,
   LoaderIcon,
+  MoonIcon,
   PlusIcon,
   RefreshCwIcon,
   SettingsIcon,
+  SunIcon,
+  Trash2Icon,
+  UploadIcon,
 } from "lucide-react";
 import { Link } from "@tanstack/react-router";
-import type { CSSProperties } from "react";
-import { useCallback, useMemo, useRef, useState } from "react";
+import type { ChangeEvent, CSSProperties, UIEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import {
   defaultInstanceIdForDriver,
@@ -63,7 +68,27 @@ import {
 } from "../SidebarStageBackdrop";
 import { isElectron } from "../../env";
 import { buildHostedChannelSelectionUrl, type HostedAppChannel } from "../../hostedPairing";
+import { useCustomThemes } from "../../hooks/useCustomThemes";
 import { useTheme } from "../../hooks/useTheme";
+import { cn } from "../../lib/utils";
+import {
+  THEME_COLOR_ROLES,
+  THEME_FILE_VERSION,
+  getThemeColorsForMode,
+  getThemeDefinition,
+  getThemeModes,
+  getThemePreferenceMode,
+  installCustomTheme,
+  parseThemeFile,
+  removeCustomTheme,
+  serializeThemeFile,
+  themePreferenceForMode,
+  type ThemeAppearance,
+  type ThemeColorRole,
+  type ThemeDefinition,
+  T3_CHAT_DARK_THEME,
+  T3_CHAT_THEME,
+} from "../../themePalette";
 import { usePrimarySettings, useUpdatePrimarySettings } from "../../hooks/useSettings";
 import { useThreadActions } from "../../hooks/useThreadActions";
 import { useDesktopUpdateState } from "../../state/desktopUpdate";
@@ -97,6 +122,7 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { DraftInput } from "../ui/draft-input";
+import { Input } from "../ui/input";
 import {
   NumberField,
   NumberFieldDecrement,
@@ -139,21 +165,6 @@ import {
 import { searchableSetting } from "./settingsSearch";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { useAtomCommand } from "../../state/use-atom-command";
-
-const THEME_OPTIONS = [
-  {
-    value: "system",
-    label: "System",
-  },
-  {
-    value: "light",
-    label: "Light",
-  },
-  {
-    value: "dark",
-    label: "Dark",
-  },
-] as const;
 
 const ENVIRONMENT_IDENTIFICATION_LABELS: Record<EnvironmentIdentificationMode, string> = {
   artwork: "Artwork",
@@ -948,8 +959,930 @@ function BackgroundActivityAdvancedDialog({
   );
 }
 
+const THEME_PREVIEW_ROLES = [
+  "sidebar",
+  "canvas",
+  "surface",
+  "accentSurface",
+  "accent",
+  "messageSurface",
+  "messageAction",
+] as const;
+type ThemePreviewRole = (typeof THEME_PREVIEW_ROLES)[number];
+type ThemeCardPreview = {
+  mode: ThemeAppearance;
+  colors: Readonly<Record<ThemePreviewRole, string>>;
+};
+type ThemeCardDefinition = {
+  id: string;
+  label: string;
+  previews: ReadonlyArray<ThemeCardPreview>;
+};
+
+const STANDARD_THEME_PREVIEW_COLORS: Record<
+  ThemeAppearance,
+  Readonly<Record<ThemePreviewRole, string>>
+> = {
+  light: {
+    sidebar: "#fafafa",
+    canvas: "#fcfcfc",
+    surface: "#ffffff",
+    accentSurface: "#f4f4f5",
+    accent: "#f4f4f5",
+    messageSurface: "#e4e4e7",
+    messageAction: "#4f46e5",
+  },
+  dark: {
+    sidebar: "#0f0f10",
+    canvas: "#0a0a0a",
+    surface: "#121212",
+    accentSurface: "#27272a",
+    accent: "#1c1c1f",
+    messageSurface: "#27272a",
+    messageAction: "#8b9cff",
+  },
+};
+
+function getStandardThemeCards(): ReadonlyArray<ThemeCardDefinition> {
+  return [
+    {
+      id: "default",
+      label: "Default",
+      previews: (["light", "dark"] as const).map((mode) => ({
+        mode,
+        colors: STANDARD_THEME_PREVIEW_COLORS[mode],
+      })),
+    },
+  ];
+}
+
+function getThemeCardDefinition(theme: ThemeDefinition): ThemeCardDefinition {
+  return {
+    id: theme.id,
+    label: theme.label,
+    previews: getThemeModes(theme).map((mode) => {
+      const colors = getThemeColorsForMode(theme, mode) ?? theme.colors;
+      return {
+        mode,
+        colors: {
+          sidebar: colors.sidebar,
+          canvas: colors.canvas,
+          surface: colors.surface,
+          accentSurface: colors.accentSurface,
+          accent: colors.accent,
+          messageSurface: colors.messageSurface,
+          messageAction: colors.messageAction,
+        },
+      };
+    }),
+  };
+}
+
+const THEME_EDITOR_PRIMARY_ROLES: ReadonlyArray<ThemeColorRole> = [
+  "canvas",
+  "chrome",
+  "sidebar",
+  "surface",
+  "text",
+  "textMuted",
+  "placeholder",
+  "secondaryLabel",
+  "iconMuted",
+  "accent",
+  "messageSurface",
+  "messageAction",
+];
+
+const THEME_EDITOR_ADVANCED_ROLES = THEME_COLOR_ROLES.filter(
+  (role) => !THEME_EDITOR_PRIMARY_ROLES.includes(role),
+);
+
+type ThemeEditorColors = Record<ThemeColorRole, string>;
+type ThemeEditorModeSelection = "single" | "both";
+type ThemeEditorColorsByAppearance = Record<ThemeAppearance, ThemeEditorColors>;
+
+function getThemeEditorDefaults(appearance: ThemeAppearance): ThemeEditorColors {
+  return {
+    ...(appearance === "dark" ? T3_CHAT_DARK_THEME.colors : T3_CHAT_THEME.colors),
+  };
+}
+
+function getThemeEditorColorsByAppearance(): ThemeEditorColorsByAppearance {
+  return {
+    light: getThemeEditorDefaults("light"),
+    dark: getThemeEditorDefaults("dark"),
+  };
+}
+
+function getThemeRoleLabel(role: ThemeColorRole): string {
+  return role.replace(/([A-Z])/g, " $1").replace(/^./, (character) => character.toUpperCase());
+}
+
+function ThemeColorField({
+  role,
+  value,
+  onChange,
+}: {
+  role: ThemeColorRole;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const label = getThemeRoleLabel(role);
+  const pickerValue = /^#[0-9a-f]{6}$/i.test(value) ? value : "#000000";
+
+  return (
+    <div className="flex items-start justify-between gap-3 rounded-lg border border-border/70 bg-background/40 px-3 py-2">
+      <label className="min-w-0 flex-1 text-sm leading-snug" htmlFor={`${role}-hex`}>
+        {label}
+      </label>
+      <div className="flex shrink-0 items-center gap-2">
+        <input
+          aria-label={`Choose ${label} color`}
+          className="size-7 cursor-pointer rounded-md border border-border bg-transparent p-0.5"
+          onChange={(event) => onChange(event.currentTarget.value)}
+          type="color"
+          value={pickerValue}
+        />
+        <Input
+          aria-label={`${label} hex value`}
+          className="w-28"
+          id={`${role}-hex`}
+          onChange={(event) => onChange(event.currentTarget.value)}
+          size="sm"
+          value={value}
+        />
+      </div>
+    </div>
+  );
+}
+
+function CreateThemeDialog({
+  open,
+  onOpenChange,
+  onCreated,
+  initialAppearance,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onCreated: (theme: ThemeDefinition) => void;
+  initialAppearance: ThemeAppearance;
+}) {
+  const [name, setName] = useState("");
+  const [modeSelection, setModeSelection] = useState<ThemeEditorModeSelection>("single");
+  const [activeAppearance, setActiveAppearance] = useState<ThemeAppearance>(initialAppearance);
+  const [colorsByAppearance, setColorsByAppearance] = useState<ThemeEditorColorsByAppearance>(() =>
+    getThemeEditorColorsByAppearance(),
+  );
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    setName("");
+    setModeSelection("single");
+    setActiveAppearance(initialAppearance);
+    setColorsByAppearance(getThemeEditorColorsByAppearance());
+    setError(null);
+  }, [initialAppearance, open]);
+
+  const updateColor = useCallback(
+    (role: ThemeColorRole, value: string) => {
+      setColorsByAppearance((current) => ({
+        ...current,
+        [activeAppearance]: { ...current[activeAppearance], [role]: value },
+      }));
+    },
+    [activeAppearance],
+  );
+
+  const handleSubmit = useCallback(() => {
+    if (!name.trim()) {
+      setError("Give your theme a name before saving it.");
+      return;
+    }
+
+    try {
+      const variantAppearance = activeAppearance === "light" ? "dark" : "light";
+      const variants =
+        modeSelection === "both"
+          ? { [variantAppearance]: colorsByAppearance[variantAppearance] }
+          : undefined;
+      const createdTheme = installCustomTheme(
+        parseThemeFile({
+          version: THEME_FILE_VERSION,
+          name,
+          appearance: activeAppearance,
+          colors: colorsByAppearance[activeAppearance],
+          ...(variants ? { variants } : {}),
+        }),
+      );
+      onCreated(createdTheme);
+      onOpenChange(false);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not create the theme.");
+    }
+  }, [activeAppearance, colorsByAppearance, modeSelection, name, onCreated, onOpenChange]);
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen) setError(null);
+        onOpenChange(nextOpen);
+      }}
+    >
+      <DialogPopup className="max-w-3xl overflow-hidden">
+        <DialogHeader>
+          <DialogTitle>Create theme</DialogTitle>
+          <DialogDescription>
+            Pick a palette for T3 Code. Add a dark version if you need one.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogPanel className="space-y-5">
+          <label className="block space-y-2">
+            <span className="text-sm font-medium">Theme name</span>
+            <Input
+              autoFocus
+              onChange={(event) => setName(event.currentTarget.value)}
+              placeholder="e.g. Aurora"
+              value={name}
+            />
+          </label>
+
+          <div className="space-y-2">
+            <span className="text-sm font-medium">Modes</span>
+            <div aria-label="Modes" className="grid grid-cols-2 gap-2" role="group">
+              <Button
+                aria-pressed={modeSelection === "single"}
+                variant={modeSelection === "single" ? "secondary" : "outline"}
+                onClick={() => setModeSelection("single")}
+              >
+                One mode
+              </Button>
+              <Button
+                aria-pressed={modeSelection === "both"}
+                variant={modeSelection === "both" ? "secondary" : "outline"}
+                onClick={() => setModeSelection("both")}
+              >
+                Light + dark
+              </Button>
+            </div>
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              {modeSelection === "both"
+                ? "Use a separate palette for light and dark mode."
+                : "Use the same palette in both modes."}
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <span className="text-sm font-medium">
+              {modeSelection === "both" ? "Colors" : "Appearance"}
+            </span>
+            <div aria-label="Theme appearance" className="grid grid-cols-2 gap-2" role="group">
+              <Button
+                aria-pressed={activeAppearance === "light"}
+                variant={activeAppearance === "light" ? "secondary" : "outline"}
+                onClick={() => setActiveAppearance("light")}
+              >
+                <SunIcon />
+                Light
+              </Button>
+              <Button
+                aria-pressed={activeAppearance === "dark"}
+                variant={activeAppearance === "dark" ? "secondary" : "outline"}
+                onClick={() => setActiveAppearance("dark")}
+              >
+                <MoonIcon />
+                Dark
+              </Button>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <div>
+              <h3 className="text-sm font-medium">Main colors</h3>
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                Surfaces, text, accents, and message actions.
+              </p>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {THEME_EDITOR_PRIMARY_ROLES.map((role) => (
+                <ThemeColorField
+                  key={role}
+                  onChange={(value) => updateColor(role, value)}
+                  role={role}
+                  value={colorsByAppearance[activeAppearance][role]}
+                />
+              ))}
+            </div>
+          </div>
+
+          <details className="group rounded-xl border border-border/70 bg-muted/20">
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-3 text-sm font-medium [&::-webkit-details-marker]:hidden">
+              <span>Advanced colors</span>
+              <span className="text-xs font-normal text-muted-foreground">
+                {THEME_EDITOR_ADVANCED_ROLES.length} more roles
+              </span>
+            </summary>
+            <div className="grid gap-2 border-t border-border/70 p-3 sm:grid-cols-2">
+              {THEME_EDITOR_ADVANCED_ROLES.map((role) => (
+                <ThemeColorField
+                  key={role}
+                  onChange={(value) => updateColor(role, value)}
+                  role={role}
+                  value={colorsByAppearance[activeAppearance][role]}
+                />
+              ))}
+            </div>
+          </details>
+
+          {error ? (
+            <div
+              aria-live="polite"
+              className="rounded-lg border border-destructive/30 bg-destructive/8 px-3 py-2 text-sm text-destructive-foreground"
+            >
+              {error}
+            </div>
+          ) : null}
+        </DialogPanel>
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button disabled={!name.trim()} onClick={handleSubmit}>
+            <PlusIcon />
+            Create theme
+          </Button>
+        </DialogFooter>
+      </DialogPopup>
+    </Dialog>
+  );
+}
+
+function escapeJsonHtml(value: string): string {
+  return value.replace(
+    /[&<>"']/g,
+    (character) =>
+      ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+      })[character] ?? character,
+  );
+}
+
+function highlightJson(value: string): string {
+  const tokenPattern =
+    /"(?:\\.|[^"\\])*"|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null/g;
+  let highlighted = "";
+  let cursor = 0;
+
+  for (const match of value.matchAll(tokenPattern)) {
+    const token = match[0];
+    const index = match.index ?? 0;
+    highlighted += escapeJsonHtml(value.slice(cursor, index));
+
+    let tokenClass = "theme-json-number";
+    if (token.startsWith('"')) {
+      tokenClass = /^\s*:/.test(value.slice(index + token.length))
+        ? "theme-json-key"
+        : "theme-json-string";
+    } else if (token === "true" || token === "false" || token === "null") {
+      tokenClass = "theme-json-constant";
+    }
+    highlighted += `<span class="${tokenClass}">${escapeJsonHtml(token)}</span>`;
+    cursor = index + token.length;
+  }
+
+  return highlighted + escapeJsonHtml(value.slice(cursor));
+}
+
+function ThemeJsonEditor({
+  id,
+  value,
+  onChange,
+}: {
+  id: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const highlightRef = useRef<HTMLPreElement>(null);
+  const highlightedJson = useMemo(() => highlightJson(value), [value]);
+
+  const syncScroll = useCallback((event: UIEvent<HTMLTextAreaElement>) => {
+    const highlightElement = highlightRef.current;
+    if (!highlightElement) return;
+    highlightElement.scrollTop = event.currentTarget.scrollTop;
+    highlightElement.scrollLeft = event.currentTarget.scrollLeft;
+  }, []);
+
+  return (
+    <div className="relative overflow-hidden rounded-xl border border-input bg-background shadow-xs/5 focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/24">
+      <pre
+        ref={highlightRef}
+        aria-hidden
+        className="pointer-events-none absolute inset-0 m-0 overflow-hidden whitespace-pre-wrap break-words p-3 font-mono text-[12px] leading-5 text-foreground"
+      >
+        <code dangerouslySetInnerHTML={{ __html: highlightedJson }} />
+      </pre>
+      <textarea
+        aria-label="Theme JSON"
+        className="relative z-10 block min-h-72 w-full resize-y overflow-auto bg-transparent p-3 font-mono text-[12px] leading-5 text-transparent caret-foreground outline-none placeholder:text-muted-foreground selection:bg-accent/30 selection:text-transparent"
+        id={id}
+        onChange={(event) => onChange(event.currentTarget.value)}
+        onScroll={syncScroll}
+        placeholder={
+          '{\n  "version": 1,\n  "name": "Aurora",\n  "appearance": "light",\n  "colors": { ... }\n}'
+        }
+        spellCheck={false}
+        value={value}
+      />
+    </div>
+  );
+}
+
+function ThemeImportDialog({
+  open,
+  onOpenChange,
+  onImported,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onImported: (theme: ThemeDefinition) => void;
+}) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [json, setJson] = useState("");
+  const [fileName, setFileName] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [isReading, setIsReading] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    setJson("");
+    setFileName(null);
+    setError(null);
+  }, [open]);
+
+  const handleFileChange = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+    if (!file) return;
+
+    setIsReading(true);
+    try {
+      setJson(await file.text());
+      setFileName(file.name);
+      setError(null);
+    } catch {
+      setError("Could not read that file. Paste the JSON below instead.");
+    } finally {
+      setIsReading(false);
+    }
+  }, []);
+
+  const handleSubmit = useCallback(() => {
+    try {
+      const installedTheme = installCustomTheme(parseThemeFile(JSON.parse(json)));
+      onImported(installedTheme);
+      onOpenChange(false);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "That theme file is invalid.");
+    }
+  }, [json, onImported, onOpenChange]);
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen) setError(null);
+        onOpenChange(nextOpen);
+      }}
+    >
+      <DialogPopup className="max-w-3xl overflow-hidden">
+        <DialogHeader>
+          <DialogTitle>Add a theme</DialogTitle>
+          <DialogDescription>
+            Choose a JSON file or paste one below. Both options use the same theme format.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogPanel className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-dashed border-border/80 bg-muted/20 px-3 py-3">
+            <div className="min-w-0">
+              <p className="text-sm font-medium">Theme file</p>
+              <p className="truncate text-xs text-muted-foreground">
+                {fileName ?? "Upload a .json file, or paste the contents below."}
+              </p>
+            </div>
+            <Button
+              disabled={isReading}
+              size="sm"
+              variant="outline"
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <UploadIcon />
+              {isReading ? "Reading…" : "Choose JSON file"}
+            </Button>
+            <input
+              ref={fileInputRef}
+              accept=".json,application/json"
+              className="sr-only"
+              onChange={handleFileChange}
+              type="file"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-baseline justify-between gap-3">
+              <label className="text-sm font-medium" htmlFor="theme-json-editor">
+                Paste theme JSON
+              </label>
+              <span className="text-xs text-muted-foreground">JSON</span>
+            </div>
+            <ThemeJsonEditor id="theme-json-editor" onChange={setJson} value={json} />
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              Export a theme from T3 Code to get a complete file, then edit the colors you want.
+            </p>
+          </div>
+
+          {error ? (
+            <div
+              aria-live="polite"
+              className="rounded-lg border border-destructive/30 bg-destructive/8 px-3 py-2 text-sm text-destructive-foreground"
+            >
+              {error}
+            </div>
+          ) : null}
+        </DialogPanel>
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button disabled={!json.trim() || isReading} onClick={handleSubmit}>
+            <PlusIcon />
+            Add theme
+          </Button>
+        </DialogFooter>
+      </DialogPopup>
+    </Dialog>
+  );
+}
+
+function downloadThemeFile(filename: string, contents: string): void {
+  const url = URL.createObjectURL(new Blob([contents], { type: "application/json" }));
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+function ThemePreviewCircle({ colors }: { colors: ThemeCardPreview["colors"] }) {
+  const gradient = `linear-gradient(135deg, ${colors.sidebar} 0%, ${colors.canvas} 38%, ${colors.accentSurface} 68%, ${colors.messageAction} 100%)`;
+  return (
+    <span
+      aria-hidden
+      className="block size-14 shrink-0 rounded-full border-2 border-background shadow-sm"
+      style={{ backgroundImage: gradient }}
+    />
+  );
+}
+
+function ThemePreviewCircles({
+  activeMode,
+  label,
+  onSelectMode,
+  previews,
+}: {
+  activeMode: ThemeAppearance | null;
+  label: string;
+  onSelectMode: ((mode: ThemeAppearance) => void) | undefined;
+  previews: ThemeCardDefinition["previews"];
+}) {
+  return (
+    <div className="flex min-h-16 items-center justify-center gap-2.5 px-3 pt-3">
+      {previews.map((preview) => {
+        const isActive = activeMode === preview.mode;
+        const circle = <ThemePreviewCircle colors={preview.colors} />;
+        if (!onSelectMode) {
+          return (
+            <span
+              className="flex size-[68px] shrink-0 items-center justify-center"
+              key={preview.mode}
+            >
+              {circle}
+            </span>
+          );
+        }
+
+        return (
+          <button
+            aria-label={`Use ${label} ${preview.mode} mode`}
+            aria-pressed={isActive}
+            className={cn(
+              "relative flex size-[68px] shrink-0 cursor-pointer items-center justify-center rounded-full p-1 outline-none transition-transform focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card",
+              !isActive && "hover:scale-105",
+            )}
+            key={preview.mode}
+            onClick={(event) => {
+              event.stopPropagation();
+              onSelectMode(preview.mode);
+            }}
+            style={isActive ? { boxShadow: "inset 0 0 0 2px var(--ring)" } : undefined}
+            type="button"
+          >
+            {circle}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function ThemeLibraryCard({
+  theme,
+  isActive,
+  isPersonal,
+  onUse,
+  onUseMode,
+  activeMode,
+  onDownload,
+  onRemove,
+}: {
+  theme: ThemeCardDefinition;
+  isActive: boolean;
+  isPersonal: boolean;
+  onUse: () => void;
+  onUseMode?: ((mode: ThemeAppearance) => void) | undefined;
+  activeMode?: ThemeAppearance | null;
+  onDownload?: () => void;
+  onRemove?: () => void;
+}) {
+  return (
+    <div
+      className={cn(
+        "cursor-pointer overflow-hidden rounded-xl border border-border/70 bg-card/60 transition-colors hover:bg-accent/10",
+        isActive && "bg-accent/30",
+      )}
+      data-theme-library-card={theme.id}
+      onClick={onUse}
+      onKeyDown={(event) => {
+        if (event.target !== event.currentTarget) return;
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        onUse();
+      }}
+      role="button"
+      style={isActive ? { boxShadow: "inset 0 0 0 1px var(--ring)" } : undefined}
+      tabIndex={0}
+    >
+      <ThemePreviewCircles
+        activeMode={isActive ? (activeMode ?? theme.previews[0]?.mode ?? null) : null}
+        label={theme.label}
+        onSelectMode={onUseMode}
+        previews={theme.previews}
+      />
+      <div className="flex items-center gap-2 px-3 pb-3 pt-2">
+        <button
+          aria-label={`${theme.label} theme${isActive ? ", currently active" : ""}`}
+          aria-pressed={isActive}
+          className="min-w-0 flex-1 cursor-pointer rounded-lg px-0.5 py-0.5 text-left outline-none transition-colors hover:bg-accent/20 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+          onClick={(event) => {
+            event.stopPropagation();
+            onUse();
+          }}
+          type="button"
+        >
+          <div className="flex items-center gap-1.5">
+            <p className="truncate text-sm font-medium text-foreground">{theme.label}</p>
+            {isPersonal ? (
+              <span className="shrink-0 rounded-full bg-accent px-1.5 py-0.5 text-[10px] font-medium text-accent-foreground">
+                Personal
+              </span>
+            ) : null}
+          </div>
+        </button>
+        {onDownload || onRemove ? (
+          <div className="flex shrink-0 items-center gap-1">
+            {onDownload ? (
+              <Button
+                aria-label={`Export ${theme.label}`}
+                size="icon-xs"
+                variant="ghost"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onDownload();
+                }}
+              >
+                <DownloadIcon />
+              </Button>
+            ) : null}
+            {onRemove ? (
+              <Button
+                aria-label={`Remove ${theme.label}`}
+                size="icon-xs"
+                variant="ghost"
+                className="text-muted-foreground hover:text-destructive"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onRemove();
+                }}
+              >
+                <Trash2Icon />
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function ThemeLibrary({
+  theme,
+  setTheme,
+  followSystem,
+  setFollowSystem,
+  customThemes,
+  initialAppearance,
+}: {
+  theme: string;
+  setTheme: (theme: string) => void;
+  followSystem: boolean;
+  setFollowSystem: (followSystem: boolean) => void;
+  customThemes: ReadonlyArray<ThemeDefinition>;
+  initialAppearance: ThemeAppearance;
+}) {
+  const [isImportOpen, setIsImportOpen] = useState(false);
+  const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const activeTheme = getThemeDefinition(theme);
+  const standardThemes = getStandardThemeCards();
+  const maintainerThemes = [T3_CHAT_THEME];
+
+  const handleFollowSystemChange = useCallback(
+    (checked: boolean) => {
+      setFollowSystem(checked);
+      setTheme(
+        checked
+          ? (activeTheme?.id ?? "system")
+          : activeTheme
+            ? themePreferenceForMode(activeTheme, initialAppearance)
+            : initialAppearance,
+      );
+    },
+    [activeTheme, initialAppearance, setFollowSystem, setTheme],
+  );
+
+  const handleRemoveTheme = useCallback(
+    (customTheme: ThemeDefinition) => {
+      if (!window.confirm(`Remove the “${customTheme.label}” theme?`)) return;
+      removeCustomTheme(customTheme.id);
+      if (getThemeDefinition(theme)?.id === customTheme.id) setTheme("system");
+    },
+    [setTheme, theme],
+  );
+
+  const handleCreatedTheme = useCallback(
+    (createdTheme: ThemeDefinition) => {
+      setTheme(createdTheme.id);
+      toastManager.add(
+        stackedThreadToast({
+          type: "success",
+          title: `${createdTheme.label} created`,
+          description: "It’s now active.",
+        }),
+      );
+    },
+    [setTheme],
+  );
+
+  return (
+    <div className="space-y-3 pt-2">
+      <div className="flex min-h-8 flex-wrap items-center justify-between gap-3 px-3 sm:px-4">
+        <h3 className="text-sm font-medium tracking-[-0.005em] text-foreground">Themes</h3>
+        <div className="flex flex-wrap items-center justify-end gap-3">
+          <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
+            <span>Follow system</span>
+            <Switch
+              aria-label="Follow system appearance"
+              checked={followSystem}
+              onCheckedChange={(checked) => handleFollowSystemChange(Boolean(checked))}
+            />
+          </label>
+          <Button size="xs" variant="outline" onClick={() => setIsCreateOpen(true)}>
+            <PlusIcon />
+            Create theme
+          </Button>
+          <Button size="xs" variant="ghost" onClick={() => setIsImportOpen(true)}>
+            <UploadIcon />
+            Import JSON
+          </Button>
+        </div>
+      </div>
+      <p className="px-3 text-[13px] leading-[1.45] text-muted-foreground/80 sm:px-4">
+        Choose how T3 Code looks. Use a built-in theme or make your own.
+      </p>
+      <div className="grid gap-2 px-3 sm:grid-cols-2 sm:px-4">
+        {standardThemes.map((standardTheme) => (
+          <ThemeLibraryCard
+            activeMode={
+              theme === "system" || theme === "light" || theme === "dark"
+                ? (getThemePreferenceMode(theme) ?? initialAppearance)
+                : null
+            }
+            isActive={theme === "system" || theme === "light" || theme === "dark"}
+            isPersonal={false}
+            key={standardTheme.id}
+            onUse={() => setTheme(followSystem ? "system" : initialAppearance)}
+            onUseMode={followSystem ? undefined : setTheme}
+            theme={standardTheme}
+          />
+        ))}
+        {maintainerThemes.map((maintainerTheme) => {
+          const isActive = getThemeDefinition(theme)?.id === maintainerTheme.id;
+          const mode = isActive
+            ? followSystem
+              ? initialAppearance
+              : (getThemePreferenceMode(theme) ?? maintainerTheme.appearance)
+            : maintainerTheme.appearance;
+          return (
+            <ThemeLibraryCard
+              activeMode={isActive ? mode : null}
+              isActive={isActive}
+              isPersonal={false}
+              key={maintainerTheme.id}
+              onUse={() => setTheme(maintainerTheme.id)}
+              onUseMode={
+                followSystem
+                  ? undefined
+                  : (nextMode: ThemeAppearance) =>
+                      setTheme(themePreferenceForMode(maintainerTheme.id, nextMode))
+              }
+              theme={getThemeCardDefinition(maintainerTheme)}
+            />
+          );
+        })}
+        {customThemes.map((customTheme) => {
+          const isActive = getThemeDefinition(theme)?.id === customTheme.id;
+          const mode = isActive
+            ? followSystem
+              ? initialAppearance
+              : (getThemePreferenceMode(theme) ?? customTheme.appearance)
+            : customTheme.appearance;
+          return (
+            <ThemeLibraryCard
+              activeMode={isActive ? mode : null}
+              isActive={isActive}
+              isPersonal
+              key={customTheme.id}
+              onDownload={() =>
+                downloadThemeFile(`${customTheme.id}.json`, serializeThemeFile(customTheme))
+              }
+              onRemove={() => handleRemoveTheme(customTheme)}
+              onUse={() => setTheme(customTheme.id)}
+              onUseMode={
+                followSystem
+                  ? undefined
+                  : (nextMode: ThemeAppearance) =>
+                      setTheme(themePreferenceForMode(customTheme.id, nextMode))
+              }
+              theme={getThemeCardDefinition(customTheme)}
+            />
+          );
+        })}
+      </div>
+      {customThemes.length === 0 ? (
+        <div className="mx-3 rounded-xl border border-dashed border-border/80 bg-muted/20 px-4 py-3 text-xs text-muted-foreground sm:mx-4">
+          Your themes will show up here.
+        </div>
+      ) : null}
+      <CreateThemeDialog
+        initialAppearance={initialAppearance}
+        onCreated={handleCreatedTheme}
+        onOpenChange={setIsCreateOpen}
+        open={isCreateOpen}
+      />
+      <ThemeImportDialog
+        onImported={(importedTheme) => {
+          setTheme(importedTheme.id);
+          toastManager.add(
+            stackedThreadToast({
+              type: "success",
+              title: `${importedTheme.label} added`,
+              description: "It’s now active.",
+            }),
+          );
+        }}
+        onOpenChange={setIsImportOpen}
+        open={isImportOpen}
+      />
+    </div>
+  );
+}
+
 export function AppearanceSettingsPanel() {
-  const { theme, setTheme } = useTheme();
+  const { theme, setTheme, setFollowSystem, followSystem, resolvedTheme } = useTheme();
+  const customThemes = useCustomThemes();
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
   const environmentStageLabel = useEnvironmentStageLabel();
@@ -964,38 +1897,14 @@ export function AppearanceSettingsPanel() {
 
   return (
     <SettingsPageContainer>
-      <SettingsSection id="appearance" title="Appearance">
-        <SettingsRow
-          {...searchableSetting("theme")}
-          description="Choose how T3 Code looks across the app."
-          resetAction={
-            theme !== "system" ? (
-              <SettingResetButton label="theme" onClick={() => setTheme("system")} />
-            ) : null
-          }
-          control={
-            <Select
-              value={theme}
-              onValueChange={(value) => {
-                if (value === "system" || value === "light" || value === "dark") {
-                  setTheme(value);
-                }
-              }}
-            >
-              <SelectTrigger className="w-full sm:w-40" aria-label="Theme preference">
-                <SelectValue>
-                  {THEME_OPTIONS.find((option) => option.value === theme)?.label ?? "System"}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectPopup align="end" alignItemWithTrigger={false}>
-                {THEME_OPTIONS.map((option) => (
-                  <SelectItem hideIndicator key={option.value} value={option.value}>
-                    {option.label}
-                  </SelectItem>
-                ))}
-              </SelectPopup>
-            </Select>
-          }
+      <SettingsSection title="Appearance">
+        <ThemeLibrary
+          customThemes={customThemes}
+          followSystem={followSystem}
+          initialAppearance={resolvedTheme}
+          setFollowSystem={setFollowSystem}
+          setTheme={setTheme}
+          theme={theme}
         />
 
         <SettingsRow
