@@ -1366,7 +1366,7 @@ function UserMessagePreviewAnnotationCard(props: {
       ) : null}
       <div className="min-w-0 px-2.5 py-2">
         {props.annotation.comment ? (
-          <div className="max-w-80 truncate text-message-foreground text-xs font-medium">
+          <div className="max-w-80 truncate text-foreground text-xs font-medium">
             {props.annotation.comment}
           </div>
         ) : null}

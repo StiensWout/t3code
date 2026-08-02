@@ -568,7 +568,7 @@ function AboutVersionSection() {
 }
 
 export function useSettingsRestore(onRestored?: () => void) {
-  const { theme, setTheme } = useTheme();
+  const { theme, setTheme, followSystem, setFollowSystem } = useTheme();
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
 
@@ -581,6 +581,7 @@ export function useSettingsRestore(onRestored?: () => void) {
   const changedSettingLabels = useMemo(
     () => [
       ...(theme !== "system" ? ["Theme"] : []),
+      ...(!followSystem ? ["Follow system"] : []),
       ...(settings.glassOpacity !== DEFAULT_UNIFIED_SETTINGS.glassOpacity ? ["Glass opacity"] : []),
       ...(settings.environmentIdentificationMode !==
       DEFAULT_UNIFIED_SETTINGS.environmentIdentificationMode
@@ -647,6 +648,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.sidebarThreadPreviewCount,
       settings.timestampFormat,
       settings.wordWrap,
+      followSystem,
       theme,
     ],
   );
@@ -662,6 +664,7 @@ export function useSettingsRestore(onRestored?: () => void) {
     if (!confirmed) return;
 
     setTheme("system");
+    setFollowSystem(true);
     updateSettings({
       timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,
       wordWrap: DEFAULT_UNIFIED_SETTINGS.wordWrap,
@@ -685,7 +688,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       textGenerationModelSelection: DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection,
     });
     onRestored?.();
-  }, [changedSettingLabels, onRestored, setTheme, updateSettings]);
+  }, [changedSettingLabels, onRestored, setFollowSystem, setTheme, updateSettings]);
 
   return {
     changedSettingLabels,
@@ -1091,27 +1094,30 @@ function ThemeColorField({
   const pickerValue = /^#[0-9a-f]{6}$/i.test(value) ? value : "#000000";
 
   return (
-    <div className="flex items-start justify-between gap-3 rounded-lg border border-border/70 bg-background/40 px-3 py-2">
-      <label className="min-w-0 flex-1 text-sm leading-snug" htmlFor={`${role}-hex`}>
-        {label}
-      </label>
-      <div className="flex shrink-0 items-center gap-2">
+    <div
+      className="flex min-h-11 min-w-0 overflow-hidden rounded-lg border border-border/70"
+      style={{ backgroundColor: pickerValue }}
+    >
+      <label className="relative flex min-w-0 flex-1 cursor-pointer items-center px-3 py-2 text-sm leading-snug text-foreground">
+        <span className="break-words">{label}</span>
         <input
           aria-label={`Choose ${label} color`}
-          className="size-7 cursor-pointer rounded-md border border-border bg-transparent p-0.5"
+          className="absolute inset-0 size-full cursor-pointer opacity-0"
           onChange={(event) => onChange(event.currentTarget.value)}
           type="color"
           value={pickerValue}
         />
-        <Input
-          aria-label={`${label} hex value`}
-          className="w-28"
-          id={`${role}-hex`}
-          onChange={(event) => onChange(event.currentTarget.value)}
-          size="sm"
-          value={value}
-        />
-      </div>
+      </label>
+      <Input
+        aria-label={`${label} hex value`}
+        className="flex w-28 shrink-0 self-stretch items-center rounded-none border-0 border-l border-border/70 bg-background/20 shadow-none"
+        id={`${role}-hex`}
+        nativeInput
+        onChange={(event) => onChange(event.currentTarget.value)}
+        size="sm"
+        unstyled
+        value={value}
+      />
     </div>
   );
 }
@@ -1134,14 +1140,17 @@ function CreateThemeDialog({
     getThemeEditorColorsByAppearance(),
   );
   const [error, setError] = useState<string | null>(null);
+  const previousOpenRef = useRef(false);
 
   useEffect(() => {
-    if (!open) return;
-    setName("");
-    setModeSelection("single");
-    setActiveAppearance(initialAppearance);
-    setColorsByAppearance(getThemeEditorColorsByAppearance());
-    setError(null);
+    if (open && !previousOpenRef.current) {
+      setName("");
+      setModeSelection("single");
+      setActiveAppearance(initialAppearance);
+      setColorsByAppearance(getThemeEditorColorsByAppearance());
+      setError(null);
+    }
+    previousOpenRef.current = open;
   }, [initialAppearance, open]);
 
   const updateColor = useCallback(
@@ -1416,12 +1425,15 @@ function ThemeImportDialog({
   const [fileName, setFileName] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isReading, setIsReading] = useState(false);
+  const importRequestRef = useRef(0);
 
   useEffect(() => {
+    importRequestRef.current += 1;
     if (!open) return;
     setJson("");
     setFileName(null);
     setError(null);
+    setIsReading(false);
   }, [open]);
 
   const handleFileChange = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
@@ -1429,15 +1441,19 @@ function ThemeImportDialog({
     event.currentTarget.value = "";
     if (!file) return;
 
+    const requestId = ++importRequestRef.current;
     setIsReading(true);
     try {
-      setJson(await file.text());
+      const fileText = await file.text();
+      if (requestId !== importRequestRef.current) return;
+      setJson(fileText);
       setFileName(file.name);
       setError(null);
     } catch {
+      if (requestId !== importRequestRef.current) return;
       setError("Could not read that file. Paste the JSON below instead.");
     } finally {
-      setIsReading(false);
+      if (requestId === importRequestRef.current) setIsReading(false);
     }
   }, []);
 

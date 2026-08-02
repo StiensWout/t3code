@@ -91,9 +91,9 @@ const DIFF_PANEL_UNSAFE_CSS = `
 [data-virtualizer-buffer] {
   --diffs-header-font-family: var(--font-sans) !important;
   --diffs-font-family: var(--font-mono) !important;
-  --diffs-bg: color-mix(in srgb, var(--card) 90%, var(--background)) !important;
-  --diffs-light-bg: color-mix(in srgb, var(--card) 90%, var(--background)) !important;
-  --diffs-dark-bg: color-mix(in srgb, var(--card) 90%, var(--background)) !important;
+  --diffs-bg: var(--code-background) !important;
+  --diffs-light-bg: var(--code-background) !important;
+  --diffs-dark-bg: var(--code-background) !important;
   --diffs-token-light-bg: transparent;
   --diffs-token-dark-bg: transparent;
 
@@ -117,19 +117,20 @@ const DIFF_PANEL_UNSAFE_CSS = `
   );
 
   background-color: var(--diffs-bg) !important;
+  color: var(--code-foreground) !important;
 }
 
 [data-file-info] {
-  background-color: color-mix(in srgb, var(--card) 94%, var(--foreground)) !important;
+  background-color: color-mix(in srgb, var(--code-background) 94%, var(--code-foreground)) !important;
   border-block-color: var(--border) !important;
-  color: var(--foreground) !important;
+  color: var(--code-foreground) !important;
 }
 
 [data-diffs-header] {
   position: sticky !important;
   top: 0;
   z-index: 4;
-  background-color: color-mix(in srgb, var(--card) 94%, var(--foreground)) !important;
+  background-color: color-mix(in srgb, var(--code-background) 94%, var(--code-foreground)) !important;
   border-bottom: 1px solid var(--border) !important;
   align-items: center !important;
   font-family: var(--font-sans) !important;

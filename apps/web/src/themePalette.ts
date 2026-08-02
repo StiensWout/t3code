@@ -38,6 +38,8 @@ export const THEME_COLOR_ROLES = [
   "messageAction",
   "messageActionForeground",
   "messageActionHover",
+  "codeBackground",
+  "codeForeground",
   "sidebar",
   "sidebarForeground",
   "sidebarMutedForeground",
@@ -112,9 +114,23 @@ function isThemeLabel(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0 && value.trim().length <= 48;
 }
 
-function isThemeColors(value: unknown): value is ThemeColors {
-  if (!isRecord(value)) return false;
-  return THEME_COLOR_ROLES.every((role) => isThemeColor(value[role]));
+function getThemeFallbackColors(appearance: ThemeAppearance): ThemeColors {
+  return appearance === "dark" ? T3_CHAT_DARK_THEME.colors : T3_CHAT_THEME.colors;
+}
+
+function parseStoredThemeColors(value: unknown, appearance: ThemeAppearance): ThemeColors | null {
+  if (!isRecord(value)) return null;
+
+  const colors: Partial<Record<ThemeColorRole, string>> = {
+    ...getThemeFallbackColors(appearance),
+  };
+  for (const [role, color] of Object.entries(value)) {
+    if (!(THEME_COLOR_ROLES as ReadonlyArray<string>).includes(role) || !isThemeColor(color)) {
+      return null;
+    }
+    colors[role as ThemeColorRole] = color;
+  }
+  return colors as ThemeColors;
 }
 
 function parseStoredThemeVariants(value: unknown): ThemeVariants | null | undefined {
@@ -123,8 +139,10 @@ function parseStoredThemeVariants(value: unknown): ThemeVariants | null | undefi
 
   const variants: Partial<Record<ThemeAppearance, ThemeColors>> = {};
   for (const [appearance, colors] of Object.entries(value)) {
-    if (!isThemeAppearance(appearance) || !isThemeColors(colors)) return null;
-    variants[appearance] = colors;
+    if (!isThemeAppearance(appearance)) return null;
+    const parsedColors = parseStoredThemeColors(colors, appearance);
+    if (!parsedColors) return null;
+    variants[appearance] = parsedColors;
   }
   return Object.keys(variants).length > 0 ? variants : undefined;
 }
@@ -133,7 +151,8 @@ function parseStoredTheme(value: unknown): ThemeDefinition | null {
   if (!isRecord(value)) return null;
   if (!isThemeId(value.id) || RESERVED_THEME_IDS.has(value.id)) return null;
   if (!isThemeLabel(value.label) || !isThemeAppearance(value.appearance)) return null;
-  if (!isThemeColors(value.colors)) return null;
+  const colors = parseStoredThemeColors(value.colors, value.appearance);
+  if (!colors) return null;
   const variants = parseStoredThemeVariants(value.variants);
   if (value.variants !== undefined && variants === null) return null;
 
@@ -141,7 +160,7 @@ function parseStoredTheme(value: unknown): ThemeDefinition | null {
     id: value.id,
     label: value.label.trim(),
     appearance: value.appearance,
-    colors: value.colors,
+    colors,
     ...(variants ? { variants } : {}),
   };
 }
@@ -269,6 +288,8 @@ const T3_CHAT_LIGHT_COLORS: ThemeColors = {
   messageAction: "#b12268",
   messageActionForeground: "#fff8ff",
   messageActionHover: "#c52d7b",
+  codeBackground: "#fff7fd",
+  codeForeground: "#5c205f",
   sidebar: "#f2e2f4",
   sidebarForeground: "#682a6b",
   sidebarMutedForeground: "#a36ea1",
@@ -312,6 +333,8 @@ const T3_CHAT_DARK_COLORS: ThemeColors = {
   messageAction: "#df4c96",
   messageActionForeground: "#2a1022",
   messageActionHover: "#f06cab",
+  codeBackground: "#120d14",
+  codeForeground: "#faeaf9",
   sidebar: "#241329",
   sidebarForeground: "#f4d8f0",
   sidebarMutedForeground: "#c49bc0",
@@ -567,6 +590,8 @@ const APP_THEME_VARIABLES: Readonly<Record<ThemeColorRole, string>> = {
   messageAction: "--app-theme-message-action",
   messageActionForeground: "--app-theme-message-action-foreground",
   messageActionHover: "--app-theme-message-action-hover",
+  codeBackground: "--app-theme-code-background",
+  codeForeground: "--app-theme-code-foreground",
   sidebar: "--app-theme-sidebar",
   sidebarForeground: "--app-theme-sidebar-foreground",
   sidebarMutedForeground: "--app-theme-sidebar-muted-foreground",
@@ -593,9 +618,9 @@ export function applyThemePalette(theme: ThemePreference, appearance?: ThemeAppe
 
   if (palette) {
     root.dataset.themeId = palette.id;
-    // A bare theme id follows the global appearance preference. Only an
-    // explicit `theme:light`/`theme:dark` preference should override it.
-    const mode = explicitThemeMode(theme) ?? appearance ?? palette.appearance;
+    // The resolved appearance is authoritative. This lets a two-mode theme
+    // follow the system even when its stored preference includes a mode suffix.
+    const mode = appearance ?? explicitThemeMode(theme) ?? palette.appearance;
     const colors = getThemeColorsForMode(palette, mode) ?? palette.colors;
     for (const [role, value] of Object.entries(colors) as Array<[ThemeColorRole, string]>) {
       root.style.setProperty(APP_THEME_VARIABLES[role], value);

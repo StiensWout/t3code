@@ -907,6 +907,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --sidebar-row-selected: var(--color-white);
   --sidebar-border: var(--border);
   --sidebar-stage-fade: var(--sidebar);
+  --code-background: color-mix(in srgb, var(--card) 90%, var(--background));
+  --code-foreground: var(--foreground);
   --terminal-background: var(--background);
   --terminal-foreground: var(--foreground);
   --terminal-cursor: rgb(38 56 78);
@@ -1068,6 +1070,8 @@ html.dark[data-theme-id] {
   --sidebar-row-selected: var(--app-theme-sidebar-row-selected);
   --sidebar-border: var(--app-theme-sidebar-border);
   --sidebar-stage-fade: var(--app-theme-sidebar);
+  --code-background: var(--app-theme-code-background);
+  --code-foreground: var(--app-theme-code-foreground);
   --terminal-background: var(--app-theme-terminal-background);
   --terminal-foreground: var(--app-theme-terminal-foreground);
   --terminal-cursor: var(--app-theme-terminal-cursor);
@@ -1709,7 +1713,18 @@ label:has(> select#reasoning-effort) select {
   border: 1px solid var(--border);
   border-radius: 0.5rem;
   overflow: clip;
-  background: color-mix(in srgb, var(--card) 92%, var(--background));
+  background: var(--code-background);
+  color: var(--code-foreground);
+}
+
+/* Pierre's file renderer owns its own surface tokens. Keep the root of a file
+   preview on the same themeable code surface as the diff panel. */
+.file-preview-virtualizer diffs-container {
+  --diffs-bg: var(--code-background) !important;
+  --diffs-light-bg: var(--code-background) !important;
+  --diffs-dark-bg: var(--code-background) !important;
+  background-color: var(--code-background) !important;
+  color: var(--code-foreground) !important;
 }
 
 @keyframes ultrathink-rainbow {

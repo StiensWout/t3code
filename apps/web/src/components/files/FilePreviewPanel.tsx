@@ -84,6 +84,14 @@ const RENDER_MARKDOWN_STORAGE_KEY = "t3code.renderMarkdown";
 const FILE_SAVE_DEBOUNCE_MS = 500;
 const FILE_LINK_REVEAL_ATTRIBUTE = "data-file-link-reveal";
 const FILE_LINK_REVEAL_UNSAFE_CSS = `
+  diffs-container {
+    --diffs-bg: var(--code-background, var(--background)) !important;
+    --diffs-light-bg: var(--code-background, var(--background)) !important;
+    --diffs-dark-bg: var(--code-background, var(--background)) !important;
+    background-color: var(--code-background, var(--background)) !important;
+    color: var(--code-foreground, var(--foreground)) !important;
+  }
+
   [${FILE_LINK_REVEAL_ATTRIBUTE}][data-line] {
     background-color: light-dark(
       color-mix(
