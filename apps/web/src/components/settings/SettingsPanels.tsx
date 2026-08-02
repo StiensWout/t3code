@@ -1538,12 +1538,18 @@ function downloadThemeFile(filename: string, contents: string): void {
 }
 
 function ThemePreviewCircle({ colors }: { colors: ThemeCardPreview["colors"] }) {
-  const gradient = `linear-gradient(135deg, ${colors.sidebar} 0%, ${colors.canvas} 38%, ${colors.accentSurface} 68%, ${colors.messageAction} 100%)`;
+  const gradient = [
+    `radial-gradient(circle at 14% 18%, ${colors.sidebar} 0%, color-mix(in srgb, ${colors.sidebar} 68%, transparent) 28%, transparent 66%)`,
+    `radial-gradient(circle at 86% 20%, ${colors.accentSurface} 0%, color-mix(in srgb, ${colors.accentSurface} 70%, transparent) 30%, transparent 68%)`,
+    `radial-gradient(circle at 82% 84%, ${colors.messageAction} 0%, color-mix(in srgb, ${colors.messageAction} 62%, transparent) 24%, transparent 62%)`,
+    `radial-gradient(circle at 18% 84%, ${colors.messageSurface} 0%, color-mix(in srgb, ${colors.messageSurface} 66%, transparent) 28%, transparent 66%)`,
+    `linear-gradient(145deg, ${colors.canvas} 0%, ${colors.surface} 100%)`,
+  ].join(", ");
   return (
     <span
       aria-hidden
       className="block size-14 shrink-0 rounded-full border-2 border-background shadow-sm"
-      style={{ backgroundImage: gradient }}
+      style={{ backgroundColor: colors.canvas, backgroundImage: gradient }}
     />
   );
 }
