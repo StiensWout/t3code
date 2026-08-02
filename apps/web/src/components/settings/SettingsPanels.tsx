@@ -1115,15 +1115,20 @@ function ThemeColorField({
   onChange: (value: string) => void;
 }) {
   const label = getThemeRoleLabel(role);
+  const isColorValue = /^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(value);
   const pickerValue = /^#[0-9a-f]{6}$/i.test(value) ? value : "#000000";
+  const swatchValue = isColorValue ? value : "#000000";
 
   return (
-    <div
-      className="flex min-h-11 min-w-0 overflow-hidden rounded-lg border border-border/70"
-      style={{ backgroundColor: pickerValue }}
-    >
-      <label className="relative flex min-w-0 flex-1 cursor-pointer items-center px-3 py-2 text-sm leading-snug text-foreground">
-        <span className="break-words">{label}</span>
+    <div className="group flex min-h-11 min-w-0 items-center gap-2 border-b border-zinc-200/70 px-1.5 py-1.5 transition-colors hover:bg-zinc-100/60 dark:border-zinc-800/70 dark:hover:bg-zinc-900/60">
+      <label
+        className="relative flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-full transition-transform hover:scale-105 focus-within:ring-2 focus-within:ring-blue-500/70 focus-within:ring-offset-2 focus-within:ring-offset-background dark:focus-within:ring-blue-400/70"
+        title={`Choose ${label} color`}
+      >
+        <span
+          className="absolute inset-0.5 rounded-full shadow-[inset_0_0_0_1px_rgb(0_0_0_/_14%),0_1px_2px_rgb(0_0_0_/_14%)] dark:shadow-[inset_0_0_0_1px_rgb(255_255_255_/_18%),0_1px_2px_rgb(0_0_0_/_30%)]"
+          style={{ backgroundColor: swatchValue }}
+        />
         <input
           aria-label={`Choose ${label} color`}
           className="absolute inset-0 size-full cursor-pointer opacity-0"
@@ -1132,9 +1137,13 @@ function ThemeColorField({
           value={pickerValue}
         />
       </label>
+      <span className="min-w-0 flex-1 truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">
+        {label}
+      </span>
       <Input
+        aria-invalid={!isColorValue}
         aria-label={`${label} hex value`}
-        className="flex w-28 shrink-0 self-stretch items-center rounded-none border-0 border-l border-border/70 bg-background/20 shadow-none"
+        className="w-28 shrink-0 rounded-none border-0 border-b border-zinc-300 bg-transparent font-mono text-xs text-zinc-900 shadow-none focus-within:border-blue-500 focus-within:ring-0 dark:border-zinc-700 dark:text-zinc-100 dark:focus-within:border-blue-400"
         id={`${role}-hex`}
         nativeInput
         onChange={(event) => onChange(event.currentTarget.value)}
