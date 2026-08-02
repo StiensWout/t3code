@@ -1726,9 +1726,11 @@ function ThemeLibraryCard({
   return (
     <div
       className={cn(
-        "cursor-pointer overflow-hidden rounded-xl border border-border/70 bg-card/60 transition-colors hover:bg-accent/10",
+        "cursor-pointer overflow-hidden rounded-xl border border-border/70 bg-card/60 outline-none transition-colors hover:bg-accent/10 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
         isActive && "bg-accent/30",
       )}
+      aria-label={`${theme.label} theme${isActive ? ", currently active" : ""}`}
+      aria-pressed={isActive}
       data-theme-library-card={theme.id}
       onClick={onUse}
       onKeyDown={(event) => {
@@ -1748,16 +1750,7 @@ function ThemeLibraryCard({
         previews={theme.previews}
       />
       <div className="flex items-center gap-2 px-3 pb-3 pt-2">
-        <button
-          aria-label={`${theme.label} theme${isActive ? ", currently active" : ""}`}
-          aria-pressed={isActive}
-          className="min-w-0 flex-1 cursor-pointer rounded-lg px-0.5 py-0.5 text-left outline-none transition-colors hover:bg-accent/20 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-          onClick={(event) => {
-            event.stopPropagation();
-            onUse();
-          }}
-          type="button"
-        >
+        <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
             <p className="truncate text-sm font-medium text-foreground">{theme.label}</p>
             {isPersonal ? (
@@ -1766,7 +1759,7 @@ function ThemeLibraryCard({
               </span>
             ) : null}
           </div>
-        </button>
+        </div>
         {onDownload || onRemove ? (
           <div className="flex shrink-0 items-center gap-1">
             {onDownload ? (
