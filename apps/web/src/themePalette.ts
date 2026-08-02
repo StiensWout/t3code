@@ -218,7 +218,9 @@ export function subscribeToCustomThemes(listener: () => void): () => void {
     return () => customThemeListeners.delete(listener);
   }
   const handleStorage = (event: StorageEvent) => {
-    if (event.key === CUSTOM_THEMES_STORAGE_KEY) invalidateCustomThemes();
+    if (event.key === CUSTOM_THEMES_STORAGE_KEY || event.key === null) {
+      invalidateCustomThemes();
+    }
   };
   window.addEventListener("storage", handleStorage);
 
@@ -555,6 +557,9 @@ export function parseThemeFile(value: unknown): ThemeDefinition {
     for (const [variantAppearance, variantColors] of Object.entries(value.variants)) {
       if (!isThemeAppearance(variantAppearance)) {
         throw new Error('Theme variants may only be named "light" or "dark".');
+      }
+      if (variantAppearance === appearance) {
+        throw new Error(`Theme variants must not repeat the base appearance "${appearance}".`);
       }
       const variantFallback = getDefaultThemeColors(variantAppearance);
       variants[variantAppearance] = {

@@ -336,8 +336,10 @@ function subscribe(listener: () => void): () => void {
     } else if (e.key === THEME_FOLLOW_SYSTEM_STORAGE_KEY) {
       applyTheme(getStored(), true);
       emitChange();
-    } else if (e.key === CUSTOM_THEMES_STORAGE_KEY) {
+    } else if (e.key === CUSTOM_THEMES_STORAGE_KEY || e.key === null) {
+      if (e.key === null) themeStorageReadFailure = null;
       invalidateCustomThemes();
+      lastAppliedTheme = null;
       applyTheme(getStored(), true);
       emitChange();
     }
@@ -405,6 +407,7 @@ export function useTheme() {
       });
       return;
     }
+    themeStorageReadFailure = null;
     applyTheme(getStored(), true);
     emitChange();
   }, []);

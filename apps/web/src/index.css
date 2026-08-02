@@ -1068,7 +1068,7 @@ html.dark[data-theme-id] {
   --secondary: var(--app-theme-secondary);
   --secondary-foreground: var(--app-theme-secondary-foreground);
   --muted: var(--app-theme-muted);
-  --muted-foreground: var(--app-theme-muted-foreground);
+  --muted-foreground: var(--app-theme-text-muted);
   --placeholder: var(--app-theme-placeholder);
   --secondary-label: var(--app-theme-secondary-label);
   --icon-muted: var(--app-theme-icon-muted);
@@ -1134,7 +1134,7 @@ html[data-theme-id] [data-sidebar-version="v2"] {
   --accent: var(--app-theme-accent-surface);
   --accent-foreground: var(--app-theme-accent-surface-foreground);
   --muted: var(--app-theme-muted);
-  --muted-foreground: var(--app-theme-muted-foreground);
+  --muted-foreground: var(--app-theme-text-muted);
   --border: var(--app-theme-border);
   --input: var(--app-theme-input);
   --sidebar: var(--app-theme-sidebar);

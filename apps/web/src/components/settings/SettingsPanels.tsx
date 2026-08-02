@@ -1797,8 +1797,8 @@ function ThemeLibrary({
   const handleRemoveTheme = useCallback(
     (customTheme: ThemeDefinition) => {
       if (!window.confirm(`Remove the “${customTheme.label}” theme?`)) return;
-      removeCustomTheme(customTheme.id);
       if (getThemeDefinition(theme)?.id === customTheme.id) setTheme("system");
+      removeCustomTheme(customTheme.id);
     },
     [setTheme, theme],
   );
@@ -1958,7 +1958,7 @@ export function AppearanceSettingsPanel() {
 
   return (
     <SettingsPageContainer>
-      <SettingsSection title="Appearance">
+      <SettingsSection {...searchableSetting("theme")} title="Appearance">
         <ThemeLibrary
           customThemes={customThemes}
           followSystem={followSystem}

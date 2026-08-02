@@ -1,16 +1,20 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
   getThemeColorsForMode,
   getThemeModes,
+  getCustomThemes,
+  invalidateCustomThemes,
   isThemeFollowingSystem,
   parseThemeFile,
   resolveDesktopTheme,
   resolveThemeAppearance,
   serializeThemeFile,
+  subscribeToCustomThemes,
   T3_CHAT_THEME,
   themePreferenceForMode,
   themePreferenceForSystem,
+  CUSTOM_THEMES_STORAGE_KEY,
   THEME_FILE_VERSION,
 } from "./themePalette";
 
@@ -100,6 +104,18 @@ describe("theme files", () => {
     });
   });
 
+  it("rejects a variant that repeats the base appearance", () => {
+    expect(() =>
+      parseThemeFile({
+        version: THEME_FILE_VERSION,
+        name: "Duplicate light",
+        appearance: "light",
+        colors: { canvas: "#f8fbff" },
+        variants: { light: { canvas: "#101827" } },
+      }),
+    ).toThrow('Theme variants must not repeat the base appearance "light".');
+  });
+
   it("keeps a single-mode theme on its only palette", () => {
     const theme = parseThemeFile({
       version: THEME_FILE_VERSION,
@@ -112,5 +128,39 @@ describe("theme files", () => {
     expect(getThemeModes(theme)).toEqual(["dark"]);
     expect(getThemeColorsForMode(theme, "dark")).toMatchObject({ canvas: "#111827" });
     expect(getThemeColorsForMode(theme, "light")).toBeNull();
+  });
+
+  it("invalidates cached themes when another tab clears localStorage", () => {
+    let storedThemes: string | null = JSON.stringify([
+      {
+        id: "ocean-dusk",
+        label: "Ocean dusk",
+        appearance: "dark",
+        colors: { canvas: "#07152f" },
+      },
+    ]);
+    let storageHandler: ((event: StorageEvent) => void) | undefined;
+    vi.stubGlobal("window", {
+      addEventListener: (type: string, listener: (event: StorageEvent) => void) => {
+        if (type === "storage") storageHandler = listener;
+      },
+      removeEventListener: vi.fn(),
+      localStorage: {
+        getItem: (key: string) => (key === CUSTOM_THEMES_STORAGE_KEY ? storedThemes : null),
+      },
+    });
+
+    expect(getCustomThemes()).toHaveLength(1);
+    const listener = vi.fn();
+    const unsubscribe = subscribeToCustomThemes(listener);
+
+    storedThemes = null;
+    storageHandler?.({ key: null } as StorageEvent);
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(getCustomThemes()).toEqual([]);
+    unsubscribe();
+    invalidateCustomThemes();
+    vi.unstubAllGlobals();
   });
 });
