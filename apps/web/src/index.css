@@ -145,6 +145,13 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     "SF Mono", "SFMono-Regular", "JetBrains Mono", Consolas, "Liberation Mono", Menlo, monospace;
   --color-warning-foreground: var(--warning-foreground);
   --color-warning: var(--warning);
+  --color-warning-surface: var(--warning-surface);
+  --color-error-foreground: var(--error-foreground);
+  --color-error: var(--error);
+  --color-error-surface: var(--error-surface);
+  --color-update-foreground: var(--update-foreground);
+  --color-update: var(--update);
+  --color-update-surface: var(--update-surface);
   --color-success-foreground: var(--success-foreground);
   --color-success: var(--success);
   --color-info-foreground: var(--info-foreground);
@@ -885,17 +892,24 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --message-action-hover: var(--primary);
   --accent: var(--color-zinc-100);
   --accent-foreground: var(--color-zinc-900);
-  --destructive: var(--color-red-500);
+  --error: var(--color-red-500);
+  --error-foreground: var(--color-red-700);
+  --error-surface: color-mix(in srgb, var(--error) 8%, transparent);
+  --destructive: var(--error);
   --border: var(--color-zinc-200);
   --input: var(--color-zinc-300);
   --ring: oklch(0.488 0.217 264);
-  --destructive-foreground: var(--color-red-700);
+  --destructive-foreground: var(--error-foreground);
   --info: var(--color-blue-500);
   --info-foreground: var(--color-blue-700);
   --success: var(--color-emerald-500);
   --success-foreground: var(--color-emerald-700);
   --warning: var(--color-amber-500);
   --warning-foreground: var(--color-amber-700);
+  --warning-surface: color-mix(in srgb, var(--warning) 8%, transparent);
+  --update: var(--primary);
+  --update-foreground: var(--primary);
+  --update-surface: color-mix(in srgb, var(--update) 12%, transparent);
   /* Keep every sidebar primitive on the same light surface hierarchy, including
      portaled mobile sheets and settings navigation outside the app sidebar. */
   --sidebar: var(--color-zinc-50);
@@ -944,17 +958,24 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     --message-action-hover: var(--primary);
     --accent: --alpha(var(--color-white) / 4%);
     --accent-foreground: var(--color-neutral-100);
-    --destructive: color-mix(in srgb, var(--color-red-500) 90%, var(--color-white));
+    --error: color-mix(in srgb, var(--color-red-500) 90%, var(--color-white));
+    --error-foreground: var(--color-red-400);
+    --error-surface: color-mix(in srgb, var(--error) 16%, transparent);
+    --destructive: var(--error);
     --border: --alpha(var(--color-white) / 6%);
     --input: --alpha(var(--color-white) / 8%);
     --ring: oklch(0.588 0.217 264);
-    --destructive-foreground: var(--color-red-400);
+    --destructive-foreground: var(--error-foreground);
     --info: var(--color-blue-500);
     --info-foreground: var(--color-blue-400);
     --success: var(--color-emerald-500);
     --success-foreground: var(--color-emerald-400);
     --warning: var(--color-amber-500);
     --warning-foreground: var(--color-amber-400);
+    --warning-surface: color-mix(in srgb, var(--warning) 16%, transparent);
+    --update: var(--primary);
+    --update-foreground: var(--primary);
+    --update-surface: color-mix(in srgb, var(--update) 18%, transparent);
     --sidebar: var(--card);
     --sidebar-foreground: var(--foreground);
     --sidebar-muted-foreground: var(--muted-foreground);
@@ -1030,8 +1051,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 /* Theme files are expressed in app color roles and mapped to the existing
    semantic surface tokens here. Keep this block after the sidebar-version
    compatibility overrides so both navigation implementations receive the
-   same palette. Status, provider, and channel identity colors intentionally
-   remain independent. */
+   same palette. Success, info, provider, and channel identity colors remain
+   independent; error, warning, and update roles are themeable below. */
 html[data-theme-id],
 html.dark[data-theme-id] {
   --background: var(--app-theme-canvas);
@@ -1058,6 +1079,17 @@ html.dark[data-theme-id] {
   --message-action: var(--app-theme-message-action);
   --message-action-foreground: var(--app-theme-message-action-foreground);
   --message-action-hover: var(--app-theme-message-action-hover);
+  --error: var(--app-theme-error);
+  --error-foreground: var(--app-theme-error-foreground);
+  --error-surface: var(--app-theme-error-surface);
+  --destructive: var(--error);
+  --destructive-foreground: var(--error-foreground);
+  --warning: var(--app-theme-warning);
+  --warning-foreground: var(--app-theme-warning-foreground);
+  --warning-surface: var(--app-theme-warning-surface);
+  --update: var(--app-theme-update);
+  --update-foreground: var(--app-theme-update-foreground);
+  --update-surface: var(--app-theme-update-surface);
   --border: var(--app-theme-border);
   --input: var(--app-theme-input);
   --ring: var(--app-theme-focus);

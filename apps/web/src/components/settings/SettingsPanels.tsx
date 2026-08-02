@@ -74,6 +74,7 @@ import { cn } from "../../lib/utils";
 import {
   THEME_COLOR_ROLES,
   THEME_FILE_VERSION,
+  getDefaultThemeColors,
   getThemeColorsForMode,
   getThemeDefinition,
   getThemeModes,
@@ -86,7 +87,6 @@ import {
   type ThemeAppearance,
   type ThemeColorRole,
   type ThemeDefinition,
-  T3_CHAT_DARK_THEME,
   T3_CHAT_THEME,
 } from "../../themePalette";
 import { usePrimarySettings, useUpdatePrimarySettings } from "../../hooks/useSettings";
@@ -1056,8 +1056,20 @@ const THEME_EDITOR_PRIMARY_ROLES: ReadonlyArray<ThemeColorRole> = [
   "messageAction",
 ];
 
+const THEME_EDITOR_STATUS_ROLES: ReadonlyArray<ThemeColorRole> = [
+  "error",
+  "errorForeground",
+  "errorSurface",
+  "warning",
+  "warningForeground",
+  "warningSurface",
+  "update",
+  "updateForeground",
+  "updateSurface",
+];
+
 const THEME_EDITOR_ADVANCED_ROLES = THEME_COLOR_ROLES.filter(
-  (role) => !THEME_EDITOR_PRIMARY_ROLES.includes(role),
+  (role) => !THEME_EDITOR_PRIMARY_ROLES.includes(role) && !THEME_EDITOR_STATUS_ROLES.includes(role),
 );
 
 type ThemeEditorColors = Record<ThemeColorRole, string>;
@@ -1065,9 +1077,7 @@ type ThemeEditorModeSelection = "single" | "both";
 type ThemeEditorColorsByAppearance = Record<ThemeAppearance, ThemeEditorColors>;
 
 function getThemeEditorDefaults(appearance: ThemeAppearance): ThemeEditorColors {
-  return {
-    ...(appearance === "dark" ? T3_CHAT_DARK_THEME.colors : T3_CHAT_THEME.colors),
-  };
+  return { ...getDefaultThemeColors(appearance) };
 }
 
 function getThemeEditorColorsByAppearance(): ThemeEditorColorsByAppearance {
@@ -1078,6 +1088,16 @@ function getThemeEditorColorsByAppearance(): ThemeEditorColorsByAppearance {
 }
 
 function getThemeRoleLabel(role: ThemeColorRole): string {
+  const labels: Partial<Record<ThemeColorRole, string>> = {
+    errorForeground: "Error text",
+    errorSurface: "Error background",
+    warningForeground: "Warning text",
+    warningSurface: "Warning background",
+    updateForeground: "Update text",
+    updateSurface: "Update background",
+  };
+  const label = labels[role];
+  if (label) return label;
   return role.replace(/([A-Z])/g, " $1").replace(/^./, (character) => character.toUpperCase());
 }
 
@@ -1275,6 +1295,25 @@ function CreateThemeDialog({
             </div>
             <div className="grid gap-2 sm:grid-cols-2">
               {THEME_EDITOR_PRIMARY_ROLES.map((role) => (
+                <ThemeColorField
+                  key={role}
+                  onChange={(value) => updateColor(role, value)}
+                  role={role}
+                  value={colorsByAppearance[activeAppearance][role]}
+                />
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <div>
+              <h3 className="text-sm font-medium">Status colors</h3>
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                Errors, warnings, and update notices.
+              </p>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {THEME_EDITOR_STATUS_ROLES.map((role) => (
                 <ThemeColorField
                   key={role}
                   onChange={(value) => updateColor(role, value)}

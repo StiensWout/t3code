@@ -2,11 +2,11 @@ import * as Schema from "effect/Schema";
 
 export const T3_CHAT_THEME_ID = "t3-chat" as const;
 export const T3_CHAT_THEME_LABEL = "T3 Chat";
-export const T3_CHAT_DARK_THEME_ID = "t3-chat-dark" as const;
-export const T3_CHAT_DARK_THEME_LABEL = "T3 Chat Dark";
 export const THEME_FILE_VERSION = 1 as const;
 export const CUSTOM_THEMES_STORAGE_KEY = "t3code:themes:v1";
 export const THEME_FOLLOW_SYSTEM_STORAGE_KEY = "t3code:theme-follow-system";
+
+const LEGACY_T3_CHAT_DARK_THEME_ID = "t3-chat-dark";
 
 export const ThemePreference = Schema.String;
 export type ThemePreference = typeof ThemePreference.Type;
@@ -31,6 +31,15 @@ export const THEME_COLOR_ROLES = [
   "placeholder",
   "secondaryLabel",
   "iconMuted",
+  "error",
+  "errorForeground",
+  "errorSurface",
+  "warning",
+  "warningForeground",
+  "warningSurface",
+  "update",
+  "updateForeground",
+  "updateSurface",
   "accentSurface",
   "accentSurfaceForeground",
   "messageSurface",
@@ -85,7 +94,7 @@ const RESERVED_THEME_IDS = new Set([
   "light",
   "dark",
   T3_CHAT_THEME_ID,
-  T3_CHAT_DARK_THEME_ID,
+  LEGACY_T3_CHAT_DARK_THEME_ID,
 ]);
 
 const customThemeListeners = new Set<() => void>();
@@ -115,7 +124,7 @@ function isThemeLabel(value: unknown): value is string {
 }
 
 function getThemeFallbackColors(appearance: ThemeAppearance): ThemeColors {
-  return appearance === "dark" ? T3_CHAT_DARK_THEME.colors : T3_CHAT_THEME.colors;
+  return appearance === "dark" ? DEFAULT_DARK_THEME_COLORS : T3_CHAT_THEME.colors;
 }
 
 function parseStoredThemeColors(value: unknown, appearance: ThemeAppearance): ThemeColors | null {
@@ -244,7 +253,7 @@ function splitThemePreference(theme: ThemePreference): ThemePreferenceParts {
 }
 
 function normalizeThemeId(themeId: string): string {
-  return themeId === T3_CHAT_DARK_THEME_ID ? T3_CHAT_THEME_ID : themeId;
+  return themeId === LEGACY_T3_CHAT_DARK_THEME_ID ? T3_CHAT_THEME_ID : themeId;
 }
 
 function themeIdFromPreference(theme: ThemePreference): string {
@@ -253,7 +262,10 @@ function themeIdFromPreference(theme: ThemePreference): string {
 
 function explicitThemeMode(theme: ThemePreference): ThemeAppearance | null {
   const parts = splitThemePreference(theme);
-  if (parts.id === T3_CHAT_DARK_THEME_ID) return "dark";
+  // Older builds stored the dark T3 Chat palette as a separate theme. Keep
+  // those preferences readable, but resolve them to the remaining light-only
+  // T3 Chat theme instead of reviving a removed option.
+  if (parts.id === LEGACY_T3_CHAT_DARK_THEME_ID) return null;
   return parts.mode === "light" || parts.mode === "dark" ? parts.mode : null;
 }
 
@@ -281,6 +293,15 @@ const T3_CHAT_LIGHT_COLORS: ThemeColors = {
   placeholder: "#855386",
   secondaryLabel: "#7e4f80",
   iconMuted: "#855386",
+  error: "#b4235f",
+  errorForeground: "#8f1748",
+  errorSurface: "#fce3ec",
+  warning: "#a65f19",
+  warningForeground: "#7d4510",
+  warningSurface: "#fff0d7",
+  update: "#b12268",
+  updateForeground: "#7e245e",
+  updateSurface: "#f8e2f4",
   accentSurface: "#f5dff3",
   accentSurfaceForeground: "#713071",
   messageSurface: "#f0d1ed",
@@ -306,7 +327,7 @@ const T3_CHAT_LIGHT_COLORS: ThemeColors = {
   terminalScrollbarHover: "#cd91c9",
 };
 
-const T3_CHAT_DARK_COLORS: ThemeColors = {
+const DEFAULT_DARK_THEME_COLORS: ThemeColors = {
   canvas: "#180f1b",
   chrome: "#241329",
   surface: "#221323",
@@ -326,6 +347,15 @@ const T3_CHAT_DARK_COLORS: ThemeColors = {
   placeholder: "#b88cb5",
   secondaryLabel: "#c49bc0",
   iconMuted: "#c99cc4",
+  error: "#f0719d",
+  errorForeground: "#ffdbe8",
+  errorSurface: "#4a1d31",
+  warning: "#efb56b",
+  warningForeground: "#ffe3b5",
+  warningSurface: "#493018",
+  update: "#f06cab",
+  updateForeground: "#ffd8f4",
+  updateSurface: "#4c2042",
   accentSurface: "#492244",
   accentSurfaceForeground: "#ffd8f4",
   messageSurface: "#522447",
@@ -356,19 +386,12 @@ export const T3_CHAT_THEME: ThemeDefinition = {
   label: T3_CHAT_THEME_LABEL,
   appearance: "light",
   colors: T3_CHAT_LIGHT_COLORS,
-  variants: { dark: T3_CHAT_DARK_COLORS },
 };
 
-/**
- * Legacy export retained for callers that use the dark palette as an editor
- * starting point. The selectable theme is now the single T3 Chat definition.
- */
-export const T3_CHAT_DARK_THEME: ThemeDefinition = {
-  id: T3_CHAT_DARK_THEME_ID,
-  label: T3_CHAT_DARK_THEME_LABEL,
-  appearance: "dark",
-  colors: T3_CHAT_DARK_COLORS,
-};
+/** Dark defaults are only used when creating a custom dark theme. */
+export function getDefaultThemeColors(appearance: ThemeAppearance): ThemeColors {
+  return appearance === "dark" ? DEFAULT_DARK_THEME_COLORS : T3_CHAT_THEME.colors;
+}
 
 const BUILT_IN_THEME_DEFINITIONS: ReadonlyArray<ThemeDefinition> = [T3_CHAT_THEME];
 
@@ -525,7 +548,7 @@ export function parseThemeFile(value: unknown): ThemeDefinition {
 
   const overrides = parseThemeColorOverrides(rawColors);
 
-  const fallback = appearance === "dark" ? T3_CHAT_DARK_THEME.colors : T3_CHAT_THEME.colors;
+  const fallback = getDefaultThemeColors(appearance);
   const variants: Partial<Record<ThemeAppearance, ThemeColors>> = {};
   if (value.variants !== undefined) {
     if (!isRecord(value.variants)) throw new Error("Theme variants must be an object.");
@@ -533,8 +556,7 @@ export function parseThemeFile(value: unknown): ThemeDefinition {
       if (!isThemeAppearance(variantAppearance)) {
         throw new Error('Theme variants may only be named "light" or "dark".');
       }
-      const variantFallback =
-        variantAppearance === "dark" ? T3_CHAT_DARK_THEME.colors : T3_CHAT_THEME.colors;
+      const variantFallback = getDefaultThemeColors(variantAppearance);
       variants[variantAppearance] = {
         ...variantFallback,
         ...parseThemeColorOverrides(variantColors),
@@ -583,6 +605,15 @@ const APP_THEME_VARIABLES: Readonly<Record<ThemeColorRole, string>> = {
   placeholder: "--app-theme-placeholder",
   secondaryLabel: "--app-theme-secondary-label",
   iconMuted: "--app-theme-icon-muted",
+  error: "--app-theme-error",
+  errorForeground: "--app-theme-error-foreground",
+  errorSurface: "--app-theme-error-surface",
+  warning: "--app-theme-warning",
+  warningForeground: "--app-theme-warning-foreground",
+  warningSurface: "--app-theme-warning-surface",
+  update: "--app-theme-update",
+  updateForeground: "--app-theme-update-foreground",
+  updateSurface: "--app-theme-update-surface",
   accentSurface: "--app-theme-accent-surface",
   accentSurfaceForeground: "--app-theme-accent-surface-foreground",
   messageSurface: "--app-theme-message-surface",

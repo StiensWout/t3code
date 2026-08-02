@@ -89,8 +89,9 @@ describe("theme files", () => {
     expect(themePreferenceForSystem(theme)).toBe("aurora:system");
     expect(isThemeFollowingSystem("aurora:system")).toBe(true);
     expect(isThemeFollowingSystem("aurora:dark")).toBe(false);
-    expect(resolveThemeAppearance(T3_CHAT_THEME.id, true, true)).toBe("dark");
-    expect(resolveDesktopTheme(T3_CHAT_THEME.id, true)).toBe("system");
+    expect(getThemeModes(T3_CHAT_THEME)).toEqual(["light"]);
+    expect(resolveThemeAppearance(T3_CHAT_THEME.id, true, true)).toBe("light");
+    expect(resolveDesktopTheme(T3_CHAT_THEME.id, true)).toBe("light");
     expect(resolveThemeAppearance("aurora:dark", false, true)).toBe("light");
     expect(resolveDesktopTheme("aurora:dark", true)).toBe("system");
     expect(JSON.parse(serializeThemeFile(theme)).variants.dark).toMatchObject({
