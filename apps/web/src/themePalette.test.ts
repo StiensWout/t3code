@@ -150,6 +150,7 @@ describe("theme files", () => {
       },
     });
 
+    invalidateCustomThemes();
     expect(getCustomThemes()).toHaveLength(1);
     const listener = vi.fn();
     const unsubscribe = subscribeToCustomThemes(listener);
