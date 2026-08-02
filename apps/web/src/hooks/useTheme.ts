@@ -412,6 +412,13 @@ export function useTheme() {
     emitChange();
   }, []);
 
+  const refreshTheme = useCallback(() => {
+    if (typeof window === "undefined") return;
+    lastAppliedTheme = null;
+    applyTheme(getStored(), true);
+    emitChange();
+  }, []);
+
   // Keep DOM in sync on mount/change
   useEffect(() => {
     applyTheme(theme);
@@ -421,6 +428,7 @@ export function useTheme() {
     theme,
     setTheme,
     setFollowSystem,
+    refreshTheme,
     followSystem: snapshot.followSystem,
     resolvedTheme,
   } as const;

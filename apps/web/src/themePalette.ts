@@ -482,6 +482,7 @@ function saveCustomThemes(themes: ReadonlyArray<ThemeDefinition>): void {
   } catch (cause) {
     throw new Error(
       `Could not save the theme library. ${cause instanceof Error ? cause.message : "Storage is unavailable."}`,
+      { cause },
     );
   }
   notifyCustomThemeListeners();
@@ -495,6 +496,23 @@ export function installCustomTheme(theme: ThemeDefinition): ThemeDefinition {
     throw new Error(`A theme named "${theme.label}" is already installed.`);
   }
   saveCustomThemes([...getCustomThemes(), theme]);
+  return theme;
+}
+
+export function updateCustomTheme(theme: ThemeDefinition): ThemeDefinition {
+  if (RESERVED_THEME_IDS.has(theme.id)) {
+    throw new Error(`The theme id "${theme.id}" is reserved.`);
+  }
+
+  const themes = getCustomThemes();
+  const themeIndex = themes.findIndex((existing) => existing.id === theme.id);
+  if (themeIndex === -1) {
+    throw new Error(`The theme "${theme.label}" is not installed.`);
+  }
+
+  const nextThemes = [...themes];
+  nextThemes[themeIndex] = theme;
+  saveCustomThemes(nextThemes);
   return theme;
 }
 

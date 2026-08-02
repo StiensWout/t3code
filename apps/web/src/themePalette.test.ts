@@ -5,6 +5,7 @@ import {
   getThemeModes,
   getCustomThemes,
   invalidateCustomThemes,
+  installCustomTheme,
   isThemeFollowingSystem,
   parseThemeFile,
   resolveDesktopTheme,
@@ -14,6 +15,7 @@ import {
   T3_CHAT_THEME,
   themePreferenceForMode,
   themePreferenceForSystem,
+  updateCustomTheme,
   CUSTOM_THEMES_STORAGE_KEY,
   THEME_FILE_VERSION,
 } from "./themePalette";
@@ -163,5 +165,41 @@ describe("theme files", () => {
     unsubscribe();
     invalidateCustomThemes();
     vi.unstubAllGlobals();
+  });
+
+  it("updates a personal theme without changing its id", () => {
+    const stored = new Map<string, string>();
+    vi.stubGlobal("window", {
+      localStorage: {
+        getItem: (key: string) => stored.get(key) ?? null,
+        setItem: (key: string, value: string) => stored.set(key, value),
+      },
+    });
+
+    invalidateCustomThemes();
+    const createdTheme = installCustomTheme(
+      parseThemeFile({
+        version: THEME_FILE_VERSION,
+        id: "aurora",
+        name: "Aurora",
+        appearance: "light",
+        colors: { canvas: "#f8fbff", accent: "#5b6cff" },
+      }),
+    );
+    const updatedTheme = updateCustomTheme({
+      ...createdTheme,
+      label: "Aurora Night",
+      colors: { ...createdTheme.colors, accent: "#7c3aed" },
+    });
+
+    expect(updatedTheme).toMatchObject({ id: "aurora", label: "Aurora Night" });
+    expect(getCustomThemes()).toEqual([updatedTheme]);
+    expect(JSON.parse(stored.get(CUSTOM_THEMES_STORAGE_KEY) ?? "[]")[0]).toMatchObject({
+      id: "aurora",
+      label: "Aurora Night",
+    });
+
+    vi.unstubAllGlobals();
+    invalidateCustomThemes();
   });
 });

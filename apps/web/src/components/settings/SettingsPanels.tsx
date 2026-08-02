@@ -5,6 +5,7 @@ import {
   InfoIcon,
   LoaderIcon,
   MoonIcon,
+  PenLineIcon,
   PlusIcon,
   RefreshCwIcon,
   SettingsIcon,
@@ -84,6 +85,7 @@ import {
   removeCustomTheme,
   serializeThemeFile,
   themePreferenceForMode,
+  updateCustomTheme,
   type ThemeAppearance,
   type ThemeColorRole,
   type ThemeDefinition,
@@ -1164,17 +1166,20 @@ function ThemeColorField({
   );
 }
 
-function CreateThemeDialog({
+function ThemeEditorDialog({
   open,
   onOpenChange,
-  onCreated,
+  onSaved,
+  editingTheme,
   initialAppearance,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onCreated: (theme: ThemeDefinition) => void;
+  onSaved: (theme: ThemeDefinition) => void;
+  editingTheme: ThemeDefinition | null;
   initialAppearance: ThemeAppearance;
 }) {
+  const isEditing = editingTheme !== null;
   const [name, setName] = useState("");
   const [modeSelection, setModeSelection] = useState<ThemeEditorModeSelection>("single");
   const [activeAppearance, setActiveAppearance] = useState<ThemeAppearance>(initialAppearance);
@@ -1187,15 +1192,29 @@ function CreateThemeDialog({
 
   useEffect(() => {
     if (open && !previousOpenRef.current) {
-      setName("");
-      setModeSelection("single");
-      setActiveAppearance(initialAppearance);
+      const nextColors = getThemeEditorColorsByAppearance();
+      const nextAppearance = editingTheme
+        ? getThemeColorsForMode(editingTheme, initialAppearance)
+          ? initialAppearance
+          : editingTheme.appearance
+        : initialAppearance;
+      if (editingTheme) {
+        nextColors[editingTheme.appearance] = { ...editingTheme.colors };
+        for (const appearance of ["light", "dark"] as const) {
+          const variantColors = editingTheme.variants?.[appearance];
+          if (variantColors) nextColors[appearance] = { ...variantColors };
+        }
+      }
+
+      setName(editingTheme?.label ?? "");
+      setModeSelection(editingTheme && getThemeModes(editingTheme).length > 1 ? "both" : "single");
+      setActiveAppearance(nextAppearance);
       setIsAdvanced(false);
-      setColorsByAppearance(getThemeEditorColorsByAppearance());
+      setColorsByAppearance(nextColors);
       setError(null);
     }
     previousOpenRef.current = open;
-  }, [initialAppearance, open]);
+  }, [editingTheme, initialAppearance, open]);
 
   const updateColor = useCallback(
     (role: ThemeColorRole, value: string) => {
@@ -1214,26 +1233,45 @@ function CreateThemeDialog({
     }
 
     try {
-      const variantAppearance = activeAppearance === "light" ? "dark" : "light";
+      const baseAppearance =
+        editingTheme && modeSelection === "both" ? editingTheme.appearance : activeAppearance;
+      const variantAppearance = baseAppearance === "light" ? "dark" : "light";
       const variants =
         modeSelection === "both"
           ? { [variantAppearance]: colorsByAppearance[variantAppearance] }
           : undefined;
-      const createdTheme = installCustomTheme(
-        parseThemeFile({
-          version: THEME_FILE_VERSION,
-          name,
-          appearance: activeAppearance,
-          colors: colorsByAppearance[activeAppearance],
-          ...(variants ? { variants } : {}),
-        }),
-      );
-      onCreated(createdTheme);
+      const themeFile = {
+        version: THEME_FILE_VERSION,
+        ...(editingTheme ? { id: editingTheme.id } : {}),
+        name,
+        appearance: baseAppearance,
+        colors: colorsByAppearance[baseAppearance],
+        ...(variants ? { variants } : {}),
+      };
+      const savedTheme = editingTheme
+        ? updateCustomTheme(parseThemeFile(themeFile))
+        : installCustomTheme(parseThemeFile(themeFile));
+      onSaved(savedTheme);
       onOpenChange(false);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not create the theme.");
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : isEditing
+            ? "Could not save the theme."
+            : "Could not create the theme.",
+      );
     }
-  }, [activeAppearance, colorsByAppearance, modeSelection, name, onCreated, onOpenChange]);
+  }, [
+    activeAppearance,
+    colorsByAppearance,
+    editingTheme,
+    isEditing,
+    modeSelection,
+    name,
+    onOpenChange,
+    onSaved,
+  ]);
 
   return (
     <Dialog
@@ -1245,9 +1283,11 @@ function CreateThemeDialog({
     >
       <DialogPopup className="max-w-3xl overflow-hidden">
         <DialogHeader>
-          <DialogTitle>Create theme</DialogTitle>
+          <DialogTitle>{isEditing ? "Edit theme" : "Create theme"}</DialogTitle>
           <DialogDescription>
-            Pick a palette for T3 Code. Add a dark version if you need one.
+            {isEditing
+              ? "Update the name and colors for this personal theme."
+              : "Pick a palette for T3 Code. Add a dark version if you need one."}
           </DialogDescription>
         </DialogHeader>
         <DialogPanel className="space-y-5">
@@ -1256,7 +1296,7 @@ function CreateThemeDialog({
             <Input
               autoFocus
               onChange={(event) => setName(event.currentTarget.value)}
-              placeholder="e.g. Aurora"
+              placeholder={isEditing ? "Theme name" : "e.g. Aurora"}
               value={name}
             />
           </label>
@@ -1419,8 +1459,14 @@ function CreateThemeDialog({
             Cancel
           </Button>
           <Button disabled={!name.trim()} onClick={handleSubmit}>
-            <PlusIcon />
-            Create theme
+            {isEditing ? (
+              "Save changes"
+            ) : (
+              <>
+                <PlusIcon />
+                Create theme
+              </>
+            )}
           </Button>
         </DialogFooter>
       </DialogPopup>
@@ -1729,6 +1775,7 @@ function ThemeLibraryCard({
   onUse,
   onUseMode,
   activeMode,
+  onEdit,
   onDownload,
   onRemove,
 }: {
@@ -1738,6 +1785,7 @@ function ThemeLibraryCard({
   onUse: () => void;
   onUseMode?: ((mode: ThemeAppearance) => void) | undefined;
   activeMode?: ThemeAppearance | null;
+  onEdit?: () => void;
   onDownload?: () => void;
   onRemove?: () => void;
 }) {
@@ -1778,8 +1826,21 @@ function ThemeLibraryCard({
             ) : null}
           </div>
         </div>
-        {onDownload || onRemove ? (
+        {onEdit || onDownload || onRemove ? (
           <div className="flex shrink-0 items-center gap-1">
+            {onEdit ? (
+              <Button
+                aria-label={`Edit ${theme.label}`}
+                size="icon-xs"
+                variant="ghost"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onEdit();
+                }}
+              >
+                <PenLineIcon />
+              </Button>
+            ) : null}
             {onDownload ? (
               <Button
                 aria-label={`Export ${theme.label}`}
@@ -1821,6 +1882,7 @@ function ThemeLibrary({
   setFollowSystem,
   customThemes,
   initialAppearance,
+  refreshTheme,
 }: {
   theme: string;
   setTheme: (theme: string) => void;
@@ -1828,9 +1890,11 @@ function ThemeLibrary({
   setFollowSystem: (followSystem: boolean) => void;
   customThemes: ReadonlyArray<ThemeDefinition>;
   initialAppearance: ThemeAppearance;
+  refreshTheme: () => void;
 }) {
   const [isImportOpen, setIsImportOpen] = useState(false);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [themeToEdit, setThemeToEdit] = useState<ThemeDefinition | null>(null);
   const [themeToRemove, setThemeToRemove] = useState<ThemeDefinition | null>(null);
   const activeTheme = getThemeDefinition(theme);
   const standardThemes = getStandardThemeCards();
@@ -1873,6 +1937,29 @@ function ThemeLibrary({
       );
     },
     [setTheme],
+  );
+
+  const handleEditedTheme = useCallback(
+    (updatedTheme: ThemeDefinition) => {
+      if (getThemeDefinition(theme)?.id === updatedTheme.id) {
+        const selectedMode = followSystem ? null : getThemePreferenceMode(theme);
+        const nextTheme =
+          selectedMode && getThemeColorsForMode(updatedTheme, selectedMode)
+            ? themePreferenceForMode(updatedTheme, selectedMode)
+            : updatedTheme.id;
+        setTheme(nextTheme);
+        refreshTheme();
+      }
+      setThemeToEdit(null);
+      toastManager.add(
+        stackedThreadToast({
+          type: "success",
+          title: `${updatedTheme.label} saved`,
+          description: "Your changes are now active.",
+        }),
+      );
+    },
+    [followSystem, refreshTheme, setTheme, theme],
   );
 
   return (
@@ -1954,6 +2041,7 @@ function ThemeLibrary({
               isActive={isActive}
               isPersonal
               key={customTheme.id}
+              onEdit={() => setThemeToEdit(customTheme)}
               onDownload={() =>
                 downloadThemeFile(`${customTheme.id}.json`, serializeThemeFile(customTheme))
               }
@@ -1975,11 +2063,17 @@ function ThemeLibrary({
           Your themes will show up here.
         </div>
       ) : null}
-      <CreateThemeDialog
+      <ThemeEditorDialog
+        editingTheme={themeToEdit}
         initialAppearance={initialAppearance}
-        onCreated={handleCreatedTheme}
-        onOpenChange={setIsCreateOpen}
-        open={isCreateOpen}
+        onSaved={themeToEdit ? handleEditedTheme : handleCreatedTheme}
+        onOpenChange={(open) => {
+          if (!open) {
+            setIsCreateOpen(false);
+            setThemeToEdit(null);
+          }
+        }}
+        open={isCreateOpen || themeToEdit !== null}
       />
       <ThemeImportDialog
         onImported={(importedTheme) => {
@@ -2022,7 +2116,8 @@ function ThemeLibrary({
 }
 
 export function AppearanceSettingsPanel() {
-  const { theme, setTheme, setFollowSystem, followSystem, resolvedTheme } = useTheme();
+  const { theme, setTheme, setFollowSystem, refreshTheme, followSystem, resolvedTheme } =
+    useTheme();
   const customThemes = useCustomThemes();
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
@@ -2043,6 +2138,7 @@ export function AppearanceSettingsPanel() {
           customThemes={customThemes}
           followSystem={followSystem}
           initialAppearance={resolvedTheme}
+          refreshTheme={refreshTheme}
           setFollowSystem={setFollowSystem}
           setTheme={setTheme}
           theme={theme}
