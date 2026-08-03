@@ -157,9 +157,12 @@
           const isThemed = isKnownTheme && themeModes !== null;
           const baseAppearance = customTheme ? customTheme.appearance : "light";
           const systemMode = prefersDark ? "dark" : "light";
+          // followSystem already accounts for a `:system` suffix when the
+          // follow-system key is unset; when that key is explicitly "false"
+          // the runtime ignores the suffix, so the boot script must too.
           const themeMode = !isThemed
             ? null
-            : followSystem || preference.mode === "system"
+            : followSystem
               ? themeModes.includes(systemMode)
                 ? systemMode
                 : baseAppearance

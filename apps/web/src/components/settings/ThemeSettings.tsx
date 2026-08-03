@@ -1398,9 +1398,9 @@ export function ThemeLibrary({
   refreshTheme,
 }: {
   theme: string;
-  setTheme: (theme: string) => void;
+  setTheme: (theme: string) => boolean;
   followSystem: boolean;
-  setFollowSystem: (followSystem: boolean) => void;
+  setFollowSystem: (followSystem: boolean) => boolean;
   customThemes: ReadonlyArray<ThemeDefinition>;
   initialAppearance: ThemeAppearance;
   refreshTheme: () => void;
@@ -1420,7 +1420,9 @@ export function ThemeLibrary({
 
   const handleFollowSystemChange = useCallback(
     (checked: boolean) => {
-      setFollowSystem(checked);
+      // Keep the theme preference untouched when the follow-system write
+      // fails, so the two stored values cannot drift apart.
+      if (!setFollowSystem(checked)) return;
       setTheme(
         checked
           ? (activeTheme?.id ?? "system")
@@ -1438,8 +1440,13 @@ export function ThemeLibrary({
 
   const handleConfirmRemoveTheme = useCallback(() => {
     if (!themeToRemove) return;
-    if (getThemeDefinition(theme)?.id === themeToRemove.id) {
-      setTheme(followSystem ? "system" : initialAppearance);
+    // Keep the theme installed if we cannot move the selection off it; the
+    // dialog stays open so the user can retry or cancel.
+    if (
+      getThemeDefinition(theme)?.id === themeToRemove.id &&
+      !setTheme(followSystem ? "system" : initialAppearance)
+    ) {
+      return;
     }
     removeCustomTheme(themeToRemove.id);
     setThemeToRemove(null);

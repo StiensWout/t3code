@@ -185,6 +185,23 @@ describe("index.html boot script", () => {
       prefersDark: true,
     },
     {
+      name: "a system-suffixed theme follows the OS while follow-system is unset",
+      storage: {
+        [THEME_STORAGE_KEY]: "aurora:system",
+        [CUSTOM_THEMES_STORAGE_KEY]: JSON.stringify([AURORA_DUAL]),
+      },
+      prefersDark: true,
+    },
+    {
+      name: "follow-system off overrides a stale system suffix",
+      storage: {
+        [THEME_STORAGE_KEY]: "aurora:system",
+        [THEME_FOLLOW_SYSTEM_STORAGE_KEY]: "false",
+        [CUSTOM_THEMES_STORAGE_KEY]: JSON.stringify([AURORA_DUAL]),
+      },
+      prefersDark: true,
+    },
+    {
       name: "follow-system off keeps an explicit light preference on a dark OS",
       storage: { [THEME_STORAGE_KEY]: "light", [THEME_FOLLOW_SYSTEM_STORAGE_KEY]: "false" },
       prefersDark: true,

@@ -380,8 +380,8 @@ export function useTheme() {
     snapshot.followSystem,
   );
 
-  const setTheme = useCallback((next: Theme) => {
-    if (typeof window === "undefined") return;
+  const setTheme = useCallback((next: Theme): boolean => {
+    if (typeof window === "undefined") return false;
     try {
       writeThemePreference(next);
     } catch (cause) {
@@ -399,14 +399,15 @@ export function useTheme() {
         theme: next,
         ...safeErrorLogAttributes(error),
       });
-      return;
+      return false;
     }
     applyTheme(next, true);
     emitChange();
+    return true;
   }, []);
 
-  const setFollowSystem = useCallback((nextFollowSystem: boolean) => {
-    if (typeof window === "undefined") return;
+  const setFollowSystem = useCallback((nextFollowSystem: boolean): boolean => {
+    if (typeof window === "undefined") return false;
     try {
       writeFollowSystemPreference(nextFollowSystem);
     } catch (cause) {
@@ -422,11 +423,12 @@ export function useTheme() {
         storageKey: error.storageKey,
         ...safeErrorLogAttributes(error),
       });
-      return;
+      return false;
     }
     themeStorageReadFailure = null;
     applyTheme(getStored(), true);
     emitChange();
+    return true;
   }, []);
 
   const refreshTheme = useCallback(() => {
