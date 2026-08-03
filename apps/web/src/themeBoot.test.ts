@@ -1,6 +1,6 @@
-import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vite-plus/test";
 
+import indexHtml from "../index.html?raw";
 import {
   CUSTOM_THEMES_STORAGE_KEY,
   invalidateCustomThemes,
@@ -13,8 +13,7 @@ import {
 const THEME_STORAGE_KEY = "t3code:theme";
 
 const bootScript = (() => {
-  const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
-  const match = html.match(/<script>([\s\S]*?)<\/script>/);
+  const match = indexHtml.match(/<script>([\s\S]*?)<\/script>/);
   if (!match?.[1]) throw new Error("Could not find the inline boot script in index.html");
   return match[1];
 })();
