@@ -53,6 +53,21 @@
             accent: "#5dd58e",
           },
         };
+        // Built-in themes and the modes they can render. T3 Chat is light-only,
+        // so a dark OS must not flip its splash; the runtime resolves the same
+        // way via getThemeColorsForMode.
+        const BUILT_IN_THEME_MODES = {
+          "t3-chat": ["light"],
+          "t3-grove": ["light", "dark"],
+        };
+        const RESERVED_THEME_IDS = [
+          "system",
+          "light",
+          "dark",
+          "t3-chat",
+          "t3-grove",
+          "t3-chat-dark",
+        ];
         const themeColorMeta = document.querySelector('meta[name="theme-color"]');
 
         const isHexColor = (value) =>
@@ -73,47 +88,22 @@
             invalidMode: !isThemePreferenceMode(rawMode),
           };
         };
-        const readCustomTheme = (themePreference, systemDark, followSystem) => {
-          if (!themePreference) return null;
-          const preference = splitThemePreference(themePreference);
-          if (preference.invalidMode) return null;
+        const findCustomTheme = (themeId) => {
+          if (RESERVED_THEME_IDS.includes(themeId)) return null;
           try {
             const parsed = JSON.parse(
               window.localStorage.getItem(CUSTOM_THEMES_STORAGE_KEY) ?? "null",
             );
             if (!Array.isArray(parsed)) return null;
-            const candidate = parsed.find(
-              (value) =>
-                value &&
-                value.id === preference.id &&
-                isThemeAppearance(value.appearance) &&
-                value.colors,
+            return (
+              parsed.find(
+                (value) =>
+                  value &&
+                  value.id === themeId &&
+                  isThemeAppearance(value.appearance) &&
+                  value.colors,
+              ) ?? null
             );
-            if (!candidate) return null;
-
-            const preferredMode =
-              followSystem || preference.mode === "system"
-                ? systemDark
-                  ? "dark"
-                  : "light"
-                : (preference.mode ?? candidate.appearance);
-            const mode =
-              preferredMode === candidate.appearance || candidate.variants?.[preferredMode]
-                ? preferredMode
-                : candidate.appearance;
-            const colors =
-              mode === candidate.appearance
-                ? candidate.colors
-                : (candidate.variants?.[mode] ?? candidate.colors);
-            if (
-              !colors ||
-              !isHexColor(colors.canvas) ||
-              !isHexColor(colors.text) ||
-              !isHexColor(colors.accent)
-            ) {
-              return null;
-            }
-            return { theme: candidate, colors, mode };
           } catch {
             return null;
           }
@@ -122,103 +112,148 @@
         try {
           const storedTheme = window.localStorage.getItem("t3code:theme");
           const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-          const preference = splitThemePreference(storedTheme ?? "");
-          const storedFollowSystem = window.localStorage.getItem(THEME_FOLLOW_SYSTEM_STORAGE_KEY);
-          const followSystem =
-            storedFollowSystem === "true" ||
-            (storedFollowSystem === null &&
-              (storedTheme === null || storedTheme === "system" || preference.mode === "system"));
-          const customTheme = readCustomTheme(storedTheme, prefersDark, followSystem);
-          const isLegacyT3ChatDark = storedTheme === "t3-chat-dark";
-          const isT3Chat =
-            isLegacyT3ChatDark ||
-            (!preference.invalidMode &&
-              (preference.id === "t3-chat" || preference.id === "t3-chat-dark"));
-          const isT3Grove = !preference.invalidMode && preference.id === "t3-grove";
-          const isBuiltInTheme = isT3Chat || isT3Grove;
-          const builtInMode = isLegacyT3ChatDark
-            ? "light"
-            : followSystem || preference.mode === "system"
-              ? prefersDark
-                ? "dark"
-                : "light"
-              : preference.id === "t3-chat-dark"
-                ? "dark"
-                : (preference.mode ?? "light");
-          const hasStoredTheme =
+          const rawPreference = splitThemePreference(storedTheme ?? "");
+          // Older builds stored the dark T3 Chat palette as its own theme id;
+          // the runtime resolves it to the light-only T3 Chat theme.
+          const isLegacyT3ChatDark =
+            !rawPreference.invalidMode && rawPreference.id === "t3-chat-dark";
+          const preference = isLegacyT3ChatDark
+            ? {
+                id: "t3-chat",
+                mode: rawPreference.mode === "system" ? "system" : null,
+                invalidMode: false,
+              }
+            : rawPreference;
+          const explicitMode =
+            preference.mode === "light" || preference.mode === "dark" ? preference.mode : null;
+          const builtInModes = preference.invalidMode
+            ? null
+            : (BUILT_IN_THEME_MODES[preference.id] ?? null);
+          const customTheme =
+            preference.invalidMode || builtInModes ? null : findCustomTheme(preference.id);
+          const themeModes =
+            builtInModes ??
+            (customTheme
+              ? ["light", "dark"].filter(
+                  (mode) => mode === customTheme.appearance || customTheme.variants?.[mode],
+                )
+              : null);
+          // Mirrors the runtime's isKnownThemePreference: an explicit mode the
+          // theme cannot render makes the whole preference unknown, and the
+          // runtime falls back to the system default.
+          const isKnownTheme =
             storedTheme === "light" ||
             storedTheme === "dark" ||
             storedTheme === "system" ||
-            isBuiltInTheme ||
-            customTheme !== null;
-          const theme = hasStoredTheme && storedTheme ? storedTheme : "system";
-          const isDark = customTheme
-            ? customTheme.mode === "dark"
-            : isBuiltInTheme
-              ? builtInMode === "dark"
-              : followSystem
-                ? prefersDark
-                : theme === "dark";
-          if (isBuiltInTheme || customTheme !== null) {
-            document.documentElement.dataset.themeId = isBuiltInTheme
-              ? isT3Grove
-                ? "t3-grove"
-                : "t3-chat"
-              : customTheme.theme.id;
+            (themeModes !== null && (explicitMode === null || themeModes.includes(explicitMode)));
+          const theme = isKnownTheme && storedTheme ? storedTheme : "system";
+          const storedFollowSystem = window.localStorage.getItem(THEME_FOLLOW_SYSTEM_STORAGE_KEY);
+          const followSystem =
+            storedFollowSystem === "true"
+              ? true
+              : storedFollowSystem === "false"
+                ? false
+                : theme === "system" || preference.mode === "system";
+          const isThemed = isKnownTheme && themeModes !== null;
+          const baseAppearance = customTheme ? customTheme.appearance : "light";
+          const systemMode = prefersDark ? "dark" : "light";
+          const themeMode = !isThemed
+            ? null
+            : followSystem || preference.mode === "system"
+              ? themeModes.includes(systemMode)
+                ? systemMode
+                : baseAppearance
+              : (explicitMode ?? baseAppearance);
+          const isDark = isThemed
+            ? themeMode === "dark"
+            : followSystem
+              ? prefersDark
+              : theme === "dark";
+          const customColors =
+            isThemed && customTheme
+              ? themeMode === customTheme.appearance
+                ? customTheme.colors
+                : (customTheme.variants?.[themeMode] ?? customTheme.colors)
+              : null;
+          // The runtime tolerates individual malformed colors, so fall back
+          // per role rather than dropping the theme.
+          const customSplash = customColors
+            ? {
+                background: isHexColor(customColors.canvas)
+                  ? customColors.canvas
+                  : themeMode === "dark"
+                    ? SPLASH_COLORS.t3ChatDark.background
+                    : SPLASH_COLORS.t3Chat.background,
+                foreground: isHexColor(customColors.text)
+                  ? customColors.text
+                  : themeMode === "dark"
+                    ? SPLASH_COLORS.t3ChatDark.foreground
+                    : SPLASH_COLORS.t3Chat.foreground,
+                accent: isHexColor(customColors.accent)
+                  ? customColors.accent
+                  : themeMode === "dark"
+                    ? SPLASH_COLORS.t3ChatDark.accent
+                    : SPLASH_COLORS.t3Chat.accent,
+              }
+            : null;
+          if (isThemed) {
+            document.documentElement.dataset.themeId = customTheme ? customTheme.id : preference.id;
           } else {
             delete document.documentElement.dataset.themeId;
           }
-          if (hasStoredTheme) {
+          if (isKnownTheme && storedTheme !== null) {
             document.documentElement.dataset.themeSelected = "true";
           } else {
             delete document.documentElement.dataset.themeSelected;
           }
           document.documentElement.classList.toggle("dark", isDark);
-          const chromeColor =
-            customTheme !== null
-              ? customTheme.colors.canvas
-              : isBuiltInTheme
-                ? builtInMode === "dark"
-                  ? isT3Grove
-                    ? T3_GROVE_DARK_BACKGROUND
-                    : T3_CHAT_DARK_BACKGROUND
-                  : isT3Grove
-                    ? T3_GROVE_BACKGROUND
-                    : T3_CHAT_BACKGROUND
-                : isDark
-                  ? DARK_BACKGROUND
-                  : LIGHT_BACKGROUND;
+          const chromeColor = customSplash
+            ? customSplash.background
+            : isThemed
+              ? themeMode === "dark"
+                ? preference.id === "t3-grove"
+                  ? T3_GROVE_DARK_BACKGROUND
+                  : T3_CHAT_DARK_BACKGROUND
+                : preference.id === "t3-grove"
+                  ? T3_GROVE_BACKGROUND
+                  : T3_CHAT_BACKGROUND
+              : isDark
+                ? DARK_BACKGROUND
+                : LIGHT_BACKGROUND;
           document.documentElement.style.backgroundColor = chromeColor;
-          if (hasStoredTheme) {
+          if (isKnownTheme && storedTheme !== null) {
             const splashColors =
-              customTheme !== null
-                ? {
-                    background: customTheme.colors.canvas,
-                    foreground: customTheme.colors.text,
-                    accent: customTheme.colors.accent,
-                  }
-                : isBuiltInTheme
-                  ? isT3Grove
-                    ? builtInMode === "dark"
-                      ? SPLASH_COLORS.t3GroveDark
-                      : SPLASH_COLORS.t3Grove
-                    : builtInMode === "dark"
-                      ? SPLASH_COLORS.t3ChatDark
-                      : SPLASH_COLORS.t3Chat
-                  : isDark
-                    ? SPLASH_COLORS.dark
-                    : SPLASH_COLORS.light;
+              customSplash ??
+              (isThemed
+                ? preference.id === "t3-grove"
+                  ? themeMode === "dark"
+                    ? SPLASH_COLORS.t3GroveDark
+                    : SPLASH_COLORS.t3Grove
+                  : themeMode === "dark"
+                    ? SPLASH_COLORS.t3ChatDark
+                    : SPLASH_COLORS.t3Chat
+                : isDark
+                  ? SPLASH_COLORS.dark
+                  : SPLASH_COLORS.light);
             for (const [name, value] of Object.entries(splashColors)) {
               document.documentElement.style.setProperty(`--boot-${name}`, value);
             }
           }
           themeColorMeta?.setAttribute("content", chromeColor);
         } catch {
+          // Mirror the runtime's storage-failure fallback: follow the OS.
+          let prefersDark = true;
+          try {
+            prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+          } catch {
+            // Keep the dark default when even matchMedia is unavailable.
+          }
           delete document.documentElement.dataset.themeId;
           delete document.documentElement.dataset.themeSelected;
-          document.documentElement.classList.add("dark");
-          document.documentElement.style.backgroundColor = DARK_BACKGROUND;
-          themeColorMeta?.setAttribute("content", DARK_BACKGROUND);
+          document.documentElement.classList.toggle("dark", prefersDark);
+          const fallbackColor = prefersDark ? DARK_BACKGROUND : LIGHT_BACKGROUND;
+          document.documentElement.style.backgroundColor = fallbackColor;
+          themeColorMeta?.setAttribute("content", fallbackColor);
         }
       })();
     </script>

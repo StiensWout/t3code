@@ -68,6 +68,7 @@ export const THEME_COLOR_ROLES = [
 ] as const;
 
 export type ThemeColorRole = (typeof THEME_COLOR_ROLES)[number];
+const THEME_COLOR_ROLE_SET: ReadonlySet<string> = new Set(THEME_COLOR_ROLES);
 export type ThemeAppearance = "light" | "dark";
 
 export type ThemeColors = Readonly<Record<ThemeColorRole, string>>;
@@ -111,7 +112,7 @@ function isThemeAppearance(value: unknown): value is ThemeAppearance {
   return value === "light" || value === "dark";
 }
 
-function isThemeColor(value: unknown): value is string {
+export function isThemeColor(value: unknown): value is string {
   return (
     typeof value === "string" &&
     /^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(value)
@@ -126,32 +127,35 @@ function isThemeLabel(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0 && value.trim().length <= 48;
 }
 
-function getThemeFallbackColors(appearance: ThemeAppearance): ThemeColors {
-  return appearance === "dark" ? DEFAULT_DARK_THEME_COLORS : T3_CHAT_THEME.colors;
-}
-
 function parseStoredThemeColors(value: unknown, appearance: ThemeAppearance): ThemeColors | null {
   if (!isRecord(value)) return null;
 
   const colors: Partial<Record<ThemeColorRole, string>> = {
-    ...getThemeFallbackColors(appearance),
+    ...getDefaultThemeColors(appearance),
   };
+  // Tolerate unknown roles and malformed values so themes saved by other
+  // builds (for example one that adds a new role) keep their remaining colors.
   for (const [role, color] of Object.entries(value)) {
-    if (!(THEME_COLOR_ROLES as ReadonlyArray<string>).includes(role) || !isThemeColor(color)) {
-      return null;
+    if (THEME_COLOR_ROLE_SET.has(role) && isThemeColor(color)) {
+      colors[role as ThemeColorRole] = color;
     }
-    colors[role as ThemeColorRole] = color;
   }
   return colors as ThemeColors;
 }
 
-function parseStoredThemeVariants(value: unknown): ThemeVariants | null | undefined {
+function parseStoredThemeVariants(
+  value: unknown,
+  baseAppearance: ThemeAppearance,
+): ThemeVariants | null | undefined {
   if (value === undefined) return undefined;
   if (!isRecord(value)) return null;
 
   const variants: Partial<Record<ThemeAppearance, ThemeColors>> = {};
   for (const [appearance, colors] of Object.entries(value)) {
     if (!isThemeAppearance(appearance)) return null;
+    // A variant matching the base appearance would be shadowed by the base
+    // colors; drop it so the theme round-trips through parseThemeFile.
+    if (appearance === baseAppearance) continue;
     const parsedColors = parseStoredThemeColors(colors, appearance);
     if (!parsedColors) return null;
     variants[appearance] = parsedColors;
@@ -165,7 +169,7 @@ function parseStoredTheme(value: unknown): ThemeDefinition | null {
   if (!isThemeLabel(value.label) || !isThemeAppearance(value.appearance)) return null;
   const colors = parseStoredThemeColors(value.colors, value.appearance);
   if (!colors) return null;
-  const variants = parseStoredThemeVariants(value.variants);
+  const variants = parseStoredThemeVariants(value.variants, value.appearance);
   if (value.variants !== undefined && variants === null) return null;
 
   return {
@@ -606,6 +610,8 @@ export function createManagedThemeColors(
   const accentSurface = mixThemeRgbColors(canvas, accent, appearance === "dark" ? 0.3 : 0.14);
   const messageSurface = mixThemeRgbColors(canvas, accent, appearance === "dark" ? 0.36 : 0.18);
   const accentForeground = readableThemeForeground(accent);
+  const codeBackground = mixThemeRgbColors(canvas, text, appearance === "dark" ? 0.18 : 0.025);
+  const terminalBackground = mixThemeRgbColors(canvas, text, appearance === "dark" ? 0.2 : 0.035);
   const messageActionHover = mixThemeRgbColors(
     accent,
     accentForeground === THEME_LIGHT_FOREGROUND || accentForeground === THEME_WHITE_FOREGROUND
@@ -644,14 +650,8 @@ export function createManagedThemeColors(
     messageAction: themeRgbToHexColor(accent),
     messageActionForeground: themeRgbToHexColor(accentForeground),
     messageActionHover: themeRgbToHexColor(messageActionHover),
-    codeBackground: themeRgbToHexColor(
-      mixThemeRgbColors(canvas, text, appearance === "dark" ? 0.18 : 0.025),
-    ),
-    codeForeground: themeRgbToHexColor(
-      readableThemeForeground(
-        mixThemeRgbColors(canvas, text, appearance === "dark" ? 0.18 : 0.025),
-      ),
-    ),
+    codeBackground: themeRgbToHexColor(codeBackground),
+    codeForeground: themeRgbToHexColor(readableThemeForeground(codeBackground)),
     sidebar: themeRgbToHexColor(sidebar),
     sidebarForeground: themeRgbToHexColor(readableThemeForeground(sidebar)),
     sidebarMutedForeground: themeRgbToHexColor(readableThemeText(sidebar, text, 0.2, 4.5)),
@@ -664,12 +664,8 @@ export function createManagedThemeColors(
     sidebarBorder: themeRgbToHexColor(
       mixThemeRgbColors(sidebar, text, appearance === "dark" ? 0.35 : 0.12),
     ),
-    terminalBackground: themeRgbToHexColor(
-      mixThemeRgbColors(canvas, text, appearance === "dark" ? 0.2 : 0.035),
-    ),
-    terminalForeground: themeRgbToHexColor(
-      readableThemeForeground(mixThemeRgbColors(canvas, text, appearance === "dark" ? 0.2 : 0.035)),
-    ),
+    terminalBackground: themeRgbToHexColor(terminalBackground),
+    terminalForeground: themeRgbToHexColor(readableThemeForeground(terminalBackground)),
     terminalCursor: themeRgbToHexColor(accent),
     terminalSelection: themeRgbToHexColor(
       mixThemeRgbColors(canvas, accent, appearance === "dark" ? 0.35 : 0.18),
@@ -746,14 +742,6 @@ export function themePreferenceForMode(
   return mode === definition.appearance
     ? definition.id
     : `${definition.id}${THEME_PREFERENCE_SEPARATOR}${mode}`;
-}
-
-export function themePreferenceForSystem(
-  theme: ThemePreference | ThemeDefinition,
-): ThemePreference {
-  const definition = typeof theme === "string" ? getThemeDefinition(theme) : theme;
-  if (!definition) return "system";
-  return `${definition.id}${THEME_PREFERENCE_SEPARATOR}system`;
 }
 
 export function isThemeFollowingSystem(theme: ThemePreference): boolean {
@@ -837,7 +825,7 @@ function parseThemeColorOverrides(value: unknown): ThemeColorOverrides {
 
   const overrides: Partial<Record<ThemeColorRole, string>> = {};
   for (const [role, color] of Object.entries(value)) {
-    if (!(THEME_COLOR_ROLES as ReadonlyArray<string>).includes(role)) {
+    if (!THEME_COLOR_ROLE_SET.has(role)) {
       throw new Error(`"${role}" is not a supported theme color role.`);
     }
     if (!isThemeColor(color)) {
@@ -1010,12 +998,7 @@ export function resolveThemeAppearance(
       ? definition.appearance
       : systemAppearance;
   }
-  if (theme === "dark" || theme === "light") return theme;
-  const definition = getThemeDefinition(theme);
-  const mode = getThemePreferenceMode(theme);
-  if (definition && mode) return mode;
-  if (definition) return definition.appearance;
-  return "light";
+  return getThemePreferenceMode(theme) ?? "light";
 }
 
 export function resolveDesktopTheme(
@@ -1028,13 +1011,7 @@ export function resolveDesktopTheme(
     const hasDarkMode = definition && getThemeColorsForMode(definition, "dark") !== null;
     return definition && (!hasLightMode || !hasDarkMode) ? definition.appearance : "system";
   }
-  if (theme === "dark") return "dark";
-  if (theme === "light") return "light";
-  const definition = getThemeDefinition(theme);
-  const mode = getThemePreferenceMode(theme);
-  if (definition && mode) return mode;
-  if (definition) return definition.appearance;
-  return "system";
+  return getThemePreferenceMode(theme) ?? "system";
 }
 
 export function isKnownThemePreference(theme: string): boolean {

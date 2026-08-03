@@ -4,6 +4,8 @@ import {
   getThemeColorsForMode,
   getThemeDefinition,
   getThemeModes,
+  getThemePreferenceMode,
+  isKnownThemePreference,
   getCustomThemes,
   invalidateCustomThemes,
   installCustomTheme,
@@ -16,7 +18,6 @@ import {
   T3_CHAT_THEME,
   T3_GROVE_THEME,
   themePreferenceForMode,
-  themePreferenceForSystem,
   updateCustomTheme,
   CUSTOM_THEMES_STORAGE_KEY,
   createManagedThemeColors,
@@ -130,7 +131,6 @@ describe("theme files", () => {
       text: "#eef5ff",
     });
     expect(themePreferenceForMode(theme, "dark")).toBe("aurora:dark");
-    expect(themePreferenceForSystem(theme)).toBe("aurora:system");
     expect(isThemeFollowingSystem("aurora:system")).toBe(true);
     expect(isThemeFollowingSystem("aurora:dark")).toBe(false);
     expect(getThemeModes(T3_CHAT_THEME)).toEqual(["light"]);
@@ -243,6 +243,66 @@ describe("theme files", () => {
       id: "aurora",
       label: "Aurora Night",
     });
+
+    vi.unstubAllGlobals();
+    invalidateCustomThemes();
+  });
+});
+
+describe("stored theme preferences", () => {
+  it("resolves the legacy t3-chat-dark preference to light T3 Chat", () => {
+    expect(getThemeDefinition("t3-chat-dark")).toBe(T3_CHAT_THEME);
+    expect(getThemePreferenceMode("t3-chat-dark")).toBe("light");
+    expect(resolveThemeAppearance("t3-chat-dark", true, false)).toBe("light");
+    expect(resolveDesktopTheme("t3-chat-dark", false)).toBe("light");
+    expect(isKnownThemePreference("t3-chat-dark")).toBe(true);
+  });
+
+  it("recognizes only preferences the runtime can render", () => {
+    for (const preference of [
+      "light",
+      "dark",
+      "system",
+      T3_CHAT_THEME.id,
+      `${T3_GROVE_THEME.id}:dark`,
+    ]) {
+      expect(isKnownThemePreference(preference)).toBe(true);
+    }
+    expect(isKnownThemePreference("aurora:blah")).toBe(false);
+    expect(isKnownThemePreference("missing-theme")).toBe(false);
+    expect(isKnownThemePreference(`${T3_CHAT_THEME.id}:dark`)).toBe(false);
+  });
+
+  it("keeps stored themes with unknown roles and drops invalid entries", () => {
+    vi.stubGlobal("window", {
+      localStorage: {
+        getItem: (key: string) =>
+          key === CUSTOM_THEMES_STORAGE_KEY
+            ? JSON.stringify([
+                {
+                  id: "aurora",
+                  label: "Aurora",
+                  appearance: "light",
+                  colors: { canvas: "#f8fbff", futureRole: "#123456", accent: "not-a-color" },
+                  variants: { light: { canvas: "#101827" } },
+                },
+                { id: "light", label: "Reserved", appearance: "light", colors: {} },
+                { id: "aurora", label: "Duplicate", appearance: "dark", colors: {} },
+              ])
+            : null,
+      },
+    });
+    invalidateCustomThemes();
+
+    const themes = getCustomThemes();
+    expect(themes).toHaveLength(1);
+    expect(themes[0]).toMatchObject({
+      id: "aurora",
+      colors: { canvas: "#f8fbff", accent: getDefaultThemeColors("light").accent },
+    });
+    // The variant shadowing the base appearance is dropped so the theme
+    // round-trips through parseThemeFile on export.
+    expect(getThemeModes(themes[0]!)).toEqual(["light"]);
 
     vi.unstubAllGlobals();
     invalidateCustomThemes();

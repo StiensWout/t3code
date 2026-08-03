@@ -379,7 +379,7 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
                   className={cn(
                     "shrink-0 whitespace-nowrap",
                     props.planSidebarOpen
-                      ? "bg-accent text-accent-foreground hover:bg-accent/80"
+                      ? "bg-primary/10 text-primary hover:bg-primary/15"
                       : "text-secondary-label hover:text-foreground",
                   )}
                   type="button"

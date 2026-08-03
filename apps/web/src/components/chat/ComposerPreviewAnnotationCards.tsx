@@ -69,7 +69,7 @@ export function ComposerPreviewAnnotationCards({
             )}
             <div className="min-w-0 px-2.5 py-2 pr-8">
               {annotation.comment.trim() ? (
-                <p className="max-w-80 truncate text-message-foreground text-xs font-medium">
+                <p className="max-w-80 truncate text-foreground text-xs font-medium">
                   {annotation.comment.trim()}
                 </p>
               ) : null}

@@ -734,7 +734,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                   ? "text-secondary-label"
                   : status === "failed"
                     ? "text-foreground/95"
-                    : "text-foreground",
+                    : "text-foreground/90",
             )
           : cn(
               "truncate group-hover/v2-row:text-foreground",
@@ -742,7 +742,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                 ? "text-foreground"
                 : isUnread
                   ? "text-muted-foreground"
-                  : "text-secondary-label",
+                  : "text-secondary-label/70",
             ),
         isRegeneratingTitle && "opacity-[0.55]",
       )}

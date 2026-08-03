@@ -65,11 +65,13 @@ export const isDesktopThemeSyncError = Schema.is(DesktopThemeSyncError);
 
 let listeners: Array<() => void> = [];
 let lastSnapshot: ThemeSnapshot | null = null;
+let snapshotStale = true;
 let lastDesktopTheme: "light" | "dark" | "system" | null = null;
 let lastAppliedTheme: ThemeSnapshot | null = null;
 let themeStorageReadFailure: ThemeStorageError | null = null;
 
 function emitChange() {
+  snapshotStale = true;
   for (const listener of listeners) listener();
 }
 
@@ -293,6 +295,10 @@ if (typeof document !== "undefined" && typeof window !== "undefined") {
 
 function getSnapshot(): ThemeSnapshot {
   if (typeof window === "undefined") return DEFAULT_THEME_SNAPSHOT;
+  // Reading the preference hits localStorage, so only recompute after a
+  // change was signalled; useTheme consumers call this on every render.
+  if (!snapshotStale && lastSnapshot) return lastSnapshot;
+  snapshotStale = false;
   const theme = getStored();
   const followSystem = readStoredFollowSystem(theme);
   const systemDark = followSystem ? getSystemDark() : false;
@@ -314,42 +320,53 @@ function getServerSnapshot() {
   return DEFAULT_THEME_SNAPSHOT;
 }
 
+function handleSystemAppearanceChange() {
+  const storedTheme = getStored();
+  if (readStoredFollowSystem(storedTheme)) applyTheme(storedTheme, true);
+  emitChange();
+}
+
+function handleStorageChange(e: StorageEvent) {
+  if (e.key === STORAGE_KEY) {
+    themeStorageReadFailure = null;
+    applyTheme(getStored(), true);
+    emitChange();
+  } else if (e.key === THEME_FOLLOW_SYSTEM_STORAGE_KEY) {
+    applyTheme(getStored(), true);
+    emitChange();
+  } else if (e.key === CUSTOM_THEMES_STORAGE_KEY || e.key === null) {
+    if (e.key === null) themeStorageReadFailure = null;
+    invalidateCustomThemes();
+    lastAppliedTheme = null;
+    applyTheme(getStored(), true);
+    emitChange();
+  }
+}
+
+let removeWindowListeners: (() => void) | null = null;
+
 function subscribe(listener: () => void): () => void {
   if (typeof window === "undefined") return () => {};
   listeners.push(listener);
 
-  // Listen for system preference changes
-  const mq = typeof window.matchMedia === "function" ? window.matchMedia(MEDIA_QUERY) : null;
-  const handleChange = () => {
-    const storedTheme = getStored();
-    if (readStoredFollowSystem(storedTheme)) applyTheme(storedTheme, true);
-    emitChange();
-  };
-  mq?.addEventListener("change", handleChange);
-
-  // Listen for storage changes from other tabs
-  const handleStorage = (e: StorageEvent) => {
-    if (e.key === STORAGE_KEY) {
-      themeStorageReadFailure = null;
-      applyTheme(getStored(), true);
-      emitChange();
-    } else if (e.key === THEME_FOLLOW_SYSTEM_STORAGE_KEY) {
-      applyTheme(getStored(), true);
-      emitChange();
-    } else if (e.key === CUSTOM_THEMES_STORAGE_KEY || e.key === null) {
-      if (e.key === null) themeStorageReadFailure = null;
-      invalidateCustomThemes();
-      lastAppliedTheme = null;
-      applyTheme(getStored(), true);
-      emitChange();
-    }
-  };
-  window.addEventListener("storage", handleStorage);
+  // The system-preference and cross-tab listeners are shared by all
+  // subscribers; each event applies the theme once and notifies everyone.
+  if (!removeWindowListeners) {
+    const mq = typeof window.matchMedia === "function" ? window.matchMedia(MEDIA_QUERY) : null;
+    mq?.addEventListener("change", handleSystemAppearanceChange);
+    window.addEventListener("storage", handleStorageChange);
+    removeWindowListeners = () => {
+      mq?.removeEventListener("change", handleSystemAppearanceChange);
+      window.removeEventListener("storage", handleStorageChange);
+    };
+  }
 
   return () => {
     listeners = listeners.filter((l) => l !== listener);
-    mq?.removeEventListener("change", handleChange);
-    window.removeEventListener("storage", handleStorage);
+    if (listeners.length === 0) {
+      removeWindowListeners?.();
+      removeWindowListeners = null;
+    }
   };
 }
 
