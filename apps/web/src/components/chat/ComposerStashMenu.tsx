@@ -145,7 +145,7 @@ export const ComposerStashMenu = memo(function ComposerStashMenu(props: {
                       {entry.pendingImageCount === 1 ? "" : "s"}…
                     </span>
                   ) : missingImageCount(entry) > 0 ? (
-                    <span className="shrink-0 text-[10px] text-amber-600">
+                    <span className="shrink-0 text-[10px] text-warning-foreground">
                       {missingImageCount(entry)} image
                       {missingImageCount(entry) === 1 ? "" : "s"} dropped
                     </span>

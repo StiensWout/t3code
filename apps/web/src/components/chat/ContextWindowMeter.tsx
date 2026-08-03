@@ -26,7 +26,7 @@ export function ContextWindowMeter(props: {
   const showTotalProcessed = totalProcessedTokens !== null && totalProcessedTokens > 0;
   const isOverloaded = normalizedPercentage > 90;
   const usageColor = isOverloaded
-    ? "var(--color-red-500)"
+    ? "var(--color-error)"
     : "color-mix(in oklab, var(--color-muted-foreground) 72%, transparent)";
 
   return (
