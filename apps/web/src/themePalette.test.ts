@@ -144,6 +144,18 @@ describe("theme files", () => {
     });
   });
 
+  it("keeps the T3 Chat palette readable", () => {
+    const colors = T3_CHAT_THEME.colors;
+    expect(contrastRatio(colors.text, colors.canvas)).toBeGreaterThanOrEqual(7);
+    expect(contrastRatio(colors.textMuted, colors.canvas)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(colors.accentForeground, colors.accent)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(colors.messageForeground, colors.messageSurface)).toBeGreaterThanOrEqual(
+      4.5,
+    );
+    expect(contrastRatio(colors.secondaryForeground, colors.secondary)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(colors.sidebarForeground, colors.sidebar)).toBeGreaterThanOrEqual(4.5);
+  });
+
   it("includes the T3 Grove maintainer theme with both modes", () => {
     expect(getThemeDefinition(T3_GROVE_THEME.id)).toBe(T3_GROVE_THEME);
     expect(getThemeModes(T3_GROVE_THEME)).toEqual(["light", "dark"]);
