@@ -1839,10 +1839,6 @@ function ThemeEditorDialog({
                     />
                   ))}
                 </div>
-                <p className="text-xs leading-relaxed text-muted-foreground">
-                  These two colors guide the palette. Text, surfaces, buttons, and code colors are
-                  adjusted for the selected appearance automatically.
-                </p>
               </>
             )}
           </div>
