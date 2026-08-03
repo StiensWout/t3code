@@ -75,6 +75,7 @@ import { cn } from "../../lib/utils";
 import {
   THEME_COLOR_ROLES,
   THEME_FILE_VERSION,
+  createManagedThemeColors,
   getDefaultThemeColors,
   getThemeColorsForMode,
   getThemeDefinition,
@@ -1101,6 +1102,22 @@ function getThemeEditorColorsByAppearance(): ThemeEditorColorsByAppearance {
   };
 }
 
+function isThemeEditorColor(value: string): boolean {
+  return /^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(value.trim());
+}
+
+function getManagedEditorColors(
+  appearance: ThemeAppearance,
+  colors: ThemeEditorColors,
+): ThemeEditorColors {
+  const defaults = getDefaultThemeColors(appearance);
+  return createManagedThemeColors(
+    appearance,
+    isThemeEditorColor(colors.canvas) ? colors.canvas : defaults.canvas,
+    isThemeEditorColor(colors.accent) ? colors.accent : defaults.accent,
+  );
+}
+
 function getThemeRoleLabel(role: ThemeColorRole): string {
   const labels: Partial<Record<ThemeColorRole, string>> = {
     canvas: "Background",
@@ -1460,12 +1477,14 @@ function ThemeColorField({
   role,
   value,
   onChange,
+  label: customLabel,
 }: {
   role: ThemeColorRole;
   value: string;
   onChange: (value: string) => void;
+  label?: string;
 }) {
-  const label = getThemeRoleLabel(role);
+  const label = customLabel ?? getThemeRoleLabel(role);
   const isColorValue = /^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(value);
   const swatchValue = isColorValue ? value : "#000000";
 
@@ -1511,6 +1530,7 @@ function ThemeEditorDialog({
   const [colorsByAppearance, setColorsByAppearance] = useState<ThemeEditorColorsByAppearance>(() =>
     getThemeEditorColorsByAppearance(),
   );
+  const [simpleColorsDirty, setSimpleColorsDirty] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const previousOpenRef = useRef(false);
 
@@ -1534,6 +1554,7 @@ function ThemeEditorDialog({
       setModeSelection(editingTheme && getThemeModes(editingTheme).length > 1 ? "both" : "single");
       setActiveAppearance(nextAppearance);
       setIsAdvanced(false);
+      setSimpleColorsDirty(false);
       setColorsByAppearance(nextColors);
       setError(null);
     }
@@ -1542,13 +1563,35 @@ function ThemeEditorDialog({
 
   const updateColor = useCallback(
     (role: ThemeColorRole, value: string) => {
-      setColorsByAppearance((current) => ({
-        ...current,
-        [activeAppearance]: { ...current[activeAppearance], [role]: value },
-      }));
+      setColorsByAppearance((current) => {
+        const nextColors = { ...current[activeAppearance], [role]: value };
+        const shouldManageColors =
+          !isAdvanced && THEME_EDITOR_SIMPLE_ROLES.includes(role) && isThemeEditorColor(value);
+
+        return {
+          ...current,
+          [activeAppearance]: shouldManageColors
+            ? getManagedEditorColors(activeAppearance, nextColors)
+            : nextColors,
+        };
+      });
+      if (!isAdvanced && THEME_EDITOR_SIMPLE_ROLES.includes(role) && isThemeEditorColor(value)) {
+        setSimpleColorsDirty(true);
+      }
     },
-    [activeAppearance],
+    [activeAppearance, isAdvanced],
   );
+
+  const handleAdvancedChange = useCallback((checked: boolean) => {
+    setIsAdvanced(checked);
+    if (checked) return;
+
+    setSimpleColorsDirty(true);
+    setColorsByAppearance((current) => ({
+      light: getManagedEditorColors("light", current.light),
+      dark: getManagedEditorColors("dark", current.dark),
+    }));
+  }, []);
 
   const handleSubmit = useCallback(() => {
     if (!name.trim()) {
@@ -1562,16 +1605,23 @@ function ThemeEditorDialog({
           ? editingTheme.appearance
           : activeAppearance;
       const variantAppearance = baseAppearance === "light" ? "dark" : "light";
+      const colorsForSave =
+        !isAdvanced && (!isEditing || simpleColorsDirty)
+          ? {
+              light: getManagedEditorColors("light", colorsByAppearance.light),
+              dark: getManagedEditorColors("dark", colorsByAppearance.dark),
+            }
+          : colorsByAppearance;
       const variants =
         modeSelection === "both"
-          ? { [variantAppearance]: colorsByAppearance[variantAppearance] }
+          ? { [variantAppearance]: colorsForSave[variantAppearance] }
           : undefined;
       const themeFile = {
         version: THEME_FILE_VERSION,
         ...(editingTheme ? { id: editingTheme.id } : {}),
         name,
         appearance: baseAppearance,
-        colors: colorsByAppearance[baseAppearance],
+        colors: colorsForSave[baseAppearance],
         ...(variants ? { variants } : {}),
       };
       const savedTheme = editingTheme
@@ -1592,11 +1642,13 @@ function ThemeEditorDialog({
     activeAppearance,
     colorsByAppearance,
     editingTheme,
+    isAdvanced,
     isEditing,
     modeSelection,
     name,
     onOpenChange,
     onSaved,
+    simpleColorsDirty,
   ]);
 
   return (
@@ -1680,12 +1732,12 @@ function ThemeEditorDialog({
             <div className="flex items-start justify-between gap-3">
               <div>
                 <h3 className="text-sm font-medium">
-                  {isAdvanced ? "Theme colors" : "Basic colors"}
+                  {isAdvanced ? "Theme colors" : "Guided colors"}
                 </h3>
                 <p className="text-xs leading-relaxed text-muted-foreground">
                   {isAdvanced
                     ? "Customize every color role used by T3 Code."
-                    : "Choose a background and accent. T3 Code fills in the rest."}
+                    : "Choose the mood. T3 Code keeps the palette balanced and readable."}
                 </p>
               </div>
               <label className="flex shrink-0 cursor-pointer items-center gap-2 pt-0.5 text-sm font-medium">
@@ -1693,7 +1745,7 @@ function ThemeEditorDialog({
                 <Switch
                   aria-label="Use advanced theme colors"
                   checked={isAdvanced}
-                  onCheckedChange={(checked) => setIsAdvanced(Boolean(checked))}
+                  onCheckedChange={(checked) => handleAdvancedChange(Boolean(checked))}
                 />
               </label>
             </div>
@@ -1758,16 +1810,23 @@ function ThemeEditorDialog({
                 </div>
               </>
             ) : (
-              <div className="grid gap-2 sm:grid-cols-2">
-                {THEME_EDITOR_SIMPLE_ROLES.map((role) => (
-                  <ThemeColorField
-                    key={role}
-                    onChange={(value) => updateColor(role, value)}
-                    role={role}
-                    value={colorsByAppearance[activeAppearance][role]}
-                  />
-                ))}
-              </div>
+              <>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {THEME_EDITOR_SIMPLE_ROLES.map((role) => (
+                    <ThemeColorField
+                      key={role}
+                      onChange={(value) => updateColor(role, value)}
+                      role={role}
+                      label={role === "canvas" ? "Background tint" : "Accent color"}
+                      value={colorsByAppearance[activeAppearance][role]}
+                    />
+                  ))}
+                </div>
+                <p className="text-xs leading-relaxed text-muted-foreground">
+                  These two colors guide the palette. Text, surfaces, buttons, and code colors are
+                  adjusted for the selected appearance automatically.
+                </p>
+              </>
             )}
           </div>
 

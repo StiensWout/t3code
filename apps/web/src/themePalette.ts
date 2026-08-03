@@ -383,6 +383,303 @@ const DEFAULT_DARK_THEME_COLORS: ThemeColors = {
   terminalScrollbarHover: "#875083",
 };
 
+type ThemeRgbColor = {
+  r: number;
+  g: number;
+  b: number;
+};
+
+type ThemeHslColor = {
+  h: number;
+  s: number;
+  l: number;
+};
+
+const THEME_LIGHT_FOREGROUND: ThemeRgbColor = { r: 255, g: 250, b: 255 };
+const THEME_DARK_FOREGROUND: ThemeRgbColor = { r: 36, g: 21, b: 35 };
+const THEME_WHITE_FOREGROUND: ThemeRgbColor = { r: 255, g: 255, b: 255 };
+const THEME_BLACK_FOREGROUND: ThemeRgbColor = { r: 0, g: 0, b: 0 };
+
+function parseThemeRgbColor(value: string, fallback: ThemeRgbColor): ThemeRgbColor {
+  const match = value.trim().match(/^#([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i);
+  if (!match) return fallback;
+
+  const raw = match[1];
+  if (!raw) return fallback;
+  const hex =
+    raw.length <= 4
+      ? raw
+          .slice(0, 3)
+          .split("")
+          .map((part) => part.repeat(2))
+          .join("")
+      : raw.slice(0, 6);
+  if (hex.length !== 6) return fallback;
+
+  return {
+    r: Number.parseInt(hex.slice(0, 2), 16),
+    g: Number.parseInt(hex.slice(2, 4), 16),
+    b: Number.parseInt(hex.slice(4, 6), 16),
+  };
+}
+
+function themeRgbToHexColor(color: ThemeRgbColor): string {
+  return `#${[color.r, color.g, color.b]
+    .map((channel) =>
+      Math.round(Math.min(255, Math.max(0, channel)))
+        .toString(16)
+        .padStart(2, "0"),
+    )
+    .join("")}`;
+}
+
+function themeRgbToHsl(color: ThemeRgbColor): ThemeHslColor {
+  const red = color.r / 255;
+  const green = color.g / 255;
+  const blue = color.b / 255;
+  const max = Math.max(red, green, blue);
+  const min = Math.min(red, green, blue);
+  const delta = max - min;
+  const lightness = (max + min) / 2;
+
+  if (delta === 0) return { h: 0, s: 0, l: lightness };
+
+  const saturation = delta / (1 - Math.abs(2 * lightness - 1));
+  let hue = 0;
+  if (max === red) hue = ((green - blue) / delta) % 6;
+  else if (max === green) hue = (blue - red) / delta + 2;
+  else hue = (red - green) / delta + 4;
+
+  return { h: (hue * 60 + 360) % 360, s: saturation, l: lightness };
+}
+
+function themeHslToRgb(color: ThemeHslColor): ThemeRgbColor {
+  const hue = ((color.h % 360) + 360) % 360;
+  const chroma = (1 - Math.abs(2 * color.l - 1)) * color.s;
+  const hueSector = hue / 60;
+  const secondary = chroma * (1 - Math.abs((hueSector % 2) - 1));
+  const match = color.l - chroma / 2;
+  const [red, green, blue] =
+    hueSector < 1
+      ? [chroma, secondary, 0]
+      : hueSector < 2
+        ? [secondary, chroma, 0]
+        : hueSector < 3
+          ? [0, chroma, secondary]
+          : hueSector < 4
+            ? [0, secondary, chroma]
+            : hueSector < 5
+              ? [secondary, 0, chroma]
+              : [chroma, 0, secondary];
+
+  return { r: (red + match) * 255, g: (green + match) * 255, b: (blue + match) * 255 };
+}
+
+function mixThemeRgbColors(
+  base: ThemeRgbColor,
+  overlay: ThemeRgbColor,
+  amount: number,
+): ThemeRgbColor {
+  return {
+    r: base.r + (overlay.r - base.r) * amount,
+    g: base.g + (overlay.g - base.g) * amount,
+    b: base.b + (overlay.b - base.b) * amount,
+  };
+}
+
+function themeRelativeLuminance(color: ThemeRgbColor): number {
+  const linearize = (channel: number) => {
+    const normalized = channel / 255;
+    return normalized <= 0.03928 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
+  };
+
+  return 0.2126 * linearize(color.r) + 0.7152 * linearize(color.g) + 0.0722 * linearize(color.b);
+}
+
+function themeContrastRatio(first: ThemeRgbColor, second: ThemeRgbColor): number {
+  const firstLuminance = themeRelativeLuminance(first);
+  const secondLuminance = themeRelativeLuminance(second);
+  const lighter = Math.max(firstLuminance, secondLuminance);
+  const darker = Math.min(firstLuminance, secondLuminance);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+function readableThemeForeground(background: ThemeRgbColor): ThemeRgbColor {
+  const lightContrast = themeContrastRatio(background, THEME_LIGHT_FOREGROUND);
+  const darkContrast = themeContrastRatio(background, THEME_DARK_FOREGROUND);
+  if (Math.max(lightContrast, darkContrast) >= 4.5) {
+    return lightContrast >= darkContrast ? THEME_LIGHT_FOREGROUND : THEME_DARK_FOREGROUND;
+  }
+
+  return themeContrastRatio(background, THEME_WHITE_FOREGROUND) >=
+    themeContrastRatio(background, THEME_BLACK_FOREGROUND)
+    ? THEME_WHITE_FOREGROUND
+    : THEME_BLACK_FOREGROUND;
+}
+
+function readableThemeText(
+  background: ThemeRgbColor,
+  foreground: ThemeRgbColor,
+  amount: number,
+  minimumRatio: number,
+): ThemeRgbColor {
+  const softened = mixThemeRgbColors(foreground, background, amount);
+  return themeContrastRatio(softened, background) >= minimumRatio ? softened : foreground;
+}
+
+function managedThemeBackground(value: string, appearance: ThemeAppearance): ThemeRgbColor {
+  const selected = parseThemeRgbColor(
+    value,
+    appearance === "dark" ? { r: 24, g: 15, b: 27 } : { r: 255, g: 250, b: 255 },
+  );
+  const hsl = themeRgbToHsl(selected);
+  return themeHslToRgb({
+    h: hsl.h,
+    // A background tint should support the selected mode, not turn the whole
+    // app into a high-saturation surface.
+    s: Math.min(hsl.s, appearance === "dark" ? 0.3 : 0.2),
+    l:
+      appearance === "dark"
+        ? Math.min(0.18, Math.max(0.07, hsl.l))
+        : Math.min(0.985, Math.max(0.94, hsl.l)),
+  });
+}
+
+function managedThemeAccent(
+  value: string,
+  appearance: ThemeAppearance,
+  background: ThemeRgbColor,
+): ThemeRgbColor {
+  const selected = parseThemeRgbColor(value, { r: 197, g: 45, b: 123 });
+  const hsl = themeRgbToHsl(selected);
+  const preferredLightness =
+    appearance === "dark"
+      ? Math.min(0.72, Math.max(0.42, hsl.l))
+      : Math.min(0.58, Math.max(0.35, hsl.l));
+  const lightnessRange: readonly [number, number] =
+    appearance === "dark" ? [0.42, 0.82] : [0.22, 0.58];
+  const saturation = Math.min(hsl.s, 0.82);
+  const candidates = Array.from({ length: 61 }, (_, index) => {
+    const lightness =
+      lightnessRange[0] + ((lightnessRange[1] - lightnessRange[0]) * index) / (61 - 1);
+    const color = themeHslToRgb({ h: hsl.h, s: saturation, l: lightness });
+    return { color, lightness, contrast: themeContrastRatio(color, background) };
+  });
+  // Leave a little room for rounding when the generated RGB values become a
+  // six-digit hex token.
+  const readableCandidates = candidates.filter((candidate) => candidate.contrast >= 4.7);
+  const pool = readableCandidates.length > 0 ? readableCandidates : candidates;
+
+  return pool.reduce((best, candidate) => {
+    const distance = Math.abs(candidate.lightness - preferredLightness);
+    const bestDistance = Math.abs(best.lightness - preferredLightness);
+    return distance < bestDistance ||
+      (distance === bestDistance && candidate.contrast > best.contrast)
+      ? candidate
+      : best;
+  }).color;
+}
+
+/**
+ * Creates the guided palette used by the basic theme editor. The two user
+ * colors control the mood, while dependent roles are generated together so
+ * text, surfaces, message actions, code, and terminal UI stay coherent.
+ */
+export function createManagedThemeColors(
+  appearance: ThemeAppearance,
+  backgroundValue: string,
+  accentValue: string,
+): ThemeColors {
+  const defaults = getDefaultThemeColors(appearance);
+  const canvas = managedThemeBackground(backgroundValue, appearance);
+  const accent = managedThemeAccent(accentValue, appearance, canvas);
+  const text = readableThemeForeground(canvas);
+  const chrome = mixThemeRgbColors(canvas, accent, 0.04);
+  const sidebar = mixThemeRgbColors(canvas, accent, 0.08);
+  const surfaceRaised = mixThemeRgbColors(canvas, text, appearance === "dark" ? 0.12 : 0.035);
+  const surfaceOverlay = mixThemeRgbColors(canvas, text, appearance === "dark" ? 0.18 : 0.06);
+  const secondary = mixThemeRgbColors(canvas, accent, appearance === "dark" ? 0.2 : 0.08);
+  const muted = mixThemeRgbColors(canvas, accent, appearance === "dark" ? 0.13 : 0.06);
+  const accentSurface = mixThemeRgbColors(canvas, accent, appearance === "dark" ? 0.3 : 0.14);
+  const messageSurface = mixThemeRgbColors(canvas, accent, appearance === "dark" ? 0.36 : 0.18);
+  const accentForeground = readableThemeForeground(accent);
+  const messageActionHover = mixThemeRgbColors(
+    accent,
+    accentForeground === THEME_LIGHT_FOREGROUND || accentForeground === THEME_WHITE_FOREGROUND
+      ? THEME_BLACK_FOREGROUND
+      : THEME_WHITE_FOREGROUND,
+    0.12,
+  );
+
+  return {
+    ...defaults,
+    canvas: themeRgbToHexColor(canvas),
+    chrome: themeRgbToHexColor(chrome),
+    surface: themeRgbToHexColor(canvas),
+    surfaceRaised: themeRgbToHexColor(surfaceRaised),
+    surfaceOverlay: themeRgbToHexColor(surfaceOverlay),
+    text: themeRgbToHexColor(text),
+    textMuted: themeRgbToHexColor(readableThemeText(canvas, text, 0.25, 4.5)),
+    border: themeRgbToHexColor(
+      mixThemeRgbColors(canvas, text, appearance === "dark" ? 0.36 : 0.12),
+    ),
+    input: themeRgbToHexColor(mixThemeRgbColors(canvas, text, appearance === "dark" ? 0.5 : 0.18)),
+    focus: themeRgbToHexColor(accent),
+    accent: themeRgbToHexColor(accent),
+    accentForeground: themeRgbToHexColor(accentForeground),
+    secondary: themeRgbToHexColor(secondary),
+    secondaryForeground: themeRgbToHexColor(readableThemeForeground(secondary)),
+    muted: themeRgbToHexColor(muted),
+    mutedForeground: themeRgbToHexColor(readableThemeText(canvas, text, 0.2, 4.5)),
+    placeholder: themeRgbToHexColor(readableThemeText(canvas, text, 0.12, 4.5)),
+    secondaryLabel: themeRgbToHexColor(readableThemeText(canvas, text, 0.18, 4.5)),
+    iconMuted: themeRgbToHexColor(readableThemeText(canvas, text, 0.18, 3)),
+    accentSurface: themeRgbToHexColor(accentSurface),
+    accentSurfaceForeground: themeRgbToHexColor(readableThemeForeground(accentSurface)),
+    messageSurface: themeRgbToHexColor(messageSurface),
+    messageForeground: themeRgbToHexColor(readableThemeForeground(messageSurface)),
+    messageAction: themeRgbToHexColor(accent),
+    messageActionForeground: themeRgbToHexColor(accentForeground),
+    messageActionHover: themeRgbToHexColor(messageActionHover),
+    codeBackground: themeRgbToHexColor(
+      mixThemeRgbColors(canvas, text, appearance === "dark" ? 0.18 : 0.025),
+    ),
+    codeForeground: themeRgbToHexColor(
+      readableThemeForeground(
+        mixThemeRgbColors(canvas, text, appearance === "dark" ? 0.18 : 0.025),
+      ),
+    ),
+    sidebar: themeRgbToHexColor(sidebar),
+    sidebarForeground: themeRgbToHexColor(readableThemeForeground(sidebar)),
+    sidebarMutedForeground: themeRgbToHexColor(readableThemeText(sidebar, text, 0.2, 4.5)),
+    sidebarControlSurface: themeRgbToHexColor(
+      mixThemeRgbColors(sidebar, text, appearance === "dark" ? 0.16 : 0.08),
+    ),
+    sidebarRowHover: themeRgbToHexColor(mixThemeRgbColors(sidebar, accent, 0.12)),
+    sidebarRowActive: themeRgbToHexColor(mixThemeRgbColors(sidebar, accent, 0.2)),
+    sidebarRowSelected: themeRgbToHexColor(mixThemeRgbColors(sidebar, accent, 0.24)),
+    sidebarBorder: themeRgbToHexColor(
+      mixThemeRgbColors(sidebar, text, appearance === "dark" ? 0.35 : 0.12),
+    ),
+    terminalBackground: themeRgbToHexColor(
+      mixThemeRgbColors(canvas, text, appearance === "dark" ? 0.2 : 0.035),
+    ),
+    terminalForeground: themeRgbToHexColor(
+      readableThemeForeground(mixThemeRgbColors(canvas, text, appearance === "dark" ? 0.2 : 0.035)),
+    ),
+    terminalCursor: themeRgbToHexColor(accent),
+    terminalSelection: themeRgbToHexColor(
+      mixThemeRgbColors(canvas, accent, appearance === "dark" ? 0.35 : 0.18),
+    ),
+    terminalScrollbar: themeRgbToHexColor(
+      mixThemeRgbColors(canvas, text, appearance === "dark" ? 0.42 : 0.22),
+    ),
+    terminalScrollbarHover: themeRgbToHexColor(
+      mixThemeRgbColors(canvas, text, appearance === "dark" ? 0.55 : 0.32),
+    ),
+  };
+}
+
 export const T3_CHAT_THEME: ThemeDefinition = {
   id: T3_CHAT_THEME_ID,
   label: T3_CHAT_THEME_LABEL,

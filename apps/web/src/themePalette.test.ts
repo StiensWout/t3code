@@ -17,10 +17,46 @@ import {
   themePreferenceForSystem,
   updateCustomTheme,
   CUSTOM_THEMES_STORAGE_KEY,
+  createManagedThemeColors,
+  getDefaultThemeColors,
   THEME_FILE_VERSION,
 } from "./themePalette";
 
+function contrastRatio(first: string, second: string): number {
+  const toRgb = (value: string) => {
+    const hex = value.slice(1);
+    return [0, 1, 2].map(
+      (channel) => Number.parseInt(hex.slice(channel * 2, channel * 2 + 2), 16) / 255,
+    );
+  };
+  const luminance = (value: string) =>
+    toRgb(value)
+      .map((channel) => (channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4))
+      .reduce((sum, channel, index) => sum + channel * [0.2126, 0.7152, 0.0722][index]!, 0);
+  const lighter = Math.max(luminance(first), luminance(second));
+  const darker = Math.min(luminance(first), luminance(second));
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
 describe("theme files", () => {
+  it("derives a readable palette from extreme simple-editor colors", () => {
+    const light = createManagedThemeColors("light", "#111827", "#ffff00");
+    const dark = createManagedThemeColors("dark", "#ffffff", "#ffff00");
+    const lightDefaults = getDefaultThemeColors("light");
+    const darkDefaults = getDefaultThemeColors("dark");
+
+    expect(light.canvas).not.toBe("#111827");
+    expect(dark.canvas).not.toBe("#ffffff");
+    expect(contrastRatio(light.accent, light.canvas)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(dark.accent, dark.canvas)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(light.textMuted, light.canvas)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(dark.textMuted, dark.canvas)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(light.accentForeground, light.accent)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(dark.accentForeground, dark.accent)).toBeGreaterThanOrEqual(4.5);
+    expect(light.error).toBe(lightDefaults.error);
+    expect(dark.warning).toBe(darkDefaults.warning);
+  });
+
   it("merges a small user file onto the matching contrast-safe base palette", () => {
     const theme = parseThemeFile({
       version: THEME_FILE_VERSION,
