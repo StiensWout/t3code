@@ -91,6 +91,7 @@ import {
   type ThemeColorRole,
   type ThemeDefinition,
   T3_CHAT_THEME,
+  T3_GROVE_THEME,
 } from "../../themePalette";
 import { usePrimarySettings, useUpdatePrimarySettings } from "../../hooks/useSettings";
 import { useThreadActions } from "../../hooks/useThreadActions";
@@ -1530,7 +1531,9 @@ function ThemeEditorDialog({
   const [colorsByAppearance, setColorsByAppearance] = useState<ThemeEditorColorsByAppearance>(() =>
     getThemeEditorColorsByAppearance(),
   );
-  const [simpleColorsDirty, setSimpleColorsDirty] = useState(false);
+  const [simpleColorsDirtyByAppearance, setSimpleColorsDirtyByAppearance] = useState<
+    Record<ThemeAppearance, boolean>
+  >({ light: false, dark: false });
   const [error, setError] = useState<string | null>(null);
   const previousOpenRef = useRef(false);
 
@@ -1554,7 +1557,7 @@ function ThemeEditorDialog({
       setModeSelection(editingTheme && getThemeModes(editingTheme).length > 1 ? "both" : "single");
       setActiveAppearance(nextAppearance);
       setIsAdvanced(false);
-      setSimpleColorsDirty(false);
+      setSimpleColorsDirtyByAppearance({ light: false, dark: false });
       setColorsByAppearance(nextColors);
       setError(null);
     }
@@ -1576,22 +1579,31 @@ function ThemeEditorDialog({
         };
       });
       if (!isAdvanced && THEME_EDITOR_SIMPLE_ROLES.includes(role) && isThemeEditorColor(value)) {
-        setSimpleColorsDirty(true);
+        setSimpleColorsDirtyByAppearance((current) => ({
+          ...current,
+          [activeAppearance]: true,
+        }));
       }
     },
     [activeAppearance, isAdvanced],
   );
 
-  const handleAdvancedChange = useCallback((checked: boolean) => {
-    setIsAdvanced(checked);
-    if (checked) return;
+  const handleAdvancedChange = useCallback(
+    (checked: boolean) => {
+      setIsAdvanced(checked);
+      if (checked) return;
 
-    setSimpleColorsDirty(true);
-    setColorsByAppearance((current) => ({
-      light: getManagedEditorColors("light", current.light),
-      dark: getManagedEditorColors("dark", current.dark),
-    }));
-  }, []);
+      setSimpleColorsDirtyByAppearance((current) => ({
+        ...current,
+        [activeAppearance]: true,
+      }));
+      setColorsByAppearance((current) => ({
+        ...current,
+        [activeAppearance]: getManagedEditorColors(activeAppearance, current[activeAppearance]),
+      }));
+    },
+    [activeAppearance],
+  );
 
   const handleSubmit = useCallback(() => {
     if (!name.trim()) {
@@ -1605,13 +1617,18 @@ function ThemeEditorDialog({
           ? editingTheme.appearance
           : activeAppearance;
       const variantAppearance = baseAppearance === "light" ? "dark" : "light";
-      const colorsForSave =
-        !isAdvanced && (!isEditing || simpleColorsDirty)
-          ? {
-              light: getManagedEditorColors("light", colorsByAppearance.light),
-              dark: getManagedEditorColors("dark", colorsByAppearance.dark),
-            }
-          : colorsByAppearance;
+      const colorsForSave = !isAdvanced
+        ? {
+            light:
+              !isEditing || simpleColorsDirtyByAppearance.light
+                ? getManagedEditorColors("light", colorsByAppearance.light)
+                : colorsByAppearance.light,
+            dark:
+              !isEditing || simpleColorsDirtyByAppearance.dark
+                ? getManagedEditorColors("dark", colorsByAppearance.dark)
+                : colorsByAppearance.dark,
+          }
+        : colorsByAppearance;
       const variants =
         modeSelection === "both"
           ? { [variantAppearance]: colorsForSave[variantAppearance] }
@@ -1648,7 +1665,7 @@ function ThemeEditorDialog({
     name,
     onOpenChange,
     onSaved,
-    simpleColorsDirty,
+    simpleColorsDirtyByAppearance,
   ]);
 
   return (
@@ -2283,7 +2300,7 @@ function ThemeLibrary({
   const [themeToRemove, setThemeToRemove] = useState<ThemeDefinition | null>(null);
   const activeTheme = getThemeDefinition(theme);
   const standardThemes = getStandardThemeCards();
-  const maintainerThemes = [T3_CHAT_THEME];
+  const maintainerThemes = [T3_CHAT_THEME, T3_GROVE_THEME];
 
   const handleFollowSystemChange = useCallback(
     (checked: boolean) => {
@@ -2376,7 +2393,10 @@ function ThemeLibrary({
       <p className="px-3 text-[13px] leading-[1.45] text-muted-foreground/80 sm:px-4">
         Choose how T3 Code looks. Use a built-in theme or make your own.
       </p>
-      <div className="grid gap-2 px-3 sm:grid-cols-2 sm:px-4">
+      <div
+        className="mx-auto grid w-full max-w-[56rem] gap-2 px-3 sm:px-4"
+        style={{ gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 17rem), 1fr))" }}
+      >
         {standardThemes.map((standardTheme) => (
           <ThemeLibraryCard
             activeMode={

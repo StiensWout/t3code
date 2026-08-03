@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
   getThemeColorsForMode,
+  getThemeDefinition,
   getThemeModes,
   getCustomThemes,
   invalidateCustomThemes,
@@ -13,6 +14,7 @@ import {
   serializeThemeFile,
   subscribeToCustomThemes,
   T3_CHAT_THEME,
+  T3_GROVE_THEME,
   themePreferenceForMode,
   themePreferenceForSystem,
   updateCustomTheme,
@@ -140,6 +142,13 @@ describe("theme files", () => {
       canvas: "#101827",
       text: "#eef5ff",
     });
+  });
+
+  it("includes the T3 Grove maintainer theme with both modes", () => {
+    expect(getThemeDefinition(T3_GROVE_THEME.id)).toBe(T3_GROVE_THEME);
+    expect(getThemeModes(T3_GROVE_THEME)).toEqual(["light", "dark"]);
+    expect(T3_GROVE_THEME.colors.accent).toMatch(/^#[0-9a-f]{6}$/i);
+    expect(T3_GROVE_THEME.variants?.dark?.accent).toMatch(/^#[0-9a-f]{6}$/i);
   });
 
   it("rejects a variant that repeats the base appearance", () => {

@@ -2,6 +2,8 @@ import * as Schema from "effect/Schema";
 
 export const T3_CHAT_THEME_ID = "t3-chat" as const;
 export const T3_CHAT_THEME_LABEL = "T3 Chat";
+export const T3_GROVE_THEME_ID = "t3-grove" as const;
+export const T3_GROVE_THEME_LABEL = "T3 Grove";
 export const THEME_FILE_VERSION = 1 as const;
 export const CUSTOM_THEMES_STORAGE_KEY = "t3code:themes:v1";
 export const THEME_FOLLOW_SYSTEM_STORAGE_KEY = "t3code:theme-follow-system";
@@ -94,6 +96,7 @@ const RESERVED_THEME_IDS = new Set([
   "light",
   "dark",
   T3_CHAT_THEME_ID,
+  T3_GROVE_THEME_ID,
   LEGACY_T3_CHAT_DARK_THEME_ID,
 ]);
 
@@ -692,7 +695,17 @@ export function getDefaultThemeColors(appearance: ThemeAppearance): ThemeColors 
   return appearance === "dark" ? DEFAULT_DARK_THEME_COLORS : T3_CHAT_THEME.colors;
 }
 
-const BUILT_IN_THEME_DEFINITIONS: ReadonlyArray<ThemeDefinition> = [T3_CHAT_THEME];
+export const T3_GROVE_THEME: ThemeDefinition = {
+  id: T3_GROVE_THEME_ID,
+  label: T3_GROVE_THEME_LABEL,
+  appearance: "light",
+  colors: createManagedThemeColors("light", "#f2faf4", "#218c5c"),
+  variants: {
+    dark: createManagedThemeColors("dark", "#102019", "#5ed58f"),
+  },
+};
+
+const BUILT_IN_THEME_DEFINITIONS: ReadonlyArray<ThemeDefinition> = [T3_CHAT_THEME, T3_GROVE_THEME];
 
 export function getThemeDefinition(theme: ThemePreference): ThemeDefinition | null {
   const themeId = themeIdFromPreference(theme);
