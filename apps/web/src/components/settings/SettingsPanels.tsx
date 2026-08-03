@@ -1345,7 +1345,7 @@ function ThemeColorPickerPanel({
           <p className="text-[11px] text-muted-foreground">Choose a color</p>
         </div>
         <span
-          className="size-7 shrink-0 rounded-full border border-black/10 shadow-[inset_0_0_0_1px_rgb(255_255_255_/_28%),0_1px_2px_rgb(0_0_0_/_18%)] dark:border-white/15 dark:shadow-[inset_0_0_0_1px_rgb(255_255_255_/_18%),0_1px_2px_rgb(0_0_0_/_35%)]"
+          className="size-7 shrink-0 rounded-full border border-border shadow-sm"
           style={{ backgroundColor: currentColor }}
         />
       </div>
@@ -1451,7 +1451,7 @@ function ThemeColorPicker({
         render={
           <button
             aria-label={`Choose ${label} color`}
-            className="relative flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-full border border-black/10 transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/70 focus-visible:ring-offset-2 focus-visible:ring-offset-background dark:border-white/15 dark:focus-visible:ring-blue-400/70"
+            className="relative flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-full border border-border transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
             title={`Choose ${label} color`}
             type="button"
           >
@@ -1490,15 +1490,13 @@ function ThemeColorField({
   const swatchValue = isColorValue ? value : "#000000";
 
   return (
-    <div className="group flex min-h-11 min-w-0 items-center gap-2 border-b border-zinc-200/70 px-1.5 py-1.5 transition-colors hover:bg-zinc-100/60 dark:border-zinc-800/70 dark:hover:bg-zinc-900/60">
+    <div className="group flex min-h-11 min-w-0 items-center gap-2 border-b border-border/70 px-1.5 py-1.5 transition-colors hover:bg-accent/40">
       <ThemeColorPicker label={label} onChange={onChange} value={swatchValue} />
-      <span className="min-w-0 flex-1 truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">
-        {label}
-      </span>
+      <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">{label}</span>
       <Input
         aria-invalid={!isColorValue}
         aria-label={`${label} hex value`}
-        className="w-28 shrink-0 rounded-none border-0 border-b border-zinc-300 bg-transparent font-mono text-xs text-zinc-900 shadow-none focus-within:border-blue-500 focus-within:ring-0 dark:border-zinc-700 dark:text-zinc-100 dark:focus-within:border-blue-400"
+        className="w-28 shrink-0 rounded-none border-0 border-b border-input bg-transparent font-mono text-xs text-foreground shadow-none focus-within:border-ring focus-within:ring-0"
         id={`${role}-hex`}
         nativeInput
         onChange={(event) => onChange(event.currentTarget.value)}
@@ -2257,7 +2255,7 @@ function ThemeLibraryCard({
                 aria-label={`Remove ${theme.label}`}
                 size="icon-xs"
                 variant="ghost"
-                className="text-muted-foreground hover:text-destructive"
+                className="text-muted-foreground hover:text-primary"
                 onClick={(event) => {
                   event.stopPropagation();
                   onRemove();
