@@ -75,6 +75,11 @@ it.effect("reports native module load failures as structured startup defects", (
         architecture: "x64",
       });
       assert.equal(error.message, "Failed to load node-pty for win32-x64.");
+      // The CLI entrypoint renders this; a broken install must never exit
+      // cleanly with no output.
+      assert.include(error.diagnostic, "Failed to load node-pty for win32-x64.");
+      assert.include(error.diagnostic, "native binding could not be loaded");
+      assert.include(error.diagnostic, "reinstall t3");
     }
   }).pipe(
     Effect.provide(
@@ -86,3 +91,158 @@ it.effect("reports native module load failures as structured startup defects", (
     ),
   ),
 );
+
+it("resolves helper executability against the calling process, not any exec bit", () => {
+  const owned = { ownerUid: 501, ownerGid: 20 };
+
+  // Owner-only binary: executable for its owner, not for anyone else.
+  assert.isTrue(
+    NodePtyAdapter.modeIsExecutableFor({
+      mode: 0o100,
+      ...owned,
+      processUid: 501,
+      processGids: [20],
+    }),
+  );
+  assert.isFalse(
+    NodePtyAdapter.modeIsExecutableFor({
+      mode: 0o100,
+      ...owned,
+      processUid: 502,
+      processGids: [21],
+    }),
+  );
+
+  // Group and other bits are honoured independently of the owner bit.
+  assert.isTrue(
+    NodePtyAdapter.modeIsExecutableFor({
+      mode: 0o010,
+      ...owned,
+      processUid: 502,
+      processGids: [20],
+    }),
+  );
+  assert.isFalse(
+    NodePtyAdapter.modeIsExecutableFor({
+      mode: 0o600,
+      ...owned,
+      processUid: 501,
+      processGids: [20],
+    }),
+  );
+  assert.isTrue(
+    NodePtyAdapter.modeIsExecutableFor({
+      mode: 0o001,
+      ...owned,
+      processUid: 502,
+      processGids: [21],
+    }),
+  );
+
+  // Root and unknown identities fall back to whether any execute bit exists.
+  assert.isTrue(
+    NodePtyAdapter.modeIsExecutableFor({ mode: 0o100, ...owned, processUid: 0, processGids: [0] }),
+  );
+  assert.isFalse(
+    NodePtyAdapter.modeIsExecutableFor({ mode: 0o644, ...owned, processUid: 0, processGids: [0] }),
+  );
+  assert.isTrue(
+    NodePtyAdapter.modeIsExecutableFor({
+      mode: 0o100,
+      ownerUid: null,
+      ownerGid: null,
+      processUid: null,
+      processGids: [],
+    }),
+  );
+
+  // The reported bug: a 0644 helper is never executable for anyone.
+  assert.isFalse(
+    NodePtyAdapter.modeIsExecutableFor({
+      mode: 0o644,
+      ...owned,
+      processUid: 501,
+      processGids: [20],
+    }),
+  );
+});
+
+it("leaves non-posix_spawnp failures untouched", () => {
+  const cause = new Error("cwd does not exist");
+  const described = NodePtyAdapter.describeSpawnFailure({
+    cause,
+    platform: "darwin",
+    helperPath: "/pkg/node-pty/build/Release/spawn-helper",
+    helperIsExecutable: false,
+  });
+  assert.equal(described, cause);
+});
+
+it("explains posix_spawnp failures caused by a non-executable spawn-helper", () => {
+  const cause = new Error("posix_spawnp failed.");
+  const described = NodePtyAdapter.describeSpawnFailure({
+    cause,
+    platform: "darwin",
+    helperPath: "/pkg/node-pty/build/Release/spawn-helper",
+    helperIsExecutable: false,
+  });
+  assert.instanceOf(described, PtyAdapter.SpawnHelperNotExecutableError);
+  const error = described as PtyAdapter.SpawnHelperNotExecutableError;
+  assert.equal(error.helperPath, "/pkg/node-pty/build/Release/spawn-helper");
+  assert.include(error.message, 'chmod +x "/pkg/node-pty/build/Release/spawn-helper"');
+  assert.equal(error.cause, cause);
+  // The terminal manager keys its retry decision off the tag, not the wording.
+  assert.isTrue(PtyAdapter.hasSpawnHelperNotExecutableCause(error));
+  assert.isTrue(
+    PtyAdapter.hasSpawnHelperNotExecutableCause(
+      new PtyAdapter.PtySpawnError({ adapter: "node-pty", shell: "/bin/zsh", cause: error }),
+    ),
+  );
+  assert.isFalse(PtyAdapter.hasSpawnHelperNotExecutableCause(cause));
+});
+
+it("keeps posix_spawnp failures as-is when the helper is executable or missing", () => {
+  const cause = new Error("posix_spawnp failed.");
+  assert.equal(
+    NodePtyAdapter.describeSpawnFailure({
+      cause,
+      platform: "darwin",
+      helperPath: "/pkg/node-pty/build/Release/spawn-helper",
+      helperIsExecutable: true,
+    }),
+    cause,
+  );
+  assert.equal(
+    NodePtyAdapter.describeSpawnFailure({
+      cause,
+      platform: "darwin",
+      helperPath: null,
+      helperIsExecutable: false,
+    }),
+    cause,
+  );
+  assert.equal(
+    NodePtyAdapter.describeSpawnFailure({
+      cause,
+      platform: "win32",
+      helperPath: "/pkg/node-pty/build/Release/spawn-helper",
+      helperIsExecutable: false,
+    }),
+    cause,
+  );
+});
+
+it("finds posix_spawnp mentions through nested error causes", () => {
+  const nested = new Error("outer wrapper", {
+    cause: new Error("posix_spawnp failed."),
+  });
+  const described = NodePtyAdapter.describeSpawnFailure({
+    cause: nested,
+    platform: "darwin",
+    helperPath: "/pkg/spawn-helper",
+    helperIsExecutable: false,
+  });
+  assert.instanceOf(described, PtyAdapter.SpawnHelperNotExecutableError);
+  const error = described as PtyAdapter.SpawnHelperNotExecutableError;
+  assert.equal(error.cause, nested);
+});

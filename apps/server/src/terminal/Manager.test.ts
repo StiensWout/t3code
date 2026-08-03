@@ -1260,6 +1260,28 @@ it.layer(
     }),
   );
 
+  it.effect("does not retry other shells when spawn-helper is not executable", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter, getEvents } = yield* createManager();
+      ptyAdapter.spawnFailures.push(
+        new PtyAdapter.SpawnHelperNotExecutableError({
+          helperPath: "/pkg/spawn-helper",
+          cause: new Error("posix_spawnp failed."),
+        }),
+      );
+
+      const snapshot = yield* manager.open(openInput());
+
+      assert.equal(snapshot.status, "error");
+      expect(ptyAdapter.spawnInputs).toHaveLength(1);
+
+      const events = yield* getEvents;
+      const errorEvent = events.find((event) => event.type === "error");
+      assert.isDefined(errorEvent);
+      assert.include(errorEvent?.message ?? "", 'chmod +x "/pkg/spawn-helper"');
+    }),
+  );
+
   it.effect("prefers PowerShell over ComSpec for Windows terminals", () =>
     Effect.gen(function* () {
       const { manager, ptyAdapter } = yield* createManager(5, {

@@ -29,6 +29,44 @@ export class PtySpawnError extends Schema.TaggedErrorClass<PtySpawnError>()("Pty
   }
 }
 
+/**
+ * A spawn failure whose real culprit is node-pty's `spawn-helper` missing its
+ * exec bit. It fails identically for every shell, so the terminal manager must
+ * not bury it under the shell-candidate fallback.
+ */
+export class SpawnHelperNotExecutableError extends Schema.TaggedErrorClass<SpawnHelperNotExecutableError>()(
+  "SpawnHelperNotExecutableError",
+  {
+    helperPath: Schema.String,
+    // Keep the originating failure available for diagnostics and logging.
+    cause: Schema.Defect(),
+  },
+) {
+  override get message(): string {
+    return `node-pty's spawn-helper at ${this.helperPath} is not executable, so every shell fails with "posix_spawnp failed". Fix it with: chmod +x "${this.helperPath}"`;
+  }
+}
+
+const isSpawnHelperNotExecutableError = Schema.is(SpawnHelperNotExecutableError);
+
+/** Walk the cause chain so wrappers cannot hide the structured diagnosis. */
+export const findSpawnHelperNotExecutableCause = (
+  error: unknown,
+): SpawnHelperNotExecutableError | null => {
+  let current: unknown = error;
+  const seen = new Set<unknown>();
+  while (current !== null && current !== undefined && !seen.has(current)) {
+    seen.add(current);
+    if (isSpawnHelperNotExecutableError(current)) return current;
+    if (typeof current !== "object") return null;
+    current = (current as { readonly cause?: unknown }).cause;
+  }
+  return null;
+};
+
+export const hasSpawnHelperNotExecutableCause = (error: unknown): boolean =>
+  findSpawnHelperNotExecutableCause(error) !== null;
+
 export interface PtyExitEvent {
   exitCode: number;
   signal: number | null;

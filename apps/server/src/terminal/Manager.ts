@@ -565,6 +565,12 @@ function resolveShellCandidates(
 }
 
 function isRetryableShellSpawnError(error: PtyAdapter.PtySpawnError): boolean {
+  // A non-executable node-pty spawn-helper fails identically for every shell;
+  // use the structured tag to preserve the actionable diagnosis.
+  if (PtyAdapter.hasSpawnHelperNotExecutableCause(error)) {
+    return false;
+  }
+
   const queue: unknown[] = [error];
   const seen = new Set<unknown>();
   const messages: string[] = [];
@@ -1959,7 +1965,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
 
       yield* evictInactiveSessionsIfNeeded();
 
-      const message = error.message;
+      const message = (PtyAdapter.findSpawnHelperNotExecutableCause(error) ?? error).message;
       yield* publishEvent({
         type: "error",
         threadId: session.threadId,
