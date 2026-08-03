@@ -699,9 +699,9 @@ export const T3_GROVE_THEME: ThemeDefinition = {
   id: T3_GROVE_THEME_ID,
   label: T3_GROVE_THEME_LABEL,
   appearance: "light",
-  colors: createManagedThemeColors("light", "#f2faf4", "#218c5c"),
+  colors: createManagedThemeColors("light", "#f4f8f5", "#1e7d52"),
   variants: {
-    dark: createManagedThemeColors("dark", "#102019", "#5ed58f"),
+    dark: createManagedThemeColors("dark", "#111f19", "#5dd58e"),
   },
 };
 

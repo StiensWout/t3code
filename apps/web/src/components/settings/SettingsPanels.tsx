@@ -1610,7 +1610,8 @@ function ThemeEditorDialog({
     }
 
     try {
-      const baseAppearance = editingTheme?.appearance ?? activeAppearance;
+      const baseAppearance =
+        editingTheme && modeSelection === "both" ? editingTheme.appearance : activeAppearance;
       const variantAppearance = baseAppearance === "light" ? "dark" : "light";
       const colorsForSave = !isAdvanced
         ? {

@@ -137,11 +137,7 @@
           const isT3Grove = !preference.invalidMode && preference.id === "t3-grove";
           const isBuiltInTheme = isT3Chat || isT3Grove;
           const builtInMode = isLegacyT3ChatDark
-            ? followSystem
-              ? prefersDark
-                ? "dark"
-                : "light"
-              : "dark"
+            ? "light"
             : followSystem || preference.mode === "system"
               ? prefersDark
                 ? "dark"
