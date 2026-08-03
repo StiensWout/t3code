@@ -217,7 +217,18 @@ export function syncBrowserChromeTheme() {
 
   document.documentElement.style.backgroundColor = backgroundColor;
   document.body.style.backgroundColor = backgroundColor;
-  ensureThemeColorMetaTag().setAttribute("content", backgroundColor);
+  // Update every theme-color meta: the browser reads whichever media-scoped
+  // element matches the OS, so mutating a single element is not enough.
+  const themeColorMetas = document.querySelectorAll<HTMLMetaElement>(
+    `meta[name="${THEME_COLOR_META_NAME}"]`,
+  );
+  if (themeColorMetas.length === 0) {
+    ensureThemeColorMetaTag().setAttribute("content", backgroundColor);
+    return;
+  }
+  for (const element of themeColorMetas) {
+    element.setAttribute("content", backgroundColor);
+  }
 }
 
 function applyTheme(theme: Theme, suppressTransitions = false) {

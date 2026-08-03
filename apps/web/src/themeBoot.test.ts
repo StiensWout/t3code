@@ -61,7 +61,7 @@ function runBootScript(options: {
   };
   const fakeDocument = {
     documentElement,
-    querySelector: (selector: string) => (selector === 'meta[name="theme-color"]' ? meta : null),
+    querySelectorAll: (selector: string) => (selector === 'meta[name="theme-color"]' ? [meta] : []),
   };
   const fakeWindow = {
     localStorage: {

@@ -68,7 +68,14 @@
           "t3-grove",
           "t3-chat-dark",
         ];
-        const themeColorMeta = document.querySelector('meta[name="theme-color"]');
+        // Update every theme-color meta (including the media-scoped ones) so
+        // the browser picks up the resolved color regardless of which element
+        // its media query matches.
+        const setThemeColor = (color) => {
+          for (const meta of document.querySelectorAll('meta[name="theme-color"]')) {
+            meta.setAttribute("content", color);
+          }
+        };
 
         const isHexColor = (value) =>
           typeof value === "string" &&
@@ -242,7 +249,7 @@
               document.documentElement.style.setProperty(`--boot-${name}`, value);
             }
           }
-          themeColorMeta?.setAttribute("content", chromeColor);
+          setThemeColor(chromeColor);
         } catch {
           // Mirror the runtime's storage-failure fallback: follow the OS.
           let prefersDark = true;
@@ -256,7 +263,7 @@
           document.documentElement.classList.toggle("dark", prefersDark);
           const fallbackColor = prefersDark ? DARK_BACKGROUND : LIGHT_BACKGROUND;
           document.documentElement.style.backgroundColor = fallbackColor;
-          themeColorMeta?.setAttribute("content", fallbackColor);
+          setThemeColor(fallbackColor);
         }
       })();
     </script>
