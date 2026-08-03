@@ -17,6 +17,8 @@
         const DARK_BACKGROUND = "#0a0a0a";
         const T3_CHAT_BACKGROUND = "#fffaff";
         const T3_CHAT_DARK_BACKGROUND = "#180f1b";
+        const T3_GROVE_BACKGROUND = "#f4f8f5";
+        const T3_GROVE_DARK_BACKGROUND = "#111f19";
         const CUSTOM_THEMES_STORAGE_KEY = "t3code:themes:v1";
         const THEME_FOLLOW_SYSTEM_STORAGE_KEY = "t3code:theme-follow-system";
         const SPLASH_COLORS = {
@@ -39,6 +41,16 @@
             background: "#180f1b",
             foreground: "#faeaf9",
             accent: "#f06cab",
+          },
+          t3Grove: {
+            background: "#f4f8f5",
+            foreground: "#241523",
+            accent: "#1e7d52",
+          },
+          t3GroveDark: {
+            background: "#111f19",
+            foreground: "#fffaff",
+            accent: "#5dd58e",
           },
         };
         const themeColorMeta = document.querySelector('meta[name="theme-color"]');
@@ -122,7 +134,9 @@
             isLegacyT3ChatDark ||
             (!preference.invalidMode &&
               (preference.id === "t3-chat" || preference.id === "t3-chat-dark"));
-          const t3ChatMode = isLegacyT3ChatDark
+          const isT3Grove = !preference.invalidMode && preference.id === "t3-grove";
+          const isBuiltInTheme = isT3Chat || isT3Grove;
+          const builtInMode = isLegacyT3ChatDark
             ? followSystem
               ? prefersDark
                 ? "dark"
@@ -139,18 +153,22 @@
             storedTheme === "light" ||
             storedTheme === "dark" ||
             storedTheme === "system" ||
-            isT3Chat ||
+            isBuiltInTheme ||
             customTheme !== null;
           const theme = hasStoredTheme && storedTheme ? storedTheme : "system";
           const isDark = customTheme
             ? customTheme.mode === "dark"
-            : isT3Chat
-              ? t3ChatMode === "dark"
+            : isBuiltInTheme
+              ? builtInMode === "dark"
               : followSystem
                 ? prefersDark
                 : theme === "dark";
-          if (isT3Chat || customTheme !== null) {
-            document.documentElement.dataset.themeId = isT3Chat ? "t3-chat" : customTheme.theme.id;
+          if (isBuiltInTheme || customTheme !== null) {
+            document.documentElement.dataset.themeId = isBuiltInTheme
+              ? isT3Grove
+                ? "t3-grove"
+                : "t3-chat"
+              : customTheme.theme.id;
           } else {
             delete document.documentElement.dataset.themeId;
           }
@@ -163,10 +181,14 @@
           const chromeColor =
             customTheme !== null
               ? customTheme.colors.canvas
-              : isT3Chat
-                ? t3ChatMode === "dark"
-                  ? T3_CHAT_DARK_BACKGROUND
-                  : T3_CHAT_BACKGROUND
+              : isBuiltInTheme
+                ? builtInMode === "dark"
+                  ? isT3Grove
+                    ? T3_GROVE_DARK_BACKGROUND
+                    : T3_CHAT_DARK_BACKGROUND
+                  : isT3Grove
+                    ? T3_GROVE_BACKGROUND
+                    : T3_CHAT_BACKGROUND
                 : isDark
                   ? DARK_BACKGROUND
                   : LIGHT_BACKGROUND;
@@ -179,10 +201,14 @@
                     foreground: customTheme.colors.text,
                     accent: customTheme.colors.accent,
                   }
-                : isT3Chat
-                  ? t3ChatMode === "dark"
-                    ? SPLASH_COLORS.t3ChatDark
-                    : SPLASH_COLORS.t3Chat
+                : isBuiltInTheme
+                  ? isT3Grove
+                    ? builtInMode === "dark"
+                      ? SPLASH_COLORS.t3GroveDark
+                      : SPLASH_COLORS.t3Grove
+                    : builtInMode === "dark"
+                      ? SPLASH_COLORS.t3ChatDark
+                      : SPLASH_COLORS.t3Chat
                   : isDark
                     ? SPLASH_COLORS.dark
                     : SPLASH_COLORS.light;

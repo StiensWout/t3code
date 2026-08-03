@@ -1610,10 +1610,7 @@ function ThemeEditorDialog({
     }
 
     try {
-      const baseAppearance =
-        editingTheme && getThemeModes(editingTheme).length > 1
-          ? editingTheme.appearance
-          : activeAppearance;
+      const baseAppearance = editingTheme?.appearance ?? activeAppearance;
       const variantAppearance = baseAppearance === "light" ? "dark" : "light";
       const colorsForSave = !isAdvanced
         ? {
@@ -2507,9 +2504,7 @@ function ThemeLibrary({
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
-            <Button variant="destructive" onClick={handleConfirmRemoveTheme}>
-              Remove theme
-            </Button>
+            <Button onClick={handleConfirmRemoveTheme}>Remove theme</Button>
           </AlertDialogFooter>
         </AlertDialogPopup>
       </AlertDialog>
