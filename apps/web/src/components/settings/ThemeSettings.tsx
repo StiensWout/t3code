@@ -1235,23 +1235,22 @@ function getThemePreviewStyle(
   mode: ThemeAppearance,
 ): CSSProperties {
   const isDark = mode === "dark";
-  const accentY = isDark ? 82 : 18;
-  const accentX = isDark ? 82 : 18;
-  const actionX = isDark ? 18 : 82;
-  const supportingY = isDark ? 18 : 82;
+  const accentX = isDark ? 24 : 76;
+  const accentY = isDark ? 76 : 24;
+  const actionX = isDark ? 76 : 24;
+  const modeBase = isDark
+    ? `color-mix(in srgb, ${colors.canvas} 25%, #09090b)`
+    : `color-mix(in srgb, ${colors.canvas} 25%, #ffffff)`;
+  const accentFade = isDark ? 62 : 72;
+  const actionFade = isDark ? 54 : 64;
   const gradient = [
-    `radial-gradient(circle at ${accentX}% ${accentY}%, ${colors.accent} 0%, color-mix(in srgb, ${colors.accent} 68%, transparent) 34%, transparent 78%)`,
-    `radial-gradient(circle at ${actionX}% ${accentY}%, ${colors.messageAction} 0%, color-mix(in srgb, ${colors.messageAction} 66%, transparent) 36%, transparent 80%)`,
-    `radial-gradient(circle at ${actionX}% ${supportingY}%, ${colors.messageSurface} 0%, color-mix(in srgb, ${colors.messageSurface} 54%, transparent) 28%, transparent 68%)`,
-    `radial-gradient(circle at ${accentX}% ${supportingY}%, ${colors.accentSurface} 0%, color-mix(in srgb, ${colors.accentSurface} 64%, transparent) 30%, transparent 70%)`,
-    `radial-gradient(circle at 50% 50%, ${colors.surface} 0%, ${colors.canvas} 100%)`,
+    `radial-gradient(circle at ${accentX}% ${accentY}%, ${colors.accent} 0%, color-mix(in srgb, ${colors.accent} ${accentFade}%, transparent) 30%, transparent 60%)`,
+    `radial-gradient(circle at ${actionX}% ${accentY}%, ${colors.messageAction} 0%, color-mix(in srgb, ${colors.messageAction} ${actionFade}%, transparent) 20%, transparent 48%)`,
+    `linear-gradient(145deg, ${modeBase} 0%, ${modeBase} 100%)`,
   ].join(", ");
   return {
-    backgroundColor: colors.canvas,
+    backgroundColor: modeBase,
     backgroundImage: gradient,
-    filter: isDark
-      ? "brightness(0.78) saturate(1.14) contrast(1.04)"
-      : "brightness(1.06) saturate(0.92)",
   };
 }
 
@@ -1287,17 +1286,20 @@ function ThemePreviewAutoCircle({
         className="absolute inset-0"
         style={{
           ...getThemePreviewStyle(light, "light"),
-          clipPath: "polygon(0 0, 100% 0, 0 100%)",
+          clipPath: "polygon(0 0, 100% 0, 100% 100%)",
         }}
       />
       <span
         className="absolute inset-0"
         style={{
           ...getThemePreviewStyle(dark, "dark"),
-          clipPath: "polygon(100% 0, 100% 100%, 0 100%)",
+          clipPath: "polygon(0 0, 0 100%, 100% 100%)",
         }}
       />
-      <span className="pointer-events-none absolute left-1/2 top-[-8%] h-[116%] w-px rotate-45 bg-background/75" />
+      <span
+        className="pointer-events-none absolute left-1/2 top-[-8%] h-[116%] w-px bg-background"
+        style={{ transform: "rotate(-45deg)" }}
+      />
     </span>
   );
 }
