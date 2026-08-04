@@ -312,7 +312,11 @@ export function TerminalViewport({
     onAddTerminalContext(selection);
   });
   const readTerminalLabel = useEffectEvent(() => terminalLabel);
-  const terminalFontFamily = useClientSettings((settings) => settings.fontFamilyTerminal);
+  // The terminal inherits the monospace (code) preference unless it has an
+  // override of its own, so one font choice drives every mono surface.
+  const terminalFontFamily = useClientSettings(
+    (settings) => settings.fontFamilyTerminal.trim() || settings.fontFamilyCode,
+  );
   const terminalFontSize = useClientSettings((settings) => settings.fontSizeTerminal);
   const terminalFontRef = useRef({ family: terminalFontFamily, size: terminalFontSize });
   const terminalSession = useAttachedTerminalSession({

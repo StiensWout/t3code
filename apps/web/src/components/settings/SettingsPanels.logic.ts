@@ -28,6 +28,25 @@ export function projectGroupingModeFromToggle(
   return lastEnabledMode === "repository_path" ? "repository_path" : "repository";
 }
 
+const TYPOGRAPHY_ADVANCED_KEY = "t3code:typography-advanced";
+
+/** Whether Settings -> Typography last showed the per-surface override rows. */
+export function readTypographyAdvanced(): boolean {
+  try {
+    return localStorage.getItem(TYPOGRAPHY_ADVANCED_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+export function rememberTypographyAdvanced(advanced: boolean): void {
+  try {
+    localStorage.setItem(TYPOGRAPHY_ADVANCED_KEY, String(advanced));
+  } catch {
+    // Storage can be unavailable in restricted browser contexts.
+  }
+}
+
 const LAST_ENABLED_PROJECT_GROUPING_MODE_KEY = "t3code:last-enabled-project-grouping-mode";
 
 export function readLastEnabledProjectGroupingMode(): SidebarProjectGroupingMode {
