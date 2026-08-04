@@ -138,7 +138,7 @@ function terminalFontOptions(family: string, size: number): { family?: string; s
   return trimmed.length > 0 ? { family: trimmed, size } : { size };
 }
 
-function terminalThemeFromApp(mountElement?: HTMLElement | null): GhosttyTheme {
+export function terminalThemeFromApp(mountElement?: HTMLElement | null): GhosttyTheme {
   const isDark = document.documentElement.classList.contains("dark");
   const fallbackBackground = isDark ? "rgb(14, 18, 24)" : "rgb(255, 255, 255)";
   const fallbackForeground = isDark ? "rgb(237, 241, 247)" : "rgb(28, 33, 41)";

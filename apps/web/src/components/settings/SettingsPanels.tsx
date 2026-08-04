@@ -108,17 +108,15 @@ import {
 import { DraftInput } from "../ui/draft-input";
 import { Input } from "../ui/input";
 import {
-  DEFAULT_CODE_FONT_STACK,
-  DEFAULT_SANS_FONT_STACK,
   MONO_FONT_OPTIONS,
   SANS_FONT_OPTIONS,
-  appearanceFontStack,
   availableFontOptions,
   fontOptionCategories,
   isFontFamilyAvailable,
   isMonospaceFamily,
   type FontOption,
 } from "../../appearanceFonts";
+import { CodeFontPreview, PromptFontPreview, TerminalFontPreview } from "./SettingsFontPreviews";
 import {
   NumberField,
   NumberFieldDecrement,
@@ -1013,20 +1011,6 @@ export function AppearanceSettingsPanel() {
     [],
   );
   const monoFontOptions = useMemo(() => availableFontOptions(MONO_FONT_OPTIONS), []);
-  const sansStack = appearanceFontStack(settings.fontFamilySans, DEFAULT_SANS_FONT_STACK);
-  // The composer falls back to the resolved interface stack (not the bare
-  // default) so the preview matches the runtime var(--font-composer) chain.
-  const composerStack =
-    settings.fontFamilyComposer.trim().length > 0
-      ? appearanceFontStack(settings.fontFamilyComposer, sansStack)
-      : sansStack;
-  const codeStack = appearanceFontStack(settings.fontFamilyCode, DEFAULT_CODE_FONT_STACK);
-  // The renderer refuses proportional faces, so the preview must show the
-  // fallback the terminal will actually draw rather than the stored name.
-  const terminalStack = appearanceFontStack(
-    isMonospaceFamily(settings.fontFamilyTerminal) ? settings.fontFamilyTerminal : "",
-    DEFAULT_CODE_FONT_STACK,
-  );
   const environmentStageLabel = useEnvironmentStageLabel();
   const showEnvironmentIdentification =
     resolveEnvironmentIdentificationPillLabel(environmentStageLabel) !== null;
@@ -1200,16 +1184,6 @@ export function AppearanceSettingsPanel() {
             value: settings.fontSizeInterface,
             onChange: (fontSizeInterface) => updateSettings({ fontSizeInterface }),
           }}
-          preview={
-            <FontPreviewCard stack={sansStack} size={settings.fontSizeInterface}>
-              <p className="text-[1em] text-foreground">
-                The quick brown fox jumps over the lazy dog.
-              </p>
-              <p className="text-[0.85em] text-muted-foreground">
-                Messages, labels, and headings across the app.
-              </p>
-            </FontPreviewCard>
-          }
         />
         <FontFamilySettingsRow
           title="Prompt font"
@@ -1224,18 +1198,7 @@ export function AppearanceSettingsPanel() {
             value: settings.fontSizePrompt,
             onChange: (fontSizePrompt) => updateSettings({ fontSizePrompt }),
           }}
-          preview={
-            <FontPreviewCard stack={composerStack} size={settings.fontSizePrompt}>
-              <div className="rounded-lg border border-border bg-background px-3 py-2">
-                <p className="text-[1em] text-foreground">
-                  Fix the flaky test in surface.test.ts and explain the race.
-                </p>
-                <p className="pt-1 text-[0.85em] text-muted-foreground/60">
-                  Ask for follow-up changes or attach images
-                </p>
-              </div>
-            </FontPreviewCard>
-          }
+          preview={<PromptFontPreview />}
         />
         <FontFamilySettingsRow
           title="Code font"
@@ -1251,29 +1214,7 @@ export function AppearanceSettingsPanel() {
             value: settings.fontSizeCode,
             onChange: (fontSizeCode) => updateSettings({ fontSizeCode }),
           }}
-          preview={
-            <FontPreviewCard stack={codeStack} size={settings.fontSizeCode}>
-              <pre className="overflow-x-auto leading-relaxed" style={{ fontFamily: "inherit" }}>
-                <code style={{ fontFamily: "inherit" }}>
-                  <span className="text-muted-foreground">1</span>
-                  {"  "}
-                  <span className="text-info">function</span>{" "}
-                  <span className="text-foreground">formatUser</span>
-                  <span className="text-muted-foreground">(user) {"{"}</span>
-                  {"\n"}
-                  <span className="text-muted-foreground">2</span>
-                  {"    "}
-                  <span className="text-info">return</span>{" "}
-                  <span className="text-success">{"`${user.name} <${user.email}>`"}</span>{" "}
-                  <span className="text-muted-foreground">{"// 0O 1lI"}</span>
-                  {"\n"}
-                  <span className="text-muted-foreground">3</span>
-                  {"  "}
-                  <span className="text-muted-foreground">{"}"}</span>
-                </code>
-              </pre>
-            </FontPreviewCard>
-          }
+          preview={<CodeFontPreview />}
         />
         <FontFamilySettingsRow
           title="Terminal font"
@@ -1290,19 +1231,10 @@ export function AppearanceSettingsPanel() {
             onChange: (fontSizeTerminal) => updateSettings({ fontSizeTerminal }),
           }}
           preview={
-            <FontPreviewCard stack={terminalStack} size={settings.fontSizeTerminal}>
-              <pre className="leading-relaxed" style={{ fontFamily: "inherit" }}>
-                <code style={{ fontFamily: "inherit" }}>
-                  <span className="text-muted-foreground">$</span>{" "}
-                  <span className="text-foreground">npm run dev</span>
-                  {"\n"}
-                  <span className="text-success">{"\u2713"} Ready in 430ms</span>
-                  {"\n"}
-                  <span className="text-muted-foreground">Local:</span>{" "}
-                  <span className="text-info">http://localhost:3000</span>
-                </code>
-              </pre>
-            </FontPreviewCard>
+            <TerminalFontPreview
+              family={settings.fontFamilyTerminal}
+              size={settings.fontSizeTerminal}
+            />
           }
         />
       </SettingsSection>
@@ -1384,27 +1316,6 @@ function FontSizeSlider({
   );
 }
 
-/** Renders in the family and size the surface will actually use. */
-function FontPreviewCard({
-  children,
-  stack,
-  size,
-}: {
-  children: ReactNode;
-  stack: string;
-  size: number;
-}) {
-  return (
-    <div
-      aria-hidden
-      className="mb-2 space-y-1 rounded-lg bg-muted/60 px-3 py-2.5"
-      style={{ fontFamily: stack, fontSize: `${size}px` }}
-    >
-      {children}
-    </div>
-  );
-}
-
 function FontFamilySettingsRow({
   title,
   description,
@@ -1418,7 +1329,7 @@ function FontFamilySettingsRow({
   title: string;
   description: string;
   options: readonly FontOption[];
-  preview: ReactNode;
+  preview?: ReactNode;
   value: string;
   onValueChange: (value: string) => void;
   requireMonospace?: boolean;
