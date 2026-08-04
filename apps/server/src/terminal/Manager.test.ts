@@ -580,7 +580,10 @@ it.layer(
                 cols: 42,
                 rows: 20,
               })
-              .pipe(Effect.tap(() => Deferred.succeed(resizeFinished, undefined)))
+              .pipe(
+                Effect.tap(() => Deferred.succeed(resizeFinished, undefined)),
+                Effect.ignore,
+              )
           : Effect.void,
       );
       yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
