@@ -26,6 +26,7 @@ import {
   type TerminalMetadataStreamEvent,
   type TerminalOpenInput,
   type TerminalResizeInput,
+  type TerminalResizeResult,
   type TerminalRestartInput,
   type TerminalSessionSnapshot,
   type TerminalSessionStatus,
@@ -146,7 +147,9 @@ export class TerminalManager extends Context.Service<
     /**
      * Resize the PTY backing a terminal session.
      */
-    readonly resize: (input: TerminalResizeInput) => Effect.Effect<void, TerminalError>;
+    readonly resize: (
+      input: TerminalResizeInput,
+    ) => Effect.Effect<TerminalResizeResult, TerminalError>;
 
     /**
      * Clear terminal output history.
@@ -2583,11 +2586,11 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     const session = yield* getSession(input.threadId, input.terminalId);
     // ResizeObserver traffic can already be in flight when the UI closes the session.
     if (Option.isNone(session)) {
-      return;
+      return { sequence: 0 };
     }
     const process = session.value.process;
     if (!process || session.value.status !== "running") {
-      return;
+      return { sequence: session.value.eventSequence };
     }
     yield* resizePtyProcess(session.value, process, input.cols, input.rows);
     session.value.cols = input.cols;
@@ -2619,6 +2622,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         yield* Deferred.await(flushed);
       }
     }
+    return { sequence: session.value.eventSequence };
   });
 
   const resize: TerminalManager["Service"]["resize"] = (input) =>

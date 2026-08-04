@@ -553,7 +553,7 @@ it.layer(
       // The data callback queues output synchronously, while its Effect drain
       // runs independently. The resize acknowledgement must wait behind it.
       process.emitData("old-width bytes\n");
-      yield* manager.resize({
+      const resizeResult = yield* manager.resize({
         threadId: "thread-1",
         terminalId: DEFAULT_TERMINAL_ID,
         cols: 42,
@@ -563,6 +563,7 @@ it.layer(
       const events = yield* getEvents;
       const outputEvent = events.find((event) => event.type === "output");
       expect(outputEvent).toBeDefined();
+      expect(resizeResult.sequence).toBe(outputEvent?.sequence);
       expect(process.resizeCalls).toEqual([{ cols: 42, rows: 20 }]);
     }),
   );

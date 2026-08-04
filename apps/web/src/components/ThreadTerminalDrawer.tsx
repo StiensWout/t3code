@@ -74,25 +74,25 @@ const MULTI_CLICK_SELECTION_ACTION_DELAY_MS = 260;
  * stream update one render after the resize RPC resolves.
  */
 export class TerminalWriteBarrier {
-  private settledVersion = 0;
+  private settledSequence = 0;
   private released = false;
   private waiters: Array<{
-    readonly version: number;
+    readonly sequence: number;
     readonly resolve: (applied: boolean) => void;
   }> = [];
 
-  waitFor(version: number): Promise<boolean> {
+  waitFor(sequence: number): Promise<boolean> {
     if (this.released) return Promise.resolve(false);
-    if (version <= this.settledVersion) return Promise.resolve(true);
+    if (sequence <= this.settledSequence) return Promise.resolve(true);
     return new Promise((resolve) => {
-      this.waiters.push({ version, resolve });
+      this.waiters.push({ sequence, resolve });
     });
   }
 
-  markApplied(version: number): void {
-    this.settledVersion = Math.max(this.settledVersion, version);
-    const ready = this.waiters.filter((waiter) => waiter.version <= this.settledVersion);
-    this.waiters = this.waiters.filter((waiter) => waiter.version > this.settledVersion);
+  markApplied(sequence: number): void {
+    this.settledSequence = Math.max(this.settledSequence, sequence);
+    const ready = this.waiters.filter((waiter) => waiter.sequence <= this.settledSequence);
+    this.waiters = this.waiters.filter((waiter) => waiter.sequence > this.settledSequence);
     for (const waiter of ready) waiter.resolve(true);
   }
 
@@ -379,10 +379,12 @@ export function TerminalViewport({
     },
   );
   const terminalVersion = terminalSession.version;
+  const terminalSequence = terminalSession.sequence;
   const previousSessionRef = useRef({
     buffer: terminalBuffer,
     error: terminalError,
     status: terminalStatus,
+    sequence: terminalSequence,
     version: terminalVersion,
   });
   const latestSessionRef = useRef(previousSessionRef.current);
@@ -390,14 +392,17 @@ export function TerminalViewport({
     buffer: terminalBuffer,
     error: terminalError,
     status: terminalStatus,
+    sequence: terminalSequence,
     version: terminalVersion,
   };
   const terminalWriteBarrierRef = useRef<TerminalWriteBarrier | null>(null);
-  const waitForTerminalWrites = useEffectEvent(async () => {
-    const barrier = terminalWriteBarrierRef.current;
-    if (barrier === null) return false;
-    return await barrier.waitFor(latestSessionRef.current.version);
-  });
+  const waitForTerminalWrites = useEffectEvent(
+    async (sequence = latestSessionRef.current.sequence) => {
+      const barrier = terminalWriteBarrierRef.current;
+      if (barrier === null) return false;
+      return await barrier.waitFor(sequence);
+    },
+  );
   const resizeTerminal = useEffectEvent(async (cols: number, rows: number) => {
     // The attach stream and the resize RPC share a transport, but the stream
     // state reaches Ghostty through a React effect. Drain that effect before
@@ -409,7 +414,9 @@ export function TerminalViewport({
     });
     // The server publishes queued output before resolving this request. Wait
     // for React to commit that output before the surface applies the new grid.
-    if (result._tag === "Success" && !(await waitForTerminalWrites())) return false;
+    if (result._tag === "Success" && !(await waitForTerminalWrites(result.value.sequence))) {
+      return false;
+    }
     // A failed request leaves the PTY at its previous dimensions, so the
     // surface must keep its old grid and retry instead of guessing.
     return result._tag === "Success";
@@ -787,17 +794,20 @@ export function TerminalViewport({
       buffer: terminalBuffer,
       error: terminalError,
       status: terminalStatus,
+      sequence: terminalSequence,
       version: terminalVersion,
     };
     if (!terminal) {
       previousSessionRef.current = current;
-      terminalWriteBarrierRef.current?.markApplied(current.version);
+      terminalWriteBarrierRef.current?.markApplied(current.sequence);
       return;
     }
 
     const previous = previousSessionRef.current;
     synchronizeTerminalStatus(terminal, current.status);
     if (current.version === previous.version) {
+      previousSessionRef.current = current;
+      terminalWriteBarrierRef.current?.markApplied(current.sequence);
       return;
     }
 
@@ -821,8 +831,8 @@ export function TerminalViewport({
       });
     }
     previousSessionRef.current = current;
-    terminalWriteBarrierRef.current?.markApplied(current.version);
-  }, [autoFocus, terminalBuffer, terminalError, terminalStatus, terminalVersion]);
+    terminalWriteBarrierRef.current?.markApplied(current.sequence);
+  }, [autoFocus, terminalBuffer, terminalError, terminalSequence, terminalStatus, terminalVersion]);
 
   useEffect(() => {
     if (!autoFocus) return;
