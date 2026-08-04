@@ -247,25 +247,67 @@ describe("index.html boot script", () => {
     });
     expect(aurora.themeId).toBe("aurora");
     expect(aurora.isDark).toBe(true);
-    expect(aurora.backgroundColor).toBe(AURORA_DUAL.variants.dark.canvas);
+    expect(aurora.backgroundColor).toBe("#241329");
     expect(aurora.bootVariables["--boot-background"]).toBe(AURORA_DUAL.variants.dark.canvas);
-    expect(aurora.metaContent).toBe(AURORA_DUAL.variants.dark.canvas);
+    expect(aurora.metaContent).toBe("#241329");
   });
 
   it.each([
-    ["t3-grove", "#1d2b24"],
-    ["t3-ocean", "#1b2938"],
-    ["t3-ember", "#30231e"],
-    ["t3-iris", "#29243b"],
-  ])("uses the %s dark splash palette", (theme, background) => {
+    ["t3-grove", "#203229", "#1d2b24"],
+    ["t3-ocean", "#202f3d", "#1d2936"],
+    ["t3-ember", "#382821", "#30231e"],
+    ["t3-iris", "#2c2640", "#282339"],
+  ])("uses the %s dark splash palette", (theme, chrome, background) => {
     const boot = runBootScript({
       storage: { [THEME_STORAGE_KEY]: theme, [THEME_FOLLOW_SYSTEM_STORAGE_KEY]: "true" },
       prefersDark: true,
     });
     expect(boot.themeId).toBe(theme);
     expect(boot.isDark).toBe(true);
-    expect(boot.backgroundColor).toBe(background);
+    expect(boot.backgroundColor).toBe(chrome);
     expect(boot.bootVariables["--boot-background"]).toBe(background);
+  });
+
+  it("uses runtime defaults for malformed custom roles", () => {
+    const boot = runBootScript({
+      storage: {
+        [THEME_STORAGE_KEY]: "partial",
+        [THEME_FOLLOW_SYSTEM_STORAGE_KEY]: "true",
+        [CUSTOM_THEMES_STORAGE_KEY]: JSON.stringify([
+          {
+            id: "partial",
+            label: "Partial",
+            appearance: "dark",
+            colors: { canvas: "not-a-color", text: "#fffaff", accent: "nope" },
+          },
+        ]),
+      },
+      prefersDark: true,
+    });
+
+    expect(boot.themeId).toBe("partial");
+    expect(boot.bootVariables["--boot-background"]).toBe("#180f1b");
+    expect(boot.bootVariables["--boot-foreground"]).toBe("#fffaff");
+    expect(boot.bootVariables["--boot-accent"]).toBe("#df4c96");
+    expect(boot.backgroundColor).toBe("#241329");
+    expect(boot.metaContent).toBe("#241329");
+  });
+
+  it("ignores malformed custom theme entries before applying a splash", () => {
+    const boot = runBootScript({
+      storage: {
+        [THEME_STORAGE_KEY]: "broken",
+        [CUSTOM_THEMES_STORAGE_KEY]: JSON.stringify([
+          { id: "broken", label: "Broken", appearance: "light", colors: "bad" },
+        ]),
+      },
+      prefersDark: false,
+    });
+
+    expect(boot.themeId).toBeUndefined();
+    expect(boot.themeSelected).toBeUndefined();
+    expect(boot.backgroundColor).toBe("#ffffff");
+    expect(boot.metaContent).toBe("#ffffff");
   });
 
   it("leaves unknown preferences unthemed so the runtime default applies", () => {

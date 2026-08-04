@@ -639,8 +639,30 @@ export function useSettingsRestore(onRestored?: () => void) {
     );
     if (!confirmed) return;
 
-    setTheme("system");
-    setFollowSystem(true);
+    const previousTheme = theme;
+    const previousFollowSystem = followSystem;
+    if (!setTheme("system")) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Couldn’t restore theme settings",
+          description: "Try again.",
+        }),
+      );
+      return;
+    }
+    if (!setFollowSystem(true)) {
+      setTheme(previousTheme);
+      setFollowSystem(previousFollowSystem);
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Couldn’t restore theme settings",
+          description: "Try again.",
+        }),
+      );
+      return;
+    }
     updateSettings({
       timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,
       wordWrap: DEFAULT_UNIFIED_SETTINGS.wordWrap,

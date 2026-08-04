@@ -628,7 +628,7 @@ function ThemeEditorDialog({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSaved: (theme: ThemeDefinition) => void;
+  onSaved: (theme: ThemeDefinition) => boolean;
   editingTheme: ThemeDefinition | null;
   initialAppearance: ThemeAppearance;
 }) {
@@ -764,7 +764,10 @@ function ThemeEditorDialog({
       const savedTheme = editingTheme
         ? updateCustomTheme(parseThemeFile(themeFile))
         : installCustomTheme(parseThemeFile(themeFile));
-      onSaved(savedTheme);
+      if (!onSaved(savedTheme)) {
+        setError("Theme saved, but it could not be made active. Try again.");
+        return;
+      }
       onOpenChange(false);
     } catch (cause) {
       setError(
@@ -1080,7 +1083,7 @@ function ThemeImportDialog({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onImported: (theme: ThemeDefinition) => void;
+  onImported: (theme: ThemeDefinition) => boolean;
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [json, setJson] = useState("");
@@ -1122,7 +1125,10 @@ function ThemeImportDialog({
   const handleSubmit = useCallback(() => {
     try {
       const installedTheme = installCustomTheme(parseThemeFile(JSON.parse(json)));
-      onImported(installedTheme);
+      if (!onImported(installedTheme)) {
+        setError("Theme added, but it could not be selected. Try again.");
+        return;
+      }
       onOpenChange(false);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "That theme file is invalid.");
@@ -1427,20 +1433,46 @@ export function ThemeLibrary({
     T3_IRIS_THEME,
   ];
 
+  const notifyThemeSaveFailure = useCallback(() => {
+    toastManager.add(
+      stackedThreadToast({
+        type: "error",
+        title: "Couldn’t save theme selection",
+        description: "Try again.",
+      }),
+    );
+  }, []);
+
+  const persistTheme = useCallback(
+    (nextTheme: string) => {
+      const didSave = setTheme(nextTheme);
+      if (!didSave) notifyThemeSaveFailure();
+      return didSave;
+    },
+    [notifyThemeSaveFailure, setTheme],
+  );
+
   const handleFollowSystemChange = useCallback(
     (checked: boolean) => {
-      // Keep the theme preference untouched when the follow-system write
-      // fails, so the two stored values cannot drift apart.
-      if (!setFollowSystem(checked)) return;
-      setTheme(
-        checked
-          ? (activeTheme?.id ?? "system")
-          : activeTheme
-            ? themePreferenceForMode(activeTheme, initialAppearance)
-            : initialAppearance,
-      );
+      const previousTheme = theme;
+      const nextTheme = checked
+        ? (activeTheme?.id ?? "system")
+        : activeTheme
+          ? themePreferenceForMode(activeTheme, initialAppearance)
+          : initialAppearance;
+
+      // Write the theme first, then commit the follow-system flag. If the
+      // second write fails, restore the original theme preference so the two
+      // stored values cannot drift apart.
+      if (!setTheme(nextTheme)) {
+        notifyThemeSaveFailure();
+        return;
+      }
+      if (setFollowSystem(checked)) return;
+      setTheme(previousTheme);
+      notifyThemeSaveFailure();
     },
-    [activeTheme, initialAppearance, setFollowSystem, setTheme],
+    [activeTheme, initialAppearance, notifyThemeSaveFailure, setFollowSystem, setTheme, theme],
   );
 
   const handleRemoveTheme = useCallback((customTheme: ThemeDefinition) => {
@@ -1453,17 +1485,17 @@ export function ThemeLibrary({
     // dialog stays open so the user can retry or cancel.
     if (
       getThemeDefinition(theme)?.id === themeToRemove.id &&
-      !setTheme(followSystem ? "system" : initialAppearance)
+      !persistTheme(followSystem ? "system" : initialAppearance)
     ) {
       return;
     }
     removeCustomTheme(themeToRemove.id);
     setThemeToRemove(null);
-  }, [followSystem, initialAppearance, setTheme, theme, themeToRemove]);
+  }, [followSystem, initialAppearance, persistTheme, theme, themeToRemove]);
 
   const handleCreatedTheme = useCallback(
     (createdTheme: ThemeDefinition) => {
-      setTheme(createdTheme.id);
+      if (!persistTheme(createdTheme.id)) return false;
       toastManager.add(
         stackedThreadToast({
           type: "success",
@@ -1471,8 +1503,9 @@ export function ThemeLibrary({
           description: "It’s now active.",
         }),
       );
+      return true;
     },
-    [setTheme],
+    [persistTheme],
   );
 
   const handleEditedTheme = useCallback(
@@ -1484,7 +1517,7 @@ export function ThemeLibrary({
           selectedMode && getThemeColorsForMode(updatedTheme, selectedMode)
             ? themePreferenceForMode(updatedTheme, selectedMode)
             : updatedTheme.id;
-        setTheme(nextTheme);
+        if (!persistTheme(nextTheme)) return false;
         refreshTheme();
       }
       setThemeToEdit(null);
@@ -1495,8 +1528,9 @@ export function ThemeLibrary({
           description: wasActive ? "Your changes are now active." : "Your changes are saved.",
         }),
       );
+      return true;
     },
-    [followSystem, refreshTheme, setTheme, theme],
+    [followSystem, persistTheme, refreshTheme, theme],
   );
 
   return (
@@ -1539,8 +1573,8 @@ export function ThemeLibrary({
             isActive={theme === "system" || theme === "light" || theme === "dark"}
             isPersonal={false}
             key={standardTheme.id}
-            onUse={() => setTheme(followSystem ? "system" : initialAppearance)}
-            onUseMode={followSystem ? undefined : setTheme}
+            onUse={() => persistTheme(followSystem ? "system" : initialAppearance)}
+            onUseMode={followSystem ? undefined : (nextMode) => persistTheme(nextMode)}
             theme={standardTheme}
           />
         ))}
@@ -1557,12 +1591,12 @@ export function ThemeLibrary({
               isActive={isActive}
               isPersonal={false}
               key={maintainerTheme.id}
-              onUse={() => setTheme(maintainerTheme.id)}
+              onUse={() => persistTheme(maintainerTheme.id)}
               onUseMode={
                 followSystem
                   ? undefined
                   : (nextMode: ThemeAppearance) =>
-                      setTheme(themePreferenceForMode(maintainerTheme.id, nextMode))
+                      persistTheme(themePreferenceForMode(maintainerTheme.id, nextMode))
               }
               theme={getThemeCardDefinition(maintainerTheme)}
             />
@@ -1586,12 +1620,12 @@ export function ThemeLibrary({
                 downloadThemeFile(`${customTheme.id}.json`, serializeThemeFile(customTheme))
               }
               onRemove={() => handleRemoveTheme(customTheme)}
-              onUse={() => setTheme(customTheme.id)}
+              onUse={() => persistTheme(customTheme.id)}
               onUseMode={
                 followSystem
                   ? undefined
                   : (nextMode: ThemeAppearance) =>
-                      setTheme(themePreferenceForMode(customTheme.id, nextMode))
+                      persistTheme(themePreferenceForMode(customTheme.id, nextMode))
               }
               theme={getThemeCardDefinition(customTheme)}
             />
@@ -1617,7 +1651,7 @@ export function ThemeLibrary({
       />
       <ThemeImportDialog
         onImported={(importedTheme) => {
-          setTheme(importedTheme.id);
+          if (!persistTheme(importedTheme.id)) return false;
           toastManager.add(
             stackedThreadToast({
               type: "success",
@@ -1625,6 +1659,7 @@ export function ThemeLibrary({
               description: "It’s now active.",
             }),
           );
+          return true;
         }}
         onOpenChange={setIsImportOpen}
         open={isImportOpen}

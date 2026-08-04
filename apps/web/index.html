@@ -29,27 +29,90 @@
             accent: "#818cf8",
           },
         };
+        // These are the runtime defaults used to complete a custom palette
+        // when a stored theme omits a role. Keep them separate from the
+        // unselected splash so a partial custom theme does not flash generic
+        // app colors before React mounts.
+        const DEFAULT_THEME_PALETTES = {
+          light: {
+            background: "#faf5fa",
+            foreground: "#501854",
+            accent: "#a84370",
+            chrome: "#f3e4f6",
+          },
+          dark: {
+            background: "#180f1b",
+            foreground: "#faeaf9",
+            accent: "#df4c96",
+            chrome: "#241329",
+          },
+        };
         // Keep this small boot-time copy in sync with the built-in palettes so
         // the selected theme is visible before the app has mounted.
         const BUILT_IN_THEME_PALETTES = {
           "t3-chat": {
-            light: { background: "#faf5fa", foreground: "#501854", accent: "#a84370" },
+            light: {
+              background: "#faf5fa",
+              foreground: "#501854",
+              accent: "#a84370",
+              chrome: "#f3e4f6",
+            },
           },
           "t3-grove": {
-            light: { background: "#f2f8f4", foreground: "#241523", accent: "#19734a" },
-            dark: { background: "#1d2b24", foreground: "#fffaff", accent: "#69d69a" },
+            light: {
+              background: "#f3f7f4",
+              foreground: "#241523",
+              accent: "#1b7d50",
+              chrome: "#eaf2ee",
+            },
+            dark: {
+              background: "#1d2b24",
+              foreground: "#fffaff",
+              accent: "#69d69a",
+              chrome: "#203229",
+            },
           },
           "t3-ocean": {
-            light: { background: "#f2f7fb", foreground: "#241523", accent: "#2878b8" },
-            dark: { background: "#1b2938", foreground: "#fffaff", accent: "#70b9ee" },
+            light: {
+              background: "#f5f7f8",
+              foreground: "#241523",
+              accent: "#2672af",
+              chrome: "#edf1f5",
+            },
+            dark: {
+              background: "#1d2936",
+              foreground: "#fffaff",
+              accent: "#70b9ee",
+              chrome: "#202f3d",
+            },
           },
           "t3-ember": {
-            light: { background: "#fff6ef", foreground: "#241523", accent: "#c4602f" },
-            dark: { background: "#30231e", foreground: "#fffaff", accent: "#f39a62" },
+            light: {
+              background: "#f9f7f5",
+              foreground: "#241523",
+              accent: "#ae552a",
+              chrome: "#f6f0ed",
+            },
+            dark: {
+              background: "#30231e",
+              foreground: "#fffaff",
+              accent: "#f09a64",
+              chrome: "#382821",
+            },
           },
           "t3-iris": {
-            light: { background: "#f7f4fc", foreground: "#241523", accent: "#7254b9" },
-            dark: { background: "#29243b", foreground: "#fffaff", accent: "#ad92f5" },
+            light: {
+              background: "#f8f7f9",
+              foreground: "#241523",
+              accent: "#7253b9",
+              chrome: "#f2f0f7",
+            },
+            dark: {
+              background: "#282339",
+              foreground: "#fffaff",
+              accent: "#9d7df2",
+              chrome: "#2c2640",
+            },
           },
         };
         // A dark OS must not flip the light-only T3 Chat palette; the runtime
@@ -83,6 +146,12 @@
         const isHexColor = (value) =>
           typeof value === "string" &&
           /^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(value);
+        const isRecord = (value) =>
+          typeof value === "object" && value !== null && !Array.isArray(value);
+        const isThemeId = (value) =>
+          typeof value === "string" && /^[a-z0-9](?:[a-z0-9-]{0,47})$/.test(value);
+        const isThemeLabel = (value) =>
+          typeof value === "string" && value.trim().length > 0 && value.trim().length <= 48;
         const isThemePreferenceMode = (value) =>
           value === "light" || value === "dark" || value === "system";
         const isThemeAppearance = (value) => value === "light" || value === "dark";
@@ -98,6 +167,25 @@
             invalidMode: !isThemePreferenceMode(rawMode),
           };
         };
+        const isStoredCustomTheme = (value) => {
+          if (
+            !isRecord(value) ||
+            !isThemeId(value.id) ||
+            RESERVED_THEME_IDS.includes(value.id) ||
+            !isThemeLabel(value.label) ||
+            !isThemeAppearance(value.appearance) ||
+            !isRecord(value.colors)
+          ) {
+            return false;
+          }
+          if (value.variants === undefined) return true;
+          if (!isRecord(value.variants)) return false;
+          return Object.entries(value.variants).every(
+            ([appearance, colors]) =>
+              isThemeAppearance(appearance) &&
+              (appearance === value.appearance || isRecord(colors)),
+          );
+        };
         const findCustomTheme = (themeId) => {
           if (RESERVED_THEME_IDS.includes(themeId)) return null;
           try {
@@ -106,13 +194,7 @@
             );
             if (!Array.isArray(parsed)) return null;
             return (
-              parsed.find(
-                (value) =>
-                  value &&
-                  value.id === themeId &&
-                  isThemeAppearance(value.appearance) &&
-                  value.colors,
-              ) ?? null
+              parsed.find((value) => isStoredCustomTheme(value) && value.id === themeId) ?? null
             );
           } catch {
             return null;
@@ -188,6 +270,8 @@
                 ? customTheme.colors
                 : (customTheme.variants?.[themeMode] ?? customTheme.colors)
               : null;
+          const customDefaults =
+            customTheme && themeMode ? DEFAULT_THEME_PALETTES[themeMode] : null;
           // The runtime tolerates individual malformed colors, so fall back
           // per role rather than dropping the theme.
           const builtInSplash =
@@ -199,13 +283,13 @@
             ? {
                 background: isHexColor(customColors.canvas)
                   ? customColors.canvas
-                  : fallbackSplash.background,
+                  : (customDefaults?.background ?? fallbackSplash.background),
                 foreground: isHexColor(customColors.text)
                   ? customColors.text
-                  : fallbackSplash.foreground,
+                  : (customDefaults?.foreground ?? fallbackSplash.foreground),
                 accent: isHexColor(customColors.accent)
                   ? customColors.accent
-                  : fallbackSplash.accent,
+                  : (customDefaults?.accent ?? fallbackSplash.accent),
               }
             : null;
           if (isThemed) {
@@ -219,10 +303,12 @@
             delete document.documentElement.dataset.themeSelected;
           }
           document.documentElement.classList.toggle("dark", isDark);
-          const chromeColor = customSplash
-            ? customSplash.background
+          const chromeColor = customColors
+            ? isHexColor(customColors.chrome)
+              ? customColors.chrome
+              : (customDefaults?.chrome ?? fallbackSplash.background)
             : builtInSplash
-              ? builtInSplash.background
+              ? builtInSplash.chrome
               : isDark
                 ? DARK_BACKGROUND
                 : LIGHT_BACKGROUND;
