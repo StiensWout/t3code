@@ -1,6 +1,6 @@
-import { LegendList } from "@legendapp/list/react";
+import { LegendList, type LegendListRef } from "@legendapp/list/react";
 import { CheckIcon, ChevronDownIcon, SearchIcon } from "lucide-react";
-import { useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { isMonospaceFamily, queryInstalledFontFamilies } from "../../appearanceFonts";
 import {
   Combobox,
@@ -91,8 +91,19 @@ export function FontFamilyPicker({
   initialOpen?: boolean;
   onSelect: (family: string) => void;
 }) {
-  const [open, setOpen] = useState(initialOpen);
+  const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  // Open after mount rather than mounting open: a popup that first renders in
+  // its open state never receives Base UI's entrance style baseline, so the
+  // exit transition on close has no style delta, never fires transitionend,
+  // and the popup lingers on screen forever.
+  useEffect(() => {
+    if (initialOpen) setOpen(true);
+    // The prop is only meaningful at mount - the control just swapped in
+    // under an active focus - so later changes are deliberately ignored.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const listRef = useRef<LegendListRef | null>(null);
   const enumeration = useFontEnumeration();
 
   const handleOpenChange = (nextOpen: boolean) => {
@@ -128,13 +139,7 @@ export function FontFamilyPicker({
     const isDefault = item === DEFAULT_FONT_VALUE;
     const family = isDefault ? defaultFamily : item;
     return (
-      <ComboboxItem
-        hideIndicator
-        index={index}
-        key={item}
-        value={item}
-        onClick={() => handlePick(item)}
-      >
+      <ComboboxItem hideIndicator index={index} key={item} value={item}>
         <div className="flex w-full min-w-0 items-center justify-between gap-2">
           <span className="min-w-0 truncate" style={{ fontFamily: family }}>
             {family}
@@ -161,6 +166,15 @@ export function FontFamilyPicker({
       open={open}
       onOpenChange={handleOpenChange}
       value={selectedValue}
+      onValueChange={(next) => {
+        if (typeof next === "string") handlePick(next);
+      }}
+      onItemHighlighted={(_value, eventDetails) => {
+        // Keyboard highlights must pull the virtualized row into view, or
+        // arrow keys walk past the rendered window and navigate blind.
+        if (!open || eventDetails.index < 0 || eventDetails.reason !== "keyboard") return;
+        void listRef.current?.scrollIndexIntoView?.({ index: eventDetails.index, animated: false });
+      }}
     >
       <ComboboxTrigger
         aria-label={ariaLabel}
@@ -195,6 +209,7 @@ export function FontFamilyPicker({
           <div className="relative min-h-0 max-h-72 w-full flex-1 overflow-hidden">
             <ComboboxListVirtualized className="size-full min-w-0 p-0">
               <LegendList<string>
+                ref={listRef}
                 data={items}
                 keyExtractor={(item) => item}
                 renderItem={({ item, index }) => renderItem(item, index)}

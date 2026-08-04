@@ -23,10 +23,10 @@ const ALLOWED_PREVIEW_PERMISSIONS: ReadonlySet<string> = new Set([
   "clipboard-sanitized-write",
   "notifications",
   "geolocation",
-  // Local Font Access (queryLocalFonts). Both handlers again: the API
-  // consults the permission check before ever raising a request, and a
-  // denied check resolves with an empty font list rather than an error.
-  "local-fonts",
+  // Deliberately NOT local-fonts: preview sessions run untrusted web content,
+  // and silently granting it would hand every page the user's installed-font
+  // fingerprint (and font file bytes via FontData.blob()). The app's own font
+  // picker runs in the main window session, which is unaffected by this list.
 ]);
 
 export class BrowserSessionPartitionDerivationError extends Schema.TaggedErrorClass<BrowserSessionPartitionDerivationError>()(

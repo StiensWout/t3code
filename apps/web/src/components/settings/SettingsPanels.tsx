@@ -55,6 +55,7 @@ import * as Arr from "effect/Array";
 import * as Duration from "effect/Duration";
 import * as Equal from "effect/Equal";
 import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
 import { APP_VERSION, HOSTED_APP_CHANNEL, HOSTED_APP_CHANNEL_LABEL } from "../../branding";
 import {
   canCheckForUpdate,
@@ -72,6 +73,7 @@ import {
 import { isElectron } from "../../env";
 import { buildHostedChannelSelectionUrl, type HostedAppChannel } from "../../hostedPairing";
 import { useTheme } from "../../hooks/useTheme";
+import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { usePrimarySettings, useUpdatePrimarySettings } from "../../hooks/useSettings";
 import { useThreadActions } from "../../hooks/useThreadActions";
 import { useDesktopUpdateState } from "../../state/desktopUpdate";
@@ -148,8 +150,6 @@ import {
   readLastEnabledProjectGroupingMode,
   rememberEnabledProjectGroupingMode,
   resolveBackgroundActivityProfileOption,
-  readTypographyAdvanced,
-  rememberTypographyAdvanced,
 } from "./SettingsPanels.logic";
 import {
   SettingResetButton,
@@ -1219,7 +1219,8 @@ function CodeFontRow({
   const defaults = useFontDefaultFamilies();
   return (
     <FontFamilySettingsRow
-      {...(title === undefined ? searchableSetting("code-font") : { title })}
+      {...searchableSetting("code-font")}
+      {...(title !== undefined ? { title } : {})}
       description={description}
       defaultFamily={defaults.code}
       value={settings.fontFamilyCode}
@@ -1360,7 +1361,17 @@ function SimpleFontRows() {
   );
 }
 
-const ADVANCED_TYPOGRAPHY_TARGET_IDS = new Set(["prompt-font", "terminal-font", "font-smoothing"]);
+// Font smoothing only renders on macOS, so a search jump to it elsewhere
+// must not flip the section - the target would never mount to be scrolled to.
+const ADVANCED_TYPOGRAPHY_TARGET_IDS: ReadonlySet<string> = new Set([
+  "prompt-font",
+  "terminal-font",
+  ...(typeof navigator !== "undefined" && isMacPlatform(navigator.platform)
+    ? ["font-smoothing"]
+    : []),
+]);
+
+const TYPOGRAPHY_ADVANCED_KEY = "t3code:typography-advanced";
 
 /**
  * The two-font view by default - one sans, one monospace, each cascading to
@@ -1370,13 +1381,18 @@ const ADVANCED_TYPOGRAPHY_TARGET_IDS = new Set(["prompt-font", "terminal-font", 
  * target exists to scroll to.
  */
 function TypographySection() {
-  const [advanced, setAdvanced] = useState(readTypographyAdvanced);
+  const [advanced, setAdvanced] = useLocalStorage(TYPOGRAPHY_ADVANCED_KEY, false, Schema.Boolean);
   const searchTargetId = useSettingsSearchTargetId();
-  const searchWantsAdvancedRow =
-    searchTargetId !== null && ADVANCED_TYPOGRAPHY_TARGET_IDS.has(searchTargetId);
+  // Flip Advanced on once per search jump so the hidden target can mount and
+  // scroll; tracking the handled id lets the user turn it back off without
+  // the still-set target immediately re-expanding the section.
+  const lastExpandedTargetRef = useRef<string | null>(null);
   useEffect(() => {
-    if (searchWantsAdvancedRow && !advanced) setAdvanced(true);
-  }, [searchWantsAdvancedRow, advanced]);
+    if (searchTargetId === null || !ADVANCED_TYPOGRAPHY_TARGET_IDS.has(searchTargetId)) return;
+    if (lastExpandedTargetRef.current === searchTargetId) return;
+    lastExpandedTargetRef.current = searchTargetId;
+    setAdvanced(true);
+  }, [searchTargetId, setAdvanced]);
   return (
     <SettingsSection
       title="Typography"
@@ -1385,11 +1401,7 @@ function TypographySection() {
           Advanced
           <Switch
             checked={advanced}
-            onCheckedChange={(checked) => {
-              const next = Boolean(checked);
-              setAdvanced(next);
-              rememberTypographyAdvanced(next);
-            }}
+            onCheckedChange={(checked) => setAdvanced(Boolean(checked))}
             aria-label="Show advanced typography settings"
           />
         </label>
