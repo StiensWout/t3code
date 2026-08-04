@@ -1443,6 +1443,16 @@ export function ThemeLibrary({
     );
   }, []);
 
+  const notifyThemeRemovalFailure = useCallback(() => {
+    toastManager.add(
+      stackedThreadToast({
+        type: "error",
+        title: "Couldn’t remove theme",
+        description: "Try again.",
+      }),
+    );
+  }, []);
+
   const persistTheme = useCallback(
     (nextTheme: string) => {
       const didSave = setTheme(nextTheme);
@@ -1499,11 +1509,18 @@ export function ThemeLibrary({
     try {
       removeCustomTheme(themeToRemove.id);
     } catch {
-      notifyThemeSaveFailure();
+      notifyThemeRemovalFailure();
       return;
     }
     setThemeToRemove(null);
-  }, [followSystem, initialAppearance, notifyThemeSaveFailure, persistTheme, theme, themeToRemove]);
+  }, [
+    followSystem,
+    initialAppearance,
+    notifyThemeRemovalFailure,
+    persistTheme,
+    theme,
+    themeToRemove,
+  ]);
 
   const handleCreatedTheme = useCallback(
     (createdTheme: ThemeDefinition) => {
