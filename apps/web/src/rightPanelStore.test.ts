@@ -18,6 +18,58 @@ beforeEach(() => {
 });
 
 describe("rightPanelStore", () => {
+  it("restores a failed split close to its original surface and pane order", () => {
+    const store = useRightPanelStore.getState();
+    store.openTerminal(refA, "term-1");
+    store.splitTerminal(refA, "terminal:term-1", "term-2", "vertical");
+    store.splitTerminal(refA, "terminal:term-1", "term-3", "vertical");
+    const snapshot = {
+      surfaceId: "terminal:term-1" as const,
+      resourceId: "term-1",
+      terminalIds: ["term-1", "term-2", "term-3"],
+      splitDirection: "vertical" as const,
+    };
+
+    store.closeTerminal(refA, "terminal:term-1", "term-2");
+    store.restoreTerminal(refA, snapshot, "term-2");
+
+    expect(selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      id: "terminal:term-1",
+      kind: "terminal",
+      resourceId: "term-1",
+      terminalIds: ["term-1", "term-2", "term-3"],
+      activeTerminalId: "term-2",
+      splitDirection: "vertical",
+    });
+  });
+
+  it("recreates a terminal surface when a failed close removed its last pane", () => {
+    const store = useRightPanelStore.getState();
+    store.openTerminal(refA, "term-1");
+    const snapshot = {
+      surfaceId: "terminal:term-1" as const,
+      resourceId: "term-1",
+      terminalIds: ["term-1"],
+    };
+
+    store.closeTerminal(refA, "terminal:term-1", "term-1");
+    store.restoreTerminal(refA, snapshot, "term-1");
+
+    expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      isOpen: true,
+      activeSurfaceId: "terminal:term-1",
+      surfaces: [
+        {
+          id: "terminal:term-1",
+          kind: "terminal",
+          resourceId: "term-1",
+          terminalIds: ["term-1"],
+          activeTerminalId: "term-1",
+        },
+      ],
+    });
+  });
+
   it("drops the legacy singleton terminal surface during migration", () => {
     expect(
       migratePersistedRightPanelState({

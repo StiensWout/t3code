@@ -39,6 +39,14 @@ export type RightPanelSurface =
     }
   | { id: "plan"; kind: "plan" };
 
+/** Pre-close shape of a terminal surface, captured for an optimistic rollback. */
+export interface TerminalSurfaceSnapshot {
+  surfaceId: `terminal:${string}`;
+  resourceId: string;
+  terminalIds: string[];
+  splitDirection?: "horizontal" | "vertical";
+}
+
 const RIGHT_PANEL_STORAGE_KEY = "t3code:right-panel-state:v2";
 const RIGHT_PANEL_STORAGE_VERSION = 7;
 
@@ -54,6 +62,11 @@ interface RightPanelStoreState {
   openBrowser: (ref: ScopedThreadRef, tabId: string | null) => void;
   openFile: (ref: ScopedThreadRef, relativePath: string, line?: number) => void;
   openTerminal: (ref: ScopedThreadRef, terminalId: string) => void;
+  restoreTerminal: (
+    ref: ScopedThreadRef,
+    snapshot: TerminalSurfaceSnapshot,
+    terminalId: string,
+  ) => void;
   splitTerminal: (
     ref: ScopedThreadRef,
     surfaceId: string,
@@ -291,6 +304,61 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
           byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) =>
             upsertSurface(current, terminalSurface(terminalId)),
           ),
+        })),
+      restoreTerminal: (ref, snapshot, terminalId) =>
+        set((state) => ({
+          byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) => {
+            const existing = current.surfaces.find(
+              (surface): surface is Extract<RightPanelSurface, { kind: "terminal" }> =>
+                surface.id === snapshot.surfaceId && surface.kind === "terminal",
+            );
+            if (!existing) {
+              return upsertSurface(current, {
+                id: snapshot.surfaceId,
+                kind: "terminal",
+                resourceId: snapshot.resourceId,
+                terminalIds: [terminalId],
+                activeTerminalId: terminalId,
+                ...(snapshot.splitDirection === "vertical"
+                  ? { splitDirection: "vertical" as const }
+                  : {}),
+              });
+            }
+
+            const existingTerminalIds = [...existing.terminalIds];
+            const snapshotTerminalIdSet = new Set(snapshot.terminalIds);
+            const terminalIds = [
+              ...snapshot.terminalIds.filter(
+                (id) => id === terminalId || existingTerminalIds.includes(id),
+              ),
+              ...existingTerminalIds.filter((id) => !snapshotTerminalIdSet.has(id)),
+            ];
+            if (!terminalIds.includes(terminalId)) {
+              terminalIds.push(terminalId);
+            }
+
+            return {
+              ...current,
+              isOpen: true,
+              activeSurfaceId: snapshot.surfaceId,
+              surfaces: current.surfaces.map((surface) => {
+                if (surface.id !== snapshot.surfaceId || surface.kind !== "terminal") {
+                  return surface;
+                }
+                const restoredSurface = {
+                  ...surface,
+                  terminalIds,
+                  activeTerminalId: terminalId,
+                };
+                if (snapshot.splitDirection === "vertical") {
+                  restoredSurface.splitDirection = "vertical";
+                } else {
+                  delete restoredSurface.splitDirection;
+                }
+                return restoredSurface;
+              }),
+            };
+          }),
         })),
       splitTerminal: (ref, surfaceId, terminalId, direction = "horizontal") =>
         set((state) => ({
