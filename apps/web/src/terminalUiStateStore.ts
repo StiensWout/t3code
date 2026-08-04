@@ -659,6 +659,7 @@ interface TerminalUiStateStoreState {
   setActiveTerminal: (threadRef: ScopedThreadRef, terminalId: string) => void;
   closeTerminal: (threadRef: ScopedThreadRef, terminalId: string) => void;
   unsuppressTerminal: (threadRef: ScopedThreadRef, terminalId: string) => void;
+  restorePendingTerminal: (threadRef: ScopedThreadRef, terminalId: string) => void;
   abandonPendingTerminal: (threadRef: ScopedThreadRef, terminalId: string) => void;
   reconcileTerminalIds: (
     threadRef: ScopedThreadRef,
@@ -797,17 +798,41 @@ export const useTerminalUiStateStore = create<TerminalUiStateStoreState>()(
           ),
         setActiveTerminal: (threadRef, terminalId) =>
           updateTerminal(threadRef, (state) => setThreadActiveTerminal(state, terminalId)),
-        closeTerminal: (threadRef, terminalId) =>
+        closeTerminal: (threadRef, terminalId) => {
+          const threadKey = terminalThreadKey(threadRef);
+          const wasPending =
+            get().pendingTerminalIdsByThreadKey[threadKey]?.includes(terminalId) ?? false;
           updateTerminal(threadRef, (state) => closeThreadTerminal(state, terminalId), {
             terminalId,
             suppressed: true,
-            pending: false,
-          }),
+            // Keep a fresh open distinguishable from a confirmed session while
+            // its close request is in flight. A failed close can then restore
+            // it even if the next metadata list is still stale.
+            pending: wasPending,
+          });
+        },
         unsuppressTerminal: (threadRef, terminalId) =>
           updateTerminal(threadRef, (state) => state, {
             terminalId,
             suppressed: false,
           }),
+        restorePendingTerminal: (threadRef, terminalId) => {
+          const threadKey = terminalThreadKey(threadRef);
+          const wasPending =
+            get().pendingTerminalIdsByThreadKey[threadKey]?.includes(terminalId) ?? false;
+          updateTerminal(
+            threadRef,
+            (state) =>
+              wasPending && !state.terminalIds.includes(terminalId)
+                ? newThreadTerminal(state, terminalId)
+                : state,
+            {
+              terminalId,
+              suppressed: false,
+              pending: wasPending,
+            },
+          );
+        },
         abandonPendingTerminal: (threadRef, terminalId) =>
           updateTerminal(threadRef, (state) => closeThreadTerminal(state, terminalId), {
             terminalId,

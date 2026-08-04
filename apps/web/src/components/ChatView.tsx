@@ -713,7 +713,9 @@ const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDra
   const storeNewTerminal = useTerminalUiStateStore((state) => state.newTerminal);
   const storeSetActiveTerminal = useTerminalUiStateStore((state) => state.setActiveTerminal);
   const storeCloseTerminal = useTerminalUiStateStore((state) => state.closeTerminal);
-  const storeUnsuppressTerminal = useTerminalUiStateStore((state) => state.unsuppressTerminal);
+  const storeRestorePendingTerminal = useTerminalUiStateStore(
+    (state) => state.restorePendingTerminal,
+  );
   const storeAbandonPendingTerminal = useTerminalUiStateStore(
     (state) => state.abandonPendingTerminal,
   );
@@ -908,7 +910,7 @@ const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDra
             // Interruption is not confirmation. Roll back the suppression: if
             // the server did close the session it vanishes from metadata and
             // reconcile drops the id; if not, the terminal resurfaces.
-            storeUnsuppressTerminal(threadRef, terminalId);
+            storeRestorePendingTerminal(threadRef, terminalId);
             return;
           }
           const exitResult = await fallbackExitWrite();
@@ -918,7 +920,7 @@ const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDra
         }
         // Neither path confirmably reached the session. Undo the optimistic
         // suppression or reconcile would hide a live terminal.
-        storeUnsuppressTerminal(threadRef, terminalId);
+        storeRestorePendingTerminal(threadRef, terminalId);
       })();
 
       storeCloseTerminal(threadRef, terminalId);
@@ -927,7 +929,7 @@ const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDra
     [
       bumpFocusRequestId,
       storeCloseTerminal,
-      storeUnsuppressTerminal,
+      storeRestorePendingTerminal,
       threadId,
       threadRef,
       closeTerminalMutation,
@@ -1414,6 +1416,7 @@ function ChatViewContent(props: ChatViewProps) {
   const storeSetActiveTerminal = useTerminalUiStateStore((s) => s.setActiveTerminal);
   const storeCloseTerminal = useTerminalUiStateStore((s) => s.closeTerminal);
   const storeUnsuppressTerminal = useTerminalUiStateStore((s) => s.unsuppressTerminal);
+  const storeRestorePendingTerminal = useTerminalUiStateStore((s) => s.restorePendingTerminal);
   const storeAbandonPendingTerminal = useTerminalUiStateStore((s) => s.abandonPendingTerminal);
   const serverThreadRefs = useThreadRefs();
   const serverThreadKeys = useMemo(() => serverThreadRefs.map(scopedThreadKey), [serverThreadRefs]);
@@ -2860,7 +2863,7 @@ function ChatViewContent(props: ChatViewProps) {
           });
           if (closeResult._tag !== "Failure") return;
           if (isAtomCommandInterrupted(closeResult)) {
-            storeUnsuppressTerminal(activeThreadRef, terminalId);
+            storeRestorePendingTerminal(activeThreadRef, terminalId);
             return;
           }
           const exitResult = await fallbackExitWrite();
@@ -2868,7 +2871,7 @@ function ChatViewContent(props: ChatViewProps) {
         } catch {
           // A thrown request is also an unconfirmed close.
         }
-        storeUnsuppressTerminal(activeThreadRef, terminalId);
+        storeRestorePendingTerminal(activeThreadRef, terminalId);
       })();
       storeCloseTerminal(activeThreadRef, terminalId);
       setTerminalFocusRequestId((value) => value + 1);
@@ -2879,7 +2882,7 @@ function ChatViewContent(props: ChatViewProps) {
       closeTerminalMutation,
       environmentId,
       storeCloseTerminal,
-      storeUnsuppressTerminal,
+      storeRestorePendingTerminal,
       writeTerminal,
     ],
   );

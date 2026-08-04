@@ -390,6 +390,28 @@ describe("terminalUiStateStore actions", () => {
     }
   });
 
+  it("restores a pending drawer terminal after a failed close", () => {
+    const store = useTerminalUiStateStore.getState();
+    store.setTerminalOpen(THREAD_REF, true);
+    store.splitTerminal(THREAD_REF, "terminal-2");
+    store.closeTerminal(THREAD_REF, "terminal-2");
+    store.restorePendingTerminal(THREAD_REF, "terminal-2");
+
+    const threadKey = scopedThreadKey(THREAD_REF);
+    expect(
+      selectThreadTerminalUiState(
+        useTerminalUiStateStore.getState().terminalUiStateByThreadKey,
+        THREAD_REF,
+      ).terminalIds,
+    ).toEqual([DEFAULT_THREAD_TERMINAL_ID, "terminal-2"]);
+    expect(
+      useTerminalUiStateStore.getState().pendingTerminalIdsByThreadKey[threadKey] ?? [],
+    ).toContain("terminal-2");
+    expect(
+      useTerminalUiStateStore.getState().suppressedTerminalIdsByThreadKey[threadKey] ?? [],
+    ).not.toContain("terminal-2");
+  });
+
   it("reconciles terminal ids from an external ordered list", () => {
     const store = useTerminalUiStateStore.getState();
     store.setTerminalOpen(THREAD_REF, true);
