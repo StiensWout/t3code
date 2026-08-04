@@ -1119,7 +1119,10 @@ export function AppearanceSettingsPanel() {
             }
           />
         ) : null}
+      </SettingsSection>
 
+      <SettingsSection title="Typography">
+        <FontSettingsGroup />
         <SettingsRow
           {...searchableSetting("word-wrap")}
           description="Wrap long lines in code blocks, tables, diffs, and file previews by default."
@@ -1143,10 +1146,6 @@ export function AppearanceSettingsPanel() {
             />
           }
         />
-      </SettingsSection>
-
-      <SettingsSection title="Fonts">
-        <FontSettingsGroup />
       </SettingsSection>
     </SettingsPageContainer>
   );
