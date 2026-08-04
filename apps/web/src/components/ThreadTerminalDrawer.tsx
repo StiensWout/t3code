@@ -321,12 +321,15 @@ export function TerminalViewport({
       input: { threadId, terminalId, data },
     }),
   );
-  const resizeTerminal = useEffectEvent((cols: number, rows: number) =>
-    runTerminalResize({
+  const resizeTerminal = useEffectEvent(async (cols: number, rows: number) => {
+    const result = await runTerminalResize({
       environmentId,
       input: { threadId, terminalId, cols, rows },
-    }),
-  );
+    });
+    // A failed request leaves the PTY at its previous dimensions, so the
+    // surface must keep its old grid and retry instead of guessing.
+    return result._tag === "Success";
+  });
   const terminalBuffer = terminalSession.buffer;
   const terminalError = terminalSession.error;
   const terminalStatus = terminalSession.status;
@@ -381,7 +384,7 @@ export function TerminalViewport({
       const terminalOptions: GhosttyTerminalSurfaceOptions = {
         theme: terminalThemeFromApp(mount),
         onData: (data) => handleData(data),
-        onResize: (cols, rows) => void resizeTerminal(cols, rows),
+        onResize: (cols, rows) => resizeTerminal(cols, rows),
         onSelectionChange: () => handleSelectionChange(),
         onCopy: (text) => handleCopy(text),
         beforeKey: (event) => handleBeforeKey(event),

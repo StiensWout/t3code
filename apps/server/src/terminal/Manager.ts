@@ -37,6 +37,7 @@ import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { getTerminalLabel } from "@t3tools/shared/terminalLabels";
 import * as DateTime from "effect/DateTime";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Encoding from "effect/Encoding";
 import * as Equal from "effect/Equal";
@@ -263,10 +264,26 @@ interface PersistHistoryRequest {
 
 type PendingProcessEvent =
   | { type: "output"; data: string }
-  | { type: "exit"; event: PtyAdapter.PtyExitEvent };
+  | { type: "exit"; event: PtyAdapter.PtyExitEvent }
+  // Drain-ordering sentinel: completes once every event queued before it has
+  // been published. Resize replies use it without adding a wire-protocol
+  // marker that clients would need to understand.
+  | { type: "flush"; deferred: Deferred.Deferred<void> };
+
+/** Queue disposal must release flush sentinels or their awaiters hang forever. */
+function discardPendingProcessEvents(session: TerminalSessionState): void {
+  for (const event of session.pendingProcessEvents) {
+    if (event.type === "flush") {
+      Deferred.doneUnsafe(event.deferred, Effect.void);
+    }
+  }
+  session.pendingProcessEvents = [];
+  session.pendingProcessEventIndex = 0;
+}
 
 type DrainProcessEventAction =
   | { type: "idle" }
+  | { type: "flush"; deferred: Deferred.Deferred<void> }
   | {
       type: "output";
       threadId: string;
@@ -1678,7 +1695,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     while (true) {
       const action: DrainProcessEventAction = yield* Effect.sync(() => {
         if (session.pid !== expectedPid || !session.process || session.status !== "running") {
-          session.pendingProcessEvents = [];
+          discardPendingProcessEvents(session);
           session.pendingProcessEventIndex = 0;
           session.processEventDrainRunning = false;
           return { type: "idle" } as const;
@@ -1686,7 +1703,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
 
         const nextEvent = session.pendingProcessEvents[session.pendingProcessEventIndex];
         if (!nextEvent) {
-          session.pendingProcessEvents = [];
+          discardPendingProcessEvents(session);
           session.pendingProcessEventIndex = 0;
           session.processEventDrainRunning = false;
           return { type: "idle" } as const;
@@ -1694,8 +1711,11 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
 
         session.pendingProcessEventIndex += 1;
         if (session.pendingProcessEventIndex >= session.pendingProcessEvents.length) {
-          session.pendingProcessEvents = [];
-          session.pendingProcessEventIndex = 0;
+          discardPendingProcessEvents(session);
+        }
+
+        if (nextEvent.type === "flush") {
+          return { type: "flush", deferred: nextEvent.deferred } as const;
         }
 
         if (nextEvent.type === "output") {
@@ -1730,7 +1750,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         session.childCommandLabel = null;
         session.status = "exited";
         session.pendingHistoryControlSequence = "";
-        session.pendingProcessEvents = [];
+        discardPendingProcessEvents(session);
         session.pendingProcessEventIndex = 0;
         session.processEventDrainRunning = false;
         session.exitCode = Number.isInteger(nextEvent.event.exitCode)
@@ -1754,6 +1774,11 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
 
       if (action.type === "idle") {
         return;
+      }
+
+      if (action.type === "flush") {
+        yield* Deferred.succeed(action.deferred, undefined);
+        continue;
       }
 
       if (action.type === "output") {
@@ -1802,7 +1827,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       session.childCommandLabel = null;
       session.status = "exited";
       session.pendingHistoryControlSequence = "";
-      session.pendingProcessEvents = [];
+      discardPendingProcessEvents(session);
       session.pendingProcessEventIndex = 0;
       session.processEventDrainRunning = false;
       session.updatedAt = updatedAt;
@@ -1897,7 +1922,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       session.exitSignal = null;
       session.hasRunningSubprocess = false;
       session.childCommandLabel = null;
-      session.pendingProcessEvents = [];
+      discardPendingProcessEvents(session);
       session.pendingProcessEventIndex = 0;
       session.processEventDrainRunning = false;
       session.updatedAt = startingAt;
@@ -1974,7 +1999,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         session.process = null;
         session.hasRunningSubprocess = false;
         session.childCommandLabel = null;
-        session.pendingProcessEvents = [];
+        discardPendingProcessEvents(session);
         session.pendingProcessEventIndex = 0;
         session.processEventDrainRunning = false;
         advanceEventSequence(session);
@@ -2252,7 +2277,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       liveSession.runtimeEnv = nextRuntimeEnv;
       liveSession.history = "";
       liveSession.pendingHistoryControlSequence = "";
-      liveSession.pendingProcessEvents = [];
+      discardPendingProcessEvents(liveSession);
       liveSession.pendingProcessEventIndex = 0;
       liveSession.processEventDrainRunning = false;
       yield* persistHistory(liveSession.threadId, liveSession.terminalId, liveSession.history);
@@ -2261,7 +2286,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       liveSession.worktreePath = nextWorktreePath;
       liveSession.history = "";
       liveSession.pendingHistoryControlSequence = "";
-      liveSession.pendingProcessEvents = [];
+      discardPendingProcessEvents(liveSession);
       liveSession.pendingProcessEventIndex = 0;
       liveSession.processEventDrainRunning = false;
       yield* persistHistory(liveSession.threadId, liveSession.terminalId, liveSession.history);
@@ -2553,6 +2578,25 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     session.value.cols = input.cols;
     session.value.rows = input.rows;
     session.value.updatedAt = yield* nowIso;
+
+    // The client applies its grid when this reply lands. Publish every output
+    // queued before the resize first so those bytes are still interpreted at
+    // the width that produced them. The drain flag matters even when the
+    // queue is momentarily empty: the active drain may already be publishing
+    // a dequeued chunk.
+    const pid = session.value.pid;
+    if (
+      pid !== null &&
+      (session.value.pendingProcessEvents.length > 0 || session.value.processEventDrainRunning)
+    ) {
+      const flushed = yield* Deferred.make<void>();
+      session.value.pendingProcessEvents.push({ type: "flush", deferred: flushed });
+      if (!session.value.processEventDrainRunning) {
+        session.value.processEventDrainRunning = true;
+        runFork(drainProcessEvents(session.value, pid));
+      }
+      yield* Deferred.await(flushed);
+    }
   });
 
   const resize: TerminalManager["Service"]["resize"] = (input) =>
@@ -2566,7 +2610,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         const session = yield* requireSession(input.threadId, terminalId);
         session.history = "";
         session.pendingHistoryControlSequence = "";
-        session.pendingProcessEvents = [];
+        discardPendingProcessEvents(session);
         session.pendingProcessEventIndex = 0;
         session.processEventDrainRunning = false;
         const eventStamp = advanceEventSequence(session);
@@ -2639,7 +2683,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
 
         session.history = "";
         session.pendingHistoryControlSequence = "";
-        session.pendingProcessEvents = [];
+        discardPendingProcessEvents(session);
         session.pendingProcessEventIndex = 0;
         session.processEventDrainRunning = false;
         yield* persistHistory(input.threadId, terminalId, session.history);
