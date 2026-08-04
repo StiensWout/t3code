@@ -1157,7 +1157,7 @@ function FontSettingsGroup() {
   return (
     <>
       <FontFamilySettingsRow
-        title="Interface font"
+        {...searchableSetting("interface-font")}
         description="Everything outside code blocks and the terminal."
         value={settings.fontFamilySans}
         onValueChange={(fontFamilySans) => updateSettings({ fontFamilySans })}
@@ -1170,7 +1170,7 @@ function FontSettingsGroup() {
         }}
       />
       <FontFamilySettingsRow
-        title="Prompt font"
+        {...searchableSetting("prompt-font")}
         description="Only the box you write prompts in. Mono works well here."
         value={settings.fontFamilyComposer}
         onValueChange={(fontFamilyComposer) => updateSettings({ fontFamilyComposer })}
@@ -1184,7 +1184,7 @@ function FontSettingsGroup() {
         preview={<PromptFontPreview />}
       />
       <FontFamilySettingsRow
-        title="Code font"
+        {...searchableSetting("code-font")}
         description="Code blocks, diffs, and file previews."
         value={settings.fontFamilyCode}
         onValueChange={(fontFamilyCode) => updateSettings({ fontFamilyCode })}
@@ -1199,7 +1199,7 @@ function FontSettingsGroup() {
         preview={<CodeFontPreview />}
       />
       <FontFamilySettingsRow
-        title="Terminal font"
+        {...searchableSetting("terminal-font")}
         description="Terminal output."
         value={settings.fontFamilyTerminal}
         onValueChange={(fontFamilyTerminal) => updateSettings({ fontFamilyTerminal })}
@@ -1223,6 +1223,7 @@ function FontSettingsGroup() {
 }
 
 function FontFamilySettingsRow({
+  id,
   title,
   description,
   preview,
@@ -1231,6 +1232,7 @@ function FontFamilySettingsRow({
   requireMonospace = false,
   size,
 }: {
+  id?: string;
   title: string;
   description: string;
   preview?: ReactNode;
@@ -1369,6 +1371,7 @@ function FontFamilySettingsRow({
   );
   return (
     <SettingsRow
+      {...(id !== undefined ? { id } : {})}
       title={title}
       description={description}
       resetAction={resetAction}
