@@ -16,7 +16,10 @@ import {
   serializeThemeFile,
   subscribeToCustomThemes,
   T3_CHAT_THEME,
+  T3_EMBER_THEME,
   T3_GROVE_THEME,
+  T3_IRIS_THEME,
+  T3_OCEAN_THEME,
   themePreferenceForMode,
   updateCustomTheme,
   CUSTOM_THEMES_STORAGE_KEY,
@@ -156,11 +159,23 @@ describe("theme files", () => {
     expect(contrastRatio(colors.sidebarForeground, colors.sidebar)).toBeGreaterThanOrEqual(4.5);
   });
 
-  it("includes the T3 Grove maintainer theme with both modes", () => {
-    expect(getThemeDefinition(T3_GROVE_THEME.id)).toBe(T3_GROVE_THEME);
-    expect(getThemeModes(T3_GROVE_THEME)).toEqual(["light", "dark"]);
-    expect(T3_GROVE_THEME.colors.accent).toMatch(/^#[0-9a-f]{6}$/i);
-    expect(T3_GROVE_THEME.variants?.dark?.accent).toMatch(/^#[0-9a-f]{6}$/i);
+  it("includes the dual-mode maintainer themes", () => {
+    for (const theme of [T3_GROVE_THEME, T3_OCEAN_THEME, T3_EMBER_THEME, T3_IRIS_THEME]) {
+      expect(getThemeDefinition(theme.id)).toBe(theme);
+      expect(getThemeModes(theme)).toEqual(["light", "dark"]);
+      expect(theme.colors.accent).toMatch(/^#[0-9a-f]{6}$/i);
+      expect(theme.variants?.dark?.accent).toMatch(/^#[0-9a-f]{6}$/i);
+
+      for (const mode of ["light", "dark"] as const) {
+        const colors = getThemeColorsForMode(theme, mode);
+        expect(colors).not.toBeNull();
+        expect(contrastRatio(colors!.text, colors!.canvas)).toBeGreaterThanOrEqual(4.5);
+        expect(contrastRatio(colors!.accentForeground, colors!.accent)).toBeGreaterThanOrEqual(4.5);
+        expect(
+          contrastRatio(colors!.messageForeground, colors!.messageSurface),
+        ).toBeGreaterThanOrEqual(4.5);
+      }
+    }
   });
 
   it("rejects a variant that repeats the base appearance", () => {

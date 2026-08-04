@@ -144,6 +144,21 @@ describe("index.html boot script", () => {
       prefersDark: true,
     },
     {
+      name: "T3 Ocean follows a dark OS",
+      storage: { [THEME_STORAGE_KEY]: "t3-ocean", [THEME_FOLLOW_SYSTEM_STORAGE_KEY]: "true" },
+      prefersDark: true,
+    },
+    {
+      name: "T3 Ember follows a dark OS",
+      storage: { [THEME_STORAGE_KEY]: "t3-ember", [THEME_FOLLOW_SYSTEM_STORAGE_KEY]: "true" },
+      prefersDark: true,
+    },
+    {
+      name: "T3 Iris follows a dark OS",
+      storage: { [THEME_STORAGE_KEY]: "t3-iris", [THEME_FOLLOW_SYSTEM_STORAGE_KEY]: "true" },
+      prefersDark: true,
+    },
+    {
       name: "legacy t3-chat-dark resolves to light T3 Chat",
       storage: { [THEME_STORAGE_KEY]: "t3-chat-dark" },
       prefersDark: true,
@@ -235,6 +250,22 @@ describe("index.html boot script", () => {
     expect(aurora.backgroundColor).toBe(AURORA_DUAL.variants.dark.canvas);
     expect(aurora.bootVariables["--boot-background"]).toBe(AURORA_DUAL.variants.dark.canvas);
     expect(aurora.metaContent).toBe(AURORA_DUAL.variants.dark.canvas);
+  });
+
+  it.each([
+    ["t3-grove", "#1d2b24"],
+    ["t3-ocean", "#1b2938"],
+    ["t3-ember", "#30231e"],
+    ["t3-iris", "#29243b"],
+  ])("uses the %s dark splash palette", (theme, background) => {
+    const boot = runBootScript({
+      storage: { [THEME_STORAGE_KEY]: theme, [THEME_FOLLOW_SYSTEM_STORAGE_KEY]: "true" },
+      prefersDark: true,
+    });
+    expect(boot.themeId).toBe(theme);
+    expect(boot.isDark).toBe(true);
+    expect(boot.backgroundColor).toBe(background);
+    expect(boot.bootVariables["--boot-background"]).toBe(background);
   });
 
   it("leaves unknown preferences unthemed so the runtime default applies", () => {

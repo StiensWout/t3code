@@ -4,6 +4,12 @@ export const T3_CHAT_THEME_ID = "t3-chat" as const;
 export const T3_CHAT_THEME_LABEL = "T3 Chat";
 export const T3_GROVE_THEME_ID = "t3-grove" as const;
 export const T3_GROVE_THEME_LABEL = "T3 Grove";
+export const T3_OCEAN_THEME_ID = "t3-ocean" as const;
+export const T3_OCEAN_THEME_LABEL = "T3 Ocean";
+export const T3_EMBER_THEME_ID = "t3-ember" as const;
+export const T3_EMBER_THEME_LABEL = "T3 Ember";
+export const T3_IRIS_THEME_ID = "t3-iris" as const;
+export const T3_IRIS_THEME_LABEL = "T3 Iris";
 export const THEME_FILE_VERSION = 1 as const;
 export const CUSTOM_THEMES_STORAGE_KEY = "t3code:themes:v1";
 export const THEME_FOLLOW_SYSTEM_STORAGE_KEY = "t3code:theme-follow-system";
@@ -98,6 +104,9 @@ const RESERVED_THEME_IDS = new Set([
   "dark",
   T3_CHAT_THEME_ID,
   T3_GROVE_THEME_ID,
+  T3_OCEAN_THEME_ID,
+  T3_EMBER_THEME_ID,
+  T3_IRIS_THEME_ID,
   LEGACY_T3_CHAT_DARK_THEME_ID,
 ]);
 
@@ -697,13 +706,49 @@ export const T3_GROVE_THEME: ThemeDefinition = {
   id: T3_GROVE_THEME_ID,
   label: T3_GROVE_THEME_LABEL,
   appearance: "light",
-  colors: createManagedThemeColors("light", "#f4f8f5", "#1e7d52"),
+  colors: createManagedThemeColors("light", "#f2f8f4", "#19734a"),
   variants: {
-    dark: createManagedThemeColors("dark", "#111f19", "#5dd58e"),
+    dark: createManagedThemeColors("dark", "#1d2b24", "#69d69a"),
   },
 };
 
-const BUILT_IN_THEME_DEFINITIONS: ReadonlyArray<ThemeDefinition> = [T3_CHAT_THEME, T3_GROVE_THEME];
+export const T3_OCEAN_THEME: ThemeDefinition = {
+  id: T3_OCEAN_THEME_ID,
+  label: T3_OCEAN_THEME_LABEL,
+  appearance: "light",
+  colors: createManagedThemeColors("light", "#f2f7fb", "#2878b8"),
+  variants: {
+    dark: createManagedThemeColors("dark", "#1b2938", "#70b9ee"),
+  },
+};
+
+export const T3_EMBER_THEME: ThemeDefinition = {
+  id: T3_EMBER_THEME_ID,
+  label: T3_EMBER_THEME_LABEL,
+  appearance: "light",
+  colors: createManagedThemeColors("light", "#fff6ef", "#c4602f"),
+  variants: {
+    dark: createManagedThemeColors("dark", "#30231e", "#f39a62"),
+  },
+};
+
+export const T3_IRIS_THEME: ThemeDefinition = {
+  id: T3_IRIS_THEME_ID,
+  label: T3_IRIS_THEME_LABEL,
+  appearance: "light",
+  colors: createManagedThemeColors("light", "#f7f4fc", "#7254b9"),
+  variants: {
+    dark: createManagedThemeColors("dark", "#29243b", "#ad92f5"),
+  },
+};
+
+const BUILT_IN_THEME_DEFINITIONS: ReadonlyArray<ThemeDefinition> = [
+  T3_CHAT_THEME,
+  T3_GROVE_THEME,
+  T3_OCEAN_THEME,
+  T3_EMBER_THEME,
+  T3_IRIS_THEME,
+];
 
 export function getThemeDefinition(theme: ThemePreference): ThemeDefinition | null {
   const themeId = themeIdFromPreference(theme);

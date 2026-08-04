@@ -30,7 +30,10 @@ import {
   type ThemeColorRole,
   type ThemeDefinition,
   T3_CHAT_THEME,
+  T3_EMBER_THEME,
   T3_GROVE_THEME,
+  T3_IRIS_THEME,
+  T3_OCEAN_THEME,
 } from "../../themePalette";
 import { Alert } from "../ui/alert";
 import {
@@ -1416,7 +1419,13 @@ export function ThemeLibrary({
   const removeDialogTheme = themeToRemove ?? lastThemeToRemoveRef.current;
   const activeTheme = getThemeDefinition(theme);
   const standardThemes = getStandardThemeCards();
-  const maintainerThemes = [T3_CHAT_THEME, T3_GROVE_THEME];
+  const maintainerThemes = [
+    T3_CHAT_THEME,
+    T3_GROVE_THEME,
+    T3_OCEAN_THEME,
+    T3_EMBER_THEME,
+    T3_IRIS_THEME,
+  ];
 
   const handleFollowSystemChange = useCallback(
     (checked: boolean) => {

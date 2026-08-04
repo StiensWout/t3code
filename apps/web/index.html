@@ -15,10 +15,6 @@
       (() => {
         const LIGHT_BACKGROUND = "#ffffff";
         const DARK_BACKGROUND = "#0a0a0a";
-        const T3_CHAT_BACKGROUND = "#faf5fa";
-        const T3_CHAT_DARK_BACKGROUND = "#180f1b";
-        const T3_GROVE_BACKGROUND = "#f4f8f5";
-        const T3_GROVE_DARK_BACKGROUND = "#111f19";
         const CUSTOM_THEMES_STORAGE_KEY = "t3code:themes:v1";
         const THEME_FOLLOW_SYSTEM_STORAGE_KEY = "t3code:theme-follow-system";
         const SPLASH_COLORS = {
@@ -28,44 +24,51 @@
             accent: "#4f46e5",
           },
           dark: {
-            background: "#161616",
+            background: "#0a0a0a",
             foreground: "#f5f5f5",
             accent: "#818cf8",
           },
-          t3Chat: {
-            background: "#faf5fa",
-            foreground: "#501854",
-            accent: "#a84370",
+        };
+        // Keep this small boot-time copy in sync with the built-in palettes so
+        // the selected theme is visible before the app has mounted.
+        const BUILT_IN_THEME_PALETTES = {
+          "t3-chat": {
+            light: { background: "#faf5fa", foreground: "#501854", accent: "#a84370" },
           },
-          t3ChatDark: {
-            background: "#180f1b",
-            foreground: "#faeaf9",
-            accent: "#f06cab",
+          "t3-grove": {
+            light: { background: "#f2f8f4", foreground: "#241523", accent: "#19734a" },
+            dark: { background: "#1d2b24", foreground: "#fffaff", accent: "#69d69a" },
           },
-          t3Grove: {
-            background: "#f4f8f5",
-            foreground: "#241523",
-            accent: "#1e7d52",
+          "t3-ocean": {
+            light: { background: "#f2f7fb", foreground: "#241523", accent: "#2878b8" },
+            dark: { background: "#1b2938", foreground: "#fffaff", accent: "#70b9ee" },
           },
-          t3GroveDark: {
-            background: "#111f19",
-            foreground: "#fffaff",
-            accent: "#5dd58e",
+          "t3-ember": {
+            light: { background: "#fff6ef", foreground: "#241523", accent: "#c4602f" },
+            dark: { background: "#30231e", foreground: "#fffaff", accent: "#f39a62" },
+          },
+          "t3-iris": {
+            light: { background: "#f7f4fc", foreground: "#241523", accent: "#7254b9" },
+            dark: { background: "#29243b", foreground: "#fffaff", accent: "#ad92f5" },
           },
         };
-        // Built-in themes and the modes they can render. T3 Chat is light-only,
-        // so a dark OS must not flip its splash; the runtime resolves the same
-        // way via getThemeColorsForMode.
-        const BUILT_IN_THEME_MODES = {
-          "t3-chat": ["light"],
-          "t3-grove": ["light", "dark"],
-        };
+        // A dark OS must not flip the light-only T3 Chat palette; the runtime
+        // resolves the same way via getThemeColorsForMode.
+        const BUILT_IN_THEME_MODES = Object.fromEntries(
+          Object.entries(BUILT_IN_THEME_PALETTES).map(([id, palettes]) => [
+            id,
+            Object.keys(palettes),
+          ]),
+        );
         const RESERVED_THEME_IDS = [
           "system",
           "light",
           "dark",
           "t3-chat",
           "t3-grove",
+          "t3-ocean",
+          "t3-ember",
+          "t3-iris",
           "t3-chat-dark",
         ];
         // Update every theme-color meta (including the media-scoped ones) so
@@ -187,23 +190,22 @@
               : null;
           // The runtime tolerates individual malformed colors, so fall back
           // per role rather than dropping the theme.
+          const builtInSplash =
+            isThemed && !customTheme && themeMode
+              ? (BUILT_IN_THEME_PALETTES[preference.id]?.[themeMode] ?? null)
+              : null;
+          const fallbackSplash = isDark ? SPLASH_COLORS.dark : SPLASH_COLORS.light;
           const customSplash = customColors
             ? {
                 background: isHexColor(customColors.canvas)
                   ? customColors.canvas
-                  : themeMode === "dark"
-                    ? SPLASH_COLORS.t3ChatDark.background
-                    : SPLASH_COLORS.t3Chat.background,
+                  : fallbackSplash.background,
                 foreground: isHexColor(customColors.text)
                   ? customColors.text
-                  : themeMode === "dark"
-                    ? SPLASH_COLORS.t3ChatDark.foreground
-                    : SPLASH_COLORS.t3Chat.foreground,
+                  : fallbackSplash.foreground,
                 accent: isHexColor(customColors.accent)
                   ? customColors.accent
-                  : themeMode === "dark"
-                    ? SPLASH_COLORS.t3ChatDark.accent
-                    : SPLASH_COLORS.t3Chat.accent,
+                  : fallbackSplash.accent,
               }
             : null;
           if (isThemed) {
@@ -219,32 +221,14 @@
           document.documentElement.classList.toggle("dark", isDark);
           const chromeColor = customSplash
             ? customSplash.background
-            : isThemed
-              ? themeMode === "dark"
-                ? preference.id === "t3-grove"
-                  ? T3_GROVE_DARK_BACKGROUND
-                  : T3_CHAT_DARK_BACKGROUND
-                : preference.id === "t3-grove"
-                  ? T3_GROVE_BACKGROUND
-                  : T3_CHAT_BACKGROUND
+            : builtInSplash
+              ? builtInSplash.background
               : isDark
                 ? DARK_BACKGROUND
                 : LIGHT_BACKGROUND;
           document.documentElement.style.backgroundColor = chromeColor;
           if (isKnownTheme && storedTheme !== null) {
-            const splashColors =
-              customSplash ??
-              (isThemed
-                ? preference.id === "t3-grove"
-                  ? themeMode === "dark"
-                    ? SPLASH_COLORS.t3GroveDark
-                    : SPLASH_COLORS.t3Grove
-                  : themeMode === "dark"
-                    ? SPLASH_COLORS.t3ChatDark
-                    : SPLASH_COLORS.t3Chat
-                : isDark
-                  ? SPLASH_COLORS.dark
-                  : SPLASH_COLORS.light);
+            const splashColors = customSplash ?? builtInSplash ?? fallbackSplash;
             for (const [name, value] of Object.entries(splashColors)) {
               document.documentElement.style.setProperty(`--boot-${name}`, value);
             }
