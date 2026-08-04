@@ -1,5 +1,5 @@
 import { FileDiff } from "@pierre/diffs/react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "../ComposerPromptEditor";
 import { terminalThemeFromApp } from "../ThreadTerminalDrawer";
 import { useTheme } from "../../hooks/useTheme";
@@ -76,9 +76,15 @@ const DIFF_PREVIEW_PATCH = [
  */
 export function CodeFontPreview() {
   const { resolvedTheme } = useTheme();
+  // Parse per mount: the parse cache returns shared mutable file objects, and
+  // a FileDiff instance keys its render/highlight bookkeeping on them. Two
+  // mounts of this preview (the simple and advanced typography views) handing
+  // the same objects to different FileDiff instances can leave a remounted
+  // diff convinced it is already highlighted, rendering plain text forever.
+  const instanceId = useId();
   const renderablePatch = useMemo(
-    () => getRenderablePatch(DIFF_PREVIEW_PATCH, "settings-font-preview"),
-    [],
+    () => getRenderablePatch(DIFF_PREVIEW_PATCH, `settings-font-preview:${instanceId}`),
+    [instanceId],
   );
   if (renderablePatch?.kind !== "files") return null;
   return (
