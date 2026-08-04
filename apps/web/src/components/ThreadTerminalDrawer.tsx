@@ -68,6 +68,42 @@ const MIN_DRAWER_HEIGHT = 180;
 const MAX_DRAWER_HEIGHT_RATIO = 0.75;
 const MULTI_CLICK_SELECTION_ACTION_DELAY_MS = 260;
 
+/**
+ * Keeps PTY resize acknowledgements behind terminal output already committed
+ * to Ghostty. The server orders the wire messages, but React may commit the
+ * stream update one render after the resize RPC resolves.
+ */
+export class TerminalWriteBarrier {
+  private settledVersion = 0;
+  private released = false;
+  private waiters: Array<{
+    readonly version: number;
+    readonly resolve: (applied: boolean) => void;
+  }> = [];
+
+  waitFor(version: number): Promise<boolean> {
+    if (this.released) return Promise.resolve(false);
+    if (version <= this.settledVersion) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      this.waiters.push({ version, resolve });
+    });
+  }
+
+  markApplied(version: number): void {
+    this.settledVersion = Math.max(this.settledVersion, version);
+    const ready = this.waiters.filter((waiter) => waiter.version <= this.settledVersion);
+    this.waiters = this.waiters.filter((waiter) => waiter.version > this.settledVersion);
+    for (const waiter of ready) waiter.resolve(true);
+  }
+
+  release(): void {
+    this.released = true;
+    const waiters = this.waiters;
+    this.waiters = [];
+    for (const waiter of waiters) waiter.resolve(false);
+  }
+}
+
 function maxDrawerHeight(): number {
   if (typeof window === "undefined") return DEFAULT_THREAD_TERMINAL_HEIGHT;
   return Math.max(MIN_DRAWER_HEIGHT, Math.floor(window.innerHeight * MAX_DRAWER_HEIGHT_RATIO));
@@ -321,15 +357,6 @@ export function TerminalViewport({
       input: { threadId, terminalId, data },
     }),
   );
-  const resizeTerminal = useEffectEvent(async (cols: number, rows: number) => {
-    const result = await runTerminalResize({
-      environmentId,
-      input: { threadId, terminalId, cols, rows },
-    });
-    // A failed request leaves the PTY at its previous dimensions, so the
-    // surface must keep its old grid and retry instead of guessing.
-    return result._tag === "Success";
-  });
   const terminalBuffer = terminalSession.buffer;
   const terminalError = terminalSession.error;
   const terminalStatus = terminalSession.status;
@@ -365,6 +392,28 @@ export function TerminalViewport({
     status: terminalStatus,
     version: terminalVersion,
   };
+  const terminalWriteBarrierRef = useRef<TerminalWriteBarrier | null>(null);
+  const waitForTerminalWrites = useEffectEvent(async () => {
+    const barrier = terminalWriteBarrierRef.current;
+    if (barrier === null) return false;
+    return await barrier.waitFor(latestSessionRef.current.version);
+  });
+  const resizeTerminal = useEffectEvent(async (cols: number, rows: number) => {
+    // The attach stream and the resize RPC share a transport, but the stream
+    // state reaches Ghostty through a React effect. Drain that effect before
+    // sending the resize so old-width bytes cannot be reinterpreted later.
+    if (!(await waitForTerminalWrites())) return false;
+    const result = await runTerminalResize({
+      environmentId,
+      input: { threadId, terminalId, cols, rows },
+    });
+    // The server publishes queued output before resolving this request. Wait
+    // for React to commit that output before the surface applies the new grid.
+    if (result._tag === "Success" && !(await waitForTerminalWrites())) return false;
+    // A failed request leaves the PTY at its previous dimensions, so the
+    // surface must keep its old grid and retry instead of guessing.
+    return result._tag === "Success";
+  });
 
   useEffect(() => {
     keybindingsRef.current = keybindings;
@@ -379,6 +428,8 @@ export function TerminalViewport({
     let teardown: (() => void) | null = null;
     let setupTerminal: GhosttyTerminalSurface | null = null;
     let setupCleanups: Array<() => void> = [];
+    const terminalWriteBarrier = new TerminalWriteBarrier();
+    terminalWriteBarrierRef.current = terminalWriteBarrier;
 
     const setup = async (): Promise<(() => void) | null> => {
       const terminalOptions: GhosttyTerminalSurfaceOptions = {
@@ -721,6 +772,10 @@ export function TerminalViewport({
     return () => {
       cancelled = true;
       teardown?.();
+      terminalWriteBarrier.release();
+      if (terminalWriteBarrierRef.current === terminalWriteBarrier) {
+        terminalWriteBarrierRef.current = null;
+      }
     };
     // autoFocus is intentionally omitted;
     // it is only read at mount time and must not trigger terminal teardown/recreation.
@@ -736,6 +791,7 @@ export function TerminalViewport({
     };
     if (!terminal) {
       previousSessionRef.current = current;
+      terminalWriteBarrierRef.current?.markApplied(current.version);
       return;
     }
 
@@ -765,6 +821,7 @@ export function TerminalViewport({
       });
     }
     previousSessionRef.current = current;
+    terminalWriteBarrierRef.current?.markApplied(current.version);
   }, [autoFocus, terminalBuffer, terminalError, terminalStatus, terminalVersion]);
 
   useEffect(() => {

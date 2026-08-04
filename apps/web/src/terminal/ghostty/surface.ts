@@ -106,6 +106,21 @@ export function settleGhosttyResize(input: {
   };
 }
 
+export interface PendingTerminalInput {
+  readonly reset: string | null;
+  readonly writes: readonly string[];
+}
+
+/** Replay input collected before the first accepted PTY dimensions. */
+export function flushPendingTerminalInput(
+  input: PendingTerminalInput,
+  resetAndWrite: (data: string) => void,
+  write: (data: string) => void,
+): void {
+  if (input.reset !== null) resetAndWrite(input.reset);
+  for (const data of input.writes) write(data);
+}
+
 /** Fill an opaque canvas before asynchronous font/WASM initialization yields. */
 export function prefillTerminalCanvas(
   context: CanvasRenderingContext2D,
@@ -437,6 +452,9 @@ export class GhosttyTerminalSurface {
   private focused = false;
   private resizeRequestedOnce = false;
   private resizeRequestActive = false;
+  private resizeReady = false;
+  private pendingInitialReset: string | null = null;
+  private pendingInitialWrites: string[] = [];
   private desiredCols = 0;
   private desiredRows = 0;
   private canvasConfigured = false;
@@ -555,7 +573,11 @@ export class GhosttyTerminalSurface {
 
   write(data: string): void {
     if (this.disposed) return;
-    this.core.write(data);
+    if (!this.resizeReady) {
+      if (data.length > 0) this.pendingInitialWrites.push(data);
+    } else {
+      this.core.write(data);
+    }
     // Restart the blink cycle from the visible phase so the cursor never sits
     // invisible through a stream of output or a burst of typing echo.
     this.cursorOn = true;
@@ -565,7 +587,12 @@ export class GhosttyTerminalSurface {
 
   resetAndWrite(data: string): void {
     if (this.disposed) return;
-    this.core.resetAndWrite(data);
+    if (!this.resizeReady) {
+      this.pendingInitialReset = data;
+      this.pendingInitialWrites = [];
+    } else {
+      this.core.resetAndWrite(data);
+    }
     // A replayed session starts from the visible phase like any other write:
     // reattaching mid-blink must not open on an invisible cursor.
     this.cursorOn = true;
@@ -741,10 +768,29 @@ export class GhosttyTerminalSurface {
   }
 
   private applyGridSize(cols: number, rows: number): void {
-    if (cols === this.cols && rows === this.rows) return;
-    this.cols = cols;
-    this.rows = rows;
-    this.core.resize(cols, rows, this.metrics.width, this.metrics.height);
+    const wasResizeReady = this.resizeReady;
+    const dimensionsChanged = cols !== this.cols || rows !== this.rows;
+    if (dimensionsChanged) {
+      this.cols = cols;
+      this.rows = rows;
+      this.core.resize(cols, rows, this.metrics.width, this.metrics.height);
+    }
+    if (!this.resizeReady) {
+      this.resizeReady = true;
+      const pendingInput = {
+        reset: this.pendingInitialReset,
+        writes: this.pendingInitialWrites,
+      };
+      this.pendingInitialReset = null;
+      this.pendingInitialWrites = [];
+      flushPendingTerminalInput(
+        pendingInput,
+        (data) => this.core.resetAndWrite(data),
+        (data) => this.core.write(data),
+      );
+      this.cursorOn = true;
+    }
+    if (!dimensionsChanged && wasResizeReady) return;
     this.forceFullRender = true;
     this.scrollbarDirty = true;
     this.renderFrame();
@@ -826,6 +872,8 @@ export class GhosttyTerminalSurface {
     if (this.compositionSuppressionTimer !== null) {
       window.clearTimeout(this.compositionSuppressionTimer);
     }
+    this.pendingInitialReset = null;
+    this.pendingInitialWrites = [];
     this.removeEvents();
     this.core.dispose();
     if (

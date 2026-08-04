@@ -5,6 +5,7 @@ import {
   DEFAULT_TERMINAL_FONT_FAMILY,
   DEFAULT_TERMINAL_FONT_SIZE,
   advanceTerminalSelectionClickSequence,
+  flushPendingTerminalInput,
   ghosttyMouseButton,
   isTerminalAltGraphText,
   isTerminalCompositionCommitInput,
@@ -320,6 +321,20 @@ describe("terminal canvas prefill", () => {
     });
 
     expect(fillStyle).toBe("rgb(14, 18, 24)");
+  });
+});
+
+describe("initial terminal input", () => {
+  it("replays history before streamed output after the grid is acknowledged", () => {
+    const calls: string[] = [];
+
+    flushPendingTerminalInput(
+      { reset: "history", writes: ["output-1", "output-2"] },
+      (data) => calls.push(`reset:${data}`),
+      (data) => calls.push(`write:${data}`),
+    );
+
+    expect(calls).toEqual(["reset:history", "write:output-1", "write:output-2"]);
   });
 });
 
