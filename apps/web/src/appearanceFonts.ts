@@ -117,70 +117,6 @@ export function clampCodeFontSize(value: number): number {
   return clampFontSize(value, MIN_CODE_FONT_SIZE, MAX_CODE_FONT_SIZE, DEFAULT_CODE_FONT_SIZE);
 }
 
-export type FontCategory = "Sans serif" | "Monospace";
-
-export interface FontOption {
-  readonly label: string;
-  readonly family: string;
-  readonly category: FontCategory;
-}
-
-function fontCatalog(
-  category: FontCategory,
-  entries: ReadonlyArray<Omit<FontOption, "category">>,
-): readonly FontOption[] {
-  return entries.map((entry) => ({ ...entry, category }));
-}
-
-/**
- * Curated choices for the Appearance dropdowns. The settings UI filters these
- * through `isFontFamilyAvailable`, so platforms only offer faces that will
- * actually render; "Custom" in the UI covers everything else. The category
- * groups mixed dropdowns (composer) into labeled sections.
- */
-export const SANS_FONT_OPTIONS: readonly FontOption[] = fontCatalog("Sans serif", [
-  // The bundled webfont registers as "DM Sans Variable", not "DM Sans"; the
-  // option must reference the registered name to resolve on every machine.
-  { label: "DM Sans", family: "DM Sans Variable" },
-  { label: "Inter", family: "Inter" },
-  { label: "SF Pro", family: "SF Pro Text" },
-  { label: "Segoe UI", family: "Segoe UI" },
-  { label: "Roboto", family: "Roboto" },
-  { label: "Helvetica Neue", family: "Helvetica Neue" },
-  { label: "Arial", family: "Arial" },
-  { label: "System UI", family: "system-ui" },
-]);
-
-export const MONO_FONT_OPTIONS: readonly FontOption[] = fontCatalog("Monospace", [
-  { label: "SF Mono", family: "SF Mono" },
-  { label: "JetBrains Mono", family: "JetBrains Mono" },
-  { label: "Fira Code", family: "Fira Code" },
-  { label: "Cascadia Code", family: "Cascadia Code" },
-  { label: "Menlo", family: "Menlo" },
-  { label: "Monaco", family: "Monaco" },
-  { label: "Consolas", family: "Consolas" },
-  { label: "Source Code Pro", family: "Source Code Pro" },
-  { label: "IBM Plex Mono", family: "IBM Plex Mono" },
-  { label: "Ubuntu Mono", family: "Ubuntu Mono" },
-  { label: "Courier New", family: "Courier New" },
-]);
-
-/** The options split into their labeled category sections, in catalog order. */
-export function fontOptionCategories(
-  options: readonly FontOption[],
-): ReadonlyArray<readonly [FontCategory, readonly FontOption[]]> {
-  const sections = new Map<FontCategory, FontOption[]>();
-  for (const option of options) {
-    const section = sections.get(option.category);
-    if (section === undefined) {
-      sections.set(option.category, [option]);
-    } else {
-      section.push(option);
-    }
-  }
-  return [...sections.entries()];
-}
-
 const FONT_PROBE_TEXT = "mmmmmmmmMMWli1O0@# fjord";
 let fontProbeContext: CanvasRenderingContext2D | null | undefined;
 
@@ -245,11 +181,48 @@ export function isMonospaceFamily(family: string): boolean {
   }
 }
 
-/** Webfonts the app bundles; offered even before document.fonts has loaded them. */
-const BUNDLED_FAMILIES = new Set(["DM Sans Variable", "JetBrains Mono"]);
+export interface InstalledFontFamiliesResult {
+  readonly families: readonly string[];
+  /**
+   * "unsupported" - the engine has no Local Font Access API (Safari,
+   * Firefox); "denied" - the API exists but the user declined the permission
+   * prompt. Both fall back to the curated catalog.
+   */
+  readonly status: "granted" | "denied" | "unsupported";
+}
 
-export function availableFontOptions(options: readonly FontOption[]): readonly FontOption[] {
-  return options.filter(
-    (option) => BUNDLED_FAMILIES.has(option.family) || isFontFamilyAvailable(option.family),
-  );
+let installedFamiliesCache: InstalledFontFamiliesResult | null = null;
+
+/**
+ * Every installed family via the Local Font Access API (Chromium and
+ * Electron). Call from a user gesture: the first call raises the browser's
+ * local-fonts permission prompt. A denial is not cached, so reopening the
+ * picker can ask again after the user changes the site setting.
+ */
+export async function queryInstalledFontFamilies(): Promise<InstalledFontFamiliesResult> {
+  if (installedFamiliesCache !== null) return installedFamiliesCache;
+  const query = (
+    window as Window & {
+      queryLocalFonts?: () => Promise<ReadonlyArray<{ readonly family: string }>>;
+    }
+  ).queryLocalFonts;
+  if (typeof query !== "function") {
+    installedFamiliesCache = { families: [], status: "unsupported" };
+    return installedFamiliesCache;
+  }
+  try {
+    const fonts = await query.call(window);
+    const families = [...new Set(fonts.map((font) => font.family))]
+      // Dot-prefixed families are macOS-internal UI faces; selecting one is
+      // never intended and most refuse to render for web content anyway.
+      .filter((family) => !family.startsWith("."))
+      .sort((left, right) => left.localeCompare(right));
+    // A denied permission check resolves with an empty list instead of
+    // throwing; no machine has zero fonts, so treat empty as denied.
+    if (families.length === 0) return { families: [], status: "denied" };
+    installedFamiliesCache = { families, status: "granted" };
+    return installedFamiliesCache;
+  } catch {
+    return { families: [], status: "denied" };
+  }
 }

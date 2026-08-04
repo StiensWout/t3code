@@ -2,7 +2,6 @@ import {
   ArchiveIcon,
   ArchiveX,
   InfoIcon,
-  ListIcon,
   LoaderIcon,
   PlusIcon,
   RefreshCwIcon,
@@ -107,16 +106,9 @@ import {
 } from "../ui/dialog";
 import { DraftInput } from "../ui/draft-input";
 import { Input } from "../ui/input";
-import {
-  MONO_FONT_OPTIONS,
-  SANS_FONT_OPTIONS,
-  availableFontOptions,
-  fontOptionCategories,
-  isFontFamilyAvailable,
-  isMonospaceFamily,
-  type FontOption,
-} from "../../appearanceFonts";
+import { isFontFamilyAvailable, isMonospaceFamily } from "../../appearanceFonts";
 import { CodeFontPreview, PromptFontPreview, TerminalFontPreview } from "./SettingsFontPreviews";
+import { FontFamilyPicker, supportsFontEnumeration } from "./FontFamilyPicker";
 import {
   NumberField,
   NumberFieldDecrement,
@@ -124,15 +116,7 @@ import {
   NumberFieldIncrement,
   NumberFieldInput,
 } from "../ui/number-field";
-import {
-  Select,
-  SelectGroup,
-  SelectGroupLabel,
-  SelectItem,
-  SelectPopup,
-  SelectTrigger,
-  SelectValue,
-} from "../ui/select";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -1002,15 +986,6 @@ export function AppearanceSettingsPanel() {
   const { theme, setTheme } = useTheme();
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
-  // Every dropdown offers the full catalog, split into category sections, so
-  // any surface can point at any face - the categories carry the guidance.
-  // Text surfaces take any face; the terminal and code render on a fixed cell
-  // grid, where a proportional font cannot line up, so they stay monospace.
-  const textFontOptions = useMemo(
-    () => [...availableFontOptions(SANS_FONT_OPTIONS), ...availableFontOptions(MONO_FONT_OPTIONS)],
-    [],
-  );
-  const monoFontOptions = useMemo(() => availableFontOptions(MONO_FONT_OPTIONS), []);
   const environmentStageLabel = useEnvironmentStageLabel();
   const showEnvironmentIdentification =
     resolveEnvironmentIdentificationPillLabel(environmentStageLabel) !== null;
@@ -1171,155 +1146,86 @@ export function AppearanceSettingsPanel() {
       </SettingsSection>
 
       <SettingsSection title="Fonts">
-        <FontFamilySettingsRow
-          title="Interface font"
-          description="Everything outside code blocks and the terminal."
-          options={textFontOptions}
-          value={settings.fontFamilySans}
-          onValueChange={(fontFamilySans) => updateSettings({ fontFamilySans })}
-          size={{
-            label: "Interface font size",
-            min: MIN_INTERFACE_FONT_SIZE,
-            max: MAX_INTERFACE_FONT_SIZE,
-            value: settings.fontSizeInterface,
-            onChange: (fontSizeInterface) => updateSettings({ fontSizeInterface }),
-          }}
-        />
-        <FontFamilySettingsRow
-          title="Prompt font"
-          description="Only the box you write prompts in. Mono works well here."
-          options={textFontOptions}
-          value={settings.fontFamilyComposer}
-          onValueChange={(fontFamilyComposer) => updateSettings({ fontFamilyComposer })}
-          size={{
-            label: "Prompt font size",
-            min: MIN_PROMPT_FONT_SIZE,
-            max: MAX_PROMPT_FONT_SIZE,
-            value: settings.fontSizePrompt,
-            onChange: (fontSizePrompt) => updateSettings({ fontSizePrompt }),
-          }}
-          preview={<PromptFontPreview />}
-        />
-        <FontFamilySettingsRow
-          title="Code font"
-          description="Code blocks, diffs, and file previews."
-          options={monoFontOptions}
-          value={settings.fontFamilyCode}
-          onValueChange={(fontFamilyCode) => updateSettings({ fontFamilyCode })}
-          requireMonospace
-          size={{
-            label: "Code font size",
-            min: MIN_CODE_FONT_SIZE,
-            max: MAX_CODE_FONT_SIZE,
-            value: settings.fontSizeCode,
-            onChange: (fontSizeCode) => updateSettings({ fontSizeCode }),
-          }}
-          preview={<CodeFontPreview />}
-        />
-        <FontFamilySettingsRow
-          title="Terminal font"
-          description="Terminal output."
-          options={monoFontOptions}
-          value={settings.fontFamilyTerminal}
-          onValueChange={(fontFamilyTerminal) => updateSettings({ fontFamilyTerminal })}
-          requireMonospace
-          size={{
-            label: "Terminal font size",
-            min: MIN_TERMINAL_FONT_SIZE,
-            max: MAX_TERMINAL_FONT_SIZE,
-            value: settings.fontSizeTerminal,
-            onChange: (fontSizeTerminal) => updateSettings({ fontSizeTerminal }),
-          }}
-          preview={
-            <TerminalFontPreview
-              family={settings.fontFamilyTerminal}
-              size={settings.fontSizeTerminal}
-            />
-          }
-        />
+        <FontSettingsGroup />
       </SettingsSection>
     </SettingsPageContainer>
   );
 }
 
-const CUSTOM_FONT_VALUE = "__custom__";
-const DEFAULT_FONT_VALUE = "__default__";
-
-/** Mirrors the mobile Appearance sliders: a labelled value and a filled track. */
-function FontSizeSlider({
-  label,
-  max,
-  min,
-  onChange,
-  value,
-}: {
-  label: string;
-  max: number;
-  min: number;
-  onChange: (value: number) => void;
-  value: number;
-}) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  // The thumb and value label follow a local draft while dragging; the
-  // preference commits on the native change event (release). Applying it live
-  // would resize the interface - and this very slider - under the pointer.
-  const [draft, setDraft] = useState<number | null>(null);
-  const shown = draft ?? value;
-  // Refs, written in the same turn as the events: input and change can land in
-  // one task (track clicks, keyboard steps), before any re-render, so a
-  // state-reading closure would still see the previous draft and drop the
-  // commit.
-  const draftRef = useRef<number | null>(null);
-  const latestRef = useRef({ value, onChange });
-  latestRef.current = { value, onChange };
-  useEffect(() => {
-    const element = inputRef.current;
-    if (!element) return;
-    const handle = () => {
-      const next = draftRef.current;
-      draftRef.current = null;
-      setDraft(null);
-      if (next !== null && next !== latestRef.current.value) latestRef.current.onChange(next);
-    };
-    element.addEventListener("change", handle);
-    return () => element.removeEventListener("change", handle);
-  }, []);
-  const ratio = (shown - min) / (max - min);
-  const style = {
-    "--settings-slider-progress": `${ratio * 100}%`,
-    "--settings-slider-fill-offset": `${0.5 - ratio}rem`,
-  } as CSSProperties;
+function FontSettingsGroup() {
+  const settings = usePrimarySettings();
+  const updateSettings = useUpdatePrimarySettings();
   return (
-    <div className="flex w-full items-center gap-3">
-      <input
-        ref={inputRef}
-        aria-label={label}
-        className="settings-slider min-w-0 flex-1"
-        max={max}
-        min={min}
-        onChange={(event) => {
-          const next = Number(event.currentTarget.value);
-          if (Number.isInteger(next) && next >= min && next <= max) {
-            draftRef.current = next;
-            setDraft(next);
-          }
+    <>
+      <FontFamilySettingsRow
+        title="Interface font"
+        description="Everything outside code blocks and the terminal."
+        value={settings.fontFamilySans}
+        onValueChange={(fontFamilySans) => updateSettings({ fontFamilySans })}
+        size={{
+          label: "Interface font size",
+          min: MIN_INTERFACE_FONT_SIZE,
+          max: MAX_INTERFACE_FONT_SIZE,
+          value: settings.fontSizeInterface,
+          onChange: (fontSizeInterface) => updateSettings({ fontSizeInterface }),
         }}
-        step={1}
-        style={style}
-        type="range"
-        value={shown}
       />
-      <output className="min-w-11 rounded-md bg-muted px-1.5 py-0.5 text-center text-xs font-medium tabular-nums text-foreground">
-        {shown} px
-      </output>
-    </div>
+      <FontFamilySettingsRow
+        title="Prompt font"
+        description="Only the box you write prompts in. Mono works well here."
+        value={settings.fontFamilyComposer}
+        onValueChange={(fontFamilyComposer) => updateSettings({ fontFamilyComposer })}
+        size={{
+          label: "Prompt font size",
+          min: MIN_PROMPT_FONT_SIZE,
+          max: MAX_PROMPT_FONT_SIZE,
+          value: settings.fontSizePrompt,
+          onChange: (fontSizePrompt) => updateSettings({ fontSizePrompt }),
+        }}
+        preview={<PromptFontPreview />}
+      />
+      <FontFamilySettingsRow
+        title="Code font"
+        description="Code blocks, diffs, and file previews."
+        value={settings.fontFamilyCode}
+        onValueChange={(fontFamilyCode) => updateSettings({ fontFamilyCode })}
+        requireMonospace
+        size={{
+          label: "Code font size",
+          min: MIN_CODE_FONT_SIZE,
+          max: MAX_CODE_FONT_SIZE,
+          value: settings.fontSizeCode,
+          onChange: (fontSizeCode) => updateSettings({ fontSizeCode }),
+        }}
+        preview={<CodeFontPreview />}
+      />
+      <FontFamilySettingsRow
+        title="Terminal font"
+        description="Terminal output."
+        value={settings.fontFamilyTerminal}
+        onValueChange={(fontFamilyTerminal) => updateSettings({ fontFamilyTerminal })}
+        requireMonospace
+        size={{
+          label: "Terminal font size",
+          min: MIN_TERMINAL_FONT_SIZE,
+          max: MAX_TERMINAL_FONT_SIZE,
+          value: settings.fontSizeTerminal,
+          onChange: (fontSizeTerminal) => updateSettings({ fontSizeTerminal }),
+        }}
+        preview={
+          <TerminalFontPreview
+            family={settings.fontFamilyTerminal}
+            size={settings.fontSizeTerminal}
+          />
+        }
+      />
+    </>
   );
 }
 
 function FontFamilySettingsRow({
   title,
   description,
-  options,
   preview,
   value,
   onValueChange,
@@ -1328,7 +1234,6 @@ function FontFamilySettingsRow({
 }: {
   title: string;
   description: string;
-  options: readonly FontOption[];
   preview?: ReactNode;
   value: string;
   onValueChange: (value: string) => void;
@@ -1336,24 +1241,22 @@ function FontFamilySettingsRow({
   size: { label: string; min: number; max: number; value: number; onChange: (v: number) => void };
 }) {
   const trimmed = value.trim();
-  const matchesOption = options.some((option) => option.family === trimmed);
-  const [customMode, setCustomMode] = useState(false);
-  // The custom input edits a draft; the preference only commits once typing
+  // The fallback input edits a draft; the preference only commits once typing
   // pauses and the text probes as an available font (or is an explicit
   // clear), so the current font holds and nothing reflows mid-word.
-  const [customDraft, setCustomDraft] = useState(value);
+  const [draft, setDraft] = useState(value);
   const [draftSettled, setDraftSettled] = useState(true);
   const commitTimerRef = useRef<number | null>(null);
   const lastValueRef = useRef(value);
   if (lastValueRef.current !== value) {
-    // The committed value changed externally (hydration, reset, dropdown
-    // pick); adopt it and drop any pending commit of a stale draft.
+    // The committed value changed externally (hydration, reset, picker
+    // selection); adopt it and drop any pending commit of a stale draft.
     lastValueRef.current = value;
     if (commitTimerRef.current !== null) {
       window.clearTimeout(commitTimerRef.current);
       commitTimerRef.current = null;
     }
-    setCustomDraft(value);
+    setDraft(value);
     setDraftSettled(true);
   }
   useEffect(
@@ -1376,186 +1279,101 @@ function FontFamilySettingsRow({
     if (commitTimerRef.current === null) return;
     window.clearTimeout(commitTimerRef.current);
     commitTimerRef.current = null;
-    commitDraft(customDraft);
+    commitDraft(draft);
   };
-  // Focus only when the user picked Custom from the dropdown. The field also
-  // appears for a persisted non-catalog family, and stealing focus on arrival
-  // would hijack the keyboard from whoever just opened Appearance.
-  const focusOnCustomEntry = useRef(false);
-  const customInputRef = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (!focusOnCustomEntry.current) return;
-    focusOnCustomEntry.current = false;
-    customInputRef.current?.focus();
-  });
-  // Derived from the value, not just the picker state: client settings hydrate
-  // after mount, so a persisted custom family must reveal the input on its own.
-  const showCustomInput = customMode || (trimmed.length > 0 && !matchesOption);
-  const draftTrimmed = customDraft.trim();
+  const draftTrimmed = draft.trim();
   // Flag an unknown name only once typing pauses, and never for an empty
   // field - that is the starting state, not a rejected entry.
-  const draftPending =
-    draftSettled && showCustomInput && draftTrimmed.length > 0 && draftTrimmed !== trimmed;
-  const categories = fontOptionCategories(options);
-  const selected =
-    trimmed.length === 0 && !customMode
-      ? DEFAULT_FONT_VALUE
-      : customMode || !matchesOption
-        ? CUSTOM_FONT_VALUE
-        : trimmed;
+  const draftPending = draftSettled && draftTrimmed.length > 0 && draftTrimmed !== trimmed;
+  const resetAction =
+    trimmed.length > 0 ? (
+      <SettingResetButton
+        label={`${title.toLowerCase()} family`}
+        onClick={() => onValueChange("")}
+      />
+    ) : null;
+  const familyControl = supportsFontEnumeration() ? (
+    <FontFamilyPicker
+      ariaLabel={`${title} family`}
+      selectedFamily={trimmed}
+      requireMonospace={requireMonospace}
+      onSelect={onValueChange}
+    />
+  ) : (
+    <Input
+      aria-label={`${title} family`}
+      aria-invalid={draftPending || undefined}
+      autoCapitalize="off"
+      autoComplete="off"
+      className="min-w-0 flex-1"
+      maxLength={200}
+      onBlur={flushDraft}
+      onChange={(event) => {
+        const next = event.currentTarget.value;
+        setDraft(next);
+        setDraftSettled(false);
+        if (commitTimerRef.current !== null) {
+          window.clearTimeout(commitTimerRef.current);
+        }
+        commitTimerRef.current = window.setTimeout(() => {
+          commitTimerRef.current = null;
+          commitDraft(next);
+        }, 400);
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") flushDraft();
+        if (event.key === "Escape") {
+          // Discard uncommitted typing without closing the settings page,
+          // which is what an unhandled Escape does.
+          event.preventDefault();
+          event.stopPropagation();
+          if (commitTimerRef.current !== null) {
+            window.clearTimeout(commitTimerRef.current);
+            commitTimerRef.current = null;
+          }
+          setDraft(value);
+          setDraftSettled(true);
+        }
+      }}
+      placeholder="Font family name"
+      spellCheck={false}
+      value={draft}
+    />
+  );
+  const control = (
+    <div className="flex w-full items-center gap-2 sm:w-auto">
+      <div className="min-w-0 flex-1 sm:w-44 sm:flex-none">{familyControl}</div>
+      <Select
+        value={String(size.value)}
+        onValueChange={(next) => {
+          if (typeof next !== "string") return;
+          const parsed = Number(next);
+          if (Number.isInteger(parsed) && parsed >= size.min && parsed <= size.max) {
+            size.onChange(parsed);
+          }
+        }}
+      >
+        <SelectTrigger className="w-22 shrink-0" aria-label={size.label}>
+          <SelectValue>{size.value} px</SelectValue>
+        </SelectTrigger>
+        <SelectPopup align="end" alignItemWithTrigger={false}>
+          {Array.from({ length: size.max - size.min + 1 }, (_, index) => size.min + index).map(
+            (px) => (
+              <SelectItem hideIndicator key={px} value={String(px)}>
+                {px} px
+              </SelectItem>
+            ),
+          )}
+        </SelectPopup>
+      </Select>
+    </div>
+  );
   return (
     <SettingsRow
       title={title}
       description={description}
-      resetAction={
-        trimmed.length > 0 || customMode ? (
-          <SettingResetButton
-            label={`${title.toLowerCase()} family`}
-            onClick={() => {
-              setCustomMode(false);
-              onValueChange("");
-            }}
-          />
-        ) : null
-      }
-      control={
-        <div className="flex w-full flex-col gap-2 sm:w-56">
-          {/* The custom input replaces the dropdown rather than stacking under
-              it, so entering custom mode does not change the row height. */}
-          <div className="flex w-full items-center gap-1.5">
-            {showCustomInput ? (
-              <>
-                <Input
-                  aria-label={`${title} custom family`}
-                  aria-invalid={draftPending || undefined}
-                  autoCapitalize="off"
-                  autoComplete="off"
-                  className="min-w-0 flex-1"
-                  maxLength={200}
-                  ref={customInputRef}
-                  onBlur={flushDraft}
-                  onChange={(event) => {
-                    const next = event.currentTarget.value;
-                    setCustomDraft(next);
-                    setDraftSettled(false);
-                    if (commitTimerRef.current !== null) {
-                      window.clearTimeout(commitTimerRef.current);
-                    }
-                    commitTimerRef.current = window.setTimeout(() => {
-                      commitTimerRef.current = null;
-                      commitDraft(next);
-                    }, 400);
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") flushDraft();
-                    if (event.key === "Escape") {
-                      // Discard uncommitted typing without leaving the settings
-                      // page (Escape closes it), and drop back to the list only
-                      // when there is no committed family to return to.
-                      event.preventDefault();
-                      event.stopPropagation();
-                      if (commitTimerRef.current !== null) {
-                        window.clearTimeout(commitTimerRef.current);
-                        commitTimerRef.current = null;
-                      }
-                      setCustomDraft(value);
-                      setDraftSettled(true);
-                      if (trimmed.length === 0) setCustomMode(false);
-                    }
-                  }}
-                  placeholder="Font family name"
-                  spellCheck={false}
-                  value={customDraft}
-                />
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <Button
-                        aria-label={`Choose ${title.toLowerCase()} from the list`}
-                        className="size-8 shrink-0 text-muted-foreground hover:text-foreground"
-                        onClick={() => {
-                          setCustomMode(false);
-                          onValueChange("");
-                        }}
-                        size="icon-sm"
-                        variant="ghost"
-                      >
-                        <ListIcon />
-                      </Button>
-                    }
-                  />
-                  <TooltipPopup>Choose from the list</TooltipPopup>
-                </Tooltip>
-              </>
-            ) : (
-              <Select
-                value={selected}
-                onValueChange={(next) => {
-                  if (typeof next !== "string") return;
-                  if (next === DEFAULT_FONT_VALUE) {
-                    setCustomMode(false);
-                    onValueChange("");
-                    return;
-                  }
-                  if (next === CUSTOM_FONT_VALUE) {
-                    // Start from an empty field rather than the outgoing family;
-                    // the applied font holds until a valid name is entered.
-                    if (commitTimerRef.current !== null) {
-                      window.clearTimeout(commitTimerRef.current);
-                      commitTimerRef.current = null;
-                    }
-                    setCustomDraft("");
-                    setDraftSettled(true);
-                    setCustomMode(true);
-                    focusOnCustomEntry.current = true;
-                    return;
-                  }
-                  setCustomMode(false);
-                  onValueChange(next);
-                }}
-              >
-                <SelectTrigger className="w-full" aria-label={`${title} family`}>
-                  <SelectValue>
-                    {selected === DEFAULT_FONT_VALUE
-                      ? "Default"
-                      : (options.find((option) => option.family === selected)?.label ?? selected)}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectPopup align="end" alignItemWithTrigger={false}>
-                  <SelectItem hideIndicator value={DEFAULT_FONT_VALUE}>
-                    Default
-                  </SelectItem>
-                  {categories.map(([category, categoryOptions]) => (
-                    <SelectGroup key={category}>
-                      {/* A lone section header is noise; label only mixed lists. */}
-                      {categories.length > 1 ? (
-                        <SelectGroupLabel className="px-2 py-1.5 font-semibold text-muted-foreground text-xs">
-                          {category}
-                        </SelectGroupLabel>
-                      ) : null}
-                      {categoryOptions.map((option) => (
-                        <SelectItem hideIndicator key={option.family} value={option.family}>
-                          <span style={{ fontFamily: option.family }}>{option.label}</span>
-                        </SelectItem>
-                      ))}
-                    </SelectGroup>
-                  ))}
-                  <SelectItem hideIndicator value={CUSTOM_FONT_VALUE}>
-                    Custom…
-                  </SelectItem>
-                </SelectPopup>
-              </Select>
-            )}
-          </div>
-          <FontSizeSlider
-            label={size.label}
-            max={size.max}
-            min={size.min}
-            onChange={size.onChange}
-            value={size.value}
-          />
-        </div>
-      }
+      resetAction={resetAction}
+      control={control}
     >
       {preview}
     </SettingsRow>

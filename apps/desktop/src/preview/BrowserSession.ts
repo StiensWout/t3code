@@ -23,6 +23,10 @@ const ALLOWED_PREVIEW_PERMISSIONS: ReadonlySet<string> = new Set([
   "clipboard-sanitized-write",
   "notifications",
   "geolocation",
+  // Local Font Access (queryLocalFonts). Both handlers again: the API
+  // consults the permission check before ever raising a request, and a
+  // denied check resolves with an empty font list rather than an error.
+  "local-fonts",
 ]);
 
 export class BrowserSessionPartitionDerivationError extends Schema.TaggedErrorClass<BrowserSessionPartitionDerivationError>()(
