@@ -8,10 +8,13 @@ import {
   invalidateCustomThemes,
   isKnownThemePreference,
   isThemeFollowingSystem,
+  getThemePreferenceMode,
   resolveDesktopTheme,
   resolveThemeAppearance,
+  THEME_APPEARANCE_MODE_STORAGE_KEY,
   THEME_FOLLOW_SYSTEM_STORAGE_KEY,
   ThemePreference,
+  type ThemePreferenceMode,
 } from "../themePalette";
 
 type Theme = ThemePreference;
@@ -19,6 +22,7 @@ type ThemeSnapshot = {
   theme: Theme;
   systemDark: boolean;
   followSystem: boolean;
+  appearanceMode: ThemePreferenceMode;
 };
 
 type DesktopThemeBridge = Pick<DesktopBridge, "setTheme">;
@@ -29,6 +33,7 @@ const DEFAULT_THEME_SNAPSHOT: ThemeSnapshot = {
   theme: "system",
   systemDark: false,
   followSystem: true,
+  appearanceMode: "system",
 };
 const THEME_COLOR_META_NAME = "theme-color";
 const DYNAMIC_THEME_COLOR_SELECTOR = `meta[name="${THEME_COLOR_META_NAME}"][data-dynamic-theme-color="true"]`;
@@ -97,14 +102,38 @@ function readStoredFollowSystem(theme: Theme): boolean {
   return theme === "system" || isThemeFollowingSystem(theme);
 }
 
-function writeFollowSystemPreference(followSystem: boolean): void {
+function isThemePreferenceMode(value: string | null): value is ThemePreferenceMode {
+  return value === "light" || value === "dark" || value === "system";
+}
+
+function readStoredAppearanceMode(theme: Theme): ThemePreferenceMode {
+  if (typeof window !== "undefined") {
+    try {
+      const raw = window.localStorage.getItem(THEME_APPEARANCE_MODE_STORAGE_KEY);
+      if (isThemePreferenceMode(raw)) return raw;
+    } catch {
+      // Fall back to the legacy preference below when storage is unavailable.
+    }
+  }
+
+  if (readStoredFollowSystem(theme)) return "system";
+  return getThemePreferenceMode(theme) ?? "light";
+}
+
+function writeAppearanceModePreference(appearanceMode: ThemePreferenceMode): void {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(THEME_FOLLOW_SYSTEM_STORAGE_KEY, String(followSystem));
+    window.localStorage.setItem(THEME_APPEARANCE_MODE_STORAGE_KEY, appearanceMode);
+    // Keep the old flag synchronized for older clients and existing settings
+    // restore flows. New clients use the mode key as the source of truth.
+    window.localStorage.setItem(
+      THEME_FOLLOW_SYSTEM_STORAGE_KEY,
+      String(appearanceMode === "system"),
+    );
   } catch (cause) {
     throw new ThemeStorageError({
       operation: "write",
-      storageKey: THEME_FOLLOW_SYSTEM_STORAGE_KEY,
+      storageKey: THEME_APPEARANCE_MODE_STORAGE_KEY,
       cause,
     });
   }
@@ -233,27 +262,34 @@ export function syncBrowserChromeTheme() {
 
 function applyTheme(theme: Theme, suppressTransitions = false) {
   if (typeof document === "undefined" || typeof window === "undefined") return;
-  const followSystem = readStoredFollowSystem(theme);
+  const appearanceMode = readStoredAppearanceMode(theme);
+  const followSystem = appearanceMode === "system";
   const systemDark = followSystem ? getSystemDark() : false;
   if (
     lastAppliedTheme?.theme === theme &&
     lastAppliedTheme.systemDark === systemDark &&
-    lastAppliedTheme.followSystem === followSystem
+    lastAppliedTheme.followSystem === followSystem &&
+    lastAppliedTheme.appearanceMode === appearanceMode
   ) {
-    syncDesktopTheme(theme, followSystem);
+    syncDesktopTheme(theme, followSystem, appearanceMode);
     return;
   }
 
   if (suppressTransitions) {
     document.documentElement.classList.add("no-transitions");
   }
-  const resolvedAppearance = resolveThemeAppearance(theme, systemDark, followSystem);
+  const resolvedAppearance = resolveThemeAppearance(
+    theme,
+    systemDark,
+    followSystem,
+    appearanceMode,
+  );
   applyThemePalette(theme, resolvedAppearance);
   const isDark = resolvedAppearance === "dark";
   document.documentElement.classList.toggle("dark", isDark);
-  lastAppliedTheme = { theme, systemDark, followSystem };
+  lastAppliedTheme = { theme, systemDark, followSystem, appearanceMode };
   syncBrowserChromeTheme();
-  syncDesktopTheme(theme, followSystem);
+  syncDesktopTheme(theme, followSystem, appearanceMode);
   if (suppressTransitions) {
     // Force a reflow so the no-transitions class takes effect before removal
     // oxlint-disable-next-line no-unused-expressions
@@ -268,35 +304,42 @@ export async function syncDesktopThemePreference(
   bridge: DesktopThemeBridge,
   theme: Theme,
   followSystem?: boolean,
+  appearanceMode?: ThemePreferenceMode,
 ): Promise<void> {
   try {
-    await bridge.setTheme(resolveDesktopTheme(theme, followSystem));
+    await bridge.setTheme(resolveDesktopTheme(theme, followSystem, appearanceMode));
   } catch (cause) {
     throw new DesktopThemeSyncError({ theme, cause });
   }
 }
 
-export function syncDesktopTheme(theme: Theme, followSystem?: boolean) {
+export function syncDesktopTheme(
+  theme: Theme,
+  followSystem?: boolean,
+  appearanceMode?: ThemePreferenceMode,
+) {
   if (typeof window === "undefined") return;
   const bridge = window.desktopBridge;
-  const desktopTheme = resolveDesktopTheme(theme, followSystem);
+  const desktopTheme = resolveDesktopTheme(theme, followSystem, appearanceMode);
   if (!bridge || typeof bridge.setTheme !== "function" || lastDesktopTheme === desktopTheme) {
     return;
   }
 
   lastDesktopTheme = desktopTheme;
-  void syncDesktopThemePreference(bridge, theme, followSystem).catch((cause: unknown) => {
-    const error = isDesktopThemeSyncError(cause)
-      ? cause
-      : new DesktopThemeSyncError({ theme, cause });
-    console.error(error.message, {
-      theme: error.theme,
-      ...safeErrorLogAttributes(error),
-    });
-    if (lastDesktopTheme === desktopTheme) {
-      lastDesktopTheme = null;
-    }
-  });
+  void syncDesktopThemePreference(bridge, theme, followSystem, appearanceMode).catch(
+    (cause: unknown) => {
+      const error = isDesktopThemeSyncError(cause)
+        ? cause
+        : new DesktopThemeSyncError({ theme, cause });
+      console.error(error.message, {
+        theme: error.theme,
+        ...safeErrorLogAttributes(error),
+      });
+      if (lastDesktopTheme === desktopTheme) {
+        lastDesktopTheme = null;
+      }
+    },
+  );
 }
 
 // Apply immediately on module load to prevent flash
@@ -311,19 +354,21 @@ function getSnapshot(): ThemeSnapshot {
   if (!snapshotStale && lastSnapshot) return lastSnapshot;
   snapshotStale = false;
   const theme = getStored();
-  const followSystem = readStoredFollowSystem(theme);
+  const appearanceMode = readStoredAppearanceMode(theme);
+  const followSystem = appearanceMode === "system";
   const systemDark = followSystem ? getSystemDark() : false;
 
   if (
     lastSnapshot &&
     lastSnapshot.theme === theme &&
     lastSnapshot.systemDark === systemDark &&
-    lastSnapshot.followSystem === followSystem
+    lastSnapshot.followSystem === followSystem &&
+    lastSnapshot.appearanceMode === appearanceMode
   ) {
     return lastSnapshot;
   }
 
-  lastSnapshot = { theme, systemDark, followSystem };
+  lastSnapshot = { theme, systemDark, followSystem, appearanceMode };
   return lastSnapshot;
 }
 
@@ -333,7 +378,7 @@ function getServerSnapshot() {
 
 function handleSystemAppearanceChange() {
   const storedTheme = getStored();
-  if (readStoredFollowSystem(storedTheme)) applyTheme(storedTheme, true);
+  if (readStoredAppearanceMode(storedTheme) === "system") applyTheme(storedTheme, true);
   emitChange();
 }
 
@@ -343,6 +388,9 @@ function handleStorageChange(e: StorageEvent) {
     applyTheme(getStored(), true);
     emitChange();
   } else if (e.key === THEME_FOLLOW_SYSTEM_STORAGE_KEY) {
+    applyTheme(getStored(), true);
+    emitChange();
+  } else if (e.key === THEME_APPEARANCE_MODE_STORAGE_KEY) {
     applyTheme(getStored(), true);
     emitChange();
   } else if (e.key === CUSTOM_THEMES_STORAGE_KEY || e.key === null) {
@@ -389,6 +437,7 @@ export function useTheme() {
     theme,
     snapshot.systemDark,
     snapshot.followSystem,
+    snapshot.appearanceMode,
   );
 
   const setTheme = useCallback((next: Theme): boolean => {
@@ -417,16 +466,16 @@ export function useTheme() {
     return true;
   }, []);
 
-  const setFollowSystem = useCallback((nextFollowSystem: boolean): boolean => {
+  const setAppearanceMode = useCallback((nextAppearanceMode: ThemePreferenceMode): boolean => {
     if (typeof window === "undefined") return false;
     try {
-      writeFollowSystemPreference(nextFollowSystem);
+      writeAppearanceModePreference(nextAppearanceMode);
     } catch (cause) {
       const error = isThemeStorageError(cause)
         ? cause
         : new ThemeStorageError({
             operation: "write",
-            storageKey: THEME_FOLLOW_SYSTEM_STORAGE_KEY,
+            storageKey: THEME_APPEARANCE_MODE_STORAGE_KEY,
             cause,
           });
       console.error(error.message, {
@@ -442,6 +491,19 @@ export function useTheme() {
     return true;
   }, []);
 
+  const setFollowSystem = useCallback(
+    (nextFollowSystem: boolean): boolean => {
+      const currentMode = readStoredAppearanceMode(theme);
+      const nextMode = nextFollowSystem
+        ? "system"
+        : currentMode === "system"
+          ? (getThemePreferenceMode(theme) ?? "light")
+          : currentMode;
+      return setAppearanceMode(nextMode);
+    },
+    [setAppearanceMode, theme],
+  );
+
   const refreshTheme = useCallback(() => {
     if (typeof window === "undefined") return;
     lastAppliedTheme = null;
@@ -452,14 +514,16 @@ export function useTheme() {
   // Keep DOM in sync on mount/change
   useEffect(() => {
     applyTheme(theme);
-  }, [snapshot.followSystem, theme]);
+  }, [snapshot.appearanceMode, theme]);
 
   return {
     theme,
     setTheme,
+    setAppearanceMode,
     setFollowSystem,
     refreshTheme,
     followSystem: snapshot.followSystem,
+    appearanceMode: snapshot.appearanceMode,
     resolvedTheme,
   } as const;
 }

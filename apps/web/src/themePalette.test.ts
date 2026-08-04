@@ -136,9 +136,11 @@ describe("theme files", () => {
     expect(themePreferenceForMode(theme, "dark")).toBe("aurora:dark");
     expect(isThemeFollowingSystem("aurora:system")).toBe(true);
     expect(isThemeFollowingSystem("aurora:dark")).toBe(false);
-    expect(getThemeModes(T3_CHAT_THEME)).toEqual(["light"]);
-    expect(resolveThemeAppearance(T3_CHAT_THEME.id, true, true)).toBe("light");
-    expect(resolveDesktopTheme(T3_CHAT_THEME.id, true)).toBe("light");
+    expect(getThemeModes(T3_CHAT_THEME)).toEqual(["light", "dark"]);
+    expect(resolveThemeAppearance(T3_CHAT_THEME.id, true, true)).toBe("dark");
+    expect(resolveDesktopTheme(T3_CHAT_THEME.id, true)).toBe("system");
+    expect(resolveThemeAppearance(T3_CHAT_THEME.id, false, false, "dark")).toBe("dark");
+    expect(resolveDesktopTheme(T3_CHAT_THEME.id, false, "dark")).toBe("dark");
     expect(resolveThemeAppearance("aurora:dark", false, true)).toBe("light");
     expect(resolveDesktopTheme("aurora:dark", true)).toBe("system");
     expect(JSON.parse(serializeThemeFile(theme)).variants.dark).toMatchObject({
@@ -160,7 +162,13 @@ describe("theme files", () => {
   });
 
   it("includes the dual-mode maintainer themes", () => {
-    for (const theme of [T3_GROVE_THEME, T3_OCEAN_THEME, T3_EMBER_THEME, T3_IRIS_THEME]) {
+    for (const theme of [
+      T3_CHAT_THEME,
+      T3_GROVE_THEME,
+      T3_OCEAN_THEME,
+      T3_EMBER_THEME,
+      T3_IRIS_THEME,
+    ]) {
       expect(getThemeDefinition(theme.id)).toBe(theme);
       expect(getThemeModes(theme)).toEqual(["light", "dark"]);
       expect(theme.colors.accent).toMatch(/^#[0-9a-f]{6}$/i);
@@ -277,11 +285,11 @@ describe("theme files", () => {
 });
 
 describe("stored theme preferences", () => {
-  it("resolves the legacy t3-chat-dark preference to light T3 Chat", () => {
+  it("resolves the legacy t3-chat-dark preference to dark T3 Chat", () => {
     expect(getThemeDefinition("t3-chat-dark")).toBe(T3_CHAT_THEME);
-    expect(getThemePreferenceMode("t3-chat-dark")).toBe("light");
-    expect(resolveThemeAppearance("t3-chat-dark", true, false)).toBe("light");
-    expect(resolveDesktopTheme("t3-chat-dark", false)).toBe("light");
+    expect(getThemePreferenceMode("t3-chat-dark")).toBe("dark");
+    expect(resolveThemeAppearance("t3-chat-dark", true, false)).toBe("dark");
+    expect(resolveDesktopTheme("t3-chat-dark", false)).toBe("dark");
     expect(isKnownThemePreference("t3-chat-dark")).toBe(true);
   });
 
@@ -297,7 +305,7 @@ describe("stored theme preferences", () => {
     }
     expect(isKnownThemePreference("aurora:blah")).toBe(false);
     expect(isKnownThemePreference("missing-theme")).toBe(false);
-    expect(isKnownThemePreference(`${T3_CHAT_THEME.id}:dark`)).toBe(false);
+    expect(isKnownThemePreference(`${T3_CHAT_THEME.id}:dark`)).toBe(true);
   });
 
   it("keeps stored themes with unknown roles and drops invalid entries", () => {

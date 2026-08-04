@@ -870,6 +870,12 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --radius: 0.625rem;
   --background: var(--color-zinc-25);
   --app-chrome-background: var(--background);
+  --toolbar-background: var(--app-chrome-background);
+  --toolbar-foreground: var(--foreground);
+  --toolbar-border: var(--border);
+  --toolbar-control: var(--popover);
+  --toolbar-control-foreground: var(--foreground);
+  --toolbar-control-hover: var(--accent);
   --surface-raised: color-mix(in srgb, var(--card) 20%, transparent);
   --foreground: var(--color-zinc-800);
   --card: var(--color-white);
@@ -1057,6 +1063,12 @@ html[data-theme-id],
 html.dark[data-theme-id] {
   --background: var(--app-theme-canvas);
   --app-chrome-background: var(--app-theme-chrome);
+  --toolbar-background: var(--app-theme-toolbar);
+  --toolbar-foreground: var(--app-theme-toolbar-foreground);
+  --toolbar-border: var(--app-theme-toolbar-border);
+  --toolbar-control: var(--app-theme-toolbar-control);
+  --toolbar-control-foreground: var(--app-theme-toolbar-control-foreground);
+  --toolbar-control-hover: var(--app-theme-toolbar-control-hover);
   --surface-raised: var(--app-theme-surface-raised);
   --foreground: var(--app-theme-text);
   --card: var(--app-theme-surface);
@@ -1123,6 +1135,33 @@ html.dark[data-theme-id] {
 html[data-theme-id] body {
   background-color: var(--app-chrome-background);
   color: var(--foreground);
+}
+
+/* Workspace actions use a small, separate chrome hierarchy. Keeping these
+   roles explicit prevents the thread toolbar from falling back to the default
+   dark-mode whites while preserving the same theme file across clients. */
+html[data-theme-id] [data-chat-header] {
+  background-color: var(--toolbar-background);
+  color: var(--toolbar-foreground);
+}
+
+html[data-theme-id] [data-chat-header] [data-slot="button"],
+html[data-theme-id] [data-chat-header] [data-slot="toggle"] {
+  --control-icon-color: var(--toolbar-control-foreground);
+  background-color: var(--toolbar-control);
+  border-color: var(--toolbar-border);
+  color: var(--toolbar-control-foreground);
+}
+
+html[data-theme-id] [data-chat-header] [data-slot="button"]:hover,
+html[data-theme-id] [data-chat-header] [data-slot="button"][data-pressed],
+html[data-theme-id] [data-chat-header] [data-slot="toggle"]:hover,
+html[data-theme-id] [data-chat-header] [data-slot="toggle"][data-pressed] {
+  background-color: var(--toolbar-control-hover);
+}
+
+html[data-theme-id] [data-chat-header] [data-slot="separator"] {
+  background-color: var(--toolbar-border);
 }
 
 html[data-theme-id] [data-sidebar-version="v1"],

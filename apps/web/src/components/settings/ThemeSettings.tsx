@@ -7,7 +7,14 @@ import {
   Trash2Icon,
   UploadIcon,
 } from "lucide-react";
-import type { ChangeEvent, KeyboardEvent, PointerEvent, UIEvent } from "react";
+import type {
+  ChangeEvent,
+  CSSProperties,
+  KeyboardEvent,
+  PointerEvent,
+  ReactNode,
+  UIEvent,
+} from "react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "../../lib/utils";
 import {
@@ -18,13 +25,11 @@ import {
   getThemeColorsForMode,
   getThemeDefinition,
   getThemeModes,
-  getThemePreferenceMode,
   installCustomTheme,
   isThemeColor,
   parseThemeFile,
   removeCustomTheme,
   serializeThemeFile,
-  themePreferenceForMode,
   updateCustomTheme,
   type ThemeAppearance,
   type ThemeColorRole,
@@ -79,6 +84,7 @@ type ThemeCardDefinition = {
   label: string;
   previews: ReadonlyArray<ThemeCardPreview>;
 };
+type ThemeMode = ThemeAppearance | "system";
 
 const STANDARD_THEME_PREVIEW_COLORS: Record<
   ThemeAppearance,
@@ -224,6 +230,12 @@ function areThemeEditorColorsManaged(
 function getThemeRoleLabel(role: ThemeColorRole): string {
   const labels: Partial<Record<ThemeColorRole, string>> = {
     canvas: "Background",
+    toolbar: "Toolbar background",
+    toolbarForeground: "Toolbar text",
+    toolbarBorder: "Toolbar border",
+    toolbarControl: "Toolbar control",
+    toolbarControlForeground: "Toolbar control text",
+    toolbarControlHover: "Toolbar control hover",
     accent: "Accent color",
     errorForeground: "Error text",
     errorSurface: "Error background",
@@ -834,7 +846,7 @@ function ThemeEditorDialog({
                 variant={modeSelection === "both" ? "secondary" : "outline"}
                 onClick={() => setModeSelection("both")}
               >
-                Light + dark
+                Dual mode
               </Button>
             </div>
             <p className="text-xs leading-relaxed text-muted-foreground">
@@ -1218,70 +1230,137 @@ function downloadThemeFile(filename: string, contents: string): void {
   URL.revokeObjectURL(url);
 }
 
-function ThemePreviewCircle({ colors }: { colors: ThemeCardPreview["colors"] }) {
+function getThemePreviewStyle(
+  colors: ThemeCardPreview["colors"],
+  mode: ThemeAppearance,
+): CSSProperties {
+  const isDark = mode === "dark";
+  const accentY = isDark ? 82 : 18;
+  const accentX = isDark ? 82 : 18;
+  const actionX = isDark ? 18 : 82;
+  const supportingY = isDark ? 18 : 82;
   const gradient = [
-    `radial-gradient(circle at 14% 18%, ${colors.sidebar} 0%, color-mix(in srgb, ${colors.sidebar} 68%, transparent) 28%, transparent 66%)`,
-    `radial-gradient(circle at 86% 20%, ${colors.accentSurface} 0%, color-mix(in srgb, ${colors.accentSurface} 70%, transparent) 30%, transparent 68%)`,
-    `radial-gradient(circle at 82% 84%, ${colors.messageAction} 0%, color-mix(in srgb, ${colors.messageAction} 62%, transparent) 24%, transparent 62%)`,
-    `radial-gradient(circle at 18% 84%, ${colors.messageSurface} 0%, color-mix(in srgb, ${colors.messageSurface} 66%, transparent) 28%, transparent 66%)`,
-    `linear-gradient(145deg, ${colors.canvas} 0%, ${colors.surface} 100%)`,
+    `radial-gradient(circle at ${accentX}% ${accentY}%, ${colors.accent} 0%, color-mix(in srgb, ${colors.accent} 68%, transparent) 34%, transparent 78%)`,
+    `radial-gradient(circle at ${actionX}% ${accentY}%, ${colors.messageAction} 0%, color-mix(in srgb, ${colors.messageAction} 66%, transparent) 36%, transparent 80%)`,
+    `radial-gradient(circle at ${actionX}% ${supportingY}%, ${colors.messageSurface} 0%, color-mix(in srgb, ${colors.messageSurface} 54%, transparent) 28%, transparent 68%)`,
+    `radial-gradient(circle at ${accentX}% ${supportingY}%, ${colors.accentSurface} 0%, color-mix(in srgb, ${colors.accentSurface} 64%, transparent) 30%, transparent 70%)`,
+    `radial-gradient(circle at 50% 50%, ${colors.surface} 0%, ${colors.canvas} 100%)`,
   ].join(", ");
+  return {
+    backgroundColor: colors.canvas,
+    backgroundImage: gradient,
+    filter: isDark
+      ? "brightness(0.78) saturate(1.14) contrast(1.04)"
+      : "brightness(1.06) saturate(0.92)",
+  };
+}
+
+function ThemePreviewCircle({
+  colors,
+  mode,
+}: {
+  colors: ThemeCardPreview["colors"];
+  mode: ThemeAppearance;
+}) {
   return (
     <span
       aria-hidden
       className="block size-14 shrink-0 rounded-full border-2 border-background shadow-sm"
-      style={{ backgroundColor: colors.canvas, backgroundImage: gradient }}
+      style={getThemePreviewStyle(colors, mode)}
     />
   );
 }
 
+function ThemePreviewAutoCircle({
+  light,
+  dark,
+}: {
+  light: ThemeCardPreview["colors"];
+  dark: ThemeCardPreview["colors"];
+}) {
+  return (
+    <span
+      aria-hidden
+      className="relative block size-14 shrink-0 overflow-hidden rounded-full border-2 border-background shadow-sm"
+    >
+      <span
+        className="absolute inset-0"
+        style={{
+          ...getThemePreviewStyle(light, "light"),
+          clipPath: "polygon(0 0, 100% 0, 0 100%)",
+        }}
+      />
+      <span
+        className="absolute inset-0"
+        style={{
+          ...getThemePreviewStyle(dark, "dark"),
+          clipPath: "polygon(100% 0, 100% 100%, 0 100%)",
+        }}
+      />
+      <span className="pointer-events-none absolute left-1/2 top-[-8%] h-[116%] w-px rotate-45 bg-background/75" />
+    </span>
+  );
+}
+
 function ThemePreviewCircles({
-  activeMode,
   label,
+  activeMode,
   onSelectMode,
   previews,
 }: {
-  activeMode: ThemeAppearance | null;
   label: string;
-  onSelectMode: ((mode: ThemeAppearance) => void) | undefined;
+  activeMode: ThemeMode | null;
+  onSelectMode: (mode: ThemeMode) => void;
   previews: ThemeCardDefinition["previews"];
 }) {
+  const lightPreview = previews.find((preview) => preview.mode === "light");
+  const darkPreview = previews.find((preview) => preview.mode === "dark");
+  const hasDualMode = lightPreview !== undefined && darkPreview !== undefined;
+
+  const renderModeButton = (mode: ThemeMode, content: ReactNode) => {
+    const isActive = activeMode === mode;
+    return (
+      <button
+        aria-label={`Use ${label} ${mode === "system" ? "automatic" : mode} mode`}
+        aria-pressed={isActive}
+        className={cn(
+          "relative flex size-[68px] shrink-0 cursor-pointer items-center justify-center rounded-full p-1 outline-none transition-transform hover:scale-105 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card",
+          isActive && "hover:scale-100",
+        )}
+        key={mode}
+        onClick={(event) => {
+          event.stopPropagation();
+          onSelectMode(mode);
+        }}
+        title={mode === "system" ? "Automatic" : mode === "light" ? "Light" : "Dark"}
+        type="button"
+      >
+        {content}
+        {isActive ? (
+          <span
+            aria-hidden
+            className="pointer-events-none absolute inset-0 rounded-full"
+            style={{ boxShadow: "inset 0 0 0 2px var(--ring)" }}
+          />
+        ) : null}
+      </button>
+    );
+  };
+
   return (
     <div className="flex min-h-16 items-center justify-center gap-2.5 px-3 pt-3">
-      {previews.map((preview) => {
-        const isActive = activeMode === preview.mode;
-        const circle = <ThemePreviewCircle colors={preview.colors} />;
-        if (!onSelectMode) {
-          return (
-            <span
-              className="flex size-[68px] shrink-0 items-center justify-center"
-              key={preview.mode}
-            >
-              {circle}
-            </span>
-          );
-        }
-
-        return (
-          <button
-            aria-label={`Use ${label} ${preview.mode} mode`}
-            aria-pressed={isActive}
-            className={cn(
-              "relative flex size-[68px] shrink-0 cursor-pointer items-center justify-center rounded-full p-1 outline-none transition-transform focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card",
-              !isActive && "hover:scale-105",
-            )}
-            key={preview.mode}
-            onClick={(event) => {
-              event.stopPropagation();
-              onSelectMode(preview.mode);
-            }}
-            style={isActive ? { boxShadow: "inset 0 0 0 2px var(--ring)" } : undefined}
-            type="button"
-          >
-            {circle}
-          </button>
-        );
-      })}
+      {previews.map((preview) =>
+        renderModeButton(
+          preview.mode,
+          <ThemePreviewCircle colors={preview.colors} mode={preview.mode} />,
+        ),
+      )}
+      {hasDualMode
+        ? renderModeButton(
+            "system",
+            <ThemePreviewAutoCircle light={lightPreview.colors} dark={darkPreview.colors} />,
+          )
+        : null}
     </div>
   );
 }
@@ -1301,8 +1380,8 @@ function ThemeLibraryCard({
   isActive: boolean;
   isPersonal: boolean;
   onUse: () => void;
-  onUseMode?: ((mode: ThemeAppearance) => void) | undefined;
-  activeMode?: ThemeAppearance | null;
+  onUseMode: (mode: ThemeMode) => void;
+  activeMode?: ThemeMode | null;
   onEdit?: () => void;
   onDownload?: () => void;
   onRemove?: () => void;
@@ -1321,8 +1400,8 @@ function ThemeLibraryCard({
       style={isActive ? { boxShadow: "inset 0 0 0 1px var(--ring)" } : undefined}
     >
       <ThemePreviewCircles
-        activeMode={isActive ? (activeMode ?? theme.previews[0]?.mode ?? null) : null}
         label={theme.label}
+        activeMode={isActive ? (activeMode ?? theme.previews[0]?.mode ?? null) : null}
         onSelectMode={onUseMode}
         previews={theme.previews}
       />
@@ -1400,16 +1479,16 @@ function ThemeLibraryCard({
 export function ThemeLibrary({
   theme,
   setTheme,
-  followSystem,
-  setFollowSystem,
+  appearanceMode,
+  setAppearanceMode,
   customThemes,
   initialAppearance,
   refreshTheme,
 }: {
   theme: string;
   setTheme: (theme: string) => boolean;
-  followSystem: boolean;
-  setFollowSystem: (followSystem: boolean) => boolean;
+  appearanceMode: ThemeMode;
+  setAppearanceMode: (mode: ThemeMode) => boolean;
   customThemes: ReadonlyArray<ThemeDefinition>;
   initialAppearance: ThemeAppearance;
   refreshTheme: () => void;
@@ -1423,7 +1502,6 @@ export function ThemeLibrary({
   const lastThemeToRemoveRef = useRef<ThemeDefinition | null>(null);
   if (themeToRemove) lastThemeToRemoveRef.current = themeToRemove;
   const removeDialogTheme = themeToRemove ?? lastThemeToRemoveRef.current;
-  const activeTheme = getThemeDefinition(theme);
   const standardThemes = getStandardThemeCards();
   const maintainerThemes = [
     T3_CHAT_THEME,
@@ -1462,34 +1540,31 @@ export function ThemeLibrary({
     [notifyThemeSaveFailure, setTheme],
   );
 
-  const handleFollowSystemChange = useCallback(
-    (checked: boolean) => {
-      const previousFollowSystem = followSystem;
-      const nextTheme = checked
-        ? (activeTheme?.id ?? "system")
-        : activeTheme
-          ? themePreferenceForMode(activeTheme, initialAppearance)
-          : initialAppearance;
-
-      // Commit Follow system first so setTheme applies the next palette using
-      // the new mode. If the theme write fails, restore the original flag so
-      // the two stored values cannot drift apart.
-      if (!setFollowSystem(checked)) {
+  const persistThemeMode = useCallback(
+    (nextTheme: string, nextMode: ThemeMode) => {
+      const previousMode = appearanceMode;
+      if (nextMode !== previousMode && !setAppearanceMode(nextMode)) {
         notifyThemeSaveFailure();
-        return;
+        return false;
       }
-      if (setTheme(nextTheme)) return;
-      setFollowSystem(previousFollowSystem);
+      if (setTheme(nextTheme)) return true;
+      if (nextMode !== previousMode) setAppearanceMode(previousMode);
       notifyThemeSaveFailure();
+      return false;
     },
-    [
-      activeTheme,
-      followSystem,
-      initialAppearance,
-      notifyThemeSaveFailure,
-      setFollowSystem,
-      setTheme,
-    ],
+    [appearanceMode, notifyThemeSaveFailure, setAppearanceMode, setTheme],
+  );
+
+  const getActiveCardMode = useCallback(
+    (card: ThemeCardDefinition): ThemeMode | null => {
+      const modes = new Set(card.previews.map((preview) => preview.mode));
+      if (appearanceMode === "system" && modes.has("light") && modes.has("dark")) {
+        return "system";
+      }
+      if (appearanceMode !== "system" && modes.has(appearanceMode)) return appearanceMode;
+      return card.previews[0]?.mode ?? null;
+    },
+    [appearanceMode],
   );
 
   const handleRemoveTheme = useCallback((customTheme: ThemeDefinition) => {
@@ -1502,7 +1577,7 @@ export function ThemeLibrary({
     // dialog stays open so the user can retry or cancel.
     if (
       getThemeDefinition(theme)?.id === themeToRemove.id &&
-      !persistTheme(followSystem ? "system" : initialAppearance)
+      !persistTheme(appearanceMode === "system" ? "system" : appearanceMode)
     ) {
       return;
     }
@@ -1513,14 +1588,7 @@ export function ThemeLibrary({
       return;
     }
     setThemeToRemove(null);
-  }, [
-    followSystem,
-    initialAppearance,
-    notifyThemeRemovalFailure,
-    persistTheme,
-    theme,
-    themeToRemove,
-  ]);
+  }, [appearanceMode, notifyThemeRemovalFailure, persistTheme, theme, themeToRemove]);
 
   const handleCreatedTheme = useCallback(
     (createdTheme: ThemeDefinition) => {
@@ -1541,12 +1609,7 @@ export function ThemeLibrary({
     (updatedTheme: ThemeDefinition) => {
       const wasActive = getThemeDefinition(theme)?.id === updatedTheme.id;
       if (wasActive) {
-        const selectedMode = followSystem ? null : getThemePreferenceMode(theme);
-        const nextTheme =
-          selectedMode && getThemeColorsForMode(updatedTheme, selectedMode)
-            ? themePreferenceForMode(updatedTheme, selectedMode)
-            : updatedTheme.id;
-        if (!persistTheme(nextTheme)) return false;
+        if (!persistTheme(updatedTheme.id)) return false;
         refreshTheme();
       }
       setThemeToEdit(null);
@@ -1559,7 +1622,7 @@ export function ThemeLibrary({
       );
       return true;
     },
-    [followSystem, persistTheme, refreshTheme, theme],
+    [persistTheme, refreshTheme, theme],
   );
 
   return (
@@ -1567,15 +1630,12 @@ export function ThemeLibrary({
       <div className="flex min-h-8 flex-wrap items-center justify-between gap-3 px-3 sm:px-4">
         <h3 className="text-sm font-medium tracking-[-0.005em] text-foreground">Themes</h3>
         <div className="flex flex-wrap items-center justify-end gap-3">
-          <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
-            <span>Follow system</span>
-            <Switch
-              aria-label="Follow system appearance"
-              checked={followSystem}
-              onCheckedChange={(checked) => handleFollowSystemChange(Boolean(checked))}
-            />
-          </label>
-          <Button size="xs" variant="outline" onClick={() => setIsCreateOpen(true)}>
+          <Button
+            className="h-7 rounded-md border border-border/70 bg-muted/30 px-2 text-xs font-medium text-foreground shadow-none hover:bg-accent/40"
+            size="xs"
+            variant="ghost"
+            onClick={() => setIsCreateOpen(true)}
+          >
             <PlusIcon />
             Create theme
           </Button>
@@ -1596,51 +1656,40 @@ export function ThemeLibrary({
           <ThemeLibraryCard
             activeMode={
               theme === "system" || theme === "light" || theme === "dark"
-                ? (getThemePreferenceMode(theme) ?? initialAppearance)
+                ? appearanceMode === "system"
+                  ? "system"
+                  : appearanceMode
                 : null
             }
             isActive={theme === "system" || theme === "light" || theme === "dark"}
             isPersonal={false}
             key={standardTheme.id}
-            onUse={() => persistTheme(followSystem ? "system" : initialAppearance)}
-            onUseMode={followSystem ? undefined : (nextMode) => persistTheme(nextMode)}
+            onUse={() => persistTheme(appearanceMode === "system" ? "system" : appearanceMode)}
+            onUseMode={(mode) => persistThemeMode(mode === "system" ? "system" : mode, mode)}
             theme={standardTheme}
           />
         ))}
         {maintainerThemes.map((maintainerTheme) => {
           const isActive = getThemeDefinition(theme)?.id === maintainerTheme.id;
-          const mode = isActive
-            ? followSystem
-              ? initialAppearance
-              : (getThemePreferenceMode(theme) ?? maintainerTheme.appearance)
-            : maintainerTheme.appearance;
+          const card = getThemeCardDefinition(maintainerTheme);
           return (
             <ThemeLibraryCard
-              activeMode={isActive ? mode : null}
+              activeMode={isActive ? getActiveCardMode(card) : null}
               isActive={isActive}
               isPersonal={false}
               key={maintainerTheme.id}
               onUse={() => persistTheme(maintainerTheme.id)}
-              onUseMode={
-                followSystem
-                  ? undefined
-                  : (nextMode: ThemeAppearance) =>
-                      persistTheme(themePreferenceForMode(maintainerTheme.id, nextMode))
-              }
-              theme={getThemeCardDefinition(maintainerTheme)}
+              onUseMode={(mode) => persistThemeMode(maintainerTheme.id, mode)}
+              theme={card}
             />
           );
         })}
         {customThemes.map((customTheme) => {
           const isActive = getThemeDefinition(theme)?.id === customTheme.id;
-          const mode = isActive
-            ? followSystem
-              ? initialAppearance
-              : (getThemePreferenceMode(theme) ?? customTheme.appearance)
-            : customTheme.appearance;
+          const card = getThemeCardDefinition(customTheme);
           return (
             <ThemeLibraryCard
-              activeMode={isActive ? mode : null}
+              activeMode={isActive ? getActiveCardMode(card) : null}
               isActive={isActive}
               isPersonal
               key={customTheme.id}
@@ -1650,13 +1699,8 @@ export function ThemeLibrary({
               }
               onRemove={() => handleRemoveTheme(customTheme)}
               onUse={() => persistTheme(customTheme.id)}
-              onUseMode={
-                followSystem
-                  ? undefined
-                  : (nextMode: ThemeAppearance) =>
-                      persistTheme(themePreferenceForMode(customTheme.id, nextMode))
-              }
-              theme={getThemeCardDefinition(customTheme)}
+              onUseMode={(mode) => persistThemeMode(customTheme.id, mode)}
+              theme={card}
             />
           );
         })}

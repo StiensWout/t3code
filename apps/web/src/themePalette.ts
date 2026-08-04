@@ -13,6 +13,7 @@ export const T3_IRIS_THEME_LABEL = "T3 Iris";
 export const THEME_FILE_VERSION = 1 as const;
 export const CUSTOM_THEMES_STORAGE_KEY = "t3code:themes:v1";
 export const THEME_FOLLOW_SYSTEM_STORAGE_KEY = "t3code:theme-follow-system";
+export const THEME_APPEARANCE_MODE_STORAGE_KEY = "t3code:theme-appearance-mode";
 
 const LEGACY_T3_CHAT_DARK_THEME_ID = "t3-chat-dark";
 
@@ -22,6 +23,12 @@ export type ThemePreference = typeof ThemePreference.Type;
 export const THEME_COLOR_ROLES = [
   "canvas",
   "chrome",
+  "toolbar",
+  "toolbarForeground",
+  "toolbarBorder",
+  "toolbarControl",
+  "toolbarControlForeground",
+  "toolbarControlHover",
   "surface",
   "surfaceRaised",
   "surfaceOverlay",
@@ -281,9 +288,8 @@ function themeIdFromPreference(theme: ThemePreference): string {
 function explicitThemeMode(theme: ThemePreference): ThemeAppearance | null {
   const parts = splitThemePreference(theme);
   // Older builds stored the dark T3 Chat palette as a separate theme. Keep
-  // those preferences readable, but resolve them to the remaining light-only
-  // T3 Chat theme instead of reviving a removed option.
-  if (parts.id === LEGACY_T3_CHAT_DARK_THEME_ID) return null;
+  // those preferences readable while mapping them to the dark variant.
+  if (parts.id === LEGACY_T3_CHAT_DARK_THEME_ID) return "dark";
   return parts.mode === "light" || parts.mode === "dark" ? parts.mode : null;
 }
 
@@ -296,14 +302,20 @@ function explicitThemeMode(theme: ThemePreference): ThemeAppearance | null {
 const T3_CHAT_LIGHT_COLORS: ThemeColors = {
   canvas: "#faf5fa",
   chrome: "#f3e4f6",
-  surface: "#faf5fa",
-  surfaceRaised: "#fdfafd",
+  toolbar: "#f3e4f6",
+  toolbarForeground: "#501854",
+  toolbarBorder: "#e0d3e1",
+  toolbarControl: "#efe7f0",
+  toolbarControlForeground: "#501854",
+  toolbarControlHover: "#e8d5e9",
+  surface: "#efe7f0",
+  surfaceRaised: "#f7f1f7",
   surfaceOverlay: "#ffffff",
   text: "#501854",
-  textMuted: "#834588",
-  border: "#efbdeb",
-  input: "#e7c1dc",
-  focus: "#db2777",
+  textMuted: "#906b93",
+  border: "#e0d3e1",
+  input: "#d7c5d9",
+  focus: "#a84370",
   accent: "#a84370",
   accentForeground: "#ffffff",
   secondary: "#f1c4e6",
@@ -350,6 +362,12 @@ const T3_CHAT_LIGHT_COLORS: ThemeColors = {
 const DEFAULT_DARK_THEME_COLORS: ThemeColors = {
   canvas: "#180f1b",
   chrome: "#241329",
+  toolbar: "#241329",
+  toolbarForeground: "#f4d8f0",
+  toolbarBorder: "#5c345b",
+  toolbarControl: "#2a182b",
+  toolbarControlForeground: "#f4d8f0",
+  toolbarControlHover: "#42243f",
   surface: "#221323",
   surfaceRaised: "#2a182b",
   surfaceOverlay: "#2c192d",
@@ -558,7 +576,7 @@ function managedThemeBackground(value: string, appearance: ThemeAppearance): The
     s: Math.min(hsl.s, appearance === "dark" ? 0.3 : 0.2),
     l:
       appearance === "dark"
-        ? Math.min(0.18, Math.max(0.07, hsl.l))
+        ? Math.min(0.13, Math.max(0.07, hsl.l))
         : Math.min(0.985, Math.max(0.94, hsl.l)),
   });
 }
@@ -635,6 +653,14 @@ export function createManagedThemeColors(
     ...defaults,
     canvas: themeRgbToHexColor(canvas),
     chrome: themeRgbToHexColor(chrome),
+    toolbar: themeRgbToHexColor(chrome),
+    toolbarForeground: themeRgbToHexColor(text),
+    toolbarBorder: themeRgbToHexColor(
+      mixThemeRgbColors(chrome, text, appearance === "dark" ? 0.35 : 0.12),
+    ),
+    toolbarControl: themeRgbToHexColor(surfaceRaised),
+    toolbarControlForeground: themeRgbToHexColor(text),
+    toolbarControlHover: themeRgbToHexColor(accentSurface),
     surface: themeRgbToHexColor(canvas),
     surfaceRaised: themeRgbToHexColor(surfaceRaised),
     surfaceOverlay: themeRgbToHexColor(surfaceOverlay),
@@ -695,11 +721,14 @@ export const T3_CHAT_THEME: ThemeDefinition = {
   label: T3_CHAT_THEME_LABEL,
   appearance: "light",
   colors: T3_CHAT_LIGHT_COLORS,
+  variants: {
+    dark: createManagedThemeColors("dark", "#211a23", "#b5226a"),
+  },
 };
 
 /** Dark defaults are only used when creating a custom dark theme. */
 export function getDefaultThemeColors(appearance: ThemeAppearance): ThemeColors {
-  return appearance === "dark" ? DEFAULT_DARK_THEME_COLORS : T3_CHAT_THEME.colors;
+  return appearance === "dark" ? DEFAULT_DARK_THEME_COLORS : T3_CHAT_LIGHT_COLORS;
 }
 
 export const T3_GROVE_THEME: ThemeDefinition = {
@@ -956,6 +985,12 @@ export function serializeThemeFile(theme: ThemeDefinition): string {
 const APP_THEME_VARIABLES: Readonly<Record<ThemeColorRole, string>> = {
   canvas: "--app-theme-canvas",
   chrome: "--app-theme-chrome",
+  toolbar: "--app-theme-toolbar",
+  toolbarForeground: "--app-theme-toolbar-foreground",
+  toolbarBorder: "--app-theme-toolbar-border",
+  toolbarControl: "--app-theme-toolbar-control",
+  toolbarControlForeground: "--app-theme-toolbar-control-foreground",
+  toolbarControlHover: "--app-theme-toolbar-control-hover",
   surface: "--app-theme-surface",
   surfaceRaised: "--app-theme-surface-raised",
   surfaceOverlay: "--app-theme-surface-overlay",
@@ -1037,13 +1072,22 @@ export function resolveThemeAppearance(
   theme: ThemePreference,
   systemDark: boolean,
   followSystem?: boolean,
+  appearanceMode?: ThemePreferenceMode,
 ): "light" | "dark" {
   const systemAppearance = systemDark ? "dark" : "light";
-  if (followSystem ?? isThemeFollowingSystem(theme)) {
+  const mode =
+    appearanceMode ?? ((followSystem ?? isThemeFollowingSystem(theme)) ? "system" : null);
+  if (mode === "system") {
     const definition = getThemeDefinition(theme);
     return definition && getThemeColorsForMode(definition, systemAppearance) === null
       ? definition.appearance
       : systemAppearance;
+  }
+  if (mode === "light" || mode === "dark") {
+    const definition = getThemeDefinition(theme);
+    return definition && getThemeColorsForMode(definition, mode) === null
+      ? definition.appearance
+      : mode;
   }
   return getThemePreferenceMode(theme) ?? "light";
 }
@@ -1051,12 +1095,21 @@ export function resolveThemeAppearance(
 export function resolveDesktopTheme(
   theme: ThemePreference,
   followSystem?: boolean,
+  appearanceMode?: ThemePreferenceMode,
 ): "light" | "dark" | "system" {
-  if (followSystem ?? isThemeFollowingSystem(theme)) {
+  const mode =
+    appearanceMode ?? ((followSystem ?? isThemeFollowingSystem(theme)) ? "system" : null);
+  if (mode === "system") {
     const definition = getThemeDefinition(theme);
     const hasLightMode = definition && getThemeColorsForMode(definition, "light") !== null;
     const hasDarkMode = definition && getThemeColorsForMode(definition, "dark") !== null;
     return definition && (!hasLightMode || !hasDarkMode) ? definition.appearance : "system";
+  }
+  if (mode === "light" || mode === "dark") {
+    const definition = getThemeDefinition(theme);
+    return definition && getThemeColorsForMode(definition, mode) === null
+      ? definition.appearance
+      : mode;
   }
   return getThemePreferenceMode(theme) ?? "system";
 }

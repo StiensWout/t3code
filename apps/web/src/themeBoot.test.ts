@@ -7,6 +7,7 @@ import {
   isKnownThemePreference,
   isThemeFollowingSystem,
   resolveThemeAppearance,
+  THEME_APPEARANCE_MODE_STORAGE_KEY,
   THEME_FOLLOW_SYSTEM_STORAGE_KEY,
 } from "./themePalette";
 
@@ -85,7 +86,7 @@ function runBootScript(options: {
   };
 }
 
-/** Mirrors getStored + readStoredFollowSystem + resolveThemeAppearance from the runtime. */
+/** Mirrors getStored + readStoredAppearanceMode + resolveThemeAppearance from the runtime. */
 function runtimeResolvedAppearance(
   storage: Record<string, string>,
   prefersDark: boolean,
@@ -99,13 +100,19 @@ function runtimeResolvedAppearance(
     const raw = storage[THEME_STORAGE_KEY] ?? null;
     const theme = raw !== null && isKnownThemePreference(raw) ? raw : "system";
     const followRaw = storage[THEME_FOLLOW_SYSTEM_STORAGE_KEY] ?? null;
-    const followSystem =
-      followRaw === "true"
-        ? true
-        : followRaw === "false"
-          ? false
-          : theme === "system" || isThemeFollowingSystem(theme);
-    return resolveThemeAppearance(theme, prefersDark, followSystem);
+    const appearanceRaw = storage[THEME_APPEARANCE_MODE_STORAGE_KEY] ?? null;
+    const appearanceMode =
+      appearanceRaw === "light" || appearanceRaw === "dark" || appearanceRaw === "system"
+        ? appearanceRaw
+        : followRaw === "true"
+          ? "system"
+          : followRaw === "false"
+            ? null
+            : theme === "system" || isThemeFollowingSystem(theme)
+              ? "system"
+              : null;
+    const followSystem = appearanceMode === "system";
+    return resolveThemeAppearance(theme, prefersDark, followSystem, appearanceMode ?? undefined);
   } finally {
     vi.unstubAllGlobals();
     invalidateCustomThemes();
@@ -134,9 +141,18 @@ describe("index.html boot script", () => {
   }> = [
     { name: "no stored preference on a dark OS", storage: {}, prefersDark: true },
     {
-      name: "T3 Chat clamps follow-system to its light-only palette",
+      name: "T3 Chat follows a dark OS",
       storage: { [THEME_STORAGE_KEY]: "t3-chat", [THEME_FOLLOW_SYSTEM_STORAGE_KEY]: "true" },
       prefersDark: true,
+    },
+    {
+      name: "an explicit global dark mode applies to T3 Chat",
+      storage: {
+        [THEME_STORAGE_KEY]: "t3-chat",
+        [THEME_APPEARANCE_MODE_STORAGE_KEY]: "dark",
+        [THEME_FOLLOW_SYSTEM_STORAGE_KEY]: "false",
+      },
+      prefersDark: false,
     },
     {
       name: "T3 Grove follows a dark OS",
@@ -159,7 +175,7 @@ describe("index.html boot script", () => {
       prefersDark: true,
     },
     {
-      name: "legacy t3-chat-dark resolves to light T3 Chat",
+      name: "legacy t3-chat-dark resolves to dark T3 Chat",
       storage: { [THEME_STORAGE_KEY]: "t3-chat-dark" },
       prefersDark: true,
     },
@@ -235,7 +251,7 @@ describe("index.html boot script", () => {
     });
     expect(chat.themeId).toBe("t3-chat");
     expect(chat.themeSelected).toBe("true");
-    expect(chat.isDark).toBe(false);
+    expect(chat.isDark).toBe(true);
 
     const aurora = runBootScript({
       storage: {
@@ -253,10 +269,11 @@ describe("index.html boot script", () => {
   });
 
   it.each([
-    ["t3-grove", "#203229", "#1d2b24"],
-    ["t3-ocean", "#202f3d", "#1d2936"],
-    ["t3-ember", "#382821", "#30231e"],
-    ["t3-iris", "#2c2640", "#282339"],
+    ["t3-chat", "#291c28", "#211a23"],
+    ["t3-grove", "#1e2f26", "#1b2821"],
+    ["t3-ocean", "#1b2733", "#17212b"],
+    ["t3-ember", "#31231c", "#291e1a"],
+    ["t3-iris", "#221d31", "#1d1929"],
   ])("uses the %s dark splash palette", (theme, chrome, background) => {
     const boot = runBootScript({
       storage: { [THEME_STORAGE_KEY]: theme, [THEME_FOLLOW_SYSTEM_STORAGE_KEY]: "true" },

@@ -961,7 +961,7 @@ function BackgroundActivityAdvancedDialog({
 }
 
 export function AppearanceSettingsPanel() {
-  const { theme, setTheme, setFollowSystem, refreshTheme, followSystem, resolvedTheme } =
+  const { appearanceMode, refreshTheme, resolvedTheme, setAppearanceMode, setTheme, theme } =
     useTheme();
   const customThemes = useCustomThemes();
   const settings = usePrimarySettings();
@@ -980,11 +980,11 @@ export function AppearanceSettingsPanel() {
     <SettingsPageContainer>
       <SettingsSection {...searchableSetting("theme")} title="Appearance">
         <ThemeLibrary
+          appearanceMode={appearanceMode}
           customThemes={customThemes}
-          followSystem={followSystem}
           initialAppearance={resolvedTheme}
           refreshTheme={refreshTheme}
-          setFollowSystem={setFollowSystem}
+          setAppearanceMode={setAppearanceMode}
           setTheme={setTheme}
           theme={theme}
         />

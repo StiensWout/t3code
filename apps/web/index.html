@@ -17,6 +17,7 @@
         const DARK_BACKGROUND = "#0a0a0a";
         const CUSTOM_THEMES_STORAGE_KEY = "t3code:themes:v1";
         const THEME_FOLLOW_SYSTEM_STORAGE_KEY = "t3code:theme-follow-system";
+        const THEME_APPEARANCE_MODE_STORAGE_KEY = "t3code:theme-appearance-mode";
         const SPLASH_COLORS = {
           light: {
             background: "#ffffff",
@@ -57,6 +58,12 @@
               accent: "#a84370",
               chrome: "#f3e4f6",
             },
+            dark: {
+              background: "#211a23",
+              foreground: "#fffaff",
+              accent: "#df5398",
+              chrome: "#291c28",
+            },
           },
           "t3-grove": {
             light: {
@@ -66,10 +73,10 @@
               chrome: "#eaf2ee",
             },
             dark: {
-              background: "#1d2b24",
+              background: "#1b2821",
               foreground: "#fffaff",
               accent: "#69d69a",
-              chrome: "#203229",
+              chrome: "#1e2f26",
             },
           },
           "t3-ocean": {
@@ -80,10 +87,10 @@
               chrome: "#edf1f5",
             },
             dark: {
-              background: "#1d2936",
+              background: "#17212b",
               foreground: "#fffaff",
               accent: "#70b9ee",
-              chrome: "#202f3d",
+              chrome: "#1b2733",
             },
           },
           "t3-ember": {
@@ -94,10 +101,10 @@
               chrome: "#f6f0ed",
             },
             dark: {
-              background: "#30231e",
+              background: "#291e1a",
               foreground: "#fffaff",
               accent: "#f09a64",
-              chrome: "#382821",
+              chrome: "#31231c",
             },
           },
           "t3-iris": {
@@ -108,15 +115,15 @@
               chrome: "#f2f0f7",
             },
             dark: {
-              background: "#282339",
+              background: "#1d1929",
               foreground: "#fffaff",
               accent: "#9d7df2",
-              chrome: "#2c2640",
+              chrome: "#221d31",
             },
           },
         };
-        // A dark OS must not flip the light-only T3 Chat palette; the runtime
-        // resolves the same way via getThemeColorsForMode.
+        // Keep the built-in mode list in sync with the runtime so the selected
+        // T3 Chat palette is visible before React has mounted.
         const BUILT_IN_THEME_MODES = Object.fromEntries(
           Object.entries(BUILT_IN_THEME_PALETTES).map(([id, palettes]) => [
             id,
@@ -206,13 +213,13 @@
           const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
           const rawPreference = splitThemePreference(storedTheme ?? "");
           // Older builds stored the dark T3 Chat palette as its own theme id;
-          // the runtime resolves it to the light-only T3 Chat theme.
+          // keep that preference pointed at the dark variant.
           const isLegacyT3ChatDark =
             !rawPreference.invalidMode && rawPreference.id === "t3-chat-dark";
           const preference = isLegacyT3ChatDark
             ? {
                 id: "t3-chat",
-                mode: rawPreference.mode === "system" ? "system" : null,
+                mode: rawPreference.mode === "system" ? "system" : "dark",
                 invalidMode: false,
               }
             : rawPreference;
@@ -239,31 +246,36 @@
             storedTheme === "system" ||
             (themeModes !== null && (explicitMode === null || themeModes.includes(explicitMode)));
           const theme = isKnownTheme && storedTheme ? storedTheme : "system";
-          const storedFollowSystem = window.localStorage.getItem(THEME_FOLLOW_SYSTEM_STORAGE_KEY);
-          const followSystem =
-            storedFollowSystem === "true"
-              ? true
-              : storedFollowSystem === "false"
-                ? false
-                : theme === "system" || preference.mode === "system";
           const isThemed = isKnownTheme && themeModes !== null;
           const baseAppearance = customTheme ? customTheme.appearance : "light";
           const systemMode = prefersDark ? "dark" : "light";
-          // followSystem already accounts for a `:system` suffix when the
-          // follow-system key is unset; when that key is explicitly "false"
-          // the runtime ignores the suffix, so the boot script must too.
+          const storedAppearanceMode = window.localStorage.getItem(
+            THEME_APPEARANCE_MODE_STORAGE_KEY,
+          );
+          const storedFollowSystem = window.localStorage.getItem(THEME_FOLLOW_SYSTEM_STORAGE_KEY);
+          const appearanceMode = isThemePreferenceMode(storedAppearanceMode)
+            ? storedAppearanceMode
+            : storedFollowSystem === "true"
+              ? "system"
+              : storedFollowSystem === "false"
+                ? (explicitMode ?? baseAppearance)
+                : theme === "system" || preference.mode === "system"
+                  ? "system"
+                  : (explicitMode ?? baseAppearance);
           const themeMode = !isThemed
             ? null
-            : followSystem
+            : appearanceMode === "system"
               ? themeModes.includes(systemMode)
                 ? systemMode
                 : baseAppearance
-              : (explicitMode ?? baseAppearance);
+              : themeModes.includes(appearanceMode)
+                ? appearanceMode
+                : baseAppearance;
           const isDark = isThemed
             ? themeMode === "dark"
-            : followSystem
+            : appearanceMode === "system"
               ? prefersDark
-              : theme === "dark";
+              : appearanceMode === "dark";
           const customColors =
             isThemed && customTheme
               ? themeMode === customTheme.appearance
