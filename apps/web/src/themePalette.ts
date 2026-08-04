@@ -638,6 +638,8 @@ export function createManagedThemeColors(
   const muted = mixThemeRgbColors(canvas, accent, appearance === "dark" ? 0.13 : 0.06);
   const accentSurface = mixThemeRgbColors(canvas, accent, appearance === "dark" ? 0.3 : 0.14);
   const messageSurface = mixThemeRgbColors(canvas, accent, appearance === "dark" ? 0.36 : 0.18);
+  const toolbarControl = mixThemeRgbColors(chrome, accent, appearance === "dark" ? 0.2 : 0.08);
+  const toolbarBorder = mixThemeRgbColors(chrome, accent, appearance === "dark" ? 0.35 : 0.14);
   const accentForeground = readableThemeForeground(accent);
   const codeBackground = mixThemeRgbColors(canvas, text, appearance === "dark" ? 0.18 : 0.025);
   const terminalBackground = mixThemeRgbColors(canvas, text, appearance === "dark" ? 0.2 : 0.035);
@@ -655,10 +657,8 @@ export function createManagedThemeColors(
     chrome: themeRgbToHexColor(chrome),
     toolbar: themeRgbToHexColor(chrome),
     toolbarForeground: themeRgbToHexColor(text),
-    toolbarBorder: themeRgbToHexColor(
-      mixThemeRgbColors(chrome, text, appearance === "dark" ? 0.35 : 0.12),
-    ),
-    toolbarControl: themeRgbToHexColor(surfaceRaised),
+    toolbarBorder: themeRgbToHexColor(toolbarBorder),
+    toolbarControl: themeRgbToHexColor(toolbarControl),
     toolbarControlForeground: themeRgbToHexColor(text),
     toolbarControlHover: themeRgbToHexColor(accentSurface),
     surface: themeRgbToHexColor(canvas),

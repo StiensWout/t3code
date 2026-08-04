@@ -180,6 +180,9 @@ describe("theme files", () => {
         expect(contrastRatio(colors!.text, colors!.canvas)).toBeGreaterThanOrEqual(4.5);
         expect(contrastRatio(colors!.accentForeground, colors!.accent)).toBeGreaterThanOrEqual(4.5);
         expect(
+          contrastRatio(colors!.toolbarControlForeground, colors!.toolbarControl),
+        ).toBeGreaterThanOrEqual(4.5);
+        expect(
           contrastRatio(colors!.messageForeground, colors!.messageSurface),
         ).toBeGreaterThanOrEqual(4.5);
       }

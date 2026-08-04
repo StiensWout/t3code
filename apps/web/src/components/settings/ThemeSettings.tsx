@@ -1285,20 +1285,20 @@ function ThemePreviewAutoCircle({
       <span
         className="absolute inset-0"
         style={{
-          ...getThemePreviewStyle(light, "light"),
-          clipPath: "polygon(0 0, 100% 0, 100% 100%)",
+          ...getThemePreviewStyle(dark, "dark"),
+          clipPath: "polygon(0 0, 100% 0, 0 100%)",
         }}
       />
       <span
         className="absolute inset-0"
         style={{
-          ...getThemePreviewStyle(dark, "dark"),
-          clipPath: "polygon(0 0, 0 100%, 100% 100%)",
+          ...getThemePreviewStyle(light, "light"),
+          clipPath: "polygon(100% 0, 100% 100%, 0 100%)",
         }}
       />
       <span
         className="pointer-events-none absolute left-1/2 top-[-8%] h-[116%] w-px bg-background"
-        style={{ transform: "rotate(-45deg)" }}
+        style={{ transform: "rotate(45deg)" }}
       />
     </span>
   );
