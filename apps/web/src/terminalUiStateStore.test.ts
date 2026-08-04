@@ -1,9 +1,10 @@
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { ThreadId } from "@t3tools/contracts";
-import { beforeEach, describe, expect, it } from "vite-plus/test";
+import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
   migratePersistedTerminalUiStateStoreState,
+  PENDING_TERMINAL_OPEN_TIMEOUT_MS,
   reconcilableServerTerminalIds,
   selectThreadTerminalUiState,
   useTerminalUiStateStore,
@@ -76,6 +77,7 @@ describe("terminalUiStateStore actions", () => {
       terminalUiStateByThreadKey: {},
       suppressedTerminalIdsByThreadKey: {},
       pendingTerminalIdsByThreadKey: {},
+      pendingTerminalExpiryByThreadKey: {},
     });
   });
 
@@ -361,6 +363,31 @@ describe("terminalUiStateStore actions", () => {
     expect(
       useTerminalUiStateStore.getState().suppressedTerminalIdsByThreadKey[threadKey] ?? [],
     ).not.toContain("terminal-2");
+  });
+
+  it("expires an unobserved pending terminal after authoritative metadata settles", () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    try {
+      const store = useTerminalUiStateStore.getState();
+      store.setTerminalOpen(THREAD_REF, true);
+      store.splitTerminal(THREAD_REF, "terminal-2");
+
+      now.mockReturnValue(1_000 + PENDING_TERMINAL_OPEN_TIMEOUT_MS + 1);
+      store.reconcileTerminalIds(THREAD_REF, [DEFAULT_THREAD_TERMINAL_ID], true);
+
+      const threadKey = scopedThreadKey(THREAD_REF);
+      expect(
+        selectThreadTerminalUiState(
+          useTerminalUiStateStore.getState().terminalUiStateByThreadKey,
+          THREAD_REF,
+        ).terminalIds,
+      ).toEqual([DEFAULT_THREAD_TERMINAL_ID]);
+      expect(
+        useTerminalUiStateStore.getState().pendingTerminalIdsByThreadKey[threadKey] ?? [],
+      ).toEqual([]);
+    } finally {
+      now.mockRestore();
+    }
   });
 
   it("reconciles terminal ids from an external ordered list", () => {

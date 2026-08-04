@@ -43,6 +43,7 @@ export type RightPanelSurface =
 export interface TerminalSurfaceSnapshot {
   surfaceId: `terminal:${string}`;
   resourceId: string;
+  surfaceIndex: number;
   terminalIds: string[];
   splitDirection?: "horizontal" | "vertical";
 }
@@ -137,13 +138,75 @@ const upsertSurface = (
   current: ThreadRightPanelState,
   surface: RightPanelSurface,
   activate = true,
+  insertAt?: number,
 ): ThreadRightPanelState => ({
   isOpen: true,
   surfaces: current.surfaces.some((entry) => entry.id === surface.id)
     ? current.surfaces
-    : [...current.surfaces, surface],
+    : (() => {
+        const surfaces = [...current.surfaces];
+        const index =
+          insertAt === undefined
+            ? surfaces.length
+            : Math.max(0, Math.min(Math.trunc(insertAt), surfaces.length));
+        surfaces.splice(index, 0, surface);
+        return surfaces;
+      })(),
   activeSurfaceId: activate ? surface.id : current.activeSurfaceId,
 });
+
+function insertTerminalAtSnapshotPosition(
+  currentTerminalIds: readonly string[],
+  snapshotTerminalIds: readonly string[],
+  terminalId: string,
+): string[] {
+  if (currentTerminalIds.includes(terminalId)) {
+    return [...currentTerminalIds];
+  }
+
+  const snapshotIndex = snapshotTerminalIds.indexOf(terminalId);
+  if (snapshotIndex < 0) {
+    return [...currentTerminalIds, terminalId];
+  }
+
+  // Keep the current order of terminals restored by other in-flight closes;
+  // only insert the missing terminal at the closest position described by its
+  // own pre-close snapshot.
+  if (snapshotIndex === 0) {
+    return [terminalId, ...currentTerminalIds];
+  }
+  for (let index = snapshotIndex - 1; index >= 0; index -= 1) {
+    const previousTerminalId = snapshotTerminalIds[index];
+    if (previousTerminalId === undefined) continue;
+    const previousIndex = currentTerminalIds.indexOf(previousTerminalId);
+    if (previousIndex >= 0) {
+      return [
+        ...currentTerminalIds.slice(0, previousIndex + 1),
+        terminalId,
+        ...currentTerminalIds.slice(previousIndex + 1),
+      ];
+    }
+  }
+  for (let index = snapshotIndex + 1; index < snapshotTerminalIds.length; index += 1) {
+    const nextTerminalId = snapshotTerminalIds[index];
+    if (nextTerminalId === undefined) continue;
+    const nextIndex = currentTerminalIds.indexOf(nextTerminalId);
+    if (nextIndex >= 0) {
+      return [
+        ...currentTerminalIds.slice(0, nextIndex),
+        terminalId,
+        ...currentTerminalIds.slice(nextIndex),
+      ];
+    }
+  }
+
+  const insertAt = Math.min(snapshotIndex, currentTerminalIds.length);
+  return [
+    ...currentTerminalIds.slice(0, insertAt),
+    terminalId,
+    ...currentTerminalIds.slice(insertAt),
+  ];
+}
 
 const updateThread = (
   byThreadKey: Record<string, ThreadRightPanelState>,
@@ -313,29 +376,29 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
                 surface.id === snapshot.surfaceId && surface.kind === "terminal",
             );
             if (!existing) {
-              return upsertSurface(current, {
-                id: snapshot.surfaceId,
-                kind: "terminal",
-                resourceId: snapshot.resourceId,
-                terminalIds: [terminalId],
-                activeTerminalId: terminalId,
-                ...(snapshot.splitDirection === "vertical"
-                  ? { splitDirection: "vertical" as const }
-                  : {}),
-              });
+              return upsertSurface(
+                current,
+                {
+                  id: snapshot.surfaceId,
+                  kind: "terminal",
+                  resourceId: snapshot.resourceId,
+                  terminalIds: [terminalId],
+                  activeTerminalId: terminalId,
+                  ...(snapshot.splitDirection === "vertical"
+                    ? { splitDirection: "vertical" as const }
+                    : {}),
+                },
+                true,
+                snapshot.surfaceIndex,
+              );
             }
 
             const existingTerminalIds = [...existing.terminalIds];
-            const snapshotTerminalIdSet = new Set(snapshot.terminalIds);
-            const terminalIds = [
-              ...snapshot.terminalIds.filter(
-                (id) => id === terminalId || existingTerminalIds.includes(id),
-              ),
-              ...existingTerminalIds.filter((id) => !snapshotTerminalIdSet.has(id)),
-            ];
-            if (!terminalIds.includes(terminalId)) {
-              terminalIds.push(terminalId);
-            }
+            const terminalIds = insertTerminalAtSnapshotPosition(
+              existingTerminalIds,
+              snapshot.terminalIds,
+              terminalId,
+            );
 
             return {
               ...current,

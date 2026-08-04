@@ -87,7 +87,7 @@ export function recordPendingPanelClose(
   const pending = pendingByThreadKey.get(threadKey) ?? new Map<string, PendingPanelClose>();
   pending.set(terminalId, { snapshot, readyAt: now + SETTLE_GRACE_MS });
   pendingByThreadKey.set(threadKey, pending);
-  scheduleNotification(threadKey, pending, SETTLE_GRACE_MS);
+  scheduleNotification(threadKey, pending);
 }
 
 /**

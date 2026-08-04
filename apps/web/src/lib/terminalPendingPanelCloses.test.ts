@@ -12,6 +12,7 @@ import {
 const snapshot = {
   surfaceId: "terminal:term-1" as const,
   resourceId: "term-1",
+  surfaceIndex: 0,
   terminalIds: ["term-1", "term-2", "term-3"],
   splitDirection: "vertical" as const,
 };
@@ -89,6 +90,29 @@ describe("terminalPendingPanelCloses", () => {
       vi.advanceTimersByTime(1_500);
       expect(notifications).toBe(1);
       expect(pendingPanelCloseVersion()).toBeGreaterThan(versionBefore);
+      unsubscribe();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("schedules the earliest interrupted close when closes overlap", () => {
+    vi.useFakeTimers();
+    try {
+      let notifications = 0;
+      const unsubscribe = subscribePendingPanelCloses(() => {
+        notifications += 1;
+      });
+
+      vi.setSystemTime(1_000);
+      recordPendingPanelClose("thread-a", "term-2", snapshot);
+      vi.advanceTimersByTime(1_000);
+      recordPendingPanelClose("thread-a", "term-3", snapshot);
+
+      vi.advanceTimersByTime(499);
+      expect(notifications).toBe(0);
+      vi.advanceTimersByTime(1);
+      expect(notifications).toBe(1);
       unsubscribe();
     } finally {
       vi.useRealTimers();

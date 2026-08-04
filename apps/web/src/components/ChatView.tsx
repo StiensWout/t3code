@@ -1004,10 +1004,14 @@ interface PersistentThreadTerminalPanelProps {
 
 type TerminalPanelSurface = Extract<RightPanelSurface, { kind: "terminal" }>;
 
-function snapshotTerminalSurface(surface: TerminalPanelSurface): TerminalSurfaceSnapshot {
+function snapshotTerminalSurface(
+  surface: TerminalPanelSurface,
+  surfaceIndex: number,
+): TerminalSurfaceSnapshot {
   return {
     surfaceId: surface.id,
     resourceId: surface.resourceId,
+    surfaceIndex,
     terminalIds: [...surface.terminalIds],
     ...(surface.splitDirection === "vertical" ? { splitDirection: "vertical" as const } : {}),
   };
@@ -3353,7 +3357,13 @@ function ChatViewContent(props: ChatViewProps) {
       if (!activeThreadRef || activeRightPanelSurface?.kind !== "terminal") return;
       const threadRef = activeThreadRef;
       const threadKey = scopedThreadKey(threadRef);
-      const surfaceSnapshot = snapshotTerminalSurface(activeRightPanelSurface);
+      const surfaceIndex = rightPanelState.surfaces.findIndex(
+        (surface) => surface.id === activeRightPanelSurface.id,
+      );
+      const surfaceSnapshot = snapshotTerminalSurface(
+        activeRightPanelSurface,
+        Math.max(0, surfaceIndex),
+      );
       void (async () => {
         try {
           const result = await closeTerminalMutation({
@@ -3388,6 +3398,7 @@ function ChatViewContent(props: ChatViewProps) {
       activeRightPanelSurface,
       activeThreadRef,
       closeTerminalMutation,
+      rightPanelState.surfaces,
       storeCloseTerminal,
       storeUnsuppressTerminal,
     ],
@@ -3448,7 +3459,10 @@ function ChatViewContent(props: ChatViewProps) {
           });
         }
         if (surface.kind === "terminal") {
-          const surfaceSnapshot = snapshotTerminalSurface(surface);
+          const surfaceIndex = rightPanelState.surfaces.findIndex(
+            (entry) => entry.id === surface.id,
+          );
+          const surfaceSnapshot = snapshotTerminalSurface(surface, Math.max(0, surfaceIndex));
           for (const terminalId of surface.terminalIds) {
             storeCloseTerminal(activeThreadRef, terminalId);
             void (async () => {
@@ -3490,6 +3504,7 @@ function ChatViewContent(props: ChatViewProps) {
       closePreview,
       closeTerminalMutation,
       dismissPlanSidebarForCurrentTurn,
+      rightPanelState.surfaces,
       storeCloseTerminal,
       storeUnsuppressTerminal,
     ],

@@ -29,6 +29,11 @@ interface ThreadTerminalUiState {
 
 // Keep the old storage key so existing drawer layout preferences migrate.
 const TERMINAL_UI_STATE_STORAGE_KEY = "t3code:terminal-state:v1";
+/**
+ * A local open survives a few stale metadata responses, but not indefinitely.
+ * This bounds the lifetime of a terminal that exits before metadata observes it.
+ */
+export const PENDING_TERMINAL_OPEN_TIMEOUT_MS = 10_000;
 
 interface PersistedTerminalUiStateStoreState {
   terminalUiStateByThreadKey?: Record<string, ThreadTerminalUiState>;
@@ -598,6 +603,34 @@ function updateThreadTerminalIdSet(
   return removeRecordEntry(idsByThreadKey, threadKey);
 }
 
+function updatePendingTerminalExpiry(
+  expiresAtByThreadKey: Record<string, Record<string, number>>,
+  threadRef: ScopedThreadRef,
+  terminalId: string,
+  pending: boolean,
+): Record<string, Record<string, number>> {
+  const normalizedTerminalId = terminalId.trim();
+  if (normalizedTerminalId.length === 0) return expiresAtByThreadKey;
+
+  const threadKey = terminalThreadKey(threadRef);
+  const current = expiresAtByThreadKey[threadKey] ?? {};
+  if (!pending) {
+    if (!(normalizedTerminalId in current)) return expiresAtByThreadKey;
+    const { [normalizedTerminalId]: _removed, ...remaining } = current;
+    return Object.keys(remaining).length > 0
+      ? { ...expiresAtByThreadKey, [threadKey]: remaining }
+      : removeRecordEntry(expiresAtByThreadKey, threadKey);
+  }
+
+  return {
+    ...expiresAtByThreadKey,
+    [threadKey]: {
+      ...current,
+      [normalizedTerminalId]: Date.now() + PENDING_TERMINAL_OPEN_TIMEOUT_MS,
+    },
+  };
+}
+
 function removeRecordEntry<T>(record: Record<string, T>, key: string): Record<string, T> {
   if (record[key] === undefined) {
     return record;
@@ -612,6 +645,7 @@ interface TerminalUiStateStoreState {
   suppressedTerminalIdsByThreadKey: Record<string, string[]>;
   /** Locally opened ids not yet confirmed by server metadata. */
   pendingTerminalIdsByThreadKey: Record<string, string[]>;
+  pendingTerminalExpiryByThreadKey: Record<string, Record<string, number>>;
   setTerminalOpen: (threadRef: ScopedThreadRef, open: boolean) => void;
   setTerminalHeight: (threadRef: ScopedThreadRef, height: number) => void;
   splitTerminal: (threadRef: ScopedThreadRef, terminalId: string) => void;
@@ -672,15 +706,26 @@ export const useTerminalUiStateStore = create<TerminalUiStateStoreState>()(
                   membership.terminalId,
                   membership.pending,
                 );
+          const nextPendingTerminalExpiryByThreadKey =
+            membership?.pending === undefined
+              ? state.pendingTerminalExpiryByThreadKey
+              : updatePendingTerminalExpiry(
+                  state.pendingTerminalExpiryByThreadKey,
+                  threadRef,
+                  membership.terminalId,
+                  membership.pending,
+                );
           if (
             nextTerminalUiStateByThreadKey === state.terminalUiStateByThreadKey &&
             nextSuppressedTerminalIdsByThreadKey === state.suppressedTerminalIdsByThreadKey &&
-            nextPendingTerminalIdsByThreadKey === state.pendingTerminalIdsByThreadKey
+            nextPendingTerminalIdsByThreadKey === state.pendingTerminalIdsByThreadKey &&
+            nextPendingTerminalExpiryByThreadKey === state.pendingTerminalExpiryByThreadKey
           ) {
             return state;
           }
           return {
             pendingTerminalIdsByThreadKey: nextPendingTerminalIdsByThreadKey,
+            pendingTerminalExpiryByThreadKey: nextPendingTerminalExpiryByThreadKey,
             terminalUiStateByThreadKey: nextTerminalUiStateByThreadKey,
             suppressedTerminalIdsByThreadKey: nextSuppressedTerminalIdsByThreadKey,
           };
@@ -691,6 +736,7 @@ export const useTerminalUiStateStore = create<TerminalUiStateStoreState>()(
         terminalUiStateByThreadKey: {},
         suppressedTerminalIdsByThreadKey: {},
         pendingTerminalIdsByThreadKey: {},
+        pendingTerminalExpiryByThreadKey: {},
         setTerminalOpen: (threadRef, open) => {
           const terminalState = selectThreadTerminalUiState(
             get().terminalUiStateByThreadKey,
@@ -773,9 +819,15 @@ export const useTerminalUiStateStore = create<TerminalUiStateStoreState>()(
             const threadKey = terminalThreadKey(threadRef);
             const suppressedTerminalIds = state.suppressedTerminalIdsByThreadKey[threadKey] ?? [];
             const pendingTerminalIds = state.pendingTerminalIdsByThreadKey[threadKey] ?? [];
+            const pendingTerminalExpiry = state.pendingTerminalExpiryByThreadKey[threadKey] ?? {};
             const serverIdSet = new Set(serverTerminalIds);
+            const now = Date.now();
             const remainingPendingTerminalIds = pendingTerminalIds.filter(
-              (terminalId) => !serverIdSet.has(terminalId),
+              (terminalId) =>
+                !serverIdSet.has(terminalId) &&
+                (!metadataLoaded ||
+                  (pendingTerminalExpiry[terminalId] !== undefined &&
+                    pendingTerminalExpiry[terminalId] > now)),
             );
             const nextPendingTerminalIdsByThreadKey =
               remainingPendingTerminalIds.length === pendingTerminalIds.length
@@ -786,6 +838,19 @@ export const useTerminalUiStateStore = create<TerminalUiStateStoreState>()(
                       [threadKey]: remainingPendingTerminalIds,
                     }
                   : removeRecordEntry(state.pendingTerminalIdsByThreadKey, threadKey);
+            const remainingPendingTerminalExpiry = Object.fromEntries(
+              remainingPendingTerminalIds.flatMap((terminalId) => {
+                const expiresAt = pendingTerminalExpiry[terminalId];
+                return expiresAt === undefined ? [] : [[terminalId, expiresAt] as const];
+              }),
+            );
+            const nextPendingTerminalExpiryByThreadKey =
+              Object.keys(remainingPendingTerminalExpiry).length > 0
+                ? {
+                    ...state.pendingTerminalExpiryByThreadKey,
+                    [threadKey]: remainingPendingTerminalExpiry,
+                  }
+                : removeRecordEntry(state.pendingTerminalExpiryByThreadKey, threadKey);
             const clientTerminalIds = selectThreadTerminalUiState(
               state.terminalUiStateByThreadKey,
               threadRef,
@@ -808,13 +873,15 @@ export const useTerminalUiStateStore = create<TerminalUiStateStoreState>()(
                   );
             if (
               nextTerminalUiStateByThreadKey === state.terminalUiStateByThreadKey &&
-              nextPendingTerminalIdsByThreadKey === state.pendingTerminalIdsByThreadKey
+              nextPendingTerminalIdsByThreadKey === state.pendingTerminalIdsByThreadKey &&
+              nextPendingTerminalExpiryByThreadKey === state.pendingTerminalExpiryByThreadKey
             ) {
               return state;
             }
             return {
               terminalUiStateByThreadKey: nextTerminalUiStateByThreadKey,
               pendingTerminalIdsByThreadKey: nextPendingTerminalIdsByThreadKey,
+              pendingTerminalExpiryByThreadKey: nextPendingTerminalExpiryByThreadKey,
             };
           }),
         clearTerminalUiState: (threadRef) => {
@@ -830,10 +897,13 @@ export const useTerminalUiStateStore = create<TerminalUiStateStoreState>()(
               state.suppressedTerminalIdsByThreadKey[threadKey] !== undefined;
             const hadPendingTerminalIds =
               state.pendingTerminalIdsByThreadKey[threadKey] !== undefined;
+            const hadPendingTerminalExpiry =
+              state.pendingTerminalExpiryByThreadKey[threadKey] !== undefined;
             if (
               nextTerminalUiStateByThreadKey === state.terminalUiStateByThreadKey &&
               !hadSuppressedTerminalIds &&
-              !hadPendingTerminalIds
+              !hadPendingTerminalIds &&
+              !hadPendingTerminalExpiry
             ) {
               return state;
             }
@@ -845,6 +915,10 @@ export const useTerminalUiStateStore = create<TerminalUiStateStoreState>()(
               ),
               pendingTerminalIdsByThreadKey: removeRecordEntry(
                 state.pendingTerminalIdsByThreadKey,
+                threadKey,
+              ),
+              pendingTerminalExpiryByThreadKey: removeRecordEntry(
+                state.pendingTerminalExpiryByThreadKey,
                 threadKey,
               ),
             };
@@ -859,7 +933,14 @@ export const useTerminalUiStateStore = create<TerminalUiStateStoreState>()(
               state.suppressedTerminalIdsByThreadKey[threadKey] !== undefined;
             const hadPendingTerminalIds =
               state.pendingTerminalIdsByThreadKey[threadKey] !== undefined;
-            if (!hadTerminalUiState && !hadSuppressedTerminalIds && !hadPendingTerminalIds) {
+            const hadPendingTerminalExpiry =
+              state.pendingTerminalExpiryByThreadKey[threadKey] !== undefined;
+            if (
+              !hadTerminalUiState &&
+              !hadSuppressedTerminalIds &&
+              !hadPendingTerminalIds &&
+              !hadPendingTerminalExpiry
+            ) {
               return state;
             }
             return {
@@ -875,6 +956,10 @@ export const useTerminalUiStateStore = create<TerminalUiStateStoreState>()(
                 state.pendingTerminalIdsByThreadKey,
                 threadKey,
               ),
+              pendingTerminalExpiryByThreadKey: removeRecordEntry(
+                state.pendingTerminalExpiryByThreadKey,
+                threadKey,
+              ),
             };
           });
         },
@@ -885,6 +970,7 @@ export const useTerminalUiStateStore = create<TerminalUiStateStoreState>()(
               ...Object.keys(currentState.terminalUiStateByThreadKey),
               ...Object.keys(currentState.suppressedTerminalIdsByThreadKey),
               ...Object.keys(currentState.pendingTerminalIdsByThreadKey),
+              ...Object.keys(currentState.pendingTerminalExpiryByThreadKey),
             ].filter((key) => !activeThreadKeys.has(key)),
           );
           if (orphanedIds.size === 0) return;
@@ -897,15 +983,20 @@ export const useTerminalUiStateStore = create<TerminalUiStateStoreState>()(
               ...state.suppressedTerminalIdsByThreadKey,
             };
             const nextPendingTerminalIdsByThreadKey = { ...state.pendingTerminalIdsByThreadKey };
+            const nextPendingTerminalExpiryByThreadKey = {
+              ...state.pendingTerminalExpiryByThreadKey,
+            };
             for (const id of orphanedIds) {
               delete nextTerminalUiStateByThreadKey[id];
               delete nextSuppressedTerminalIdsByThreadKey[id];
               delete nextPendingTerminalIdsByThreadKey[id];
+              delete nextPendingTerminalExpiryByThreadKey[id];
             }
             return {
               terminalUiStateByThreadKey: nextTerminalUiStateByThreadKey,
               suppressedTerminalIdsByThreadKey: nextSuppressedTerminalIdsByThreadKey,
               pendingTerminalIdsByThreadKey: nextPendingTerminalIdsByThreadKey,
+              pendingTerminalExpiryByThreadKey: nextPendingTerminalExpiryByThreadKey,
             };
           });
         },
