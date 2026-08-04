@@ -58,13 +58,41 @@ export function discoverInstalledFonts(): void {
   });
 }
 
+let grantedProbeStarted = false;
+
+/**
+ * Discover eagerly when the permission is already granted, so the picker
+ * renders without waiting for a focus. Electron's default permission handler
+ * approves silently (it has no prompt UI), and a browser that granted once
+ * reports "granted" on later visits — in both, no user gesture is needed.
+ * "prompt" and "denied" states change nothing: the focus-driven flow stays,
+ * because raising the browser prompt still requires a gesture.
+ */
+function probeAlreadyGrantedPermission(): void {
+  if (grantedProbeStarted || enumerationState.status !== "unknown") return;
+  grantedProbeStarted = true;
+  const permissions = typeof navigator !== "undefined" ? navigator.permissions : undefined;
+  if (typeof permissions?.query !== "function") return;
+  permissions.query({ name: "local-fonts" as PermissionName }).then(
+    (status) => {
+      if (status.state === "granted") discoverInstalledFonts();
+    },
+    () => {
+      // The engine does not recognize the permission name; keep the
+      // focus-driven flow.
+    },
+  );
+}
+
 /**
  * Whether the engine can list installed fonts (Local Font Access API —
- * Chromium and Electron). "unknown" until a row's input is focused and
- * discovery resolves the permission; rows render a plain family-name input
- * until the state is known granted, then upgrade to the picker.
+ * Chromium and Electron). "unknown" until discovery resolves the permission;
+ * rows render a plain family-name input until the state is known granted,
+ * then upgrade to the picker. Where the permission is already granted,
+ * discovery starts at mount and the picker appears without a focus.
  */
 export function useFontEnumeration(): FontEnumerationState {
+  useEffect(probeAlreadyGrantedPermission, []);
   return useSyncExternalStore(subscribeToEnumeration, readEnumerationState);
 }
 
