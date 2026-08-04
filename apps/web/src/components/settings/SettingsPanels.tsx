@@ -1246,7 +1246,7 @@ function FontSettingsGroup() {
       {isMacPlatform(navigator.platform) ? (
         <SettingsRow
           {...searchableSetting("font-smoothing")}
-          description="Use native macOS font anti-aliasing."
+          description="Render text with thinner grayscale anti-aliasing instead of macOS's heavier default."
           resetAction={
             settings.fontSmoothing !== DEFAULT_UNIFIED_SETTINGS.fontSmoothing ? (
               <SettingResetButton
@@ -1261,7 +1261,7 @@ function FontSettingsGroup() {
             <Switch
               checked={settings.fontSmoothing}
               onCheckedChange={(checked) => updateSettings({ fontSmoothing: Boolean(checked) })}
-              aria-label="Use native macOS font anti-aliasing"
+              aria-label="Font smoothing"
             />
           }
         />

@@ -57,7 +57,7 @@ export interface AppearanceFontPreferences {
   readonly sizeInterface: number;
   readonly sizePrompt: number;
   readonly sizeCode: number;
-  /** Native macOS anti-aliasing; false forces grayscale `antialiased`. */
+  /** Grayscale `antialiased` rendering; false keeps the heavier platform default. */
   readonly smoothing: boolean;
 }
 
@@ -96,11 +96,13 @@ export function applyAppearanceFontVariables(
   root.style.setProperty("--diffs-font-size", `${code}px`);
 
   // Inherited from the root; only macOS engines honor the property, so no
-  // platform gate is needed here.
+  // platform gate is needed here. Smoothing on means grayscale `antialiased`
+  // (thinner strokes); off restores the platform default, which macOS renders
+  // with heavier stem darkening.
   if (preferences.smoothing) {
-    root.style.removeProperty("-webkit-font-smoothing");
-  } else {
     root.style.setProperty("-webkit-font-smoothing", "antialiased");
+  } else {
+    root.style.removeProperty("-webkit-font-smoothing");
   }
 }
 
