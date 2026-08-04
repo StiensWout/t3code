@@ -18,11 +18,10 @@ import {
 } from "@t3tools/contracts";
 
 export const DEFAULT_SANS_FONT_STACK =
-  '"DM Sans Variable", "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, ' +
-  "sans-serif";
+  '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif';
 
 export const DEFAULT_CODE_FONT_STACK =
-  '"SF Mono", "SFMono-Regular", "JetBrains Mono", Consolas, "Liberation Mono", Menlo, monospace';
+  'ui-monospace, "SF Mono", "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace';
 
 function quoteFontFamilyName(name: string): string {
   const bare = name.trim();
@@ -58,6 +57,8 @@ export interface AppearanceFontPreferences {
   readonly sizeInterface: number;
   readonly sizePrompt: number;
   readonly sizeCode: number;
+  /** Native macOS anti-aliasing; false forces grayscale `antialiased`. */
+  readonly smoothing: boolean;
 }
 
 /**
@@ -93,6 +94,14 @@ export function applyAppearanceFontVariables(
   root.style.setProperty("--font-size-code", `${code}px`);
   // The @pierre/diffs surfaces read their own hook for code text.
   root.style.setProperty("--diffs-font-size", `${code}px`);
+
+  // Inherited from the root; only macOS engines honor the property, so no
+  // platform gate is needed here.
+  if (preferences.smoothing) {
+    root.style.removeProperty("-webkit-font-smoothing");
+  } else {
+    root.style.setProperty("-webkit-font-smoothing", "antialiased");
+  }
 }
 
 function clampFontSize(value: number, minimum: number, maximum: number, fallback: number): number {
@@ -181,9 +190,6 @@ export function isMonospaceFamily(family: string): boolean {
   }
 }
 
-/** Bundled webfonts count as present even before document.fonts settles. */
-const BUNDLED_FAMILIES = new Set(["DM Sans Variable", "DM Sans", "JetBrains Mono"]);
-
 /**
  * The first family of a default stack that will actually render - what the
  * "Default" choice means on this machine. Generic keywords are skipped: they
@@ -201,11 +207,7 @@ export function resolveDefaultFamilyLabel(stack: string): string | null {
     ) {
       continue;
     }
-    if (BUNDLED_FAMILIES.has(family) || isFontFamilyAvailable(family)) {
-      // The bundled face registers under its variable-font name; the plain
-      // family name is what users know it as.
-      return family.replace(/ Variable$/, "");
-    }
+    if (isFontFamilyAvailable(family)) return family;
   }
   return null;
 }

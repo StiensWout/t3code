@@ -36,12 +36,9 @@ describe("cssFontFamilies", () => {
 });
 
 describe("resolveDefaultFamilyLabel", () => {
-  it("names the first renderable family, preferring bundled faces", () => {
-    expect(resolveDefaultFamilyLabel(DEFAULT_SANS_FONT_STACK)).toBe("DM Sans");
-  });
-
   it("skips generic keywords and returns null for a stack of only generics", () => {
     expect(resolveDefaultFamilyLabel("system-ui, sans-serif")).toBeNull();
+    expect(resolveDefaultFamilyLabel("ui-monospace, monospace")).toBeNull();
   });
 });
 

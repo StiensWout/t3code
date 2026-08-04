@@ -76,6 +76,11 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/appearance",
   },
   {
+    id: "font-smoothing",
+    title: "Font smoothing",
+    to: "/settings/appearance",
+  },
+  {
     id: "word-wrap",
     title: "Word wrap",
     to: "/settings/appearance",

@@ -161,6 +161,7 @@ function FontAppearanceSync() {
   const fontSizeInterface = useClientSettings((settings) => settings.fontSizeInterface);
   const fontSizePrompt = useClientSettings((settings) => settings.fontSizePrompt);
   const fontSizeCode = useClientSettings((settings) => settings.fontSizeCode);
+  const fontSmoothing = useClientSettings((settings) => settings.fontSmoothing);
 
   useEffect(() => {
     applyAppearanceFontVariables(document.documentElement, {
@@ -170,6 +171,7 @@ function FontAppearanceSync() {
       sizeInterface: fontSizeInterface,
       sizePrompt: fontSizePrompt,
       sizeCode: fontSizeCode,
+      smoothing: fontSmoothing,
     });
   }, [
     fontFamilyCode,
@@ -178,6 +180,7 @@ function FontAppearanceSync() {
     fontSizeCode,
     fontSizeInterface,
     fontSizePrompt,
+    fontSmoothing,
   ]);
 
   return null;

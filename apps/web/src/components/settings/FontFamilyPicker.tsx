@@ -82,7 +82,7 @@ export function FontFamilyPicker({
   onSelect,
 }: {
   ariaLabel: string;
-  /** What an unset preference renders as, e.g. "DM Sans". */
+  /** What an unset preference renders as, e.g. "Menlo". */
   defaultFamily: string;
   /** Committed family name; empty string means the default is in use. */
   selectedFamily: string;

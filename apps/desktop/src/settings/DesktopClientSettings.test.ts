@@ -28,6 +28,7 @@ const clientSettings: ClientSettings = {
   fontSizeInterface: 16,
   fontSizePrompt: 14,
   fontSizeTerminal: 12,
+  fontSmoothing: true,
   glassOpacity: 80,
   providerModelPreferences: {},
   sidebarAutoSettleAfterDays: 3,

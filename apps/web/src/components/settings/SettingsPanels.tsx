@@ -85,6 +85,7 @@ import {
   sortProviderInstanceEntries,
 } from "../../providerInstances";
 import { ensureLocalApi, readLocalApi } from "../../localApi";
+import { isMacPlatform } from "../../lib/utils";
 import {
   primaryServerObservabilityAtom,
   primaryServerProvidersAtom,
@@ -1162,8 +1163,8 @@ function FontSettingsGroup() {
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
   // An unset preference shows the font it resolves to on this machine; the
-  // stacks are platform-dependent (SF Mono on macOS when installed, the
-  // bundled JetBrains Mono elsewhere), so the name is probed, not hardcoded.
+  // default stacks are the platform's own faces, so the name is probed, not
+  // hardcoded.
   const defaultFamilies = useMemo(
     () => ({
       sans: resolveDefaultFamilyLabel(DEFAULT_SANS_FONT_STACK) ?? "System default",
@@ -1242,6 +1243,29 @@ function FontSettingsGroup() {
           />
         }
       />
+      {isMacPlatform(navigator.platform) ? (
+        <SettingsRow
+          {...searchableSetting("font-smoothing")}
+          description="Use native macOS font anti-aliasing."
+          resetAction={
+            settings.fontSmoothing !== DEFAULT_UNIFIED_SETTINGS.fontSmoothing ? (
+              <SettingResetButton
+                label="font smoothing"
+                onClick={() =>
+                  updateSettings({ fontSmoothing: DEFAULT_UNIFIED_SETTINGS.fontSmoothing })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.fontSmoothing}
+              onCheckedChange={(checked) => updateSettings({ fontSmoothing: Boolean(checked) })}
+              aria-label="Use native macOS font anti-aliasing"
+            />
+          }
+        />
+      ) : null}
     </>
   );
 }
@@ -1260,7 +1284,7 @@ function FontFamilySettingsRow({
   id?: string;
   title: string;
   description: string;
-  /** What an unset preference renders as, e.g. "DM Sans". */
+  /** What an unset preference renders as, e.g. "Menlo". */
   defaultFamily: string;
   preview?: ReactNode;
   value: string;
