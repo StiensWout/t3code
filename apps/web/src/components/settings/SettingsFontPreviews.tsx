@@ -1,13 +1,9 @@
-import { FileDiff } from "@pierre/diffs/react";
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { preloadPatchFile } from "@pierre/diffs/ssr";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "../ComposerPromptEditor";
 import { terminalThemeFromApp } from "../ThreadTerminalDrawer";
 import { useTheme } from "../../hooks/useTheme";
-import {
-  getRenderablePatch,
-  resolveDiffThemeName,
-  resolveFileDiffPath,
-} from "../../lib/diffRendering";
+import { resolveDiffThemeName, type DiffThemeName } from "../../lib/diffRendering";
 import { GhosttyTerminalSurface } from "~/terminal/ghostty/surface";
 
 // The font previews are the real surfaces, not lookalikes: the composer's
@@ -69,37 +65,56 @@ const DIFF_PREVIEW_PATCH = [
   "",
 ].join("\n");
 
-/**
- * The diff panel's file diff, rendered by its real pipeline. The one-off
- * worker pool is not worth it for a three-line patch, so the diff renders on
- * the main thread.
- */
+// Rendered once per theme through the SSR pipeline, which always awaits the
+// shared highlighter before producing HTML. The interactive FileDiff's mount
+// lifecycle can race that highlighter when the typography views remount it
+// (toggling Advanced) and lock in an unhighlighted frame; a static preview
+// needs none of that lifecycle, so it uses the deterministic renderer and
+// injects the finished HTML into a shadow root, exactly as FileDiff would.
+const diffPreviewHtmlByTheme = new Map<DiffThemeName, Promise<readonly string[]>>();
+
+function loadDiffPreviewHtml(theme: DiffThemeName): Promise<readonly string[]> {
+  let promise = diffPreviewHtmlByTheme.get(theme);
+  if (promise === undefined) {
+    promise = preloadPatchFile({
+      patch: DIFF_PREVIEW_PATCH,
+      options: { diffStyle: "unified", theme },
+    }).then((results) => results.map((result) => result.prerenderedHTML));
+    diffPreviewHtmlByTheme.set(theme, promise);
+  }
+  return promise;
+}
+
+function StaticDiffHtml({ html }: { html: string }) {
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const host = hostRef.current;
+    if (host === null) return;
+    const shadow = host.shadowRoot ?? host.attachShadow({ mode: "open" });
+    shadow.innerHTML = html;
+  }, [html]);
+  return <div ref={hostRef} />;
+}
+
+/** The diff panel's file diff, statically rendered by its real pipeline. */
 export function CodeFontPreview() {
   const { resolvedTheme } = useTheme();
-  // Parse per mount: the parse cache returns shared mutable file objects, and
-  // a FileDiff instance keys its render/highlight bookkeeping on them. Two
-  // mounts of this preview (the simple and advanced typography views) handing
-  // the same objects to different FileDiff instances can leave a remounted
-  // diff convinced it is already highlighted, rendering plain text forever.
-  const instanceId = useId();
-  const renderablePatch = useMemo(
-    () => getRenderablePatch(DIFF_PREVIEW_PATCH, `settings-font-preview:${instanceId}`),
-    [instanceId],
-  );
-  if (renderablePatch?.kind !== "files") return null;
+  const themeName = resolveDiffThemeName(resolvedTheme);
+  const [htmlByFile, setHtmlByFile] = useState<readonly string[] | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void loadDiffPreviewHtml(themeName).then((html) => {
+      if (!cancelled) setHtmlByFile(html);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [themeName]);
+  if (htmlByFile === null) return null;
   return (
     <div className="mt-1 mb-2 space-y-2">
-      {renderablePatch.files.map((fileDiff) => (
-        <FileDiff
-          key={resolveFileDiffPath(fileDiff)}
-          fileDiff={fileDiff}
-          disableWorkerPool
-          options={{
-            collapsed: false,
-            diffStyle: "unified",
-            theme: resolveDiffThemeName(resolvedTheme),
-          }}
-        />
+      {htmlByFile.map((html, index) => (
+        <StaticDiffHtml key={index} html={html} />
       ))}
     </div>
   );
