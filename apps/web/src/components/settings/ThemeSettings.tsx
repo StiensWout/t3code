@@ -1454,25 +1454,32 @@ export function ThemeLibrary({
 
   const handleFollowSystemChange = useCallback(
     (checked: boolean) => {
-      const previousTheme = theme;
+      const previousFollowSystem = followSystem;
       const nextTheme = checked
         ? (activeTheme?.id ?? "system")
         : activeTheme
           ? themePreferenceForMode(activeTheme, initialAppearance)
           : initialAppearance;
 
-      // Write the theme first, then commit the follow-system flag. If the
-      // second write fails, restore the original theme preference so the two
-      // stored values cannot drift apart.
-      if (!setTheme(nextTheme)) {
+      // Commit Follow system first so setTheme applies the next palette using
+      // the new mode. If the theme write fails, restore the original flag so
+      // the two stored values cannot drift apart.
+      if (!setFollowSystem(checked)) {
         notifyThemeSaveFailure();
         return;
       }
-      if (setFollowSystem(checked)) return;
-      setTheme(previousTheme);
+      if (setTheme(nextTheme)) return;
+      setFollowSystem(previousFollowSystem);
       notifyThemeSaveFailure();
     },
-    [activeTheme, initialAppearance, notifyThemeSaveFailure, setFollowSystem, setTheme, theme],
+    [
+      activeTheme,
+      followSystem,
+      initialAppearance,
+      notifyThemeSaveFailure,
+      setFollowSystem,
+      setTheme,
+    ],
   );
 
   const handleRemoveTheme = useCallback((customTheme: ThemeDefinition) => {
