@@ -1,11 +1,7 @@
 import { LegendList } from "@legendapp/list/react";
 import { CheckIcon, ChevronDownIcon, SearchIcon } from "lucide-react";
-import { useMemo, useState } from "react";
-import {
-  type InstalledFontFamiliesResult,
-  isMonospaceFamily,
-  queryInstalledFontFamilies,
-} from "../../appearanceFonts";
+import { useMemo, useState, useSyncExternalStore } from "react";
+import { isMonospaceFamily, queryInstalledFontFamilies } from "../../appearanceFonts";
 import {
   Combobox,
   ComboboxEmpty,
@@ -18,55 +14,96 @@ import {
 
 const DEFAULT_FONT_VALUE = "__default__";
 
-/**
- * Whether the engine can enumerate installed fonts (Local Font Access API -
- * Chromium and Electron). Rows fall back to a plain family-name input
- * elsewhere.
- */
-export function supportsFontEnumeration(): boolean {
+function supportsFontEnumeration(): boolean {
   return (
     typeof window !== "undefined" &&
     typeof (window as { queryLocalFonts?: unknown }).queryLocalFonts === "function"
   );
 }
 
+type FontEnumerationState =
+  | { readonly status: "unknown" }
+  | { readonly status: "granted"; readonly families: readonly string[] }
+  | { readonly status: "unavailable" };
+
+// Shared across every row: once one picker learns the fonts (or learns the
+// permission is blocked), the others follow without re-querying — and the
+// rows can swap to the plain-input control together.
+let enumerationState: FontEnumerationState = supportsFontEnumeration()
+  ? { status: "unknown" }
+  : { status: "unavailable" };
+const enumerationListeners = new Set<() => void>();
+
+function subscribeToEnumeration(listener: () => void): () => void {
+  enumerationListeners.add(listener);
+  return () => enumerationListeners.delete(listener);
+}
+
+function readEnumerationState(): FontEnumerationState {
+  return enumerationState;
+}
+
+let enumerationLoad: Promise<void> | null = null;
+
+/** Query installed fonts; call from a user gesture (the permission prompt needs one). */
+export function discoverInstalledFonts(): void {
+  if (enumerationState.status !== "unknown" || enumerationLoad !== null) return;
+  enumerationLoad = queryInstalledFontFamilies().then((result) => {
+    enumerationState =
+      result.status === "granted"
+        ? { status: "granted", families: result.families }
+        : { status: "unavailable" };
+    enumerationLoad = null;
+    for (const listener of enumerationListeners) listener();
+  });
+}
+
+/**
+ * Whether the engine can list installed fonts (Local Font Access API —
+ * Chromium and Electron). "unknown" until a row's input is focused and
+ * discovery resolves the permission; rows render a plain family-name input
+ * until the state is known granted, then upgrade to the picker.
+ */
+export function useFontEnumeration(): FontEnumerationState {
+  return useSyncExternalStore(subscribeToEnumeration, readEnumerationState);
+}
+
 /**
  * A searchable picker over every installed family, the way native editors
- * list system fonts. Enumeration happens on open - that click is the user
- * gesture the local-fonts permission prompt requires.
+ * list system fonts. The trigger always names the font in use: the committed
+ * family, or what the default stack resolves to on this machine.
  */
 export function FontFamilyPicker({
   ariaLabel,
-  defaultLabel = "Default",
+  defaultFamily,
   selectedFamily,
   requireMonospace = false,
+  initialOpen = false,
   onSelect,
 }: {
   ariaLabel: string;
-  /** What the Default choice reads as, e.g. "Default (SF Mono)". */
-  defaultLabel?: string;
-  /** Committed family name; empty string means the built-in default. */
+  /** What an unset preference renders as, e.g. "DM Sans". */
+  defaultFamily: string;
+  /** Committed family name; empty string means the default is in use. */
   selectedFamily: string;
   requireMonospace?: boolean;
+  /** Open the popup on mount — set when the control upgrades under focus. */
+  initialOpen?: boolean;
   onSelect: (family: string) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(initialOpen);
   const [query, setQuery] = useState("");
-  const [installed, setInstalled] = useState<InstalledFontFamiliesResult | null>(null);
+  const enumeration = useFontEnumeration();
 
   const handleOpenChange = (nextOpen: boolean) => {
     setOpen(nextOpen);
-    if (!nextOpen) return;
-    setQuery("");
-    if (installed?.status !== "granted") {
-      void queryInstalledFontFamilies().then(setInstalled);
-    }
+    if (nextOpen) setQuery("");
   };
 
   const families = useMemo(() => {
-    if (installed?.status !== "granted") return [];
-    return requireMonospace ? installed.families.filter(isMonospaceFamily) : installed.families;
-  }, [installed, requireMonospace]);
+    if (enumeration.status !== "granted") return [];
+    return requireMonospace ? enumeration.families.filter(isMonospaceFamily) : enumeration.families;
+  }, [enumeration, requireMonospace]);
 
   const items = useMemo(() => {
     const trimmedQuery = query.trim().toLowerCase();
@@ -87,34 +124,33 @@ export function FontFamilyPicker({
     onSelect(value === DEFAULT_FONT_VALUE ? "" : value);
   };
 
-  const renderItem = (item: string, index: number) => (
-    <ComboboxItem
-      hideIndicator
-      index={index}
-      key={item}
-      value={item}
-      onClick={() => handlePick(item)}
-    >
-      <div className="flex w-full min-w-0 items-center justify-between gap-2">
-        <span
-          className="min-w-0 truncate"
-          style={item === DEFAULT_FONT_VALUE ? undefined : { fontFamily: item }}
-        >
-          {item === DEFAULT_FONT_VALUE ? defaultLabel : item}
-        </span>
-        {item === selectedValue ? (
-          <CheckIcon className="size-3.5 shrink-0 text-muted-foreground" />
-        ) : null}
-      </div>
-    </ComboboxItem>
-  );
-
-  const statusNotice =
-    installed?.status === "denied"
-      ? "Font access was declined in the browser."
-      : open && installed === null
-        ? "Reading installed fonts…"
-        : null;
+  const renderItem = (item: string, index: number) => {
+    const isDefault = item === DEFAULT_FONT_VALUE;
+    const family = isDefault ? defaultFamily : item;
+    return (
+      <ComboboxItem
+        hideIndicator
+        index={index}
+        key={item}
+        value={item}
+        onClick={() => handlePick(item)}
+      >
+        <div className="flex w-full min-w-0 items-center justify-between gap-2">
+          <span className="min-w-0 truncate" style={{ fontFamily: family }}>
+            {family}
+          </span>
+          <span className="flex shrink-0 items-center gap-1.5">
+            {isDefault ? (
+              <span className="text-[10px] text-muted-foreground/60">default</span>
+            ) : null}
+            {item === selectedValue ? (
+              <CheckIcon className="size-3.5 text-muted-foreground" />
+            ) : null}
+          </span>
+        </div>
+      </ComboboxItem>
+    );
+  };
 
   return (
     <Combobox
@@ -131,7 +167,7 @@ export function FontFamilyPicker({
         className="relative inline-flex min-h-9 w-full min-w-36 cursor-pointer select-none items-center justify-between gap-2 rounded-lg border border-input bg-background px-[calc(--spacing(3)-1px)] text-left text-base text-foreground shadow-xs/5 outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/24 sm:min-h-8 sm:text-sm dark:bg-input/32"
       >
         <span className="min-w-0 truncate">
-          {selectedFamily.length === 0 ? defaultLabel : selectedFamily}
+          {selectedFamily.length === 0 ? defaultFamily : selectedFamily}
         </span>
         <ChevronDownIcon className="-me-1 size-3 shrink-0 text-muted-foreground opacity-50" />
       </ComboboxTrigger>
@@ -168,11 +204,6 @@ export function FontFamilyPicker({
               />
             </ComboboxListVirtualized>
           </div>
-          {statusNotice ? (
-            <div className="shrink-0 border-t border-border/60 px-3 py-1.5 text-[11px] text-muted-foreground/70">
-              {statusNotice}
-            </div>
-          ) : null}
         </div>
       </ComboboxPopup>
     </Combobox>

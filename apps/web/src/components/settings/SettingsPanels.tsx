@@ -115,7 +115,7 @@ import {
 } from "../../appearanceFonts";
 import { DEFAULT_TERMINAL_FONT_FAMILY } from "~/terminal/ghostty/surface";
 import { CodeFontPreview, PromptFontPreview, TerminalFontPreview } from "./SettingsFontPreviews";
-import { FontFamilyPicker, supportsFontEnumeration } from "./FontFamilyPicker";
+import { discoverInstalledFonts, FontFamilyPicker, useFontEnumeration } from "./FontFamilyPicker";
 import {
   NumberField,
   NumberFieldDecrement,
@@ -1161,27 +1161,25 @@ export function AppearanceSettingsPanel() {
 function FontSettingsGroup() {
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
-  // Spell out what "Default" resolves to on this machine; the stacks are
-  // platform-dependent (SF Mono on macOS, the bundled JetBrains Mono
-  // elsewhere), so the label is probed rather than hardcoded.
-  const defaultLabels = useMemo(() => {
-    const sans = resolveDefaultFamilyLabel(DEFAULT_SANS_FONT_STACK);
-    const code = resolveDefaultFamilyLabel(DEFAULT_CODE_FONT_STACK);
-    const terminal = resolveDefaultFamilyLabel(DEFAULT_TERMINAL_FONT_FAMILY);
-    return {
-      interface: sans === null ? "Default" : `Default (${sans})`,
-      // The composer inherits whatever the interface preference resolves to.
-      prompt: "Default (interface font)",
-      code: code === null ? "Default" : `Default (${code})`,
-      terminal: terminal === null ? "Default" : `Default (${terminal})`,
-    };
-  }, []);
+  // An unset preference shows the font it resolves to on this machine; the
+  // stacks are platform-dependent (SF Mono on macOS when installed, the
+  // bundled JetBrains Mono elsewhere), so the name is probed, not hardcoded.
+  const defaultFamilies = useMemo(
+    () => ({
+      sans: resolveDefaultFamilyLabel(DEFAULT_SANS_FONT_STACK) ?? "System default",
+      code: resolveDefaultFamilyLabel(DEFAULT_CODE_FONT_STACK) ?? "System monospace",
+      terminal: resolveDefaultFamilyLabel(DEFAULT_TERMINAL_FONT_FAMILY) ?? "System monospace",
+    }),
+    [],
+  );
+  // The composer inherits whatever the interface preference resolves to.
+  const interfaceFamily = settings.fontFamilySans.trim() || defaultFamilies.sans;
   return (
     <>
       <FontFamilySettingsRow
         {...searchableSetting("interface-font")}
         description="Everything outside code blocks and the terminal."
-        defaultLabel={defaultLabels.interface}
+        defaultFamily={defaultFamilies.sans}
         value={settings.fontFamilySans}
         onValueChange={(fontFamilySans) => updateSettings({ fontFamilySans })}
         size={{
@@ -1195,7 +1193,7 @@ function FontSettingsGroup() {
       <FontFamilySettingsRow
         {...searchableSetting("prompt-font")}
         description="Only the box you write prompts in. Mono works well here."
-        defaultLabel={defaultLabels.prompt}
+        defaultFamily={interfaceFamily}
         value={settings.fontFamilyComposer}
         onValueChange={(fontFamilyComposer) => updateSettings({ fontFamilyComposer })}
         size={{
@@ -1210,7 +1208,7 @@ function FontSettingsGroup() {
       <FontFamilySettingsRow
         {...searchableSetting("code-font")}
         description="Code blocks, diffs, and file previews."
-        defaultLabel={defaultLabels.code}
+        defaultFamily={defaultFamilies.code}
         value={settings.fontFamilyCode}
         onValueChange={(fontFamilyCode) => updateSettings({ fontFamilyCode })}
         requireMonospace
@@ -1226,7 +1224,7 @@ function FontSettingsGroup() {
       <FontFamilySettingsRow
         {...searchableSetting("terminal-font")}
         description="Terminal output."
-        defaultLabel={defaultLabels.terminal}
+        defaultFamily={defaultFamilies.terminal}
         value={settings.fontFamilyTerminal}
         onValueChange={(fontFamilyTerminal) => updateSettings({ fontFamilyTerminal })}
         requireMonospace
@@ -1252,7 +1250,7 @@ function FontFamilySettingsRow({
   id,
   title,
   description,
-  defaultLabel,
+  defaultFamily,
   preview,
   value,
   onValueChange,
@@ -1262,7 +1260,8 @@ function FontFamilySettingsRow({
   id?: string;
   title: string;
   description: string;
-  defaultLabel: string;
+  /** What an unset preference renders as, e.g. "DM Sans". */
+  defaultFamily: string;
   preview?: ReactNode;
   value: string;
   onValueChange: (value: string) => void;
@@ -1321,55 +1320,70 @@ function FontFamilySettingsRow({
         onClick={() => onValueChange("")}
       />
     ) : null;
-  const familyControl = supportsFontEnumeration() ? (
-    <FontFamilyPicker
-      ariaLabel={`${title} family`}
-      defaultLabel={defaultLabel}
-      selectedFamily={trimmed}
-      requireMonospace={requireMonospace}
-      onSelect={onValueChange}
-    />
-  ) : (
-    <Input
-      aria-label={`${title} family`}
-      aria-invalid={draftPending || undefined}
-      autoCapitalize="off"
-      autoComplete="off"
-      className="min-w-0 flex-1"
-      maxLength={200}
-      onBlur={flushDraft}
-      onChange={(event) => {
-        const next = event.currentTarget.value;
-        setDraft(next);
-        setDraftSettled(false);
-        if (commitTimerRef.current !== null) {
-          window.clearTimeout(commitTimerRef.current);
-        }
-        commitTimerRef.current = window.setTimeout(() => {
-          commitTimerRef.current = null;
-          commitDraft(next);
-        }, 400);
-      }}
-      onKeyDown={(event) => {
-        if (event.key === "Enter") flushDraft();
-        if (event.key === "Escape") {
-          // Discard uncommitted typing without closing the settings page,
-          // which is what an unhandled Escape does.
-          event.preventDefault();
-          event.stopPropagation();
+  const fontEnumeration = useFontEnumeration();
+  // Everyone starts on the plain input; focusing it is the user gesture that
+  // runs font discovery. Where the engine can enumerate, the control then
+  // upgrades to the picker - popped open when the swap happens under focus,
+  // so the interaction continues without a second click.
+  const inputFocusedRef = useRef(false);
+  const familyControl =
+    fontEnumeration.status === "granted" ? (
+      <FontFamilyPicker
+        ariaLabel={`${title} family`}
+        defaultFamily={defaultFamily}
+        selectedFamily={trimmed}
+        requireMonospace={requireMonospace}
+        initialOpen={inputFocusedRef.current}
+        onSelect={onValueChange}
+      />
+    ) : (
+      <Input
+        aria-label={`${title} family`}
+        aria-invalid={draftPending || undefined}
+        autoCapitalize="off"
+        autoComplete="off"
+        className="min-w-0 flex-1"
+        maxLength={200}
+        onFocus={() => {
+          inputFocusedRef.current = true;
+          discoverInstalledFonts();
+        }}
+        onBlur={() => {
+          inputFocusedRef.current = false;
+          flushDraft();
+        }}
+        onChange={(event) => {
+          const next = event.currentTarget.value;
+          setDraft(next);
+          setDraftSettled(false);
           if (commitTimerRef.current !== null) {
             window.clearTimeout(commitTimerRef.current);
-            commitTimerRef.current = null;
           }
-          setDraft(value);
-          setDraftSettled(true);
-        }
-      }}
-      placeholder="Font family name"
-      spellCheck={false}
-      value={draft}
-    />
-  );
+          commitTimerRef.current = window.setTimeout(() => {
+            commitTimerRef.current = null;
+            commitDraft(next);
+          }, 400);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") flushDraft();
+          if (event.key === "Escape") {
+            // Discard uncommitted typing without closing the settings page,
+            // which is what an unhandled Escape does.
+            event.preventDefault();
+            event.stopPropagation();
+            if (commitTimerRef.current !== null) {
+              window.clearTimeout(commitTimerRef.current);
+              commitTimerRef.current = null;
+            }
+            setDraft(value);
+            setDraftSettled(true);
+          }
+        }}
+        placeholder={defaultFamily}
+        spellCheck={false}
+        value={draft}
+      />
+    );
   const control = (
     <div className="flex w-full items-center gap-2 sm:w-auto">
       <div className="min-w-0 flex-1 sm:w-44 sm:flex-none">{familyControl}</div>
