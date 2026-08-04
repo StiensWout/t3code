@@ -20,8 +20,10 @@ import {
 export const DEFAULT_SANS_FONT_STACK =
   '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif';
 
+// Concrete names first: some engines alias `ui-monospace` to the
+// proportional system UI font, which would break every code surface.
 export const DEFAULT_CODE_FONT_STACK =
-  'ui-monospace, "SF Mono", "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace';
+  '"SF Mono", "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace';
 
 function quoteFontFamilyName(name: string): string {
   const bare = name.trim();
@@ -192,11 +194,98 @@ export function isMonospaceFamily(family: string): boolean {
   }
 }
 
+// Nameable faces the platform generics commonly map to, likeliest first.
+// Pixel-comparing a generic against these names the actual face; Apple's own
+// UI fonts are deliberately not CSS-nameable, so a miss on an Apple platform
+// identifies San Francisco itself.
+const SANS_GENERIC_CANDIDATES = [
+  "Segoe UI",
+  "Roboto",
+  "Noto Sans",
+  "Ubuntu",
+  "Cantarell",
+  "DejaVu Sans",
+  "Liberation Sans",
+  "Helvetica Neue",
+  "Arial",
+] as const;
+const MONO_GENERIC_CANDIDATES = [
+  "Menlo",
+  "Consolas",
+  "Cascadia Mono",
+  "DejaVu Sans Mono",
+  "Ubuntu Mono",
+  "Liberation Mono",
+  "Noto Sans Mono",
+  "Roboto Mono",
+  "Monaco",
+  "Courier New",
+] as const;
+
+const GENERIC_PROBE_TEXT = "RagIl10O@ fjord quiz";
+
+/**
+ * Advance width of the probe text laid out by the DOM - not canvas, whose
+ * generic-family mapping diverges from real rendering (this engine draws
+ * `ui-monospace` as the proportional UI font on canvas but not in CSS).
+ * Identical widths at this size mean the same face for practical purposes.
+ */
+function measureDomProbeWidth(fontFamily: string): number | null {
+  try {
+    const body = document.body;
+    if (!body) return null;
+    const span = document.createElement("span");
+    span.style.cssText =
+      "position:absolute;left:-9999px;top:0;visibility:hidden;white-space:pre;font-size:100px;";
+    span.style.fontFamily = fontFamily;
+    span.textContent = GENERIC_PROBE_TEXT;
+    body.appendChild(span);
+    const width = span.getBoundingClientRect().width;
+    span.remove();
+    return width > 0 ? width : null;
+  } catch {
+    return null;
+  }
+}
+
+function widthsMatch(left: number, right: number): boolean {
+  return Math.abs(left - right) < 0.01;
+}
+
+/**
+ * Name the concrete face a generic keyword renders as, by measuring the
+ * generic against nameable candidates. Null when the face cannot be
+ * identified (and the platform gives no definitional answer).
+ */
+function resolveGenericFamilyLabel(generic: string): string | null {
+  const lower = generic.toLowerCase();
+  if (lower === "serif") return null;
+  const monoLike = lower === "ui-monospace" || lower === "monospace";
+  const genericWidth = measureDomProbeWidth(generic);
+  if (genericWidth === null) return null;
+  for (const candidate of monoLike ? MONO_GENERIC_CANDIDATES : SANS_GENERIC_CANDIDATES) {
+    if (!isFontFamilyAvailable(candidate)) continue;
+    const candidateWidth = measureDomProbeWidth(`"${candidate}"`);
+    if (candidateWidth !== null && widthsMatch(genericWidth, candidateWidth)) {
+      return candidate;
+    }
+  }
+  // No nameable face matched; on Apple platforms that means one of the San
+  // Francisco faces, which CSS cannot name. Comparing against -apple-system
+  // tells the UI face apart from SF Mono.
+  if (/mac|iphone|ipad|ipod/i.test(navigator.platform)) {
+    const systemWidth = measureDomProbeWidth("-apple-system");
+    if (systemWidth !== null && widthsMatch(genericWidth, systemWidth)) return "SF Pro";
+    return monoLike ? "SF Mono" : "SF Pro";
+  }
+  return null;
+}
+
 /**
  * The first family of a default stack that will actually render - what the
- * "Default" choice means on this machine. Generic keywords are skipped: they
- * always resolve but name no concrete face. Null when nothing concrete in the
- * stack is installed.
+ * "Default" choice means on this machine. Concrete names are probed for
+ * availability; generic keywords are resolved to the face they draw with
+ * where identifiable. Null when nothing can be named.
  */
 export function resolveDefaultFamilyLabel(stack: string): string | null {
   for (const raw of stack.split(",")) {
@@ -207,6 +296,8 @@ export function resolveDefaultFamilyLabel(stack: string): string | null {
         family,
       )
     ) {
+      const resolved = resolveGenericFamilyLabel(family);
+      if (resolved !== null) return resolved;
       continue;
     }
     if (isFontFamilyAvailable(family)) return family;
