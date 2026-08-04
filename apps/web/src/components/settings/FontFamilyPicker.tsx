@@ -37,11 +37,14 @@ export function supportsFontEnumeration(): boolean {
  */
 export function FontFamilyPicker({
   ariaLabel,
+  defaultLabel = "Default",
   selectedFamily,
   requireMonospace = false,
   onSelect,
 }: {
   ariaLabel: string;
+  /** What the Default choice reads as, e.g. "Default (SF Mono)". */
+  defaultLabel?: string;
   /** Committed family name; empty string means the built-in default. */
   selectedFamily: string;
   requireMonospace?: boolean;
@@ -97,7 +100,7 @@ export function FontFamilyPicker({
           className="min-w-0 truncate"
           style={item === DEFAULT_FONT_VALUE ? undefined : { fontFamily: item }}
         >
-          {item === DEFAULT_FONT_VALUE ? "Default" : item}
+          {item === DEFAULT_FONT_VALUE ? defaultLabel : item}
         </span>
         {item === selectedValue ? (
           <CheckIcon className="size-3.5 shrink-0 text-muted-foreground" />
@@ -128,7 +131,7 @@ export function FontFamilyPicker({
         className="relative inline-flex min-h-9 w-full min-w-36 cursor-pointer select-none items-center justify-between gap-2 rounded-lg border border-input bg-background px-[calc(--spacing(3)-1px)] text-left text-base text-foreground shadow-xs/5 outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/24 sm:min-h-8 sm:text-sm dark:bg-input/32"
       >
         <span className="min-w-0 truncate">
-          {selectedFamily.length === 0 ? "Default" : selectedFamily}
+          {selectedFamily.length === 0 ? defaultLabel : selectedFamily}
         </span>
         <ChevronDownIcon className="-me-1 size-3 shrink-0 text-muted-foreground opacity-50" />
       </ComboboxTrigger>

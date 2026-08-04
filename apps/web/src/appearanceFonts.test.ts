@@ -8,6 +8,7 @@ import {
   DEFAULT_SANS_FONT_STACK,
   appearanceFontStack,
   cssFontFamilies,
+  resolveDefaultFamilyLabel,
 } from "./appearanceFonts";
 
 describe("cssFontFamilies", () => {
@@ -31,6 +32,16 @@ describe("cssFontFamilies", () => {
   it("quotes names that are not single CSS idents", () => {
     expect(cssFontFamilies("3270 Nerd Font")).toBe('"3270 Nerd Font"');
     expect(cssFontFamilies("M+ 1m")).toBe('"M+ 1m"');
+  });
+});
+
+describe("resolveDefaultFamilyLabel", () => {
+  it("names the first renderable family, preferring bundled faces", () => {
+    expect(resolveDefaultFamilyLabel(DEFAULT_SANS_FONT_STACK)).toBe("DM Sans");
+  });
+
+  it("skips generic keywords and returns null for a stack of only generics", () => {
+    expect(resolveDefaultFamilyLabel("system-ui, sans-serif")).toBeNull();
   });
 });
 

@@ -181,6 +181,35 @@ export function isMonospaceFamily(family: string): boolean {
   }
 }
 
+/** Bundled webfonts count as present even before document.fonts settles. */
+const BUNDLED_FAMILIES = new Set(["DM Sans Variable", "DM Sans", "JetBrains Mono"]);
+
+/**
+ * The first family of a default stack that will actually render - what the
+ * "Default" choice means on this machine. Generic keywords are skipped: they
+ * always resolve but name no concrete face. Null when nothing concrete in the
+ * stack is installed.
+ */
+export function resolveDefaultFamilyLabel(stack: string): string | null {
+  for (const raw of stack.split(",")) {
+    const family = raw.trim().replace(/^(['"])(.*)\1$/, "$2");
+    if (family.length === 0) continue;
+    if (
+      /^(system-ui|sans-serif|serif|monospace|ui-monospace|-apple-system|BlinkMacSystemFont)$/i.test(
+        family,
+      )
+    ) {
+      continue;
+    }
+    if (BUNDLED_FAMILIES.has(family) || isFontFamilyAvailable(family)) {
+      // The bundled face registers under its variable-font name; the plain
+      // family name is what users know it as.
+      return family.replace(/ Variable$/, "");
+    }
+  }
+  return null;
+}
+
 export interface InstalledFontFamiliesResult {
   readonly families: readonly string[];
   /**

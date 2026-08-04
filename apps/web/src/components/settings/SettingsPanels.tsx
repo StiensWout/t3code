@@ -106,7 +106,14 @@ import {
 } from "../ui/dialog";
 import { DraftInput } from "../ui/draft-input";
 import { Input } from "../ui/input";
-import { isFontFamilyAvailable, isMonospaceFamily } from "../../appearanceFonts";
+import {
+  DEFAULT_CODE_FONT_STACK,
+  DEFAULT_SANS_FONT_STACK,
+  isFontFamilyAvailable,
+  isMonospaceFamily,
+  resolveDefaultFamilyLabel,
+} from "../../appearanceFonts";
+import { DEFAULT_TERMINAL_FONT_FAMILY } from "~/terminal/ghostty/surface";
 import { CodeFontPreview, PromptFontPreview, TerminalFontPreview } from "./SettingsFontPreviews";
 import { FontFamilyPicker, supportsFontEnumeration } from "./FontFamilyPicker";
 import {
@@ -1154,11 +1161,27 @@ export function AppearanceSettingsPanel() {
 function FontSettingsGroup() {
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
+  // Spell out what "Default" resolves to on this machine; the stacks are
+  // platform-dependent (SF Mono on macOS, the bundled JetBrains Mono
+  // elsewhere), so the label is probed rather than hardcoded.
+  const defaultLabels = useMemo(() => {
+    const sans = resolveDefaultFamilyLabel(DEFAULT_SANS_FONT_STACK);
+    const code = resolveDefaultFamilyLabel(DEFAULT_CODE_FONT_STACK);
+    const terminal = resolveDefaultFamilyLabel(DEFAULT_TERMINAL_FONT_FAMILY);
+    return {
+      interface: sans === null ? "Default" : `Default (${sans})`,
+      // The composer inherits whatever the interface preference resolves to.
+      prompt: "Default (interface font)",
+      code: code === null ? "Default" : `Default (${code})`,
+      terminal: terminal === null ? "Default" : `Default (${terminal})`,
+    };
+  }, []);
   return (
     <>
       <FontFamilySettingsRow
         {...searchableSetting("interface-font")}
         description="Everything outside code blocks and the terminal."
+        defaultLabel={defaultLabels.interface}
         value={settings.fontFamilySans}
         onValueChange={(fontFamilySans) => updateSettings({ fontFamilySans })}
         size={{
@@ -1172,6 +1195,7 @@ function FontSettingsGroup() {
       <FontFamilySettingsRow
         {...searchableSetting("prompt-font")}
         description="Only the box you write prompts in. Mono works well here."
+        defaultLabel={defaultLabels.prompt}
         value={settings.fontFamilyComposer}
         onValueChange={(fontFamilyComposer) => updateSettings({ fontFamilyComposer })}
         size={{
@@ -1186,6 +1210,7 @@ function FontSettingsGroup() {
       <FontFamilySettingsRow
         {...searchableSetting("code-font")}
         description="Code blocks, diffs, and file previews."
+        defaultLabel={defaultLabels.code}
         value={settings.fontFamilyCode}
         onValueChange={(fontFamilyCode) => updateSettings({ fontFamilyCode })}
         requireMonospace
@@ -1201,6 +1226,7 @@ function FontSettingsGroup() {
       <FontFamilySettingsRow
         {...searchableSetting("terminal-font")}
         description="Terminal output."
+        defaultLabel={defaultLabels.terminal}
         value={settings.fontFamilyTerminal}
         onValueChange={(fontFamilyTerminal) => updateSettings({ fontFamilyTerminal })}
         requireMonospace
@@ -1226,6 +1252,7 @@ function FontFamilySettingsRow({
   id,
   title,
   description,
+  defaultLabel,
   preview,
   value,
   onValueChange,
@@ -1235,6 +1262,7 @@ function FontFamilySettingsRow({
   id?: string;
   title: string;
   description: string;
+  defaultLabel: string;
   preview?: ReactNode;
   value: string;
   onValueChange: (value: string) => void;
@@ -1296,6 +1324,7 @@ function FontFamilySettingsRow({
   const familyControl = supportsFontEnumeration() ? (
     <FontFamilyPicker
       ariaLabel={`${title} family`}
+      defaultLabel={defaultLabel}
       selectedFamily={trimmed}
       requireMonospace={requireMonospace}
       onSelect={onValueChange}
