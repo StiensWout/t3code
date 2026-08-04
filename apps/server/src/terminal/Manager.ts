@@ -242,6 +242,7 @@ export interface TerminalSessionState {
   pendingProcessEvents: Array<PendingProcessEvent>;
   pendingProcessEventIndex: number;
   processEventDrainRunning: boolean;
+  processEventPublishFiberIds: Set<number>;
   exitCode: number | null;
   exitSignal: number | null;
   updatedAt: string;
@@ -1267,6 +1268,19 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       }
     });
 
+  const publishProcessEvent = (session: TerminalSessionState, event: TerminalEvent) =>
+    Effect.gen(function* () {
+      const fiberId = yield* Effect.fiberId;
+      session.processEventPublishFiberIds.add(fiberId);
+      yield* publishEvent(event).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            session.processEventPublishFiberIds.delete(fiberId);
+          }),
+        ),
+      );
+    });
+
   const historyPath = (threadId: string, terminalId: string) => {
     const threadPart = toSafeThreadId(threadId);
     if (terminalId === DEFAULT_TERMINAL_ID) {
@@ -1786,7 +1800,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
           yield* queuePersist(action.threadId, action.terminalId, action.history);
         }
 
-        yield* publishEvent({
+        yield* publishProcessEvent(session, {
           type: "output",
           threadId: action.threadId,
           terminalId: action.terminalId,
@@ -1801,7 +1815,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         threadId: action.threadId,
         terminalId: action.terminalId,
       });
-      yield* publishEvent({
+      yield* publishProcessEvent(session, {
         type: "exited",
         threadId: action.threadId,
         terminalId: action.terminalId,
@@ -2219,6 +2233,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         pendingProcessEvents: [],
         pendingProcessEventIndex: 0,
         processEventDrainRunning: false,
+        processEventPublishFiberIds: new Set(),
         exitCode: null,
         exitSignal: null,
         updatedAt: yield* nowIso,
@@ -2589,13 +2604,20 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       pid !== null &&
       (session.value.pendingProcessEvents.length > 0 || session.value.processEventDrainRunning)
     ) {
+      const currentFiberId = yield* Effect.fiberId;
       const flushed = yield* Deferred.make<void>();
       session.value.pendingProcessEvents.push({ type: "flush", deferred: flushed });
       if (!session.value.processEventDrainRunning) {
         session.value.processEventDrainRunning = true;
         runFork(drainProcessEvents(session.value, pid));
       }
-      yield* Deferred.await(flushed);
+      // A listener may synchronously call resize while the drain is delivering
+      // this output. Waiting here would make the listener wait for the drain
+      // while the drain waits for that listener. The sentinel remains queued
+      // and the drain releases it as soon as listener delivery resumes.
+      if (!session.value.processEventPublishFiberIds.has(currentFiberId)) {
+        yield* Deferred.await(flushed);
+      }
     }
   });
 
@@ -2650,6 +2672,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             pendingProcessEvents: [],
             pendingProcessEventIndex: 0,
             processEventDrainRunning: false,
+            processEventPublishFiberIds: new Set(),
             exitCode: null,
             exitSignal: null,
             updatedAt: yield* nowIso,

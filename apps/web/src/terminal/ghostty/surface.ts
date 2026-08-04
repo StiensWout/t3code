@@ -18,6 +18,8 @@ import symbolsFontUrl from "./fonts/SymbolsNerdFontMono-Regular.woff2?url";
 export const DEFAULT_TERMINAL_FONT_SIZE = 12;
 const MIN_TERMINAL_FONT_SIZE = 6;
 const MAX_TERMINAL_FONT_SIZE = 32;
+const INITIAL_TERMINAL_COLS = 1;
+const INITIAL_TERMINAL_ROWS = 1;
 // The glyph fallbacks only supply symbols the text faces are missing (powerline
 // separators, devicons, and other private-use prompt symbols), so shells
 // configured for a locally installed Nerd Font keep their prompt glyphs no
@@ -527,10 +529,9 @@ export class GhosttyTerminalSurface {
       // Metrics fall back to whichever faces are already available.
     }
     const metrics = measureGhosttyCell(context, fontSize, fontFamily);
-    const grid = terminalGridSize(mount.clientWidth, mount.clientHeight, metrics, CONTENT_PADDING);
     const core = await GhosttyTerminalCore.create(
-      grid.cols,
-      grid.rows,
+      INITIAL_TERMINAL_COLS,
+      INITIAL_TERMINAL_ROWS,
       metrics.width,
       metrics.height,
       options.theme,
@@ -600,6 +601,8 @@ export class GhosttyTerminalSurface {
   }
 
   private applyFontMetrics(): void {
+    // Keep the core on the last PTY-acknowledged grid while a newer resize is
+    // in flight. The initial sentinel is also the core's initial dimensions.
     this.metrics = measureGhosttyCell(this.context, this.fontSize, this.fontFamily);
     this.core.resize(this.cols, this.rows, this.metrics.width, this.metrics.height);
     // Cached IME textarea coordinates are stale in the new cell geometry.

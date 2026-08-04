@@ -567,6 +567,35 @@ it.layer(
     }),
   );
 
+  it.effect("does not deadlock when an output listener resizes synchronously", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager();
+      const resizeFinished = yield* Deferred.make<void>();
+      const unsubscribe = yield* manager.subscribe((event) =>
+        event.type === "output"
+          ? manager
+              .resize({
+                threadId: "thread-1",
+                terminalId: DEFAULT_TERMINAL_ID,
+                cols: 42,
+                rows: 20,
+              })
+              .pipe(Effect.tap(() => Deferred.succeed(resizeFinished, undefined)))
+          : Effect.void,
+      );
+      yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
+
+      yield* manager.open(openInput());
+      const process = ptyAdapter.processes[0];
+      expect(process).toBeDefined();
+      if (!process) return;
+
+      process.emitData("listener-triggered resize\n");
+      yield* Deferred.await(resizeFinished);
+      expect(process.resizeCalls).toEqual([{ cols: 42, rows: 20 }]);
+    }),
+  );
+
   it.effect("releases a resize flush when exit disposes the pending queue", () =>
     Effect.gen(function* () {
       const { manager, ptyAdapter, getEvents } = yield* createManager();
