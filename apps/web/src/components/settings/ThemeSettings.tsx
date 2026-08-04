@@ -1496,9 +1496,14 @@ export function ThemeLibrary({
     ) {
       return;
     }
-    removeCustomTheme(themeToRemove.id);
+    try {
+      removeCustomTheme(themeToRemove.id);
+    } catch {
+      notifyThemeSaveFailure();
+      return;
+    }
     setThemeToRemove(null);
-  }, [followSystem, initialAppearance, persistTheme, theme, themeToRemove]);
+  }, [followSystem, initialAppearance, notifyThemeSaveFailure, persistTheme, theme, themeToRemove]);
 
   const handleCreatedTheme = useCallback(
     (createdTheme: ThemeDefinition) => {
