@@ -514,6 +514,9 @@ export class GhosttyTerminalSurface {
   resetAndWrite(data: string): void {
     if (this.disposed) return;
     this.core.resetAndWrite(data);
+    // A replayed session starts from the visible phase like any other write:
+    // reattaching mid-blink must not open on an invisible cursor.
+    this.cursorOn = true;
     this.forceFullRender = true;
     this.scrollbarDirty = true;
     this.requestRender();
