@@ -396,8 +396,8 @@ export class GhosttyTerminalSurface {
   private pasteShortcutToken = 0;
   private wheelRemainder = 0;
   private dprMedia: MediaQueryList | null = null;
-  // Read live on every blink decision, so a preference change during a session
-  // takes effect without a listener.
+  // Read live on every blink decision, and watched so that dropping the
+  // preference restarts a blink cycle that has no timer left to notice it.
   private readonly reducedMotionMedia = window.matchMedia?.("(prefers-reduced-motion: reduce)");
   private inputLeft = -1;
   private inputTop = -1;
@@ -428,6 +428,7 @@ export class GhosttyTerminalSurface {
     this.resizeObserver = new ResizeObserver(() => this.fit());
     this.installEvents();
     this.watchDevicePixelRatio();
+    this.reducedMotionMedia?.addEventListener("change", this.onReducedMotionChange);
     document.fonts.addEventListener("loadingdone", this.onFontsLoaded);
     this.resizeObserver.observe(mount);
   }
@@ -555,6 +556,14 @@ export class GhosttyTerminalSurface {
     this.fit();
     this.requestRender();
   }
+
+  private readonly onReducedMotionChange = () => {
+    if (this.disposed) return;
+    // Nothing else wakes an idle steady cursor: the blink timer only reschedules
+    // from a render, and reduced motion is exactly the state that stopped it.
+    this.cursorOn = true;
+    this.requestRender();
+  };
 
   private readonly onFontsLoaded = () => {
     if (this.disposed) return;
@@ -698,6 +707,7 @@ export class GhosttyTerminalSurface {
     document.fonts.removeEventListener("loadingdone", this.onFontsLoaded);
     this.dprMedia?.removeEventListener("change", this.onDevicePixelRatioChange);
     this.dprMedia = null;
+    this.reducedMotionMedia?.removeEventListener("change", this.onReducedMotionChange);
     if (this.selectionScrollTimer !== null) window.clearInterval(this.selectionScrollTimer);
     if (this.resizeNotifyTimer !== null) {
       window.clearTimeout(this.resizeNotifyTimer);
