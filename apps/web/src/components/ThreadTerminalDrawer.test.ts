@@ -27,6 +27,13 @@ describe("TerminalWriteBarrier", () => {
     expect(released).toBe(true);
   });
 
+  it("can seed a recreated barrier with output already applied", async () => {
+    const barrier = new TerminalWriteBarrier();
+    barrier.markApplied(4);
+
+    expect(await barrier.waitFor(4)).toBe(true);
+  });
+
   it("releases an in-flight waiter when the terminal is disposed", async () => {
     const barrier = new TerminalWriteBarrier();
     let released = false;

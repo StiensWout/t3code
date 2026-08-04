@@ -414,7 +414,12 @@ export function TerminalViewport({
     });
     // The server publishes queued output before resolving this request. Wait
     // for React to commit that output before the surface applies the new grid.
-    if (result._tag === "Success" && !(await waitForTerminalWrites(result.value.sequence))) {
+    if (
+      result._tag === "Success" &&
+      !(await waitForTerminalWrites(
+        Math.max(result.value.sequence, latestSessionRef.current.sequence),
+      ))
+    ) {
       return false;
     }
     // A failed request leaves the PTY at its previous dimensions, so the
@@ -436,6 +441,7 @@ export function TerminalViewport({
     let setupTerminal: GhosttyTerminalSurface | null = null;
     let setupCleanups: Array<() => void> = [];
     const terminalWriteBarrier = new TerminalWriteBarrier();
+    terminalWriteBarrier.markApplied(latestSessionRef.current.sequence);
     terminalWriteBarrierRef.current = terminalWriteBarrier;
 
     const setup = async (): Promise<(() => void) | null> => {
