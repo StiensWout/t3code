@@ -238,6 +238,35 @@
                 : theme === "system"
                   ? "system"
                   : preferenceMode;
+          // A valid mix half for the wanted appearance takes over: it decides
+          // light vs dark even when the base theme cannot render that mode.
+          // Mirrors the runtime's halves-aware resolveThemeAppearance.
+          const wantedMode = appearanceMode === "system" ? systemMode : appearanceMode;
+          let halfThemeId = null;
+          let halfCustomTheme = null;
+          try {
+            const halvesRaw = JSON.parse(
+              window.localStorage.getItem(THEME_HALVES_STORAGE_KEY) ?? "null",
+            );
+            const candidate = isRecord(halvesRaw) ? halvesRaw[wantedMode] : null;
+            if (typeof candidate === "string") {
+              const halfBuiltIn = BUILT_IN_THEME_MODES[candidate] ?? null;
+              const halfCustom = halfBuiltIn ? null : findCustomTheme(candidate);
+              const halfModes =
+                halfBuiltIn ??
+                (halfCustom
+                  ? ["light", "dark"].filter(
+                      (mode) => mode === halfCustom.appearance || halfCustom.variants?.[mode],
+                    )
+                  : null);
+              if (halfModes && halfModes.includes(wantedMode)) {
+                halfThemeId = candidate;
+                halfCustomTheme = halfCustom;
+              }
+            }
+          } catch {
+            // A malformed mix degrades to the base preference.
+          }
           const themeMode = !isThemed
             ? null
             : appearanceMode === "system"
@@ -247,44 +276,18 @@
               : themeModes.includes(appearanceMode)
                 ? appearanceMode
                 : baseAppearance;
-          const isDark = isThemed
-            ? themeMode === "dark"
-            : appearanceMode === "system"
-              ? prefersDark
-              : appearanceMode === "dark";
-          // An automatic-mode mix can point each appearance at a different
-          // theme; the resolved appearance keeps driving light/dark and only
-          // the palette swaps. Mirrors the runtime's resolveThemeHalf.
-          let effectiveThemeId = themeId;
-          let effectiveCustomTheme = customTheme;
-          let effectiveThemeMode = themeMode;
-          let effectiveIsThemed = isThemed;
-          try {
-            const wantedMode = isDark ? "dark" : "light";
-            const halvesRaw = JSON.parse(
-              window.localStorage.getItem(THEME_HALVES_STORAGE_KEY) ?? "null",
-            );
-            const halfId = isRecord(halvesRaw) ? halvesRaw[wantedMode] : null;
-            if (typeof halfId === "string") {
-              const halfBuiltIn = BUILT_IN_THEME_MODES[halfId] ?? null;
-              const halfCustom = halfBuiltIn ? null : findCustomTheme(halfId);
-              const halfModes =
-                halfBuiltIn ??
-                (halfCustom
-                  ? ["light", "dark"].filter(
-                      (mode) => mode === halfCustom.appearance || halfCustom.variants?.[mode],
-                    )
-                  : null);
-              if (halfModes && halfModes.includes(wantedMode)) {
-                effectiveThemeId = halfId;
-                effectiveCustomTheme = halfCustom;
-                effectiveThemeMode = wantedMode;
-                effectiveIsThemed = true;
-              }
-            }
-          } catch {
-            // A malformed mix degrades to the base preference.
-          }
+          const isDark =
+            halfThemeId !== null
+              ? wantedMode === "dark"
+              : isThemed
+                ? themeMode === "dark"
+                : appearanceMode === "system"
+                  ? prefersDark
+                  : appearanceMode === "dark";
+          const effectiveIsThemed = halfThemeId !== null || isThemed;
+          const effectiveThemeId = halfThemeId ?? themeId;
+          const effectiveCustomTheme = halfThemeId !== null ? halfCustomTheme : customTheme;
+          const effectiveThemeMode = halfThemeId !== null ? wantedMode : themeMode;
           const customColors =
             effectiveIsThemed && effectiveCustomTheme
               ? effectiveThemeMode === effectiveCustomTheme.appearance

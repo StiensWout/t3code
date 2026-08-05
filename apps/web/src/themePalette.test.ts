@@ -284,6 +284,34 @@ describe("theme files", () => {
 });
 
 describe("stored theme preferences", () => {
+  it("lets a configured half unlock an appearance the base theme lacks", () => {
+    // Light-only base: without halves, dark requests fall back to light.
+    const lightOnly = parseThemeFile({
+      version: THEME_FILE_VERSION,
+      id: "paper",
+      name: "Paper",
+      appearance: "light",
+      colors: { canvas: "#f8fbff" },
+    });
+    vi.stubGlobal("window", {
+      localStorage: {
+        getItem: (key: string) =>
+          key === CUSTOM_THEMES_STORAGE_KEY ? JSON.stringify([lightOnly]) : null,
+      },
+    });
+    invalidateCustomThemes();
+    try {
+      expect(resolveThemeAppearance("paper", true, true)).toBe("light");
+      const halves = { dark: T3_GROVE_THEME.id };
+      expect(resolveThemeAppearance("paper", true, true, undefined, halves)).toBe("dark");
+      expect(resolveThemeAppearance("paper", false, false, "dark", halves)).toBe("dark");
+      expect(resolveDesktopTheme("paper", true, undefined, halves)).toBe("system");
+    } finally {
+      vi.unstubAllGlobals();
+      invalidateCustomThemes();
+    }
+  });
+
   it("resolves the legacy t3-chat-dark preference to dark T3 Chat", () => {
     expect(getThemeDefinition("t3-chat-dark")).toBe(T3_CHAT_THEME);
     expect(getThemePreferenceMode("t3-chat-dark")).toBe("dark");

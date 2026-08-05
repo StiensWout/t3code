@@ -322,6 +322,27 @@ describe("index.html boot script", () => {
     );
   });
 
+  it("lets a dark half go dark when the light-only base cannot", () => {
+    const boot = runBootScript({
+      storage: {
+        [THEME_STORAGE_KEY]: "paper",
+        [THEME_APPEARANCE_MODE_STORAGE_KEY]: "system",
+        [CUSTOM_THEMES_STORAGE_KEY]: JSON.stringify([
+          {
+            id: "paper",
+            label: "Paper",
+            appearance: "light",
+            colors: { canvas: "#f8fbff", text: "#10243d", accent: "#5b6cff" },
+          },
+        ]),
+        "t3code:theme-halves:v1": JSON.stringify({ dark: "t3-grove" }),
+      },
+      prefersDark: true,
+    });
+    expect(boot.isDark).toBe(true);
+    expect(boot.themeId).toBe("t3-grove");
+  });
+
   it("ignores a mix half that names an unknown theme", () => {
     const boot = runBootScript({
       storage: {

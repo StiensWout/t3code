@@ -300,6 +300,7 @@ function applyTheme(theme: Theme, suppressTransitions = false) {
     systemDark,
     followSystem,
     appearanceMode,
+    themeHalves,
   );
   applyThemePalette(resolveThemeHalf(theme, themeHalves, resolvedAppearance), resolvedAppearance);
   const isDark = resolvedAppearance === "dark";
@@ -337,7 +338,12 @@ export function syncDesktopTheme(
 ) {
   if (typeof window === "undefined") return;
   const bridge = window.desktopBridge;
-  const desktopTheme = resolveDesktopTheme(theme, followSystem, appearanceMode);
+  const desktopTheme = resolveDesktopTheme(
+    theme,
+    followSystem,
+    appearanceMode,
+    readStoredThemeHalves(),
+  );
   if (!bridge || typeof bridge.setTheme !== "function" || lastDesktopTheme === desktopTheme) {
     return;
   }
@@ -457,14 +463,16 @@ export function useTheme() {
     snapshot.systemDark,
     snapshot.followSystem,
     snapshot.appearanceMode,
+    snapshot.themeHalves,
   );
 
   const setTheme = useCallback((next: Theme): boolean => {
     if (typeof window === "undefined") return false;
     try {
-      writeThemePreference(next);
-      // Choosing a whole theme replaces any automatic-mode mix.
+      // Choosing a whole theme replaces any automatic-mode mix. Clearing the
+      // mix first keeps storage coherent if the preference write fails.
       window.localStorage.removeItem(THEME_HALVES_STORAGE_KEY);
+      writeThemePreference(next);
     } catch (cause) {
       const error = isThemeStorageError(cause)
         ? cause

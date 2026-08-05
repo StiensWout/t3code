@@ -73,7 +73,7 @@ import {
 import { isElectron } from "../../env";
 import { buildHostedChannelSelectionUrl, type HostedAppChannel } from "../../hostedPairing";
 import { useCustomThemes } from "../../hooks/useCustomThemes";
-import { useTheme } from "../../hooks/useTheme";
+import { readThemePreference, useTheme } from "../../hooks/useTheme";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { usePrimarySettings, useUpdatePrimarySettings } from "../../hooks/useSettings";
 import { useThreadActions } from "../../hooks/useThreadActions";
@@ -568,7 +568,7 @@ function AboutVersionSection() {
 }
 
 export function useSettingsRestore(onRestored?: () => void) {
-  const { theme, setTheme, followSystem, setFollowSystem } = useTheme();
+  const { theme, setTheme, followSystem, setFollowSystem, setThemeHalf, themeHalves } = useTheme();
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
 
@@ -582,6 +582,7 @@ export function useSettingsRestore(onRestored?: () => void) {
     () => [
       ...(theme !== "system" ? ["Theme"] : []),
       ...(!followSystem ? ["Follow system"] : []),
+      ...(themeHalves !== null ? ["Theme mix"] : []),
       ...(settings.glassOpacity !== DEFAULT_UNIFIED_SETTINGS.glassOpacity ? ["Glass opacity"] : []),
       ...(settings.environmentIdentificationMode !==
       DEFAULT_UNIFIED_SETTINGS.environmentIdentificationMode
@@ -682,11 +683,20 @@ export function useSettingsRestore(onRestored?: () => void) {
     if (!confirmed) return;
 
     // Only touch the theme keys that are actually dirty, so a theme-storage
-    // failure cannot block restoring unrelated settings.
-    const previousTheme = theme;
+    // failure cannot block restoring unrelated settings. Preferences are
+    // re-read after the confirmation dialog: they may have changed (another
+    // tab, an OS flip) while it was open, and rollback must restore the live
+    // values rather than the ones captured at render time.
+    let previousTheme = theme;
+    try {
+      previousTheme = readThemePreference();
+    } catch {
+      // Storage is unreadable; the render-time value is the best rollback.
+    }
     const needsThemeReset = previousTheme !== "system";
+    const needsMixReset = themeHalves !== null;
     const needsFollowSystemReset = !followSystem;
-    if (needsThemeReset && !setTheme("system")) {
+    const notifyThemeRestoreFailure = () => {
       toastManager.add(
         stackedThreadToast({
           type: "error",
@@ -694,17 +704,19 @@ export function useSettingsRestore(onRestored?: () => void) {
           description: "Try again.",
         }),
       );
+    };
+    if (needsThemeReset && !setTheme("system")) {
+      notifyThemeRestoreFailure();
+      return;
+    }
+    if (needsMixReset && (!setThemeHalf("light", null) || !setThemeHalf("dark", null))) {
+      if (needsThemeReset) setTheme(previousTheme);
+      notifyThemeRestoreFailure();
       return;
     }
     if (needsFollowSystemReset && !setFollowSystem(true)) {
       if (needsThemeReset) setTheme(previousTheme);
-      toastManager.add(
-        stackedThreadToast({
-          type: "error",
-          title: "Couldn’t restore theme settings",
-          description: "Try again.",
-        }),
-      );
+      notifyThemeRestoreFailure();
       return;
     }
     updateSettings({
@@ -734,7 +746,17 @@ export function useSettingsRestore(onRestored?: () => void) {
       fontFamilyTerminal: DEFAULT_UNIFIED_SETTINGS.fontFamilyTerminal,
     });
     onRestored?.();
-  }, [changedSettingLabels, onRestored, setFollowSystem, setTheme, updateSettings]);
+  }, [
+    changedSettingLabels,
+    followSystem,
+    onRestored,
+    setFollowSystem,
+    setTheme,
+    setThemeHalf,
+    theme,
+    themeHalves,
+    updateSettings,
+  ]);
 
   return {
     changedSettingLabels,

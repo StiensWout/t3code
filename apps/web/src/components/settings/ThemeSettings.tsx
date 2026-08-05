@@ -248,6 +248,13 @@ export function ThemeLibrary({
     ) {
       return;
     }
+    // A mix half pointing at the removed theme falls back to the base.
+    for (const appearance of ["light", "dark"] as const) {
+      if (themeHalves?.[appearance] === themeToRemove.id && !setThemeHalf(appearance, null)) {
+        notifyThemeRemovalFailure();
+        return;
+      }
+    }
     try {
       removeCustomTheme(themeToRemove.id);
     } catch {
@@ -255,7 +262,15 @@ export function ThemeLibrary({
       return;
     }
     setThemeToRemove(null);
-  }, [appearanceMode, notifyThemeRemovalFailure, persistTheme, theme, themeToRemove]);
+  }, [
+    appearanceMode,
+    notifyThemeRemovalFailure,
+    persistTheme,
+    setThemeHalf,
+    theme,
+    themeHalves,
+    themeToRemove,
+  ]);
 
   const handleCreatedTheme = useCallback(
     (createdTheme: ThemeDefinition) => {
@@ -274,11 +289,14 @@ export function ThemeLibrary({
 
   const handleEditedTheme = useCallback(
     (updatedTheme: ThemeDefinition) => {
-      const wasActive = getThemeDefinition(theme)?.id === updatedTheme.id;
-      if (wasActive) {
-        if (!persistTheme(updatedTheme.id)) return false;
-        refreshTheme();
-      }
+      // The edited theme may be showing through the base preference or either
+      // half of the mix; the preference itself is untouched (a setTheme here
+      // would clear the mix), the palette just needs re-applying.
+      const wasActive =
+        getThemeDefinition(theme)?.id === updatedTheme.id ||
+        themeHalves?.light === updatedTheme.id ||
+        themeHalves?.dark === updatedTheme.id;
+      if (wasActive) refreshTheme();
       setThemeToEdit(null);
       toastManager.add(
         stackedThreadToast({
@@ -289,7 +307,7 @@ export function ThemeLibrary({
       );
       return true;
     },
-    [persistTheme, refreshTheme, theme],
+    [refreshTheme, theme, themeHalves],
   );
 
   // ----- Automatic-mode mixing -------------------------------------------

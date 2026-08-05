@@ -274,7 +274,9 @@ function ThemeColorPickerPanel({
     if (!nextColor) return;
     setHsv(themeHexToHsv(nextColor));
     setHexDraft(nextColor);
-    onChange(nextColor);
+    // RGB cannot express alpha, so a commit keeps the incoming suffix just
+    // like the plane and hue controls do.
+    onChange(nextColor + alphaSuffix);
   };
 
   return (
