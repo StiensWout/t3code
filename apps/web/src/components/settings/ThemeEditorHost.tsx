@@ -16,10 +16,12 @@ export function ThemeEditorHost() {
   const closeThemeEditor = useThemeEditorStore((store) => store.closeThemeEditor);
   const { theme, setTheme, themeHalves, refreshTheme } = useTheme();
 
+  // The panel reports which path it actually took: a theme removed while its
+  // editor is open resolves to null there, so the save becomes a create even
+  // though the session still names it.
   const handleSaved = useCallback(
-    (savedTheme: ThemeDefinition) => {
-      const isEditing = session?.editingThemeId !== null && session?.editingThemeId !== undefined;
-      if (isEditing) {
+    (savedTheme: ThemeDefinition, { created }: { created: boolean }) => {
+      if (!created) {
         // The edited theme may be showing through the base preference or either
         // half of the mix; the preference itself is untouched (a setTheme here
         // would clear the mix), the palette just needs re-applying.
@@ -57,7 +59,7 @@ export function ThemeEditorHost() {
       );
       return true;
     },
-    [refreshTheme, session?.editingThemeId, setTheme, theme, themeHalves],
+    [refreshTheme, setTheme, theme, themeHalves],
   );
 
   if (!session) return null;
@@ -73,7 +75,7 @@ export function ThemeEditorHost() {
     <ThemeEditorPanel
       editingTheme={editingTheme}
       initialAppearance={session.initialAppearance}
-      key={`${session.editingThemeId ?? ""}:${session.seedThemeId ?? ""}`}
+      key={session.id}
       onOpenChange={(open) => {
         if (!open) closeThemeEditor();
       }}

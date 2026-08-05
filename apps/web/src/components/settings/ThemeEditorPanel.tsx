@@ -136,7 +136,7 @@ export function ThemeEditorPanel({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSaved: (theme: ThemeDefinition) => boolean;
+  onSaved: (theme: ThemeDefinition, context: { created: boolean }) => boolean;
   editingTheme: ThemeDefinition | null;
   initialAppearance: ThemeAppearance;
   /** The theme a new theme starts from, so tuning what you already use is a
@@ -307,7 +307,7 @@ export function ThemeEditorPanel({
       const savedTheme = editingTheme
         ? updateCustomTheme(parseThemeFile(themeFile))
         : installCustomTheme(parseThemeFile(themeFile));
-      if (!onSaved(savedTheme)) {
+      if (!onSaved(savedTheme, { created: editingTheme === null })) {
         if (!editingTheme) {
           // Roll the install back so a retry can run it again instead of
           // failing on the already-taken theme id.

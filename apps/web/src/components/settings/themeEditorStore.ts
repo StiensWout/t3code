@@ -8,7 +8,7 @@ import type { ThemeAppearance } from "../../themePalette";
  * while the editor stays open. Themes are referenced by id because the stored
  * definitions change underneath an open session (an edit, an import).
  */
-export type ThemeEditorSession = {
+export type ThemeEditorSessionInput = {
   /** Set when editing an installed theme; null creates a new one. */
   editingThemeId: string | null;
   /** Theme a new theme starts from: the active one, or a duplicate target. */
@@ -18,14 +18,24 @@ export type ThemeEditorSession = {
   initialAppearance: ThemeAppearance;
 };
 
+export type ThemeEditorSession = ThemeEditorSessionInput & {
+  /**
+   * Distinguishes two sessions that name the same themes, so asking for a
+   * fresh draft while the panel is already open still reseeds it.
+   */
+  id: number;
+};
+
 type ThemeEditorStore = {
   session: ThemeEditorSession | null;
-  openThemeEditor: (session: ThemeEditorSession) => void;
+  openThemeEditor: (session: ThemeEditorSessionInput) => void;
   closeThemeEditor: () => void;
 };
 
+let nextSessionId = 0;
+
 export const useThemeEditorStore = create<ThemeEditorStore>((set) => ({
   session: null,
-  openThemeEditor: (session) => set({ session }),
+  openThemeEditor: (session) => set({ session: { ...session, id: ++nextSessionId } }),
   closeThemeEditor: () => set({ session: null }),
 }));
