@@ -1,9 +1,9 @@
-import { MoonIcon, PlusIcon, SunIcon } from "lucide-react";
+import { PlusIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   THEME_COLOR_ROLES,
   THEME_FILE_VERSION,
-  createManagedThemeColors,
+  createVividThemeColors,
   getDefaultThemeColors,
   getThemeColorsForMode,
   getThemeModes,
@@ -30,6 +30,7 @@ import {
 import { Input } from "../ui/input";
 import { Switch } from "../ui/switch";
 import { ThemeColorField } from "./ThemeColorPicker";
+import { ThemeWireframe } from "./ThemeWireframe";
 
 const THEME_EDITOR_PRIMARY_ROLES: ReadonlyArray<ThemeColorRole> = [
   "canvas",
@@ -64,6 +65,32 @@ const THEME_EDITOR_ADVANCED_ROLES = THEME_COLOR_ROLES.filter(
   (role) => !THEME_EDITOR_PRIMARY_ROLES.includes(role) && !THEME_EDITOR_STATUS_ROLES.includes(role),
 );
 
+const THEME_EDITOR_ROLE_GROUPS: ReadonlyArray<{
+  id: string;
+  title: string;
+  description: string;
+  roles: ReadonlyArray<ThemeColorRole>;
+}> = [
+  {
+    id: "main",
+    title: "Main colors",
+    description: "Surfaces, text, accents, and message actions.",
+    roles: THEME_EDITOR_PRIMARY_ROLES,
+  },
+  {
+    id: "status",
+    title: "Status colors",
+    description: "Errors, warnings, and update notices.",
+    roles: THEME_EDITOR_STATUS_ROLES,
+  },
+  {
+    id: "additional",
+    title: "Additional colors",
+    description: "Fine-tune the remaining interface, code, and terminal roles.",
+    roles: THEME_EDITOR_ADVANCED_ROLES,
+  },
+];
+
 type ThemeEditorColors = Record<ThemeColorRole, string>;
 type ThemeEditorModeSelection = "single" | "both";
 type ThemeEditorColorsByAppearance = Record<ThemeAppearance, ThemeEditorColors>;
@@ -88,13 +115,12 @@ function getManagedEditorColors(
   colors: ThemeEditorColors,
 ): ThemeEditorColors {
   const defaults = getDefaultThemeColors(appearance);
-  // The editor keeps the user's exact picks; only the derived roles adapt
-  // for readability.
-  return createManagedThemeColors(
+  // The editor keeps the user's exact picks and derives the rest through the
+  // perceptual vivid engine, so a two-color theme carries its own identity.
+  return createVividThemeColors(
     appearance,
     isThemeEditorColor(colors.canvas) ? colors.canvas : defaults.canvas,
     isThemeEditorColor(colors.accent) ? colors.accent : defaults.accent,
-    { exactSeeds: true },
   );
 }
 
@@ -278,6 +304,138 @@ export function ThemeEditorDialog({
     simpleColorsDirtyByAppearance,
   ]);
 
+  const renderNameField = () => (
+    <label className="block space-y-2">
+      <span className="text-sm font-medium">Theme name</span>
+      <Input
+        autoFocus
+        onChange={(event) => setName(event.currentTarget.value)}
+        placeholder={isEditing ? "Theme name" : "e.g. Aurora"}
+        value={name}
+      />
+    </label>
+  );
+
+  const renderModeButtons = () => (
+    <div className="space-y-2">
+      <span className="text-sm font-medium">Modes</span>
+      <div aria-label="Modes" className="grid grid-cols-2 gap-2" role="group">
+        <Button
+          aria-pressed={modeSelection === "single"}
+          style={
+            modeSelection === "single" ? { boxShadow: "inset 0 0 0 1px var(--ring)" } : undefined
+          }
+          variant={modeSelection === "single" ? "secondary" : "outline"}
+          onClick={() => setModeSelection("single")}
+        >
+          One mode
+        </Button>
+        <Button
+          aria-pressed={modeSelection === "both"}
+          style={
+            modeSelection === "both" ? { boxShadow: "inset 0 0 0 1px var(--ring)" } : undefined
+          }
+          variant={modeSelection === "both" ? "secondary" : "outline"}
+          onClick={() => setModeSelection("both")}
+        >
+          Dual mode
+        </Button>
+      </div>
+      <p className="text-xs leading-relaxed text-muted-foreground">
+        {modeSelection === "both"
+          ? "Separate light and dark palettes."
+          : "One palette for light and dark."}
+      </p>
+    </div>
+  );
+
+  const renderAppearanceButtons = () => (
+    <div className="space-y-2">
+      <span className="text-sm font-medium">Appearance</span>
+      <div aria-label="Theme appearance" className="grid grid-cols-2 gap-2" role="group">
+        <Button
+          aria-pressed={activeAppearance === "light"}
+          style={
+            activeAppearance === "light" ? { boxShadow: "inset 0 0 0 1px var(--ring)" } : undefined
+          }
+          variant={activeAppearance === "light" ? "secondary" : "outline"}
+          onClick={() => setActiveAppearance("light")}
+        >
+          Light
+        </Button>
+        <Button
+          aria-pressed={activeAppearance === "dark"}
+          style={
+            activeAppearance === "dark" ? { boxShadow: "inset 0 0 0 1px var(--ring)" } : undefined
+          }
+          variant={activeAppearance === "dark" ? "secondary" : "outline"}
+          onClick={() => setActiveAppearance("dark")}
+        >
+          Dark
+        </Button>
+      </div>
+    </div>
+  );
+
+  const renderGuidedColorFields = (appearance: ThemeAppearance = activeAppearance) => (
+    <div className="grid gap-2 sm:grid-cols-2">
+      {THEME_EDITOR_SIMPLE_ROLES.map((role) => (
+        <ThemeColorField
+          key={role}
+          onChange={updateColor}
+          role={role}
+          label={role === "canvas" ? "Background tint" : "Accent color"}
+          value={colorsByAppearance[appearance][role]}
+        />
+      ))}
+    </div>
+  );
+
+  const renderColorsHeader = () => (
+    <div className="flex items-start justify-between gap-3">
+      <div>
+        <h3 className="text-sm font-medium">{isAdvanced ? "Theme colors" : "Guided colors"}</h3>
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          {isAdvanced
+            ? "Full control over every color role."
+            : "Pick two colors — T3 Code builds the rest."}
+        </p>
+      </div>
+      <label className="flex shrink-0 cursor-pointer items-center gap-2 pt-0.5 text-sm font-medium">
+        <span>Advanced</span>
+        <Switch
+          aria-label="Use advanced theme colors"
+          checked={isAdvanced}
+          onCheckedChange={(checked) => handleAdvancedChange(Boolean(checked))}
+        />
+      </label>
+    </div>
+  );
+
+  const renderRoleFields = (
+    roles: ReadonlyArray<ThemeColorRole>,
+    gridClassName = "grid gap-2 sm:grid-cols-2",
+  ) => (
+    <div className={gridClassName}>
+      {roles.map((role) => (
+        <ThemeColorField
+          key={role}
+          onChange={updateColor}
+          role={role}
+          value={colorsByAppearance[activeAppearance][role]}
+        />
+      ))}
+    </div>
+  );
+
+  // The same miniature app wireframe as the Appearance settings screen, fed
+  // with the live draft palette for the appearance being edited.
+  const renderPreviewColumn = () => (
+    <div className="sm:sticky sm:top-0 sm:self-start">
+      <ThemeWireframe className="h-40" panes={[{ colors: colorsByAppearance[activeAppearance] }]} />
+    </div>
+  );
+
   return (
     <Dialog
       open={open}
@@ -294,160 +452,34 @@ export function ThemeEditorDialog({
           </DialogDescription>
         </DialogHeader>
         <DialogPanel className="space-y-5">
-          <label className="block space-y-2">
-            <span className="text-sm font-medium">Theme name</span>
-            <Input
-              autoFocus
-              onChange={(event) => setName(event.currentTarget.value)}
-              placeholder={isEditing ? "Theme name" : "e.g. Aurora"}
-              value={name}
-            />
-          </label>
-
-          <div className="space-y-2">
-            <span className="text-sm font-medium">Modes</span>
-            <div aria-label="Modes" className="grid grid-cols-2 gap-2" role="group">
-              <Button
-                aria-pressed={modeSelection === "single"}
-                variant={modeSelection === "single" ? "secondary" : "outline"}
-                onClick={() => setModeSelection("single")}
-              >
-                One mode
-              </Button>
-              <Button
-                aria-pressed={modeSelection === "both"}
-                variant={modeSelection === "both" ? "secondary" : "outline"}
-                onClick={() => setModeSelection("both")}
-              >
-                Dual mode
-              </Button>
-            </div>
-            <p className="text-xs leading-relaxed text-muted-foreground">
-              {modeSelection === "both"
-                ? "Separate light and dark palettes."
-                : "One palette for light and dark."}
-            </p>
-          </div>
-
-          <div className="space-y-2">
-            <span className="text-sm font-medium">Appearance</span>
-            <div aria-label="Theme appearance" className="grid grid-cols-2 gap-2" role="group">
-              <Button
-                aria-pressed={activeAppearance === "light"}
-                variant={activeAppearance === "light" ? "secondary" : "outline"}
-                onClick={() => setActiveAppearance("light")}
-              >
-                <SunIcon />
-                Light
-              </Button>
-              <Button
-                aria-pressed={activeAppearance === "dark"}
-                variant={activeAppearance === "dark" ? "secondary" : "outline"}
-                onClick={() => setActiveAppearance("dark")}
-              >
-                <MoonIcon />
-                Dark
-              </Button>
-            </div>
-          </div>
-
-          <div className="space-y-3">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <h3 className="text-sm font-medium">
-                  {isAdvanced ? "Theme colors" : "Guided colors"}
-                </h3>
-                <p className="text-xs leading-relaxed text-muted-foreground">
-                  {isAdvanced
-                    ? "Full control over every color role."
-                    : "Pick two colors — T3 Code builds the rest."}
-                </p>
+          <div className="grid gap-5 sm:grid-cols-[minmax(0,1fr)_minmax(0,15rem)]">
+            <div className="space-y-5">
+              {renderNameField()}
+              {renderModeButtons()}
+              {renderAppearanceButtons()}
+              <div className="space-y-3">
+                {renderColorsHeader()}
+                {renderGuidedColorFields()}
               </div>
-              <label className="flex shrink-0 cursor-pointer items-center gap-2 pt-0.5 text-sm font-medium">
-                <span>Advanced</span>
-                <Switch
-                  aria-label="Use advanced theme colors"
-                  checked={isAdvanced}
-                  onCheckedChange={(checked) => handleAdvancedChange(Boolean(checked))}
-                />
-              </label>
             </div>
-
-            {isAdvanced ? (
-              <>
-                <div className="space-y-2">
-                  <div>
-                    <h4 className="text-sm font-medium">Main colors</h4>
-                    <p className="text-xs leading-relaxed text-muted-foreground">
-                      Surfaces, text, accents, and message actions.
-                    </p>
-                  </div>
-                  <div className="grid gap-2 sm:grid-cols-2">
-                    {THEME_EDITOR_PRIMARY_ROLES.map((role) => (
-                      <ThemeColorField
-                        key={role}
-                        onChange={updateColor}
-                        role={role}
-                        value={colorsByAppearance[activeAppearance][role]}
-                      />
-                    ))}
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <div>
-                    <h4 className="text-sm font-medium">Status colors</h4>
-                    <p className="text-xs leading-relaxed text-muted-foreground">
-                      Errors, warnings, and update notices.
-                    </p>
-                  </div>
-                  <div className="grid gap-2 sm:grid-cols-2">
-                    {THEME_EDITOR_STATUS_ROLES.map((role) => (
-                      <ThemeColorField
-                        key={role}
-                        onChange={updateColor}
-                        role={role}
-                        value={colorsByAppearance[activeAppearance][role]}
-                      />
-                    ))}
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <div>
-                    <h4 className="text-sm font-medium">Additional colors</h4>
-                    <p className="text-xs leading-relaxed text-muted-foreground">
-                      Fine-tune the remaining interface, code, and terminal roles.
-                    </p>
-                  </div>
-                  <div className="grid gap-2 sm:grid-cols-2">
-                    {THEME_EDITOR_ADVANCED_ROLES.map((role) => (
-                      <ThemeColorField
-                        key={role}
-                        onChange={updateColor}
-                        role={role}
-                        value={colorsByAppearance[activeAppearance][role]}
-                      />
-                    ))}
-                  </div>
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="grid gap-2 sm:grid-cols-2">
-                  {THEME_EDITOR_SIMPLE_ROLES.map((role) => (
-                    <ThemeColorField
-                      key={role}
-                      onChange={updateColor}
-                      role={role}
-                      label={role === "canvas" ? "Background tint" : "Accent color"}
-                      value={colorsByAppearance[activeAppearance][role]}
-                    />
-                  ))}
-                </div>
-              </>
-            )}
+            {renderPreviewColumn()}
           </div>
+
+          {isAdvanced ? (
+            <div className="space-y-4 rounded-lg border p-4">
+              {THEME_EDITOR_ROLE_GROUPS.map((group) => (
+                <div className="space-y-2" key={group.id}>
+                  <div>
+                    <h4 className="text-sm font-medium">{group.title}</h4>
+                    <p className="text-xs leading-relaxed text-muted-foreground">
+                      {group.description}
+                    </p>
+                  </div>
+                  {renderRoleFields(group.roles, "grid gap-2 sm:grid-cols-2 md:grid-cols-3")}
+                </div>
+              ))}
+            </div>
+          ) : null}
 
           {error ? (
             <Alert aria-live="polite" variant="error">
