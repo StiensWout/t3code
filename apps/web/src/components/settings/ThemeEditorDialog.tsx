@@ -88,10 +88,13 @@ function getManagedEditorColors(
   colors: ThemeEditorColors,
 ): ThemeEditorColors {
   const defaults = getDefaultThemeColors(appearance);
+  // The editor keeps the user's exact picks; only the derived roles adapt
+  // for readability.
   return createManagedThemeColors(
     appearance,
     isThemeEditorColor(colors.canvas) ? colors.canvas : defaults.canvas,
     isThemeEditorColor(colors.accent) ? colors.accent : defaults.accent,
+    { exactSeeds: true },
   );
 }
 

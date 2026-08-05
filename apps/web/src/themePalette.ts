@@ -294,7 +294,9 @@ const T3_CHAT_LIGHT_COLORS: ThemeColors = {
   toolbarControlHover: "#e8d5e9",
   surface: "#efe7f0",
   surfaceRaised: "#f7f1f7",
-  surfaceOverlay: "#ffffff",
+  // Popovers, menus, and outline controls sit on the overlay; pure white
+  // reads unthemed against the pink family.
+  surfaceOverlay: "#fcf6fc",
   text: "#501854",
   textMuted: "#84608a",
   border: "#e0d3e1",
@@ -609,10 +611,22 @@ export function createManagedThemeColors(
   appearance: ThemeAppearance,
   backgroundValue: string,
   accentValue: string,
+  options?: {
+    /** Use the seeds exactly as given instead of nudging them into the
+     * readability envelope. Derived foregrounds still adapt for contrast. */
+    exactSeeds?: boolean;
+  },
 ): ThemeColors {
   const defaults = getDefaultThemeColors(appearance);
-  const canvas = managedThemeBackground(backgroundValue, appearance);
-  const accent = managedThemeAccent(accentValue, appearance, canvas);
+  const canvas = options?.exactSeeds
+    ? parseThemeRgbColor(
+        backgroundValue,
+        appearance === "dark" ? { r: 24, g: 15, b: 27 } : { r: 250, g: 245, b: 250 },
+      )
+    : managedThemeBackground(backgroundValue, appearance);
+  const accent = options?.exactSeeds
+    ? parseThemeRgbColor(accentValue, { r: 168, g: 67, b: 112 })
+    : managedThemeAccent(accentValue, appearance, canvas);
   const text = readableThemeForeground(canvas);
   const chrome = mixThemeRgbColors(canvas, accent, 0.04);
   const sidebar = mixThemeRgbColors(canvas, accent, 0.08);

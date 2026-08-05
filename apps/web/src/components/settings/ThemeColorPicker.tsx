@@ -192,15 +192,38 @@ function ThemeColorPickerPanel({
     );
   }, [normalizedValue]);
 
+  // Local state updates immediately for a smooth thumb; the parent commit
+  // (which can regenerate a whole guided palette) is batched to one call per
+  // animation frame.
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+  const pendingCommitRef = useRef<string | null>(null);
+  const commitFrameRef = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (commitFrameRef.current !== null) cancelAnimationFrame(commitFrameRef.current);
+    },
+    [],
+  );
+  const scheduleCommit = useCallback((color: string) => {
+    pendingCommitRef.current = color;
+    commitFrameRef.current ??= requestAnimationFrame(() => {
+      commitFrameRef.current = null;
+      const pending = pendingCommitRef.current;
+      pendingCommitRef.current = null;
+      if (pending !== null) onChangeRef.current(pending);
+    });
+  }, []);
+
   const commitHsv = useCallback(
     (nextHsv: ThemeColorHsv) => {
       setHsv(nextHsv);
       const nextColor = themeHsvToHex(nextHsv.h, nextHsv.s, nextHsv.v);
       setHexDraft(nextColor);
       setRgbDraft(themeRgbValue(nextColor));
-      onChange(nextColor + alphaSuffix);
+      scheduleCommit(nextColor + alphaSuffix);
     },
-    [alphaSuffix, onChange],
+    [alphaSuffix, scheduleCommit],
   );
 
   const updateFromPlane = useCallback(
@@ -280,7 +303,7 @@ function ThemeColorPickerPanel({
   };
 
   return (
-    <div className="w-64 bg-popover">
+    <div className="w-72 bg-popover">
       <div className="flex items-center justify-between border-b border-border/70 px-4 py-3">
         <div className="min-w-0">
           <p className="truncate text-xs font-semibold text-foreground">{label}</p>
@@ -354,7 +377,7 @@ function ThemeColorPickerPanel({
             }}
           />
         </div>
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-[1fr_1.2fr] gap-2">
           <label className="grid min-w-0 gap-1">
             <span className="px-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
               HEX

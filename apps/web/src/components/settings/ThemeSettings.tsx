@@ -319,9 +319,19 @@ export function ThemeLibrary({
 
   const assignHalf = useCallback(
     (appearance: ThemeAppearance, cardId: string | null) => {
-      if (!setThemeHalf(appearance, cardId)) notifyThemeSaveFailure();
+      if (!setThemeHalf(appearance, cardId)) {
+        notifyThemeSaveFailure();
+        return;
+      }
+      // A first pick over an unthemed base pairs the whole theme: the other
+      // half follows along until the user refines it, so Auto never mixes an
+      // explicit pick with the generic default by accident.
+      const otherAppearance = appearance === "light" ? "dark" : "light";
+      if (cardId !== null && baseCardId === null && themeHalves?.[otherAppearance] === undefined) {
+        setThemeHalf(otherAppearance, cardId);
+      }
     },
-    [notifyThemeSaveFailure, setThemeHalf],
+    [baseCardId, notifyThemeSaveFailure, setThemeHalf, themeHalves],
   );
 
   const cardDefById = (id: string | null): ThemeCardDefinition => {

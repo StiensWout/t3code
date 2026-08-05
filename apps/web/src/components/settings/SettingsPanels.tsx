@@ -568,7 +568,15 @@ function AboutVersionSection() {
 }
 
 export function useSettingsRestore(onRestored?: () => void) {
-  const { theme, setTheme, followSystem, setFollowSystem, setThemeHalf, themeHalves } = useTheme();
+  const {
+    theme,
+    setTheme,
+    followSystem,
+    setFollowSystem,
+    setThemeHalf,
+    clearThemeHalves,
+    themeHalves,
+  } = useTheme();
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
 
@@ -705,17 +713,26 @@ export function useSettingsRestore(onRestored?: () => void) {
         }),
       );
     };
+    // Rollback restores the base preference first (which clears any mix) and
+    // then re-applies the captured mix on top, so no failure path can leave
+    // the pair of keys half-restored.
+    const previousHalves = themeHalves;
+    const rollbackThemeState = () => {
+      if (needsThemeReset) setTheme(previousTheme);
+      if (previousHalves?.light) setThemeHalf("light", previousHalves.light);
+      if (previousHalves?.dark) setThemeHalf("dark", previousHalves.dark);
+    };
     if (needsThemeReset && !setTheme("system")) {
       notifyThemeRestoreFailure();
       return;
     }
-    if (needsMixReset && (!setThemeHalf("light", null) || !setThemeHalf("dark", null))) {
-      if (needsThemeReset) setTheme(previousTheme);
+    if (needsMixReset && !clearThemeHalves()) {
+      rollbackThemeState();
       notifyThemeRestoreFailure();
       return;
     }
     if (needsFollowSystemReset && !setFollowSystem(true)) {
-      if (needsThemeReset) setTheme(previousTheme);
+      rollbackThemeState();
       notifyThemeRestoreFailure();
       return;
     }
@@ -748,6 +765,7 @@ export function useSettingsRestore(onRestored?: () => void) {
     onRestored?.();
   }, [
     changedSettingLabels,
+    clearThemeHalves,
     followSystem,
     onRestored,
     setFollowSystem,

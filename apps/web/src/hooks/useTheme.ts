@@ -323,9 +323,10 @@ export async function syncDesktopThemePreference(
   theme: Theme,
   followSystem?: boolean,
   appearanceMode?: ThemePreferenceMode,
+  halves: ThemeHalves | null = readStoredThemeHalves(),
 ): Promise<void> {
   try {
-    await bridge.setTheme(resolveDesktopTheme(theme, followSystem, appearanceMode));
+    await bridge.setTheme(resolveDesktopTheme(theme, followSystem, appearanceMode, halves));
   } catch (cause) {
     throw new DesktopThemeSyncError({ theme, cause });
   }
@@ -338,18 +339,14 @@ export function syncDesktopTheme(
 ) {
   if (typeof window === "undefined") return;
   const bridge = window.desktopBridge;
-  const desktopTheme = resolveDesktopTheme(
-    theme,
-    followSystem,
-    appearanceMode,
-    readStoredThemeHalves(),
-  );
+  const halves = readStoredThemeHalves();
+  const desktopTheme = resolveDesktopTheme(theme, followSystem, appearanceMode, halves);
   if (!bridge || typeof bridge.setTheme !== "function" || lastDesktopTheme === desktopTheme) {
     return;
   }
 
   lastDesktopTheme = desktopTheme;
-  void syncDesktopThemePreference(bridge, theme, followSystem, appearanceMode).catch(
+  void syncDesktopThemePreference(bridge, theme, followSystem, appearanceMode, halves).catch(
     (cause: unknown) => {
       const error = isDesktopThemeSyncError(cause)
         ? cause
@@ -579,6 +576,28 @@ export function useTheme() {
     [],
   );
 
+  const clearThemeHalves = useCallback((): boolean => {
+    if (typeof window === "undefined") return false;
+    try {
+      window.localStorage.removeItem(THEME_HALVES_STORAGE_KEY);
+    } catch (cause) {
+      const error = new ThemeStorageError({
+        operation: "write",
+        storageKey: THEME_HALVES_STORAGE_KEY,
+        cause,
+      });
+      console.error(error.message, {
+        operation: error.operation,
+        storageKey: error.storageKey,
+        ...safeErrorLogAttributes(error),
+      });
+      return false;
+    }
+    applyTheme(getStored(), true);
+    emitChange();
+    return true;
+  }, []);
+
   const refreshTheme = useCallback(() => {
     if (typeof window === "undefined") return;
     lastAppliedTheme = null;
@@ -597,6 +616,7 @@ export function useTheme() {
     setAppearanceMode,
     setFollowSystem,
     setThemeHalf,
+    clearThemeHalves,
     refreshTheme,
     followSystem: snapshot.followSystem,
     appearanceMode: snapshot.appearanceMode,
