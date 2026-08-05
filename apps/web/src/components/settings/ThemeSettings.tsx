@@ -320,6 +320,16 @@ export function ThemeLibrary({
 
   const assignHalf = useCallback(
     (appearance: ThemeAppearance, cardId: string | null) => {
+      const otherAppearance = appearance === "light" ? "dark" : "light";
+      // Picking the default over a themed base cannot be stored as a half:
+      // the base would still own that appearance. Convert the base into an
+      // explicit half on the other side so this side falls back to default.
+      if (cardId === null && baseCardId !== null) {
+        const otherOwner = themeHalves?.[otherAppearance] ?? baseCardId;
+        if (!persistTheme(appearanceMode === "system" ? "system" : appearanceMode)) return;
+        if (!setThemeHalf(otherAppearance, otherOwner)) notifyThemeSaveFailure();
+        return;
+      }
       if (!setThemeHalf(appearance, cardId)) {
         notifyThemeSaveFailure();
         return;
@@ -327,7 +337,6 @@ export function ThemeLibrary({
       // A first pick over an unthemed base pairs the whole theme: the other
       // half follows along until the user refines it, so Auto never mixes an
       // explicit pick with the generic default by accident.
-      const otherAppearance = appearance === "light" ? "dark" : "light";
       if (
         cardId !== null &&
         baseCardId === null &&
@@ -337,7 +346,7 @@ export function ThemeLibrary({
         notifyThemeSaveFailure();
       }
     },
-    [baseCardId, notifyThemeSaveFailure, setThemeHalf, themeHalves],
+    [appearanceMode, baseCardId, notifyThemeSaveFailure, persistTheme, setThemeHalf, themeHalves],
   );
 
   const cardDefById = (id: string | null): ThemeCardDefinition => {
@@ -361,10 +370,10 @@ export function ThemeLibrary({
     assignHalf(mode, cardId);
   };
 
-  // The Default card is the implicit fallback for an unpicked half; it never
-  // wears a ring, otherwise it shows selections the user cannot clear.
+  // Rings always show the effective owner of each appearance: an unpicked
+  // half belongs to the default card (a null owner), so a fresh install
+  // shows T3 Code selected instead of nothing.
   const pickedModesFor = (cardId: string | null): ThemeMode[] => {
-    if (cardId === null) return [];
     const rings: ThemeMode[] = [];
     if (lightOwner === cardId) rings.push("light");
     if (darkOwner === cardId) rings.push("dark");
