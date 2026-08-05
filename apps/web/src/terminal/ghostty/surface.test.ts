@@ -13,6 +13,7 @@ import {
   isTerminalPasteShortcut,
   shouldBlinkTerminalCursor,
   shouldReportTerminalMouse,
+  terminalGridCellAt,
   terminalScrollbarGeometry,
   terminalScrollbarOffsetAtPointer,
   terminalLinkAtColumn,
@@ -54,6 +55,32 @@ describe("isTerminalAltGraphText", () => {
         getModifierState: (modifier) => modifier === "AltGraph",
       }),
     ).toBe(false);
+  });
+});
+
+describe("terminalGridCellAt", () => {
+  const options = {
+    bounds: { left: 100, top: 200 },
+    cols: 3,
+    rows: 2,
+    metrics: { width: 10, height: 20 },
+    padding: 4,
+    originY: 24,
+  };
+
+  it("maps points inside the rendered grid without clamping its padding", () => {
+    expect(terminalGridCellAt({ ...options, clientX: 104, clientY: 224 })).toEqual({
+      x: 0,
+      y: 0,
+    });
+    expect(terminalGridCellAt({ ...options, clientX: 133, clientY: 263 })).toEqual({
+      x: 2,
+      y: 1,
+    });
+    expect(terminalGridCellAt({ ...options, clientX: 103, clientY: 224 })).toBeNull();
+    expect(terminalGridCellAt({ ...options, clientX: 104, clientY: 223 })).toBeNull();
+    expect(terminalGridCellAt({ ...options, clientX: 134, clientY: 224 })).toBeNull();
+    expect(terminalGridCellAt({ ...options, clientX: 104, clientY: 264 })).toBeNull();
   });
 });
 

@@ -206,6 +206,28 @@ export function terminalScrollbarOffsetAtPointer(
   return Math.round((thumbTop / travel) * geometry.maxOffset);
 }
 
+export function terminalGridCellAt(options: {
+  bounds: { left: number; top: number };
+  clientX: number;
+  clientY: number;
+  cols: number;
+  rows: number;
+  metrics: Pick<GhosttyCellMetrics, "width" | "height">;
+  padding: number;
+  originY: number;
+}): { x: number; y: number } | null {
+  const { bounds, clientX, clientY, cols, rows, metrics, padding, originY } = options;
+  const gridX = clientX - bounds.left - padding;
+  const gridY = clientY - bounds.top - originY;
+  if (gridX < 0 || gridY < 0 || gridX >= cols * metrics.width || gridY >= rows * metrics.height) {
+    return null;
+  }
+  return {
+    x: Math.floor(gridX / metrics.width),
+    y: Math.floor(gridY / metrics.height),
+  };
+}
+
 function terminalRowText(row: GhosttySnapshot["rowData"][number], trimRight: boolean): string {
   const text = row.cells.map((cell) => cell.text || " ").join("");
   return trimRight ? text.trimEnd() : text;
@@ -488,7 +510,7 @@ export class GhosttyTerminalSurface {
   private mouseReportingButton: number | null = null;
   private linkActivationPointerId: number | null = null;
   private hoveredLink: TerminalLinkWithRange | null = null;
-  private hoverPointer: { x: number; y: number } | null = null;
+  private hoverPointer: { x: number; y: number; allowInMouseTracking: boolean } | null = null;
   private selectionClickSequence: TerminalSelectionClickSequence | null = null;
   private selectionMoved = false;
   private composing = false;
@@ -1013,6 +1035,7 @@ export class GhosttyTerminalSurface {
       if (button === null) return;
       event.preventDefault();
       event.stopPropagation();
+      this.clearHoveredLink("default");
       this.mouseReportingPointerId = event.pointerId;
       this.mouseReportingButton = button;
       this.sendMouse("press", button, event);
@@ -1027,6 +1050,7 @@ export class GhosttyTerminalSurface {
       this.canvas.setPointerCapture(event.pointerId);
       return;
     }
+    this.clearHoveredLink();
     const cell = this.cellAt(event.clientX, event.clientY);
     this.selectionMoved = false;
     this.selectionClickSequence = advanceTerminalSelectionClickSequence(
@@ -1074,7 +1098,7 @@ export class GhosttyTerminalSurface {
       shouldReportTerminalMouse(this.core.isMouseAnyEventTracking(), event)
     ) {
       event.preventDefault();
-      this.canvas.style.cursor = "default";
+      this.clearHoveredLink("default");
       this.sendMouse("motion", this.buttonFromButtons(event.buttons), event);
       return;
     }
@@ -1082,6 +1106,7 @@ export class GhosttyTerminalSurface {
       this.updateHoverCursor(event);
       return;
     }
+    this.clearHoveredLink();
     this.selectionPointer = { x: event.clientX, y: event.clientY };
     const bounds = this.canvas.getBoundingClientRect();
     this.setSelectionAutoscroll(
@@ -1142,18 +1167,31 @@ export class GhosttyTerminalSurface {
   }
 
   private updateHoverCursor(event: PointerEvent): void {
-    this.hoverPointer = { x: event.clientX, y: event.clientY };
+    this.hoverPointer = {
+      x: event.clientX,
+      y: event.clientY,
+      allowInMouseTracking: isTerminalLinkPointerGesture(event),
+    };
     this.refreshHoveredLink();
   }
 
   private readonly onPointerLeave = () => {
+    this.clearHoveredLink();
+  };
+
+  private clearHoveredLink(cursor = ""): void {
     this.hoverPointer = null;
     this.setHoveredLink(null);
-  };
+    this.canvas.style.cursor = cursor;
+  }
 
   private refreshHoveredLink(): void {
     const pointer = this.hoverPointer;
-    this.setHoveredLink(pointer ? this.linkAt(pointer.x, pointer.y) : null);
+    const link =
+      pointer && (!this.core.isMouseTracking() || pointer.allowInMouseTracking)
+        ? this.linkAt(pointer.x, pointer.y)
+        : null;
+    this.setHoveredLink(link);
   }
 
   private setHoveredLink(link: TerminalLinkWithRange | null): void {
@@ -1428,7 +1466,6 @@ export class GhosttyTerminalSurface {
       this.frame = 0;
     }
     this.snapshot = this.core.snapshot();
-    this.refreshHoveredLink();
     // A cursor that is not blinking right now must be drawn, never caught in an
     // off phase left behind by a blink that has since been turned off.
     if (!this.blinkEnabled()) this.cursorOn = true;
@@ -1449,6 +1486,7 @@ export class GhosttyTerminalSurface {
       this.originY = nextOriginY;
       this.forceFullRender = true;
     }
+    this.refreshHoveredLink();
     renderGhosttySnapshot({
       context: this.context,
       snapshot: this.snapshot,
@@ -1540,7 +1578,17 @@ export class GhosttyTerminalSurface {
 
   private linkAt(clientX: number, clientY: number): TerminalLinkWithRange | null {
     if (!this.snapshot) return null;
-    const cell = this.cellAt(clientX, clientY);
+    const cell = terminalGridCellAt({
+      bounds: this.canvas.getBoundingClientRect(),
+      clientX,
+      clientY,
+      cols: this.cols,
+      rows: this.rows,
+      metrics: this.metrics,
+      padding: CONTENT_PADDING,
+      originY: this.originY,
+    });
+    if (!cell) return null;
     const explicitHyperlink = this.core.hyperlinkAt(cell.x, cell.y);
     if (explicitHyperlink) {
       const start = { ...cell };
