@@ -799,16 +799,24 @@ function themeIdFromName(name: string): string {
   return normalized || "custom-theme";
 }
 
+export class ThemeLibraryStorageError extends Schema.TaggedErrorClass<ThemeLibraryStorageError>()(
+  "ThemeLibraryStorageError",
+  { cause: Schema.Defect() },
+) {
+  override get message(): string {
+    return `Could not save the theme library. ${this.cause instanceof Error ? this.cause.message : "Storage is unavailable."}`;
+  }
+}
+
+export const isThemeLibraryStorageError = Schema.is(ThemeLibraryStorageError);
+
 function saveCustomThemes(themes: ReadonlyArray<ThemeDefinition>): void {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(CUSTOM_THEMES_STORAGE_KEY, JSON.stringify(themes));
     customThemesSnapshot = themes;
   } catch (cause) {
-    throw new Error(
-      `Could not save the theme library. ${cause instanceof Error ? cause.message : "Storage is unavailable."}`,
-      { cause },
-    );
+    throw new ThemeLibraryStorageError({ cause });
   }
   notifyCustomThemeListeners();
 }

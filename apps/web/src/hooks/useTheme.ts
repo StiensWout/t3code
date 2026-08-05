@@ -122,13 +122,9 @@ function readStoredAppearanceMode(theme: Theme): ThemePreferenceMode {
 function writeAppearanceModePreference(appearanceMode: ThemePreferenceMode): void {
   if (typeof window === "undefined") return;
   try {
+    // The legacy follow-system flag is read-only migration input now; the
+    // mode key is the single source of truth.
     window.localStorage.setItem(THEME_APPEARANCE_MODE_STORAGE_KEY, appearanceMode);
-    // Keep the old flag synchronized for older clients and existing settings
-    // restore flows. New clients use the mode key as the source of truth.
-    window.localStorage.setItem(
-      THEME_FOLLOW_SYSTEM_STORAGE_KEY,
-      String(appearanceMode === "system"),
-    );
   } catch (cause) {
     throw new ThemeStorageError({
       operation: "write",
