@@ -32,8 +32,8 @@ import {
 } from "../ui/alert-dialog";
 import { Button } from "../ui/button";
 import { stackedThreadToast, toastManager } from "../ui/toast";
-import { ThemeEditorDialog } from "./ThemeEditorDialog";
 import { ThemeImportDialog } from "./ThemeImportDialog";
+import { useThemeEditorStore } from "./themeEditorStore";
 import {
   STANDARD_THEME_CARDS,
   getThemeCardDefinition,
@@ -196,10 +196,7 @@ export function ThemeLibrary({
   setAppearanceMode,
   customThemes,
   initialAppearance,
-  refreshTheme,
-  isCreateOpen,
   isImportOpen,
-  onCreateOpenChange,
   onImportOpenChange,
   themeHalves,
   setThemeHalf,
@@ -210,18 +207,12 @@ export function ThemeLibrary({
   setAppearanceMode: (mode: ThemeMode) => boolean;
   customThemes: ReadonlyArray<ThemeDefinition>;
   initialAppearance: ThemeAppearance;
-  refreshTheme: () => void;
-  isCreateOpen: boolean;
   isImportOpen: boolean;
-  onCreateOpenChange: (open: boolean) => void;
   onImportOpenChange: (open: boolean) => void;
   themeHalves: ThemeHalves | null;
   setThemeHalf: (appearance: ThemeAppearance, themeId: string | null) => boolean;
 }) {
-  const [themeToEdit, setThemeToEdit] = useState<ThemeDefinition | null>(null);
-  // The theme a new theme starts from when the user duplicates a card; a plain
-  // "Create theme" seeds from whatever is active instead (see below).
-  const [themeToSeed, setThemeToSeed] = useState<ThemeDefinition | null>(null);
+  const openThemeEditor = useThemeEditorStore((store) => store.openThemeEditor);
   const [themeToRemove, setThemeToRemove] = useState<ThemeDefinition | null>(null);
   // Keep the last removal target so the dialog title stays populated while the
   // close animation plays after confirming.
@@ -300,44 +291,6 @@ export function ThemeLibrary({
     themeHalves,
     themeToRemove,
   ]);
-
-  const handleCreatedTheme = useCallback(
-    (createdTheme: ThemeDefinition) => {
-      if (!persistTheme(createdTheme.id)) return false;
-      toastManager.add(
-        stackedThreadToast({
-          type: "success",
-          title: `${createdTheme.label} created`,
-          description: "It’s now active.",
-        }),
-      );
-      return true;
-    },
-    [persistTheme],
-  );
-
-  const handleEditedTheme = useCallback(
-    (updatedTheme: ThemeDefinition) => {
-      // The edited theme may be showing through the base preference or either
-      // half of the mix; the preference itself is untouched (a setTheme here
-      // would clear the mix), the palette just needs re-applying.
-      const wasActive =
-        getThemeDefinition(theme)?.id === updatedTheme.id ||
-        themeHalves?.light === updatedTheme.id ||
-        themeHalves?.dark === updatedTheme.id;
-      if (wasActive) refreshTheme();
-      setThemeToEdit(null);
-      toastManager.add(
-        stackedThreadToast({
-          type: "success",
-          title: `${updatedTheme.label} saved`,
-          description: wasActive ? "Your changes are now active." : "Your changes are saved.",
-        }),
-      );
-      return true;
-    },
-    [refreshTheme, theme, themeHalves],
-  );
 
   // ----- Automatic-mode mixing -------------------------------------------
   // The pair model: one theme owns light, one owns dark, and the global
@@ -506,7 +459,14 @@ export function ThemeLibrary({
             isActive={false}
             isPersonal={false}
             key={maintainerTheme.id}
-            onDuplicate={() => setThemeToSeed(maintainerTheme)}
+            onDuplicate={() =>
+              openThemeEditor({
+                editingThemeId: null,
+                seedThemeId: maintainerTheme.id,
+                seedName: `${maintainerTheme.label} copy`,
+                initialAppearance,
+              })
+            }
             onUse={() => persistTheme(maintainerTheme.id)}
             onUseMode={handlePairPick(maintainerTheme.id)}
             theme={card}
@@ -521,8 +481,22 @@ export function ThemeLibrary({
             isActive={false}
             isPersonal
             key={customTheme.id}
-            onDuplicate={() => setThemeToSeed(customTheme)}
-            onEdit={() => setThemeToEdit(customTheme)}
+            onDuplicate={() =>
+              openThemeEditor({
+                editingThemeId: null,
+                seedThemeId: customTheme.id,
+                seedName: `${customTheme.label} copy`,
+                initialAppearance,
+              })
+            }
+            onEdit={() =>
+              openThemeEditor({
+                editingThemeId: customTheme.id,
+                seedThemeId: null,
+                seedName: null,
+                initialAppearance,
+              })
+            }
             onDownload={() =>
               downloadThemeFile(`${customTheme.id}.json`, serializeThemeFile(customTheme))
             }
@@ -552,7 +526,14 @@ export function ThemeLibrary({
             className="h-7 rounded-md border border-border/70 bg-muted/30 px-2 text-xs font-medium text-foreground shadow-none hover:bg-accent/40"
             size="xs"
             variant="ghost"
-            onClick={() => onCreateOpenChange(true)}
+            onClick={() =>
+              openThemeEditor({
+                editingThemeId: null,
+                seedThemeId: activeThemeForAppearance?.id ?? null,
+                seedName: null,
+                initialAppearance,
+              })
+            }
           >
             <PlusIcon />
             Create theme
@@ -564,22 +545,6 @@ export function ThemeLibrary({
         </div>
       </div>
       {renderPairGrid()}
-      <ThemeEditorDialog
-        editingTheme={themeToEdit}
-        initialAppearance={initialAppearance}
-        seedTheme={themeToSeed ?? activeThemeForAppearance}
-        seedName={themeToSeed ? `${themeToSeed.label} copy` : undefined}
-        restoreTheme={refreshTheme}
-        onSaved={themeToEdit ? handleEditedTheme : handleCreatedTheme}
-        onOpenChange={(open) => {
-          if (!open) {
-            onCreateOpenChange(false);
-            setThemeToEdit(null);
-            setThemeToSeed(null);
-          }
-        }}
-        open={isCreateOpen || themeToEdit !== null || themeToSeed !== null}
-      />
       <ThemeImportDialog
         onImported={(importedTheme) => {
           if (!persistTheme(importedTheme.id)) return false;

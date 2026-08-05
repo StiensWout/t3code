@@ -1195,14 +1195,6 @@ html[data-theme-id] [data-chat-header] [data-slot="separator"] {
   background-color: var(--toolbar-border);
 }
 
-/* Hold-to-peek in the theme editor: the app already wears the draft palette,
-   so the dialog and its scrim step aside to let the rest of it be seen. */
-html[data-theme-editor-peek="true"] [data-slot="dialog-backdrop"],
-html[data-theme-editor-peek="true"] [data-slot="dialog-popup"] {
-  opacity: 0;
-  transition: opacity 120ms ease-out;
-}
-
 /* Chat code blocks join the other code surfaces on the code tokens. The
    default look keeps its secondary/input tints; themed palettes tint those
    surfaces with the accent, which fights syntax highlighting. */

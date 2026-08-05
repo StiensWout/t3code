@@ -1054,7 +1054,6 @@ function BackgroundActivityAdvancedDialog({
 export function AppearanceSettingsPanel() {
   const {
     appearanceMode,
-    refreshTheme,
     resolvedTheme,
     setAppearanceMode,
     setTheme,
@@ -1063,7 +1062,6 @@ export function AppearanceSettingsPanel() {
     themeHalves,
   } = useTheme();
   const customThemes = useCustomThemes();
-  const [isCreateThemeOpen, setIsCreateThemeOpen] = useState(false);
   const [isImportThemeOpen, setIsImportThemeOpen] = useState(false);
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
@@ -1085,15 +1083,12 @@ export function AppearanceSettingsPanel() {
             appearanceMode={appearanceMode}
             customThemes={customThemes}
             initialAppearance={resolvedTheme}
-            isCreateOpen={isCreateThemeOpen}
             isImportOpen={isImportThemeOpen}
-            refreshTheme={refreshTheme}
             setAppearanceMode={setAppearanceMode}
             setTheme={setTheme}
             setThemeHalf={setThemeHalf}
             theme={theme}
             themeHalves={themeHalves}
-            onCreateOpenChange={setIsCreateThemeOpen}
             onImportOpenChange={setIsImportThemeOpen}
           />
         </div>

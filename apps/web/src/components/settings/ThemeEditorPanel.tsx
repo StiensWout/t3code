@@ -1,4 +1,11 @@
-import { EyeIcon, PlusIcon } from "lucide-react";
+import {
+  ArrowLeftIcon,
+  ArrowRightIcon,
+  ChevronDownIcon,
+  ChevronUpIcon,
+  PlusIcon,
+  XIcon,
+} from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   applyThemeColorPreview,
@@ -17,17 +24,9 @@ import {
   type ThemeColorRole,
   type ThemeDefinition,
 } from "../../themePalette";
+import { cn } from "../../lib/utils";
 import { Alert } from "../ui/alert";
 import { Button } from "../ui/button";
-import {
-  Dialog,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogPanel,
-  DialogPopup,
-  DialogTitle,
-} from "../ui/dialog";
 import { Input } from "../ui/input";
 import { Switch } from "../ui/switch";
 import { ThemeColorField } from "./ThemeColorPicker";
@@ -125,7 +124,7 @@ function getManagedEditorColors(
   );
 }
 
-export function ThemeEditorDialog({
+export function ThemeEditorPanel({
   open,
   onOpenChange,
   onSaved,
@@ -160,7 +159,8 @@ export function ThemeEditorDialog({
     Record<ThemeAppearance, boolean>
   >({ light: false, dark: false });
   const [error, setError] = useState<string | null>(null);
-  const [isPeeking, setIsPeeking] = useState(false);
+  const [isMinimized, setIsMinimized] = useState(false);
+  const [side, setSide] = useState<"left" | "right">("right");
   // The draft only reaches the live app once this open has been seeded;
   // previewing in the seeding commit would paint the previous session's
   // colors for a frame.
@@ -219,21 +219,6 @@ export function ThemeEditorDialog({
       restoreTheme();
     };
   }, [open, restoreTheme]);
-
-  // Holding the peek control fades the editor and its scrim out of the way.
-  // Closing counts as releasing: the flag hides every dialog in the app, so it
-  // must not survive a dismissal mid-hold (pointer down, then Escape).
-  useEffect(() => {
-    if (!open) setIsPeeking(false);
-  }, [open]);
-
-  useEffect(() => {
-    if (!isPeeking || !open) return;
-    document.documentElement.dataset.themeEditorPeek = "true";
-    return () => {
-      delete document.documentElement.dataset.themeEditorPeek;
-    };
-  }, [isPeeking, open]);
 
   const updateColor = useCallback(
     (role: ThemeColorRole, value: string) => {
@@ -482,101 +467,109 @@ export function ThemeEditorDialog({
     </div>
   );
 
-  // The same miniature app wireframe as the Appearance settings screen, fed
-  // with the live draft palette for the appearance being edited.
-  const renderPreviewColumn = () => (
-    <div className="space-y-2 sm:sticky sm:top-0 sm:self-start">
-      <ThemeWireframe className="h-40" panes={[{ colors: colorsByAppearance[activeAppearance] }]} />
-      {/* The app already wears the draft; this just moves the editor aside so
-          the rest of it can be seen. Hold rather than toggle, so the editor
-          can never be left hidden. */}
-      <Button
-        className="w-full"
-        size="xs"
-        variant="outline"
-        onBlur={() => setIsPeeking(false)}
-        onKeyDown={(event) => {
-          if (event.key === " " || event.key === "Enter") setIsPeeking(true);
-        }}
-        onKeyUp={() => setIsPeeking(false)}
-        onPointerCancel={() => setIsPeeking(false)}
-        onPointerDown={() => setIsPeeking(true)}
-        onPointerLeave={() => setIsPeeking(false)}
-        onPointerUp={() => setIsPeeking(false)}
-      >
-        <EyeIcon />
-        Hold to see the app
-      </Button>
-    </div>
-  );
-
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(nextOpen) => {
-        if (!nextOpen) setError(null);
-        onOpenChange(nextOpen);
-      }}
+    <div
+      aria-label={isEditing ? "Edit theme" : "Create theme"}
+      className={cn(
+        "fixed bottom-4 z-40 flex max-h-[min(42rem,calc(100dvh-6rem))] w-[min(26rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-xl",
+        // The panel parks opposite the sidebar and can swap sides when it
+        // covers what is being judged.
+        side === "right" ? "right-4" : "left-4",
+        isMinimized && "max-h-none",
+      )}
+      role="dialog"
     >
-      <DialogPopup className="max-w-3xl overflow-hidden">
-        <DialogHeader>
-          <DialogTitle>{isEditing ? "Edit theme" : "Create theme"}</DialogTitle>
-          <DialogDescription>
-            {isEditing ? "Tweak the name or colors." : "Make T3 Code yours."}
-          </DialogDescription>
-        </DialogHeader>
-        <DialogPanel className="space-y-5">
-          <div className="grid gap-5 sm:grid-cols-[minmax(0,1fr)_minmax(0,15rem)]">
-            <div className="space-y-5">
-              {renderNameField()}
-              {renderModeButtons()}
-              {renderAppearanceButtons()}
-              <div className="space-y-3">
-                {renderColorsHeader()}
-                {isAdvanced ? null : renderGuidedColorFields()}
-              </div>
-            </div>
-            {renderPreviewColumn()}
-          </div>
+      <div className="flex items-center gap-1 border-b border-border/70 px-3 py-2">
+        <div className="min-w-0 flex-1">
+          <h2 className="truncate text-sm font-medium">
+            {isEditing ? "Edit theme" : "Create theme"}
+          </h2>
+          {isMinimized ? null : (
+            <p className="truncate text-xs text-muted-foreground">
+              Browse the app — it is wearing this draft.
+            </p>
+          )}
+        </div>
+        <Button
+          aria-label={side === "right" ? "Move panel to the left" : "Move panel to the right"}
+          size="icon-xs"
+          variant="ghost"
+          onClick={() => setSide(side === "right" ? "left" : "right")}
+        >
+          {side === "right" ? <ArrowLeftIcon /> : <ArrowRightIcon />}
+        </Button>
+        <Button
+          aria-label={isMinimized ? "Expand the theme editor" : "Minimize the theme editor"}
+          size="icon-xs"
+          variant="ghost"
+          onClick={() => setIsMinimized(!isMinimized)}
+        >
+          {isMinimized ? <ChevronUpIcon /> : <ChevronDownIcon />}
+        </Button>
+        <Button
+          aria-label="Close the theme editor"
+          size="icon-xs"
+          variant="ghost"
+          onClick={() => onOpenChange(false)}
+        >
+          <XIcon />
+        </Button>
+      </div>
 
-          {isAdvanced ? (
-            <div className="space-y-4 rounded-lg border p-4">
-              {THEME_EDITOR_ROLE_GROUPS.map((group) => (
-                <div className="space-y-2" key={group.id}>
-                  <div>
-                    <h4 className="text-sm font-medium">{group.title}</h4>
-                    <p className="text-xs leading-relaxed text-muted-foreground">
-                      {group.description}
-                    </p>
+      {isMinimized ? null : (
+        <>
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-3 py-3">
+            {renderNameField()}
+            <ThemeWireframe
+              className="h-28"
+              panes={[{ colors: colorsByAppearance[activeAppearance] }]}
+            />
+            {renderModeButtons()}
+            {renderAppearanceButtons()}
+            <div className="space-y-3">
+              {renderColorsHeader()}
+              {isAdvanced ? null : renderGuidedColorFields()}
+            </div>
+
+            {isAdvanced ? (
+              <div className="space-y-4 rounded-lg border p-3">
+                {THEME_EDITOR_ROLE_GROUPS.map((group) => (
+                  <div className="space-y-2" key={group.id}>
+                    <div>
+                      <h4 className="text-sm font-medium">{group.title}</h4>
+                      <p className="text-xs leading-relaxed text-muted-foreground">
+                        {group.description}
+                      </p>
+                    </div>
+                    {renderRoleFields(group.roles)}
                   </div>
-                  {renderRoleFields(group.roles, "grid gap-2 sm:grid-cols-2 md:grid-cols-3")}
-                </div>
-              ))}
-            </div>
-          ) : null}
+                ))}
+              </div>
+            ) : null}
 
-          {error ? (
-            <Alert aria-live="polite" variant="error">
-              {error}
-            </Alert>
-          ) : null}
-        </DialogPanel>
-        <DialogFooter>
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button disabled={!name.trim()} onClick={handleSubmit}>
-            {isEditing ? (
-              "Save changes"
-            ) : (
-              <>
-                <PlusIcon />
-                Create theme
-              </>
-            )}
-          </Button>
-        </DialogFooter>
-      </DialogPopup>
-    </Dialog>
+            {error ? (
+              <Alert aria-live="polite" variant="error">
+                {error}
+              </Alert>
+            ) : null}
+          </div>
+          <div className="flex items-center justify-end gap-2 border-t border-border/70 px-3 py-2">
+            <Button size="sm" variant="ghost" onClick={() => onOpenChange(false)}>
+              Cancel
+            </Button>
+            <Button disabled={!name.trim()} size="sm" onClick={handleSubmit}>
+              {isEditing ? (
+                "Save changes"
+              ) : (
+                <>
+                  <PlusIcon />
+                  Create theme
+                </>
+              )}
+            </Button>
+          </div>
+        </>
+      )}
+    </div>
   );
 }
