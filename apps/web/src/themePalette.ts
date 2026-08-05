@@ -648,10 +648,23 @@ export function createManagedThemeColors(
     surfaceOverlay: themeRgbToHexColor(surfaceOverlay),
     text: themeRgbToHexColor(text),
     textMuted: themeRgbToHexColor(readableThemeText(canvas, text, 0.25, 4.5)),
+    // Borders blend through the accent before lightening so control chrome
+    // carries the theme hue like the hand-tuned palettes (#5c345b, #e0d3e1)
+    // instead of flattening to grey.
     border: themeRgbToHexColor(
-      mixThemeRgbColors(canvas, text, appearance === "dark" ? 0.36 : 0.12),
+      mixThemeRgbColors(
+        mixThemeRgbColors(canvas, accent, appearance === "dark" ? 0.22 : 0.1),
+        text,
+        0.1,
+      ),
     ),
-    input: themeRgbToHexColor(mixThemeRgbColors(canvas, text, appearance === "dark" ? 0.5 : 0.18)),
+    input: themeRgbToHexColor(
+      mixThemeRgbColors(
+        mixThemeRgbColors(canvas, accent, appearance === "dark" ? 0.3 : 0.14),
+        text,
+        appearance === "dark" ? 0.14 : 0.13,
+      ),
+    ),
     focus: themeRgbToHexColor(accent),
     accent: themeRgbToHexColor(accent),
     accentForeground: themeRgbToHexColor(accentForeground),
