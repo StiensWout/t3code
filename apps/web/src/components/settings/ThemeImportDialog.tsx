@@ -1,7 +1,12 @@
 import { PlusIcon, UploadIcon } from "lucide-react";
 import type { ChangeEvent, UIEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { installCustomTheme, parseThemeFile, type ThemeDefinition } from "../../themePalette";
+import {
+  installCustomTheme,
+  parseThemeFile,
+  removeCustomTheme,
+  type ThemeDefinition,
+} from "../../themePalette";
 import { Alert } from "../ui/alert";
 import { Button } from "../ui/button";
 import {
@@ -148,6 +153,13 @@ export function ThemeImportDialog({
     try {
       const installedTheme = installCustomTheme(parseThemeFile(JSON.parse(json)));
       if (!onImported(installedTheme)) {
+        // Roll the install back so a retry can run it again instead of
+        // failing on the already-taken theme id.
+        try {
+          removeCustomTheme(installedTheme.id);
+        } catch {
+          // Storage is failing wholesale; the error below covers it.
+        }
         setError("Theme added, but it could not be selected. Try again.");
         return;
       }

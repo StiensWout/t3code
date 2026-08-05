@@ -10,6 +10,7 @@ import {
   installCustomTheme,
   isThemeColor,
   parseThemeFile,
+  removeCustomTheme,
   updateCustomTheme,
   type ThemeAppearance,
   type ThemeColorRole,
@@ -239,6 +240,15 @@ export function ThemeEditorDialog({
         ? updateCustomTheme(parseThemeFile(themeFile))
         : installCustomTheme(parseThemeFile(themeFile));
       if (!onSaved(savedTheme)) {
+        if (!editingTheme) {
+          // Roll the install back so a retry can run it again instead of
+          // failing on the already-taken theme id.
+          try {
+            removeCustomTheme(savedTheme.id);
+          } catch {
+            // Storage is failing wholesale; the error below covers it.
+          }
+        }
         setError("Theme saved, but it could not be made active. Try again.");
         return;
       }

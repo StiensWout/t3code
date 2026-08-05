@@ -848,10 +848,10 @@ function themeIdFromName(name: string): string {
 
 export class ThemeLibraryStorageError extends Schema.TaggedErrorClass<ThemeLibraryStorageError>()(
   "ThemeLibraryStorageError",
-  { cause: Schema.Defect() },
+  { storageKey: Schema.String, cause: Schema.Defect() },
 ) {
   override get message(): string {
-    return `Could not save the theme library. ${this.cause instanceof Error ? this.cause.message : "Storage is unavailable."}`;
+    return `Failed to write the theme library to ${this.storageKey}.`;
   }
 }
 
@@ -863,7 +863,7 @@ function saveCustomThemes(themes: ReadonlyArray<ThemeDefinition>): void {
     window.localStorage.setItem(CUSTOM_THEMES_STORAGE_KEY, JSON.stringify(themes));
     customThemesSnapshot = themes;
   } catch (cause) {
-    throw new ThemeLibraryStorageError({ cause });
+    throw new ThemeLibraryStorageError({ storageKey: CUSTOM_THEMES_STORAGE_KEY, cause });
   }
   notifyCustomThemeListeners();
 }

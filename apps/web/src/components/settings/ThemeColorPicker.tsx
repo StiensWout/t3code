@@ -35,6 +35,21 @@ function clampThemeColor(value: number, min = 0, max = 1) {
   return Math.min(max, Math.max(min, value));
 }
 
+/**
+ * The picker's plane and sliders operate on opaque six-digit hex, but theme
+ * colors may carry alpha. The suffix is preserved separately and re-attached
+ * on commit so adjusting hue or brightness cannot change transparency.
+ */
+function themePickerAlphaSuffix(value: string): string {
+  const trimmed = value.trim().toLowerCase();
+  const alpha = /^#[0-9a-f]{4}$/.test(trimmed)
+    ? trimmed.slice(4).repeat(2)
+    : /^#[0-9a-f]{8}$/.test(trimmed)
+      ? trimmed.slice(7)
+      : "";
+  return alpha === "ff" ? "" : alpha;
+}
+
 function normalizeThemePickerColor(value: string): string {
   const trimmed = value.trim();
   if (/^#[0-9a-f]{3}$/i.test(trimmed)) {
@@ -151,6 +166,7 @@ function ThemeColorPickerPanel({
   onChange: (value: string) => void;
 }) {
   const normalizedValue = normalizeThemePickerColor(value);
+  const alphaSuffix = themePickerAlphaSuffix(value);
   const [hsv, setHsv] = useState(() => themeHexToHsv(normalizedValue));
   const [hexDraft, setHexDraft] = useState(normalizedValue);
   const [rgbDraft, setRgbDraft] = useState(() => themeRgbValue(normalizedValue));
@@ -182,9 +198,9 @@ function ThemeColorPickerPanel({
       const nextColor = themeHsvToHex(nextHsv.h, nextHsv.s, nextHsv.v);
       setHexDraft(nextColor);
       setRgbDraft(themeRgbValue(nextColor));
-      onChange(nextColor);
+      onChange(nextColor + alphaSuffix);
     },
-    [onChange],
+    [alphaSuffix, onChange],
   );
 
   const updateFromPlane = useCallback(
