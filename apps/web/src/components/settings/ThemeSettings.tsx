@@ -1,4 +1,11 @@
-import { DownloadIcon, PenLineIcon, PlusIcon, Trash2Icon, UploadIcon } from "lucide-react";
+import {
+  CopyIcon,
+  DownloadIcon,
+  PenLineIcon,
+  PlusIcon,
+  Trash2Icon,
+  UploadIcon,
+} from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "../../lib/utils";
 import {
@@ -64,6 +71,7 @@ function ThemeLibraryCard({
   onUseMode,
   activeModes,
   onEdit,
+  onDuplicate,
   onDownload,
   onRemove,
 }: {
@@ -74,6 +82,7 @@ function ThemeLibraryCard({
   onUseMode: (mode: ThemeMode) => void;
   activeModes: ReadonlyArray<ThemeMode>;
   onEdit?: () => void;
+  onDuplicate?: () => void;
   onDownload?: () => void;
   onRemove?: () => void;
 }) {
@@ -118,8 +127,21 @@ function ThemeLibraryCard({
             ) : null}
           </div>
         </div>
-        {onEdit || onDownload || onRemove ? (
+        {onEdit || onDuplicate || onDownload || onRemove ? (
           <div className="flex shrink-0 items-center gap-1">
+            {onDuplicate ? (
+              <Button
+                aria-label={`Duplicate ${theme.label}`}
+                size="icon-xs"
+                variant="ghost"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onDuplicate();
+                }}
+              >
+                <CopyIcon />
+              </Button>
+            ) : null}
             {onEdit ? (
               <Button
                 aria-label={`Edit ${theme.label}`}
@@ -197,6 +219,9 @@ export function ThemeLibrary({
   setThemeHalf: (appearance: ThemeAppearance, themeId: string | null) => boolean;
 }) {
   const [themeToEdit, setThemeToEdit] = useState<ThemeDefinition | null>(null);
+  // The theme a new theme starts from when the user duplicates a card; a plain
+  // "Create theme" seeds from whatever is active instead (see below).
+  const [themeToSeed, setThemeToSeed] = useState<ThemeDefinition | null>(null);
   const [themeToRemove, setThemeToRemove] = useState<ThemeDefinition | null>(null);
   // Keep the last removal target so the dialog title stays populated while the
   // close animation plays after confirming.
@@ -363,6 +388,11 @@ export function ThemeLibrary({
     ],
   );
 
+  // "Create theme" starts from whatever is on screen for the appearance being
+  // edited, so tuning the theme you already use never means rebuilding it.
+  const activeThemeForAppearance =
+    getThemeDefinition((initialAppearance === "light" ? lightOwner : darkOwner) ?? "") ?? null;
+
   const cardDefById = (id: string | null): ThemeCardDefinition => {
     if (id === null) return STANDARD_THEME_CARDS[0]!;
     const definition = getThemeDefinition(id);
@@ -473,6 +503,7 @@ export function ThemeLibrary({
             isActive={false}
             isPersonal={false}
             key={maintainerTheme.id}
+            onDuplicate={() => setThemeToSeed(maintainerTheme)}
             onUse={() => persistTheme(maintainerTheme.id)}
             onUseMode={handlePairPick(maintainerTheme.id)}
             theme={card}
@@ -487,6 +518,7 @@ export function ThemeLibrary({
             isActive={false}
             isPersonal
             key={customTheme.id}
+            onDuplicate={() => setThemeToSeed(customTheme)}
             onEdit={() => setThemeToEdit(customTheme)}
             onDownload={() =>
               downloadThemeFile(`${customTheme.id}.json`, serializeThemeFile(customTheme))
@@ -532,14 +564,17 @@ export function ThemeLibrary({
       <ThemeEditorDialog
         editingTheme={themeToEdit}
         initialAppearance={initialAppearance}
+        seedTheme={themeToSeed ?? activeThemeForAppearance}
+        seedName={themeToSeed ? `${themeToSeed.label} copy` : undefined}
         onSaved={themeToEdit ? handleEditedTheme : handleCreatedTheme}
         onOpenChange={(open) => {
           if (!open) {
             onCreateOpenChange(false);
             setThemeToEdit(null);
+            setThemeToSeed(null);
           }
         }}
-        open={isCreateOpen || themeToEdit !== null}
+        open={isCreateOpen || themeToEdit !== null || themeToSeed !== null}
       />
       <ThemeImportDialog
         onImported={(importedTheme) => {

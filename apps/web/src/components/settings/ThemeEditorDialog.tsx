@@ -130,12 +130,19 @@ export function ThemeEditorDialog({
   onSaved,
   editingTheme,
   initialAppearance,
+  seedTheme,
+  seedName,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSaved: (theme: ThemeDefinition) => boolean;
   editingTheme: ThemeDefinition | null;
   initialAppearance: ThemeAppearance;
+  /** The theme a new theme starts from, so tuning what you already use is a
+   *  matter of editing rather than rebuilding. Null starts from the defaults. */
+  seedTheme?: ThemeDefinition | null;
+  /** Prefilled name for an explicit duplicate; a plain create stays unnamed. */
+  seedName?: string | undefined;
 }) {
   const isEditing = editingTheme !== null;
   const [name, setName] = useState("");
@@ -153,33 +160,39 @@ export function ThemeEditorDialog({
 
   useEffect(() => {
     if (open && !previousOpenRef.current) {
+      // Editing works on the theme itself; creating starts from the theme
+      // that is currently in use, so tuning what you already run is an edit
+      // away instead of a rebuild from the defaults.
+      const sourceTheme = editingTheme ?? seedTheme ?? null;
       const nextColors = getThemeEditorColorsByAppearance();
-      const nextAppearance = editingTheme
-        ? getThemeColorsForMode(editingTheme, initialAppearance)
+      const nextAppearance = sourceTheme
+        ? getThemeColorsForMode(sourceTheme, initialAppearance)
           ? initialAppearance
-          : editingTheme.appearance
+          : sourceTheme.appearance
         : initialAppearance;
-      if (editingTheme) {
-        nextColors[editingTheme.appearance] = { ...editingTheme.colors };
+      if (sourceTheme) {
+        nextColors[sourceTheme.appearance] = { ...sourceTheme.colors };
         for (const appearance of ["light", "dark"] as const) {
-          const variantColors = editingTheme.variants?.[appearance];
+          const variantColors = sourceTheme.variants?.[appearance];
           if (variantColors) nextColors[appearance] = { ...variantColors };
         }
       }
 
-      setName(editingTheme?.label ?? "");
-      setModeSelection(editingTheme && getThemeModes(editingTheme).length > 1 ? "both" : "single");
+      setName(editingTheme?.label ?? seedName ?? "");
+      setModeSelection(sourceTheme && getThemeModes(sourceTheme).length > 1 ? "both" : "single");
       setActiveAppearance(nextAppearance);
       // Themes saved by the guided editor carry the managed flag; anything
       // else (imports, hand-edited files, older saves) opens in advanced mode
-      // so guided regeneration cannot silently discard hand-tuned colors.
-      setIsAdvanced(editingTheme !== null && editingTheme.managed !== true);
+      // so guided regeneration cannot silently discard hand-tuned colors. A
+      // seeded new theme follows the same rule: its palette is only safe to
+      // regenerate when the guided editor produced it.
+      setIsAdvanced(sourceTheme !== null && sourceTheme.managed !== true);
       setSimpleColorsDirtyByAppearance({ light: false, dark: false });
       setColorsByAppearance(nextColors);
       setError(null);
     }
     previousOpenRef.current = open;
-  }, [editingTheme, initialAppearance, open]);
+  }, [editingTheme, initialAppearance, open, seedName, seedTheme]);
 
   const updateColor = useCallback(
     (role: ThemeColorRole, value: string) => {
