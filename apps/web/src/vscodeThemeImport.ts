@@ -221,9 +221,16 @@ export function parseVsCodeThemeFile(value: unknown): ThemeDefinition {
     fallback: string,
     ...keys: ReadonlyArray<string>
   ): string => {
-    const candidate = solidOver(hexToRgb(surface), ...keys);
-    if (!candidate) return fallback;
-    return contrastRatio(hexToRgb(candidate), hexToRgb(surface)) >= 4.5 ? candidate : fallback;
+    const surfaceRgb = hexToRgb(surface);
+    const isReadable = (candidate: string) => contrastRatio(hexToRgb(candidate), surfaceRgb) >= 4.5;
+    const specified = solidOver(surfaceRgb, ...keys);
+    if (specified && isReadable(specified)) return specified;
+    // The derived fallback was solved against the derived surface. When the
+    // file replaced that surface (a light sideBar in a dark theme, say), the
+    // fallback has to clear the bar there too, or the text falls back to the
+    // readable end of the greyscale for the surface actually in play.
+    if (isReadable(fallback)) return fallback;
+    return relativeLuminance(surfaceRgb) < 0.179 ? "#ffffff" : "#000000";
   };
 
   const overrides: Partial<Record<ThemeColorRole, string>> = {

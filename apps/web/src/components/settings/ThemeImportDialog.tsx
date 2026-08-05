@@ -157,6 +157,9 @@ export function ThemeImportDialog({
 
   useEffect(() => {
     importRequestRef.current += 1;
+    // Reset on close too: a dialog dismissed mid-drag would otherwise reopen
+    // still wearing the drop highlight.
+    setIsDropTarget(false);
     if (!open) return;
     setJson("");
     setFileName(null);

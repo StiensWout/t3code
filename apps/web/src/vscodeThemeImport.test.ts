@@ -115,6 +115,28 @@ describe("VS Code theme import", () => {
     expect(contrastRatio(theme.colors.text, theme.colors.canvas)).toBeGreaterThanOrEqual(4.5);
   });
 
+  it("stays readable when the file replaces a surface but not its foreground", () => {
+    // A dark theme with a light sidebar: the derived sidebar foreground was
+    // solved for a dark surface and would vanish on this one.
+    const theme = parseVsCodeThemeFile({
+      name: "Split",
+      type: "dark",
+      colors: {
+        "editor.background": "#101010",
+        "editor.foreground": "#f5f5f5",
+        "sideBar.background": "#fafafa",
+        "terminal.background": "#fbfbfb",
+      },
+    });
+    expect(theme.colors.sidebar).toBe("#fafafa");
+    expect(
+      contrastRatio(theme.colors.sidebarForeground, theme.colors.sidebar),
+    ).toBeGreaterThanOrEqual(4.5);
+    expect(
+      contrastRatio(theme.colors.terminalForeground, theme.colors.terminalBackground),
+    ).toBeGreaterThanOrEqual(4.5);
+  });
+
   it("reads wide-gamut color() notation", () => {
     // Themes authored for P3 displays (the shipped Pierre "vibrant" pair) use
     // this instead of hex.
