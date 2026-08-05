@@ -327,9 +327,7 @@ export function ThemeEditorDialog({
           </div>
 
           <div className="space-y-2">
-            <span className="text-sm font-medium">
-              {modeSelection === "both" ? "Colors" : "Appearance"}
-            </span>
+            <span className="text-sm font-medium">Appearance</span>
             <div aria-label="Theme appearance" className="grid grid-cols-2 gap-2" role="group">
               <Button
                 aria-pressed={activeAppearance === "light"}
