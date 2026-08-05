@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import indexHtml from "../index.html?raw";
 import {
   CUSTOM_THEMES_STORAGE_KEY,
+  getDefaultThemeColors,
   getThemeColorsForMode,
   invalidateCustomThemes,
   isKnownThemePreference,
@@ -17,6 +18,9 @@ import {
 } from "./themePalette";
 
 const THEME_STORAGE_KEY = "t3code:theme";
+// A custom theme that omits chrome falls back to the runtime default, so the
+// boot copy of that default stays derived from the real palette.
+const DEFAULT_DARK_CHROME = getDefaultThemeColors("dark").chrome;
 
 const bootScript = (() => {
   const match = indexHtml.match(/<script>([\s\S]*?)<\/script>/);
@@ -266,9 +270,9 @@ describe("index.html boot script", () => {
     });
     expect(aurora.themeId).toBe("aurora");
     expect(aurora.isDark).toBe(true);
-    expect(aurora.backgroundColor).toBe("#241329");
+    expect(aurora.backgroundColor).toBe(DEFAULT_DARK_CHROME);
     expect(aurora.bootVariables["--boot-background"]).toBe(AURORA_DUAL.variants.dark.canvas);
-    expect(aurora.metaContent).toBe("#241329");
+    expect(aurora.metaContent).toBe(DEFAULT_DARK_CHROME);
   });
 
   // Asserting against the real palette definitions (not literals) turns the
@@ -392,8 +396,8 @@ describe("index.html boot script", () => {
     expect(boot.bootVariables["--boot-background"]).toBe("#180f1b");
     expect(boot.bootVariables["--boot-foreground"]).toBe("#fffaff");
     expect(boot.bootVariables["--boot-accent"]).toBe("#df4c96");
-    expect(boot.backgroundColor).toBe("#241329");
-    expect(boot.metaContent).toBe("#241329");
+    expect(boot.backgroundColor).toBe(DEFAULT_DARK_CHROME);
+    expect(boot.metaContent).toBe(DEFAULT_DARK_CHROME);
   });
 
   it("ignores malformed custom theme entries before applying a splash", () => {

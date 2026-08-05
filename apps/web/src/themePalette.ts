@@ -307,10 +307,10 @@ const T3_CHAT_LIGHT_COLORS: ThemeColors = {
   // The main panel leans into the pink family; the paler #faf5fa moves to
   // the code surface so both official shades stay in play.
   canvas: "#f5ecf5",
-  // Sits just off the canvas so the top bar meets it with a soft seam
-  // instead of a hard hue step.
-  chrome: "#f4e8f5",
-  toolbar: "#f4e8f5",
+  // The top bar shares the main panel's surface family: same canvas, same
+  // border, controls on the panel's own raised surface — no chrome seam.
+  chrome: "#f5ecf5",
+  toolbar: "#f5ecf5",
   toolbarForeground: "#501854",
   toolbarBorder: "#e0d3e1",
   toolbarControl: "#efe7f0",
@@ -371,11 +371,11 @@ const T3_CHAT_LIGHT_COLORS: ThemeColors = {
 
 const DEFAULT_DARK_THEME_COLORS: ThemeColors = {
   canvas: "#180f1b",
-  chrome: "#241329",
-  toolbar: "#241329",
+  chrome: "#180f1b",
+  toolbar: "#180f1b",
   toolbarForeground: "#f4d8f0",
   toolbarBorder: "#5c345b",
-  toolbarControl: "#2a182b",
+  toolbarControl: "#221323",
   toolbarControlForeground: "#f4d8f0",
   toolbarControlHover: "#42243f",
   surface: "#221323",
@@ -699,7 +699,6 @@ export function createVividThemeColors(
   const actionForeground = readableThemeForeground(actionRgb);
   const accentForeground = readableThemeForeground(accentRgb);
 
-  const chrome = surfaceAt(0.025);
   const sidebar = surfaceAt(0.045, tintC * 1.4);
   const sidebarRgb = themeOklchToRgb(sidebar);
   const surface = surfaceAt(0.015);
@@ -727,8 +726,9 @@ export function createVividThemeColors(
   return {
     ...defaults,
     canvas: themeRgbToHexColor(canvasRgb),
-    chrome: hex(chrome),
-    toolbar: hex(chrome),
+    // The top bar shares the canvas so the main panel reads as one surface.
+    chrome: themeRgbToHexColor(canvasRgb),
+    toolbar: themeRgbToHexColor(canvasRgb),
     toolbarForeground: themeRgbToHexColor(textRgb),
     toolbarBorder: hex(surfaceAt(dark ? 0.14 : 0.1, Math.min(0.08, accent.C * 0.4))),
     toolbarControl: hex(surfaceAt(dark ? 0.09 : 0.05, tintC * 1.3)),
@@ -911,7 +911,9 @@ export function createManagedThemeColors(
     ? parseThemeRgbColor(accentValue, { r: 168, g: 67, b: 112 })
     : managedThemeAccent(accentValue, appearance, canvas);
   const text = readableThemeForeground(canvas);
-  const chrome = mixThemeRgbColors(canvas, accent, 0.04);
+  // The top bar is part of the main panel, not a separate chrome layer: it
+  // shares the canvas, and its controls sit on the panel's own surfaces.
+  const chrome = canvas;
   const sidebar = mixThemeRgbColors(canvas, accent, 0.08);
   const surfaceRaised = mixThemeRgbColors(canvas, text, appearance === "dark" ? 0.12 : 0.035);
   const surfaceOverlay = mixThemeRgbColors(canvas, text, appearance === "dark" ? 0.18 : 0.06);
