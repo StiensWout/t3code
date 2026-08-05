@@ -1086,8 +1086,12 @@ html.dark[data-theme-id] {
   --card-foreground: var(--app-theme-text);
   --popover: var(--app-theme-surface-overlay);
   --popover-foreground: var(--app-theme-text);
-  --primary: var(--app-theme-accent);
-  --primary-foreground: var(--app-theme-accent-foreground);
+  /* Solid controls (CTAs, switches, sliders, the send button) all share the
+     theme's action color so every "act now" affordance reads consistently;
+     the accent keeps driving surfaces, selection, and focus. Palettes without
+     a distinct action color make these identical. */
+  --primary: var(--app-theme-message-action);
+  --primary-foreground: var(--app-theme-message-action-foreground);
   --secondary: var(--app-theme-secondary);
   --secondary-foreground: var(--app-theme-secondary-foreground);
   --muted: var(--app-theme-muted);
