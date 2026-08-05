@@ -162,18 +162,6 @@
         const isThemePreferenceMode = (value) =>
           value === "light" || value === "dark" || value === "system";
         const isThemeAppearance = (value) => value === "light" || value === "dark";
-        const splitThemePreference = (preference) => {
-          const separatorIndex = preference.lastIndexOf(":");
-          if (separatorIndex <= 0) {
-            return { id: preference, mode: null, invalidMode: false };
-          }
-          const rawMode = preference.slice(separatorIndex + 1);
-          return {
-            id: preference.slice(0, separatorIndex),
-            mode: isThemePreferenceMode(rawMode) ? rawMode : null,
-            invalidMode: !isThemePreferenceMode(rawMode),
-          };
-        };
         const isStoredCustomTheme = (value) => {
           if (
             !isRecord(value) ||
@@ -211,25 +199,13 @@
         try {
           const storedTheme = window.localStorage.getItem("t3code:theme");
           const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-          const rawPreference = splitThemePreference(storedTheme ?? "");
           // Older builds stored the dark T3 Chat palette as its own theme id;
           // keep that preference pointed at the dark variant.
-          const isLegacyT3ChatDark =
-            !rawPreference.invalidMode && rawPreference.id === "t3-chat-dark";
-          const preference = isLegacyT3ChatDark
-            ? {
-                id: "t3-chat",
-                mode: rawPreference.mode === "system" ? "system" : "dark",
-                invalidMode: false,
-              }
-            : rawPreference;
-          const explicitMode =
-            preference.mode === "light" || preference.mode === "dark" ? preference.mode : null;
-          const builtInModes = preference.invalidMode
-            ? null
-            : (BUILT_IN_THEME_MODES[preference.id] ?? null);
-          const customTheme =
-            preference.invalidMode || builtInModes ? null : findCustomTheme(preference.id);
+          const isLegacyT3ChatDark = storedTheme === "t3-chat-dark";
+          const themeId = isLegacyT3ChatDark ? "t3-chat" : (storedTheme ?? "");
+          const legacyMode = isLegacyT3ChatDark ? "dark" : null;
+          const builtInModes = BUILT_IN_THEME_MODES[themeId] ?? null;
+          const customTheme = builtInModes ? null : findCustomTheme(themeId);
           const themeModes =
             builtInModes ??
             (customTheme
@@ -237,14 +213,12 @@
                   (mode) => mode === customTheme.appearance || customTheme.variants?.[mode],
                 )
               : null);
-          // Mirrors the runtime's isKnownThemePreference: an explicit mode the
-          // theme cannot render makes the whole preference unknown, and the
-          // runtime falls back to the system default.
+          // Mirrors the runtime's isKnownThemePreference.
           const isKnownTheme =
             storedTheme === "light" ||
             storedTheme === "dark" ||
             storedTheme === "system" ||
-            (themeModes !== null && (explicitMode === null || themeModes.includes(explicitMode)));
+            themeModes !== null;
           const theme = isKnownTheme && storedTheme ? storedTheme : "system";
           const isThemed = isKnownTheme && themeModes !== null;
           const baseAppearance = customTheme ? customTheme.appearance : "light";
@@ -258,10 +232,10 @@
             : storedFollowSystem === "true"
               ? "system"
               : storedFollowSystem === "false"
-                ? (explicitMode ?? baseAppearance)
-                : theme === "system" || preference.mode === "system"
+                ? (legacyMode ?? baseAppearance)
+                : theme === "system"
                   ? "system"
-                  : (explicitMode ?? baseAppearance);
+                  : (legacyMode ?? baseAppearance);
           const themeMode = !isThemed
             ? null
             : appearanceMode === "system"
@@ -288,7 +262,7 @@
           // per role rather than dropping the theme.
           const builtInSplash =
             isThemed && !customTheme && themeMode
-              ? (BUILT_IN_THEME_PALETTES[preference.id]?.[themeMode] ?? null)
+              ? (BUILT_IN_THEME_PALETTES[themeId]?.[themeMode] ?? null)
               : null;
           const fallbackSplash = isDark ? SPLASH_COLORS.dark : SPLASH_COLORS.light;
           const customSplash = customColors
@@ -305,7 +279,7 @@
               }
             : null;
           if (isThemed) {
-            document.documentElement.dataset.themeId = customTheme ? customTheme.id : preference.id;
+            document.documentElement.dataset.themeId = customTheme ? customTheme.id : themeId;
           } else {
             delete document.documentElement.dataset.themeId;
           }

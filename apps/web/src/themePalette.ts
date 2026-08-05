@@ -253,44 +253,18 @@ export function subscribeToCustomThemes(listener: () => void): () => void {
   };
 }
 
-const THEME_PREFERENCE_SEPARATOR = ":";
-
-type ThemePreferenceParts = {
-  id: string;
-  mode: ThemePreferenceMode | null;
-  invalidMode: boolean;
-};
-
-function isThemePreferenceMode(value: unknown): value is ThemePreferenceMode {
-  return value === "light" || value === "dark" || value === "system";
-}
-
-function splitThemePreference(theme: ThemePreference): ThemePreferenceParts {
-  const separatorIndex = theme.lastIndexOf(THEME_PREFERENCE_SEPARATOR);
-  if (separatorIndex <= 0) return { id: theme, mode: null, invalidMode: false };
-
-  const rawMode = theme.slice(separatorIndex + 1);
-  return {
-    id: theme.slice(0, separatorIndex),
-    mode: isThemePreferenceMode(rawMode) ? rawMode : null,
-    invalidMode: !isThemePreferenceMode(rawMode),
-  };
-}
-
 function normalizeThemeId(themeId: string): string {
   return themeId === LEGACY_T3_CHAT_DARK_THEME_ID ? T3_CHAT_THEME_ID : themeId;
 }
 
 function themeIdFromPreference(theme: ThemePreference): string {
-  return normalizeThemeId(splitThemePreference(theme).id);
+  return normalizeThemeId(theme);
 }
 
-function explicitThemeMode(theme: ThemePreference): ThemeAppearance | null {
-  const parts = splitThemePreference(theme);
-  // Older builds stored the dark T3 Chat palette as a separate theme. Keep
-  // those preferences readable while mapping them to the dark variant.
-  if (parts.id === LEGACY_T3_CHAT_DARK_THEME_ID) return "dark";
-  return parts.mode === "light" || parts.mode === "dark" ? parts.mode : null;
+// Older builds stored the dark T3 Chat palette as a separate theme. Keep
+// those preferences readable while mapping them to the dark variant.
+function legacyThemeMode(theme: ThemePreference): ThemeAppearance | null {
+  return theme === LEGACY_T3_CHAT_DARK_THEME_ID ? "dark" : null;
 }
 
 /**
@@ -810,39 +784,9 @@ export function getThemeModes(theme: ThemeDefinition): ReadonlyArray<ThemeAppear
 export function getThemePreferenceMode(theme: ThemePreference): ThemeAppearance | null {
   if (theme === "system") return null;
   if (theme === "light" || theme === "dark") return theme;
-  const explicitMode = explicitThemeMode(theme);
-  if (explicitMode) return explicitMode;
+  const legacyMode = legacyThemeMode(theme);
+  if (legacyMode) return legacyMode;
   return getThemeDefinition(theme)?.appearance ?? null;
-}
-
-export function themePreferenceForMode(
-  theme: ThemePreference | ThemeDefinition,
-  mode: ThemeAppearance,
-): ThemePreference {
-  const definition = typeof theme === "string" ? getThemeDefinition(theme) : theme;
-  const themeId = typeof theme === "string" ? theme : theme.id;
-  if (!definition || getThemeColorsForMode(definition, mode) === null) return themeId;
-  return mode === definition.appearance
-    ? definition.id
-    : `${definition.id}${THEME_PREFERENCE_SEPARATOR}${mode}`;
-}
-
-export function isThemeFollowingSystem(theme: ThemePreference): boolean {
-  if (theme === "system") return true;
-  return splitThemePreference(theme).mode === "system";
-}
-
-export function getThemeDefinitions(): ReadonlyArray<ThemeDefinition> {
-  return [...BUILT_IN_THEME_DEFINITIONS, ...getCustomThemes()];
-}
-
-export function isCustomTheme(theme: ThemePreference): boolean {
-  const themeId = themeIdFromPreference(theme);
-  return getCustomThemes().some((definition) => definition.id === themeId);
-}
-
-export function isT3ChatTheme(theme: ThemePreference): boolean {
-  return themeIdFromPreference(theme) === T3_CHAT_THEME_ID;
 }
 
 function themeIdFromName(name: string): string {
@@ -873,7 +817,11 @@ export function installCustomTheme(theme: ThemeDefinition): ThemeDefinition {
   if (RESERVED_THEME_IDS.has(theme.id)) {
     throw new Error(`The theme id "${theme.id}" is reserved.`);
   }
-  if (getThemeDefinitions().some((existing) => existing.id === theme.id)) {
+  if (
+    [...BUILT_IN_THEME_DEFINITIONS, ...getCustomThemes()].some(
+      (existing) => existing.id === theme.id,
+    )
+  ) {
     throw new Error(`A theme named "${theme.label}" is already installed.`);
   }
   saveCustomThemes([...getCustomThemes(), theme]);
@@ -1059,9 +1007,7 @@ export function applyThemePalette(theme: ThemePreference, appearance?: ThemeAppe
 
   if (palette) {
     root.dataset.themeId = palette.id;
-    // The resolved appearance is authoritative. This lets a two-mode theme
-    // follow the system even when its stored preference includes a mode suffix.
-    const mode = appearance ?? explicitThemeMode(theme) ?? palette.appearance;
+    const mode = appearance ?? legacyThemeMode(theme) ?? palette.appearance;
     const colors = getThemeColorsForMode(palette, mode) ?? palette.colors;
     for (const [role, value] of Object.entries(colors) as Array<[ThemeColorRole, string]>) {
       root.style.setProperty(APP_THEME_VARIABLES[role], value);
@@ -1082,8 +1028,7 @@ export function resolveThemeAppearance(
   appearanceMode?: ThemePreferenceMode,
 ): "light" | "dark" {
   const systemAppearance = systemDark ? "dark" : "light";
-  const mode =
-    appearanceMode ?? ((followSystem ?? isThemeFollowingSystem(theme)) ? "system" : null);
+  const mode = appearanceMode ?? ((followSystem ?? theme === "system") ? "system" : null);
   if (mode === "system") {
     const definition = getThemeDefinition(theme);
     return definition && getThemeColorsForMode(definition, systemAppearance) === null
@@ -1104,8 +1049,7 @@ export function resolveDesktopTheme(
   followSystem?: boolean,
   appearanceMode?: ThemePreferenceMode,
 ): "light" | "dark" | "system" {
-  const mode =
-    appearanceMode ?? ((followSystem ?? isThemeFollowingSystem(theme)) ? "system" : null);
+  const mode = appearanceMode ?? ((followSystem ?? theme === "system") ? "system" : null);
   if (mode === "system") {
     const definition = getThemeDefinition(theme);
     const hasLightMode = definition && getThemeColorsForMode(definition, "light") !== null;
@@ -1123,10 +1067,5 @@ export function resolveDesktopTheme(
 
 export function isKnownThemePreference(theme: string): boolean {
   if (theme === "light" || theme === "dark" || theme === "system") return true;
-  const parts = splitThemePreference(theme);
-  if (parts.invalidMode) return false;
-  const definition = getThemeDefinition(theme);
-  if (!definition) return false;
-  const mode = getThemePreferenceMode(theme);
-  return mode === null || getThemeColorsForMode(definition, mode) !== null;
+  return getThemeDefinition(theme) !== null;
 }

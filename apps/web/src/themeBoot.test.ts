@@ -5,7 +5,6 @@ import {
   CUSTOM_THEMES_STORAGE_KEY,
   invalidateCustomThemes,
   isKnownThemePreference,
-  isThemeFollowingSystem,
   resolveThemeAppearance,
   THEME_APPEARANCE_MODE_STORAGE_KEY,
   THEME_FOLLOW_SYSTEM_STORAGE_KEY,
@@ -108,7 +107,7 @@ function runtimeResolvedAppearance(
           ? "system"
           : followRaw === "false"
             ? null
-            : theme === "system" || isThemeFollowingSystem(theme)
+            : theme === "system"
               ? "system"
               : null;
     const followSystem = appearanceMode === "system";
@@ -198,10 +197,10 @@ describe("index.html boot script", () => {
       prefersDark: false,
     },
     {
-      name: "a stale mode suffix for a single-mode theme falls back to system",
+      name: "a legacy mode-suffixed preference is treated as unknown",
       storage: {
         [THEME_STORAGE_KEY]: "aurora:dark",
-        [CUSTOM_THEMES_STORAGE_KEY]: JSON.stringify([{ ...AURORA_DUAL, variants: undefined }]),
+        [CUSTOM_THEMES_STORAGE_KEY]: JSON.stringify([AURORA_DUAL]),
       },
       prefersDark: true,
     },
@@ -213,23 +212,6 @@ describe("index.html boot script", () => {
     {
       name: "a corrupted follow-system value falls back to inference",
       storage: { [THEME_STORAGE_KEY]: "system", [THEME_FOLLOW_SYSTEM_STORAGE_KEY]: "1" },
-      prefersDark: true,
-    },
-    {
-      name: "a system-suffixed theme follows the OS while follow-system is unset",
-      storage: {
-        [THEME_STORAGE_KEY]: "aurora:system",
-        [CUSTOM_THEMES_STORAGE_KEY]: JSON.stringify([AURORA_DUAL]),
-      },
-      prefersDark: true,
-    },
-    {
-      name: "follow-system off overrides a stale system suffix",
-      storage: {
-        [THEME_STORAGE_KEY]: "aurora:system",
-        [THEME_FOLLOW_SYSTEM_STORAGE_KEY]: "false",
-        [CUSTOM_THEMES_STORAGE_KEY]: JSON.stringify([AURORA_DUAL]),
-      },
       prefersDark: true,
     },
     {

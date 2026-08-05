@@ -7,7 +7,6 @@ import {
   CUSTOM_THEMES_STORAGE_KEY,
   invalidateCustomThemes,
   isKnownThemePreference,
-  isThemeFollowingSystem,
   getThemePreferenceMode,
   resolveDesktopTheme,
   resolveThemeAppearance,
@@ -89,7 +88,7 @@ function getSystemDark() {
 }
 
 function readStoredFollowSystem(theme: Theme): boolean {
-  if (typeof window === "undefined") return theme === "system" || isThemeFollowingSystem(theme);
+  if (typeof window === "undefined") return theme === "system";
 
   try {
     const raw = window.localStorage.getItem(THEME_FOLLOW_SYSTEM_STORAGE_KEY);
@@ -99,7 +98,7 @@ function readStoredFollowSystem(theme: Theme): boolean {
     // Fall back to the legacy theme value when the separate preference is unavailable.
   }
 
-  return theme === "system" || isThemeFollowingSystem(theme);
+  return theme === "system";
 }
 
 function isThemePreferenceMode(value: string | null): value is ThemePreferenceMode {

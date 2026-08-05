@@ -9,7 +9,6 @@ import {
   getCustomThemes,
   invalidateCustomThemes,
   installCustomTheme,
-  isThemeFollowingSystem,
   parseThemeFile,
   resolveDesktopTheme,
   resolveThemeAppearance,
@@ -20,7 +19,6 @@ import {
   T3_GROVE_THEME,
   T3_IRIS_THEME,
   T3_OCEAN_THEME,
-  themePreferenceForMode,
   updateCustomTheme,
   CUSTOM_THEMES_STORAGE_KEY,
   createManagedThemeColors,
@@ -133,16 +131,11 @@ describe("theme files", () => {
       canvas: "#101827",
       text: "#eef5ff",
     });
-    expect(themePreferenceForMode(theme, "dark")).toBe("aurora:dark");
-    expect(isThemeFollowingSystem("aurora:system")).toBe(true);
-    expect(isThemeFollowingSystem("aurora:dark")).toBe(false);
     expect(getThemeModes(T3_CHAT_THEME)).toEqual(["light", "dark"]);
     expect(resolveThemeAppearance(T3_CHAT_THEME.id, true, true)).toBe("dark");
     expect(resolveDesktopTheme(T3_CHAT_THEME.id, true)).toBe("system");
     expect(resolveThemeAppearance(T3_CHAT_THEME.id, false, false, "dark")).toBe("dark");
     expect(resolveDesktopTheme(T3_CHAT_THEME.id, false, "dark")).toBe("dark");
-    expect(resolveThemeAppearance("aurora:dark", false, true)).toBe("light");
-    expect(resolveDesktopTheme("aurora:dark", true)).toBe("system");
     expect(JSON.parse(serializeThemeFile(theme)).variants.dark).toMatchObject({
       canvas: "#101827",
       text: "#eef5ff",
@@ -297,18 +290,11 @@ describe("stored theme preferences", () => {
   });
 
   it("recognizes only preferences the runtime can render", () => {
-    for (const preference of [
-      "light",
-      "dark",
-      "system",
-      T3_CHAT_THEME.id,
-      `${T3_GROVE_THEME.id}:dark`,
-    ]) {
+    for (const preference of ["light", "dark", "system", T3_CHAT_THEME.id, T3_GROVE_THEME.id]) {
       expect(isKnownThemePreference(preference)).toBe(true);
     }
-    expect(isKnownThemePreference("aurora:blah")).toBe(false);
+    expect(isKnownThemePreference(`${T3_GROVE_THEME.id}:dark`)).toBe(false);
     expect(isKnownThemePreference("missing-theme")).toBe(false);
-    expect(isKnownThemePreference(`${T3_CHAT_THEME.id}:dark`)).toBe(true);
   });
 
   it("keeps stored themes with unknown roles and drops invalid entries", () => {
