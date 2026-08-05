@@ -327,7 +327,12 @@ export function ThemeLibrary({
       if (cardId === null && baseCardId !== null) {
         const otherOwner = themeHalves?.[otherAppearance] ?? baseCardId;
         if (!persistTheme(appearanceMode === "system" ? "system" : appearanceMode)) return;
-        if (!setThemeHalf(otherAppearance, otherOwner)) notifyThemeSaveFailure();
+        if (!setThemeHalf(otherAppearance, otherOwner)) {
+          // Best-effort rollback: restore the whole-theme selection rather
+          // than leaving the user with no theme at all.
+          setTheme(theme);
+          notifyThemeSaveFailure();
+        }
         return;
       }
       if (!setThemeHalf(appearance, cardId)) {
@@ -346,7 +351,16 @@ export function ThemeLibrary({
         notifyThemeSaveFailure();
       }
     },
-    [appearanceMode, baseCardId, notifyThemeSaveFailure, persistTheme, setThemeHalf, themeHalves],
+    [
+      appearanceMode,
+      baseCardId,
+      notifyThemeSaveFailure,
+      persistTheme,
+      setTheme,
+      setThemeHalf,
+      theme,
+      themeHalves,
+    ],
   );
 
   const cardDefById = (id: string | null): ThemeCardDefinition => {
