@@ -202,7 +202,7 @@ export function ThemeEditorDialog({
 
   const handleSubmit = useCallback(() => {
     if (!name.trim()) {
-      setError("Give your theme a name before saving it.");
+      setError("Name your theme first.");
       return;
     }
 
@@ -277,9 +277,7 @@ export function ThemeEditorDialog({
         <DialogHeader>
           <DialogTitle>{isEditing ? "Edit theme" : "Create theme"}</DialogTitle>
           <DialogDescription>
-            {isEditing
-              ? "Update the name and colors for this personal theme."
-              : "Pick a palette for T3 Code. Add a dark version if you need one."}
+            {isEditing ? "Tweak the name or colors." : "Make T3 Code yours."}
           </DialogDescription>
         </DialogHeader>
         <DialogPanel className="space-y-5">
@@ -313,8 +311,8 @@ export function ThemeEditorDialog({
             </div>
             <p className="text-xs leading-relaxed text-muted-foreground">
               {modeSelection === "both"
-                ? "Use a separate palette for light and dark mode."
-                : "Use the same palette in both modes."}
+                ? "Separate light and dark palettes."
+                : "One palette for light and dark."}
             </p>
           </div>
 
@@ -350,8 +348,8 @@ export function ThemeEditorDialog({
                 </h3>
                 <p className="text-xs leading-relaxed text-muted-foreground">
                   {isAdvanced
-                    ? "Customize every color role used by T3 Code."
-                    : "Choose the mood. T3 Code keeps the palette balanced and readable."}
+                    ? "Full control over every color role."
+                    : "Pick two colors — T3 Code builds the rest."}
                 </p>
               </div>
               <label className="flex shrink-0 cursor-pointer items-center gap-2 pt-0.5 text-sm font-medium">

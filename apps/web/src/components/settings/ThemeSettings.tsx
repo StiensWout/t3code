@@ -417,8 +417,7 @@ export function ThemeLibrary({
           <AlertDialogHeader>
             <AlertDialogTitle>Remove “{removeDialogTheme?.label}”?</AlertDialogTitle>
             <AlertDialogDescription>
-              This removes the theme from your saved themes. You can add it again by importing its
-              JSON file.
+              You can bring it back anytime by importing its JSON file.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

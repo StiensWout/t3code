@@ -168,9 +168,7 @@ export function ThemeImportDialog({
       <DialogPopup className="max-w-3xl overflow-hidden">
         <DialogHeader>
           <DialogTitle>Add a theme</DialogTitle>
-          <DialogDescription>
-            Choose a JSON file or paste one below. Both options use the same theme format.
-          </DialogDescription>
+          <DialogDescription>Drop in a JSON file or paste one below.</DialogDescription>
         </DialogHeader>
         <DialogPanel className="space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-dashed border-border/80 bg-muted/20 px-3 py-3">
@@ -207,7 +205,7 @@ export function ThemeImportDialog({
             </div>
             <ThemeJsonEditor id="theme-json-editor" onChange={setJson} value={json} />
             <p className="text-xs leading-relaxed text-muted-foreground">
-              Export a theme from T3 Code to get a complete file, then edit the colors you want.
+              Export an existing theme to get a full file you can tweak.
             </p>
           </div>
 
