@@ -8,10 +8,10 @@ import {
   isKnownThemePreference,
   resolveThemeAppearance,
   T3_CHAT_THEME,
-  T3_EMBER_THEME,
-  T3_GROVE_THEME,
-  T3_IRIS_THEME,
-  T3_OCEAN_THEME,
+  EMBER_THEME,
+  GROVE_THEME,
+  IRIS_THEME,
+  OCEAN_THEME,
   THEME_APPEARANCE_MODE_STORAGE_KEY,
   THEME_FOLLOW_SYSTEM_STORAGE_KEY,
 } from "./themePalette";
@@ -131,9 +131,9 @@ const AURORA_DUAL = {
   colors: { canvas: "#f8fbff", text: "#10243d", accent: "#5b6cff" },
   variants: { dark: { canvas: "#101827", text: "#eef5ff", accent: "#7c93ff" } },
 };
-const EMBER_DARK_ONLY = {
-  id: "ember",
-  label: "Ember",
+const CHARCOAL_DARK_ONLY = {
+  id: "charcoal",
+  label: "Charcoal",
   appearance: "dark",
   colors: { canvas: "#1c1210", text: "#ffe8d9", accent: "#ff7a45" },
 };
@@ -160,23 +160,28 @@ describe("index.html boot script", () => {
       prefersDark: false,
     },
     {
-      name: "T3 Grove follows a dark OS",
+      name: "Grove follows a dark OS",
+      storage: { [THEME_STORAGE_KEY]: "grove", [THEME_FOLLOW_SYSTEM_STORAGE_KEY]: "true" },
+      prefersDark: true,
+    },
+    {
+      name: "Ocean follows a dark OS",
+      storage: { [THEME_STORAGE_KEY]: "ocean", [THEME_FOLLOW_SYSTEM_STORAGE_KEY]: "true" },
+      prefersDark: true,
+    },
+    {
+      name: "Ember follows a dark OS",
+      storage: { [THEME_STORAGE_KEY]: "ember", [THEME_FOLLOW_SYSTEM_STORAGE_KEY]: "true" },
+      prefersDark: true,
+    },
+    {
+      name: "Iris follows a dark OS",
+      storage: { [THEME_STORAGE_KEY]: "iris", [THEME_FOLLOW_SYSTEM_STORAGE_KEY]: "true" },
+      prefersDark: true,
+    },
+    {
+      name: "a legacy t3-grove preference resolves through the alias",
       storage: { [THEME_STORAGE_KEY]: "t3-grove", [THEME_FOLLOW_SYSTEM_STORAGE_KEY]: "true" },
-      prefersDark: true,
-    },
-    {
-      name: "T3 Ocean follows a dark OS",
-      storage: { [THEME_STORAGE_KEY]: "t3-ocean", [THEME_FOLLOW_SYSTEM_STORAGE_KEY]: "true" },
-      prefersDark: true,
-    },
-    {
-      name: "T3 Ember follows a dark OS",
-      storage: { [THEME_STORAGE_KEY]: "t3-ember", [THEME_FOLLOW_SYSTEM_STORAGE_KEY]: "true" },
-      prefersDark: true,
-    },
-    {
-      name: "T3 Iris follows a dark OS",
-      storage: { [THEME_STORAGE_KEY]: "t3-iris", [THEME_FOLLOW_SYSTEM_STORAGE_KEY]: "true" },
       prefersDark: true,
     },
     {
@@ -196,9 +201,9 @@ describe("index.html boot script", () => {
     {
       name: "a dark-only custom theme stays dark on a light OS",
       storage: {
-        [THEME_STORAGE_KEY]: "ember",
+        [THEME_STORAGE_KEY]: "charcoal",
         [THEME_FOLLOW_SYSTEM_STORAGE_KEY]: "true",
-        [CUSTOM_THEMES_STORAGE_KEY]: JSON.stringify([EMBER_DARK_ONLY]),
+        [CUSTOM_THEMES_STORAGE_KEY]: JSON.stringify([CHARCOAL_DARK_ONLY]),
       },
       prefersDark: false,
     },
@@ -270,13 +275,7 @@ describe("index.html boot script", () => {
   // boot script's hand-maintained copy into a CI-enforced contract: any
   // palette change breaks this test until the copy in index.html is updated.
   it("keeps every built-in boot splash in sync with the real palettes", () => {
-    for (const theme of [
-      T3_CHAT_THEME,
-      T3_GROVE_THEME,
-      T3_OCEAN_THEME,
-      T3_EMBER_THEME,
-      T3_IRIS_THEME,
-    ]) {
+    for (const theme of [T3_CHAT_THEME, GROVE_THEME, OCEAN_THEME, EMBER_THEME, IRIS_THEME]) {
       // The boot script resolves every built-in from a light base appearance.
       expect(theme.appearance).toBe("light");
       for (const mode of ["light", "dark"] as const) {
@@ -304,14 +303,14 @@ describe("index.html boot script", () => {
     const storage = {
       [THEME_STORAGE_KEY]: "t3-chat",
       [THEME_APPEARANCE_MODE_STORAGE_KEY]: "system",
-      "t3code:theme-halves:v1": JSON.stringify({ dark: "t3-grove" }),
+      "t3code:theme-halves:v1": JSON.stringify({ dark: GROVE_THEME.id }),
     };
 
     const dark = runBootScript({ storage, prefersDark: true });
     expect(dark.isDark).toBe(true);
-    expect(dark.themeId).toBe("t3-grove");
+    expect(dark.themeId).toBe(GROVE_THEME.id);
     expect(dark.bootVariables["--boot-background"]).toBe(
-      getThemeColorsForMode(T3_GROVE_THEME, "dark")!.canvas,
+      getThemeColorsForMode(GROVE_THEME, "dark")!.canvas,
     );
 
     const light = runBootScript({ storage, prefersDark: false });
@@ -335,12 +334,28 @@ describe("index.html boot script", () => {
             colors: { canvas: "#f8fbff", text: "#10243d", accent: "#5b6cff" },
           },
         ]),
+        "t3code:theme-halves:v1": JSON.stringify({ dark: GROVE_THEME.id }),
+      },
+      prefersDark: true,
+    });
+    expect(boot.isDark).toBe(true);
+    expect(boot.themeId).toBe(GROVE_THEME.id);
+  });
+
+  it("resolves a legacy-prefixed mix half onto the renamed theme", () => {
+    const boot = runBootScript({
+      storage: {
+        [THEME_STORAGE_KEY]: "t3-chat",
+        [THEME_APPEARANCE_MODE_STORAGE_KEY]: "system",
         "t3code:theme-halves:v1": JSON.stringify({ dark: "t3-grove" }),
       },
       prefersDark: true,
     });
     expect(boot.isDark).toBe(true);
-    expect(boot.themeId).toBe("t3-grove");
+    expect(boot.themeId).toBe(GROVE_THEME.id);
+    expect(boot.bootVariables["--boot-background"]).toBe(
+      getThemeColorsForMode(GROVE_THEME, "dark")!.canvas,
+    );
   });
 
   it("ignores a mix half that names an unknown theme", () => {

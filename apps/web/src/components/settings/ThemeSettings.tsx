@@ -9,10 +9,10 @@ import {
   type ThemeDefinition,
   type ThemeHalves,
   T3_CHAT_THEME,
-  T3_EMBER_THEME,
-  T3_GROVE_THEME,
-  T3_IRIS_THEME,
-  T3_OCEAN_THEME,
+  EMBER_THEME,
+  GROVE_THEME,
+  IRIS_THEME,
+  OCEAN_THEME,
 } from "../../themePalette";
 import {
   AlertDialog,
@@ -39,10 +39,10 @@ import { ThemeWireframe } from "./ThemeWireframe";
 
 const MAINTAINER_THEMES: ReadonlyArray<ThemeDefinition> = [
   T3_CHAT_THEME,
-  T3_GROVE_THEME,
-  T3_OCEAN_THEME,
-  T3_EMBER_THEME,
-  T3_IRIS_THEME,
+  GROVE_THEME,
+  OCEAN_THEME,
+  EMBER_THEME,
+  IRIS_THEME,
 ];
 
 function downloadThemeFile(filename: string, contents: string): void {

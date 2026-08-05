@@ -64,7 +64,7 @@
               chrome: "#291c28",
             },
           },
-          "t3-grove": {
+          grove: {
             light: {
               background: "#f3f7f4",
               foreground: "#241523",
@@ -78,7 +78,7 @@
               chrome: "#1e2f26",
             },
           },
-          "t3-ocean": {
+          ocean: {
             light: {
               background: "#f5f7f8",
               foreground: "#241523",
@@ -92,7 +92,7 @@
               chrome: "#1b2733",
             },
           },
-          "t3-ember": {
+          ember: {
             light: {
               background: "#f9f7f5",
               foreground: "#241523",
@@ -106,7 +106,7 @@
               chrome: "#31231c",
             },
           },
-          "t3-iris": {
+          iris: {
             light: {
               background: "#f8f7f9",
               foreground: "#241523",
@@ -134,11 +134,15 @@
           "light",
           "dark",
           "t3-chat",
+          "grove",
+          "ocean",
+          "ember",
+          "iris",
+          "t3-chat-dark",
           "t3-grove",
           "t3-ocean",
           "t3-ember",
           "t3-iris",
-          "t3-chat-dark",
         ];
         // Update every theme-color meta so any element another layer added
         // carries the resolved color too.
@@ -197,10 +201,19 @@
         try {
           const storedTheme = window.localStorage.getItem("t3code:theme");
           const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-          // Older builds stored the dark T3 Chat palette as its own theme id;
-          // keep that preference pointed at the dark variant.
+          // Older builds stored the dark T3 Chat palette as its own theme id
+          // and every maintainer theme under a t3- prefix; keep those
+          // preferences readable. Mirrors the runtime's legacy alias table.
+          const LEGACY_THEME_IDS = {
+            "t3-chat-dark": "t3-chat",
+            "t3-grove": "grove",
+            "t3-ocean": "ocean",
+            "t3-ember": "ember",
+            "t3-iris": "iris",
+          };
           const isLegacyT3ChatDark = storedTheme === "t3-chat-dark";
-          const themeId = isLegacyT3ChatDark ? "t3-chat" : (storedTheme ?? "");
+          const themeId =
+            storedTheme === null ? "" : (LEGACY_THEME_IDS[storedTheme] ?? storedTheme);
           const legacyMode = isLegacyT3ChatDark ? "dark" : null;
           const builtInModes = BUILT_IN_THEME_MODES[themeId] ?? null;
           const customTheme = builtInModes ? null : findCustomTheme(themeId);
@@ -250,8 +263,9 @@
             );
             const candidate = isRecord(halvesRaw) ? halvesRaw[wantedMode] : null;
             if (typeof candidate === "string") {
-              const halfBuiltIn = BUILT_IN_THEME_MODES[candidate] ?? null;
-              const halfCustom = halfBuiltIn ? null : findCustomTheme(candidate);
+              const halfId = LEGACY_THEME_IDS[candidate] ?? candidate;
+              const halfBuiltIn = BUILT_IN_THEME_MODES[halfId] ?? null;
+              const halfCustom = halfBuiltIn ? null : findCustomTheme(halfId);
               const halfModes =
                 halfBuiltIn ??
                 (halfCustom
@@ -260,7 +274,7 @@
                     )
                   : null);
               if (halfModes && halfModes.includes(wantedMode)) {
-                halfThemeId = candidate;
+                halfThemeId = halfId;
                 halfCustomTheme = halfCustom;
               }
             }

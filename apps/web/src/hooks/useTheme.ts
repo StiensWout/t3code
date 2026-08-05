@@ -6,6 +6,7 @@ import {
   applyThemePalette,
   CUSTOM_THEMES_STORAGE_KEY,
   invalidateCustomThemes,
+  canonicalThemePreference,
   isKnownThemePreference,
   getThemePreferenceMode,
   parseThemeHalves,
@@ -173,7 +174,7 @@ export function readThemePreference(): Theme {
     });
   }
   if (raw !== null && isKnownThemePreference(raw)) {
-    return raw;
+    return canonicalThemePreference(raw);
   }
   return DEFAULT_THEME_SNAPSHOT.theme;
 }

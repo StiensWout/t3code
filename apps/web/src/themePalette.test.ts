@@ -9,16 +9,18 @@ import {
   getCustomThemes,
   invalidateCustomThemes,
   installCustomTheme,
+  canonicalThemePreference,
   parseThemeFile,
+  parseThemeHalves,
   resolveDesktopTheme,
   resolveThemeAppearance,
   serializeThemeFile,
   subscribeToCustomThemes,
   T3_CHAT_THEME,
-  T3_EMBER_THEME,
-  T3_GROVE_THEME,
-  T3_IRIS_THEME,
-  T3_OCEAN_THEME,
+  EMBER_THEME,
+  GROVE_THEME,
+  IRIS_THEME,
+  OCEAN_THEME,
   updateCustomTheme,
   CUSTOM_THEMES_STORAGE_KEY,
   createManagedThemeColors,
@@ -192,13 +194,7 @@ describe("theme files", () => {
   });
 
   it("includes the dual-mode maintainer themes", () => {
-    for (const theme of [
-      T3_CHAT_THEME,
-      T3_GROVE_THEME,
-      T3_OCEAN_THEME,
-      T3_EMBER_THEME,
-      T3_IRIS_THEME,
-    ]) {
+    for (const theme of [T3_CHAT_THEME, GROVE_THEME, OCEAN_THEME, EMBER_THEME, IRIS_THEME]) {
       expect(getThemeDefinition(theme.id)).toBe(theme);
       expect(getThemeModes(theme)).toEqual(["light", "dark"]);
       expect(theme.colors.accent).toMatch(/^#[0-9a-f]{6}$/i);
@@ -339,7 +335,7 @@ describe("stored theme preferences", () => {
     invalidateCustomThemes();
     try {
       expect(resolveThemeAppearance("paper", true, true)).toBe("light");
-      const halves = { dark: T3_GROVE_THEME.id };
+      const halves = { dark: GROVE_THEME.id };
       expect(resolveThemeAppearance("paper", true, true, undefined, halves)).toBe("dark");
       expect(resolveThemeAppearance("paper", false, false, "dark", halves)).toBe("dark");
       expect(resolveDesktopTheme("paper", true, undefined, halves)).toBe("system");
@@ -357,11 +353,31 @@ describe("stored theme preferences", () => {
     expect(isKnownThemePreference("t3-chat-dark")).toBe(true);
   });
 
+  it("resolves legacy t3-prefixed ids onto the renamed themes", () => {
+    for (const [legacy, theme] of [
+      ["t3-grove", GROVE_THEME],
+      ["t3-ocean", OCEAN_THEME],
+      ["t3-ember", EMBER_THEME],
+      ["t3-iris", IRIS_THEME],
+    ] as const) {
+      expect(getThemeDefinition(legacy)).toBe(theme);
+      expect(isKnownThemePreference(legacy)).toBe(true);
+      expect(canonicalThemePreference(legacy)).toBe(theme.id);
+    }
+    // The dark-variant alias keeps its raw form: it still carries a mode hint.
+    expect(canonicalThemePreference("t3-chat-dark")).toBe("t3-chat-dark");
+    // A stored mix that predates the rename resolves to the new ids.
+    expect(parseThemeHalves(JSON.stringify({ light: "t3-ocean", dark: "t3-grove" }))).toEqual({
+      light: OCEAN_THEME.id,
+      dark: GROVE_THEME.id,
+    });
+  });
+
   it("recognizes only preferences the runtime can render", () => {
-    for (const preference of ["light", "dark", "system", T3_CHAT_THEME.id, T3_GROVE_THEME.id]) {
+    for (const preference of ["light", "dark", "system", T3_CHAT_THEME.id, GROVE_THEME.id]) {
       expect(isKnownThemePreference(preference)).toBe(true);
     }
-    expect(isKnownThemePreference(`${T3_GROVE_THEME.id}:dark`)).toBe(false);
+    expect(isKnownThemePreference(`${GROVE_THEME.id}:dark`)).toBe(false);
     expect(isKnownThemePreference("missing-theme")).toBe(false);
   });
 
