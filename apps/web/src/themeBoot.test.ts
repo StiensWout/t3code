@@ -225,6 +225,16 @@ describe("index.html boot script", () => {
       storage: { [THEME_STORAGE_KEY]: "light", [THEME_FOLLOW_SYSTEM_STORAGE_KEY]: "false" },
       prefersDark: true,
     },
+    {
+      name: "a bare dark preference stays dark on a light OS",
+      storage: { [THEME_STORAGE_KEY]: "dark" },
+      prefersDark: false,
+    },
+    {
+      name: "follow-system off keeps a bare dark preference on a light OS",
+      storage: { [THEME_STORAGE_KEY]: "dark", [THEME_FOLLOW_SYSTEM_STORAGE_KEY]: "false" },
+      prefersDark: false,
+    },
   ];
 
   it.each(parityCases)("matches the runtime appearance: $name", ({ storage, prefersDark }) => {

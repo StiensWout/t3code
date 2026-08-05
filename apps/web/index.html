@@ -224,15 +224,19 @@
             THEME_APPEARANCE_MODE_STORAGE_KEY,
           );
           const storedFollowSystem = window.localStorage.getItem(THEME_FOLLOW_SYSTEM_STORAGE_KEY);
+          // Mirrors the runtime's getThemePreferenceMode fallback: a bare
+          // "light"/"dark" preference names its own mode.
+          const preferenceMode =
+            theme === "light" || theme === "dark" ? theme : (legacyMode ?? baseAppearance);
           const appearanceMode = isThemePreferenceMode(storedAppearanceMode)
             ? storedAppearanceMode
             : storedFollowSystem === "true"
               ? "system"
               : storedFollowSystem === "false"
-                ? (legacyMode ?? baseAppearance)
+                ? preferenceMode
                 : theme === "system"
                   ? "system"
-                  : (legacyMode ?? baseAppearance);
+                  : preferenceMode;
           const themeMode = !isThemed
             ? null
             : appearanceMode === "system"
