@@ -100,34 +100,49 @@ const DIFF_PANEL_UNSAFE_CSS = `
   --diffs-token-light-bg: transparent;
   --diffs-token-dark-bg: transparent;
 
-  --diffs-bg-context-override: color-mix(in srgb, var(--background) 97%, var(--foreground));
-  --diffs-bg-hover-override: color-mix(in srgb, var(--background) 94%, var(--foreground));
-  --diffs-bg-separator-override: color-mix(in srgb, var(--background) 95%, var(--foreground));
-  --diffs-bg-buffer-override: color-mix(in srgb, var(--background) 90%, var(--foreground));
+  /* Gutter, context, and row tints all derive from the code surface the diff
+     body sits on — mixing from the canvas leaves the gutter looking unthemed
+     when a palette separates the two. */
+  --diffs-bg-context-override: color-mix(in srgb, var(--code-background) 97%, var(--code-foreground));
+  --diffs-bg-hover-override: color-mix(in srgb, var(--code-background) 94%, var(--code-foreground));
+  --diffs-bg-separator-override: color-mix(
+    in srgb,
+    var(--code-background) 95%,
+    var(--code-foreground)
+  );
+  --diffs-bg-buffer-override: color-mix(in srgb, var(--code-background) 90%, var(--code-foreground));
 
   --diffs-bg-addition-override: light-dark(
-    color-mix(in srgb, var(--background) 50%, var(--success)),
-    color-mix(in srgb, var(--background) 70%, var(--success))
+    color-mix(in srgb, var(--code-background) 50%, var(--success)),
+    color-mix(in srgb, var(--code-background) 70%, var(--success))
   );
   --diffs-bg-addition-number-override: light-dark(
-    color-mix(in srgb, var(--background) 35%, var(--success)),
-    color-mix(in srgb, var(--background) 60%, var(--success))
+    color-mix(in srgb, var(--code-background) 35%, var(--success)),
+    color-mix(in srgb, var(--code-background) 60%, var(--success))
   );
-  --diffs-bg-addition-hover-override: color-mix(in srgb, var(--background) 85%, var(--success));
-  --diffs-bg-addition-emphasis-override: color-mix(in srgb, var(--background) 80%, var(--success));
+  --diffs-bg-addition-hover-override: color-mix(in srgb, var(--code-background) 85%, var(--success));
+  --diffs-bg-addition-emphasis-override: color-mix(
+    in srgb,
+    var(--code-background) 80%,
+    var(--success)
+  );
 
   --diffs-bg-deletion-override: light-dark(
-    color-mix(in srgb, var(--background) 50%, var(--destructive)),
-    color-mix(in srgb, var(--background) 70%, var(--destructive))
+    color-mix(in srgb, var(--code-background) 50%, var(--destructive)),
+    color-mix(in srgb, var(--code-background) 70%, var(--destructive))
   );
   --diffs-bg-deletion-number-override: light-dark(
-    color-mix(in srgb, var(--background) 35%, var(--destructive)),
-    color-mix(in srgb, var(--background) 60%, var(--destructive))
+    color-mix(in srgb, var(--code-background) 35%, var(--destructive)),
+    color-mix(in srgb, var(--code-background) 60%, var(--destructive))
   );
-  --diffs-bg-deletion-hover-override: color-mix(in srgb, var(--background) 85%, var(--destructive));
+  --diffs-bg-deletion-hover-override: color-mix(
+    in srgb,
+    var(--code-background) 85%,
+    var(--destructive)
+  );
   --diffs-bg-deletion-emphasis-override: color-mix(
     in srgb,
-    var(--background) 80%,
+    var(--code-background) 80%,
     var(--destructive)
   );
 
