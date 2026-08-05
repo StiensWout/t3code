@@ -1,6 +1,7 @@
 import { PlusIcon, UploadIcon } from "lucide-react";
-import type { ChangeEvent, UIEvent } from "react";
+import type { ChangeEvent, DragEvent, UIEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { cn } from "../../lib/utils";
 import {
   installCustomTheme,
   parseThemeFile,
@@ -18,6 +19,30 @@ import {
   DialogPopup,
   DialogTitle,
 } from "../ui/dialog";
+
+/**
+ * A full theme export is a few KB, so anything past this is not a theme file.
+ * The guard runs on the size before the bytes are ever read: a large file
+ * would otherwise be pulled into memory, highlighted, and rendered, which
+ * locks the UI for as long as that takes.
+ */
+export const MAX_THEME_FILE_BYTES = 256 * 1024;
+
+/** Highlighting rebuilds the whole markup on every keystroke, so oversized
+ *  pastes fall back to plain text instead of freezing the editor. */
+const MAX_HIGHLIGHTED_JSON_LENGTH = 20_000;
+
+function formatByteSize(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${bytes} bytes`;
+}
+
+/** Returns the error to show for a file too large to be a theme, else null. */
+export function describeOversizedThemeFile(bytes: number): string | null {
+  if (bytes <= MAX_THEME_FILE_BYTES) return null;
+  return `That file is ${formatByteSize(bytes)}. Theme files are only a few KB, so this one was not read (limit ${formatByteSize(MAX_THEME_FILE_BYTES)}).`;
+}
 
 function escapeJsonHtml(value: string): string {
   return value.replace(
@@ -69,7 +94,11 @@ function ThemeJsonEditor({
   onChange: (value: string) => void;
 }) {
   const highlightRef = useRef<HTMLPreElement>(null);
-  const highlightedJson = useMemo(() => highlightJson(value), [value]);
+  const isPlainText = value.length > MAX_HIGHLIGHTED_JSON_LENGTH;
+  const highlightedJson = useMemo(
+    () => (value.length > MAX_HIGHLIGHTED_JSON_LENGTH ? "" : highlightJson(value)),
+    [value],
+  );
 
   const syncScroll = useCallback((event: UIEvent<HTMLTextAreaElement>) => {
     const highlightElement = highlightRef.current;
@@ -80,16 +109,21 @@ function ThemeJsonEditor({
 
   return (
     <div className="relative overflow-hidden rounded-xl border border-input bg-background shadow-xs/5 focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/24">
-      <pre
-        ref={highlightRef}
-        aria-hidden
-        className="pointer-events-none absolute inset-0 m-0 overflow-hidden whitespace-pre-wrap break-words p-3 font-mono text-[12px] leading-5 text-foreground"
-      >
-        <code dangerouslySetInnerHTML={{ __html: highlightedJson }} />
-      </pre>
+      {isPlainText ? null : (
+        <pre
+          ref={highlightRef}
+          aria-hidden
+          className="pointer-events-none absolute inset-0 m-0 overflow-hidden whitespace-pre-wrap break-words p-3 font-mono text-[12px] leading-5 text-foreground"
+        >
+          <code dangerouslySetInnerHTML={{ __html: highlightedJson }} />
+        </pre>
+      )}
       <textarea
         aria-label="Theme JSON"
-        className="relative z-10 block min-h-72 w-full resize-y overflow-auto bg-transparent p-3 font-mono text-[12px] leading-5 text-transparent caret-foreground outline-none placeholder:text-muted-foreground selection:bg-accent/30 selection:text-transparent"
+        className={cn(
+          "relative z-10 block min-h-72 w-full resize-y overflow-auto bg-transparent p-3 font-mono text-[12px] leading-5 caret-foreground outline-none placeholder:text-muted-foreground selection:bg-accent/30",
+          isPlainText ? "text-foreground" : "text-transparent selection:text-transparent",
+        )}
         id={id}
         onChange={(event) => onChange(event.currentTarget.value)}
         onScroll={syncScroll}
@@ -117,6 +151,7 @@ export function ThemeImportDialog({
   const [fileName, setFileName] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isReading, setIsReading] = useState(false);
+  const [isDropTarget, setIsDropTarget] = useState(false);
   const importRequestRef = useRef(0);
 
   useEffect(() => {
@@ -128,10 +163,14 @@ export function ThemeImportDialog({
     setIsReading(false);
   }, [open]);
 
-  const handleFileChange = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.currentTarget.files?.[0];
-    event.currentTarget.value = "";
-    if (!file) return;
+  const readThemeFile = useCallback(async (file: File) => {
+    // Check the size first: reading a large file is what locks the UI, so it
+    // never gets read at all.
+    const oversized = describeOversizedThemeFile(file.size);
+    if (oversized) {
+      setError(oversized);
+      return;
+    }
 
     const requestId = ++importRequestRef.current;
     setIsReading(true);
@@ -149,7 +188,32 @@ export function ThemeImportDialog({
     }
   }, []);
 
+  const handleFileChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => {
+      const file = event.currentTarget.files?.[0];
+      event.currentTarget.value = "";
+      if (file) void readThemeFile(file);
+    },
+    [readThemeFile],
+  );
+
+  const handleDrop = useCallback(
+    (event: DragEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      setIsDropTarget(false);
+      const file = event.dataTransfer.files[0];
+      if (file) void readThemeFile(file);
+    },
+    [readThemeFile],
+  );
+
   const handleSubmit = useCallback(() => {
+    // Pasted text bypasses the file guard, so the same limit applies here.
+    const oversized = describeOversizedThemeFile(json.length);
+    if (oversized) {
+      setError(oversized);
+      return;
+    }
     try {
       const installedTheme = installCustomTheme(parseThemeFile(JSON.parse(json)));
       if (!onImported(installedTheme)) {
@@ -183,11 +247,30 @@ export function ThemeImportDialog({
           <DialogDescription>Drop in a JSON file or paste one below.</DialogDescription>
         </DialogHeader>
         <DialogPanel className="space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-dashed border-border/80 bg-muted/20 px-3 py-3">
+          <div
+            className={cn(
+              "flex flex-wrap items-center justify-between gap-3 rounded-xl border border-dashed px-3 py-3 transition-colors",
+              isDropTarget ? "border-ring bg-accent/20" : "border-border/80 bg-muted/20",
+            )}
+            onDragEnter={(event) => {
+              event.preventDefault();
+              setIsDropTarget(true);
+            }}
+            onDragOver={(event) => {
+              event.preventDefault();
+              setIsDropTarget(true);
+            }}
+            onDragLeave={(event) => {
+              // Ignore moves between children of the drop zone.
+              if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+              setIsDropTarget(false);
+            }}
+            onDrop={handleDrop}
+          >
             <div className="min-w-0">
               <p className="text-sm font-medium">Theme file</p>
               <p className="truncate text-xs text-muted-foreground">
-                {fileName ?? "Upload a .json file, or paste the contents below."}
+                {fileName ?? "Drop a .json file here, choose one, or paste the contents below."}
               </p>
             </div>
             <Button
