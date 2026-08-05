@@ -280,7 +280,9 @@ function legacyThemeMode(theme: ThemePreference): ThemeAppearance | null {
 // Anchored to the t3.chat light palette: #a84370 primary, #db2777 ring,
 // #501854 foreground, and its pink-tinted surface family.
 const T3_CHAT_LIGHT_COLORS: ThemeColors = {
-  canvas: "#faf5fa",
+  // The main panel leans into the pink family; the paler #faf5fa moves to
+  // the code surface so both official shades stay in play.
+  canvas: "#f5ecf5",
   chrome: "#f3e4f6",
   toolbar: "#f3e4f6",
   toolbarForeground: "#501854",
@@ -321,7 +323,7 @@ const T3_CHAT_LIGHT_COLORS: ThemeColors = {
   messageAction: "#a84370",
   messageActionForeground: "#ffffff",
   messageActionHover: "#933a63",
-  codeBackground: "#f5ecf5",
+  codeBackground: "#faf5fa",
   codeForeground: "#501854",
   sidebar: "#f3e4f6",
   sidebarForeground: "#8f2a70",
