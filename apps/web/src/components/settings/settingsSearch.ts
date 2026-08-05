@@ -53,12 +53,6 @@ export const SETTINGS_SEARCH_ITEMS = [
     targetId: "appearance",
   },
   {
-    id: "theme-mix",
-    title: "Mix light and dark themes",
-    to: "/settings/appearance",
-    targetId: "appearance",
-  },
-  {
     // Prefixed because the slider control already owns the `glass-opacity` id.
     id: "setting-glass-opacity",
     title: "Glass opacity",
