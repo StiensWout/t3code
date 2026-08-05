@@ -42,6 +42,12 @@ const DEFAULT_THEME_SNAPSHOT: ThemeSnapshot = {
   themeHalves: null,
 };
 
+/** Live read of the stored appearance mix, for callers that must not rely on
+ * a render-time snapshot (for example rollback after an async dialog). */
+export function readThemeHalves(): ThemeHalves | null {
+  return readStoredThemeHalves();
+}
+
 function readStoredThemeHalves(): ThemeHalves | null {
   if (typeof window === "undefined") return null;
   try {

@@ -199,12 +199,18 @@ function ThemeColorPickerPanel({
   onChangeRef.current = onChange;
   const pendingCommitRef = useRef<string | null>(null);
   const commitFrameRef = useRef<number | null>(null);
-  useEffect(
-    () => () => {
-      if (commitFrameRef.current !== null) cancelAnimationFrame(commitFrameRef.current);
-    },
-    [],
-  );
+  // The final drag frame must not be lost when the popover closes or the
+  // pointer lifts before the animation frame fires.
+  const flushPendingCommit = useCallback(() => {
+    if (commitFrameRef.current !== null) {
+      cancelAnimationFrame(commitFrameRef.current);
+      commitFrameRef.current = null;
+    }
+    const pending = pendingCommitRef.current;
+    pendingCommitRef.current = null;
+    if (pending !== null) onChangeRef.current(pending);
+  }, []);
+  useEffect(() => () => flushPendingCommit(), [flushPendingCommit]);
   const scheduleCommit = useCallback((color: string) => {
     pendingCommitRef.current = color;
     commitFrameRef.current ??= requestAnimationFrame(() => {
@@ -273,7 +279,10 @@ function ThemeColorPickerPanel({
     };
   };
 
-  const stopDragging = () => setIsDragging(false);
+  const stopDragging = () => {
+    setIsDragging(false);
+    flushPendingCommit();
+  };
 
   // Thumbs travel inside the control by half their own size so they never
   // clip at the extremes; movement only animates for keyboard steps and

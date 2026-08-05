@@ -73,7 +73,7 @@ import {
 import { isElectron } from "../../env";
 import { buildHostedChannelSelectionUrl, type HostedAppChannel } from "../../hostedPairing";
 import { useCustomThemes } from "../../hooks/useCustomThemes";
-import { readThemePreference, useTheme } from "../../hooks/useTheme";
+import { readThemeHalves, readThemePreference, useTheme } from "../../hooks/useTheme";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { usePrimarySettings, useUpdatePrimarySettings } from "../../hooks/useSettings";
 import { useThreadActions } from "../../hooks/useThreadActions";
@@ -701,8 +701,11 @@ export function useSettingsRestore(onRestored?: () => void) {
     } catch {
       // Storage is unreadable; the render-time value is the best rollback.
     }
+    // The mix may have changed while the confirmation dialog was open; both
+    // the dirty check and the rollback must see the live value.
+    const liveHalves = readThemeHalves();
     const needsThemeReset = previousTheme !== "system";
-    const needsMixReset = themeHalves !== null;
+    const needsMixReset = liveHalves !== null;
     const needsFollowSystemReset = !followSystem;
     const notifyThemeRestoreFailure = () => {
       toastManager.add(
@@ -716,7 +719,7 @@ export function useSettingsRestore(onRestored?: () => void) {
     // Rollback restores the base preference first (which clears any mix) and
     // then re-applies the captured mix on top, so no failure path can leave
     // the pair of keys half-restored.
-    const previousHalves = themeHalves;
+    const previousHalves = liveHalves;
     const rollbackThemeState = () => {
       if (needsThemeReset) setTheme(previousTheme);
       if (previousHalves?.light) setThemeHalf("light", previousHalves.light);
