@@ -1162,29 +1162,30 @@ html[data-theme-id] [data-chat-header] {
 
 html[data-theme-id] [data-chat-header] [data-slot="button"],
 html[data-theme-id] [data-chat-header] [data-slot="menu-trigger"],
-html[data-theme-id] [data-chat-header] [data-panel-layout-controls] [data-slot="tooltip-trigger"],
-html[data-theme-id] [data-chat-header] [data-toolbar-control],
-html[data-theme-id] [data-chat-header] [data-slot="toggle"] {
+html[data-theme-id] [data-chat-header] [data-toolbar-control] {
   --control-icon-color: var(--toolbar-control-foreground);
   background-color: var(--toolbar-control);
   border-color: var(--toolbar-border);
   color: var(--toolbar-control-foreground);
 }
 
+/* The panel layout toggles stay ghost: they render both inside the header and
+   in the titlebar strip, so filling them would make them change appearance as
+   the panel opens. They only take the themed foreground; hover and pressed
+   keep the base ghost accent. The tooltip trigger's data-slot wins over the
+   toggle's when the trigger renders the toggle, so match both. */
+html[data-theme-id] [data-panel-layout-controls] [data-slot="toggle"],
+html[data-theme-id] [data-panel-layout-controls] [data-slot="tooltip-trigger"],
+html[data-theme-id] .workspace-titlebar-controls [data-slot="toggle"],
+html[data-theme-id] .workspace-titlebar-controls [data-slot="tooltip-trigger"] {
+  --control-icon-color: var(--toolbar-foreground);
+  color: var(--toolbar-foreground);
+}
+
 html[data-theme-id] [data-chat-header] [data-slot="button"]:hover,
 html[data-theme-id] [data-chat-header] [data-slot="button"][data-pressed],
 html[data-theme-id] [data-chat-header] [data-slot="menu-trigger"]:hover,
 html[data-theme-id] [data-chat-header] [data-slot="menu-trigger"][data-pressed],
-html[data-theme-id]
-  [data-chat-header]
-  [data-panel-layout-controls]
-  [data-slot="tooltip-trigger"]:hover,
-html[data-theme-id]
-  [data-chat-header]
-  [data-panel-layout-controls]
-  [data-slot="tooltip-trigger"][data-pressed],
-html[data-theme-id] [data-chat-header] [data-slot="toggle"]:hover,
-html[data-theme-id] [data-chat-header] [data-slot="toggle"][data-pressed],
 html[data-theme-id] [data-chat-header] [data-toolbar-control]:hover,
 html[data-theme-id] [data-chat-header] [data-toolbar-control][data-pressed] {
   background-color: var(--toolbar-control-hover);
