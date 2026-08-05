@@ -17,6 +17,7 @@ import {
   terminalScrollbarOffsetAtPointer,
   terminalLinkAtColumn,
   terminalLinkAtPosition,
+  terminalLinkAtPositionWithRange,
   terminalContentOriginY,
   terminalFontFamily,
   fittedTerminalFontSize,
@@ -99,6 +100,10 @@ describe("terminalLinkAtColumn", () => {
     expect(terminalLinkAtColumn(row, 2)).toBe("https://t3.codes");
     expect(terminalLinkAtColumn(row, cells.length - 1)).toBe("https://t3.codes");
     expect(terminalLinkAtColumn(row, 0)).toBeNull();
+    expect(terminalLinkAtPositionWithRange([row], 0, 8)?.range).toEqual({
+      start: { x: 2, y: 0 },
+      end: { x: cells.length - 1, y: 0 },
+    });
   });
 
   it("uses shared path matching and reconstructs soft-wrapped links", () => {
@@ -119,6 +124,13 @@ describe("terminalLinkAtColumn", () => {
     expect(terminalLinkAtPosition(rows, 1, 4)).toBe("https://example.com/reference");
     expect(terminalLinkAtPosition(rows, 2, 2)).toBe("~/project/file");
     expect(terminalLinkAtPosition(rows, 3, 4)).toBe("C:\\repo\\file.ts");
+    expect(terminalLinkAtPositionWithRange(rows, 1, 4)).toEqual({
+      text: "https://example.com/reference",
+      range: {
+        start: { x: 0, y: 0 },
+        end: { x: 12, y: 1 },
+      },
+    });
   });
 
   it("refuses links truncated at the viewport edges instead of mis-resolving", () => {

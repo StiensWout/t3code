@@ -10,6 +10,7 @@ import {
   measureGhosttyCell,
   renderGhosttySnapshot,
   terminalGridSize,
+  type GhosttyCellRange,
   type GhosttyCellMetrics,
 } from "./renderer";
 import symbolsFontUrl from "./fonts/SymbolsNerdFontMono-Regular.woff2?url";
@@ -223,6 +224,27 @@ export function terminalLinkAtPosition(
   rowIndex: number,
   column: number,
 ): string | null {
+  return terminalLinkAtPositionWithRange(rows, rowIndex, column)?.text ?? null;
+}
+
+export interface TerminalLinkWithRange {
+  readonly text: string;
+  readonly range: GhosttyCellRange;
+}
+
+function terminalColumnAtOffset(row: GhosttySnapshot["rowData"][number], offset: number): number {
+  for (let column = 0; column < row.cells.length; column += 1) {
+    const nextOffset = terminalColumnOffset(row, column + 1);
+    if (offset < nextOffset) return column;
+  }
+  return Math.max(0, row.cells.length - 1);
+}
+
+export function terminalLinkAtPositionWithRange(
+  rows: GhosttySnapshot["rowData"],
+  rowIndex: number,
+  column: number,
+): TerminalLinkWithRange | null {
   const wrappedLine = collectWrappedTerminalLinkLine(rowIndex + 1, (index) => {
     const row = rows[index];
     if (!row) return null;
@@ -251,7 +273,28 @@ export function terminalLinkAtPosition(
     if (offset >= match.start && offset < match.end) {
       // A truncated tail must not activate as a complete link.
       if (match.end === wrappedLine.text.length && continuesBelowViewport) return null;
-      return match.text;
+      const startSegment = wrappedLine.segments.find(
+        (value) => match.start >= value.startIndex && match.start < value.endIndex,
+      );
+      const endSegment = wrappedLine.segments.find(
+        (value) => match.end - 1 >= value.startIndex && match.end - 1 < value.endIndex,
+      );
+      const startRow = startSegment ? rows[startSegment.bufferLineNumber - 1] : undefined;
+      const endRow = endSegment ? rows[endSegment.bufferLineNumber - 1] : undefined;
+      if (!startSegment || !endSegment || !startRow || !endRow) return null;
+      return {
+        text: match.text,
+        range: {
+          start: {
+            x: terminalColumnAtOffset(startRow, match.start - startSegment.startIndex),
+            y: startSegment.bufferLineNumber - 1,
+          },
+          end: {
+            x: terminalColumnAtOffset(endRow, match.end - 1 - endSegment.startIndex),
+            y: endSegment.bufferLineNumber - 1,
+          },
+        },
+      };
     }
   }
   return null;
@@ -444,6 +487,8 @@ export class GhosttyTerminalSurface {
   private mouseReportingPointerId: number | null = null;
   private mouseReportingButton: number | null = null;
   private linkActivationPointerId: number | null = null;
+  private hoveredLink: TerminalLinkWithRange | null = null;
+  private hoverPointer: { x: number; y: number } | null = null;
   private selectionClickSequence: TerminalSelectionClickSequence | null = null;
   private selectionMoved = false;
   private composing = false;
@@ -1097,10 +1142,33 @@ export class GhosttyTerminalSurface {
   }
 
   private updateHoverCursor(event: PointerEvent): void {
-    const overLink =
-      isTerminalLinkPointerGesture(event) && this.linkAt(event.clientX, event.clientY) !== null;
-    const cursor = overLink ? "pointer" : "";
-    if (this.canvas.style.cursor !== cursor) this.canvas.style.cursor = cursor;
+    this.hoverPointer = { x: event.clientX, y: event.clientY };
+    this.refreshHoveredLink();
+  }
+
+  private readonly onPointerLeave = () => {
+    this.hoverPointer = null;
+    this.setHoveredLink(null);
+  };
+
+  private refreshHoveredLink(): void {
+    const pointer = this.hoverPointer;
+    this.setHoveredLink(pointer ? this.linkAt(pointer.x, pointer.y) : null);
+  }
+
+  private setHoveredLink(link: TerminalLinkWithRange | null): void {
+    const previous = this.hoveredLink;
+    const unchanged =
+      previous?.text === link?.text &&
+      previous?.range.start.x === link?.range.start.x &&
+      previous?.range.start.y === link?.range.start.y &&
+      previous?.range.end.x === link?.range.end.x &&
+      previous?.range.end.y === link?.range.end.y;
+    this.canvas.style.cursor = link ? "pointer" : "";
+    if (unchanged) return;
+    this.hoveredLink = link;
+    this.forceFullRender = true;
+    this.requestRender();
   }
 
   private readonly onPointerUp = (event: PointerEvent) => {
@@ -1114,7 +1182,7 @@ export class GhosttyTerminalSurface {
       }
       if (event.type !== "pointercancel") {
         const link = this.linkAt(event.clientX, event.clientY);
-        if (link) this.options.onLinkActivate(link, event);
+        if (link) this.options.onLinkActivate(link.text, event);
       }
       return;
     }
@@ -1253,6 +1321,7 @@ export class GhosttyTerminalSurface {
     this.input.addEventListener("compositionend", this.onCompositionEnd);
     this.canvas.addEventListener("pointerdown", this.onPointerDown);
     this.canvas.addEventListener("pointermove", this.onPointerMove);
+    this.canvas.addEventListener("pointerleave", this.onPointerLeave);
     this.canvas.addEventListener("pointerup", this.onPointerUp);
     this.canvas.addEventListener("pointercancel", this.onPointerUp);
     this.canvas.addEventListener("wheel", this.onWheel, { passive: false });
@@ -1276,6 +1345,7 @@ export class GhosttyTerminalSurface {
     this.input.removeEventListener("compositionend", this.onCompositionEnd);
     this.canvas.removeEventListener("pointerdown", this.onPointerDown);
     this.canvas.removeEventListener("pointermove", this.onPointerMove);
+    this.canvas.removeEventListener("pointerleave", this.onPointerLeave);
     this.canvas.removeEventListener("pointerup", this.onPointerUp);
     this.canvas.removeEventListener("pointercancel", this.onPointerUp);
     this.canvas.removeEventListener("wheel", this.onWheel);
@@ -1358,6 +1428,7 @@ export class GhosttyTerminalSurface {
       this.frame = 0;
     }
     this.snapshot = this.core.snapshot();
+    this.refreshHoveredLink();
     // A cursor that is not blinking right now must be drawn, never caught in an
     // off phase left behind by a blink that has since been turned off.
     if (!this.blinkEnabled()) this.cursorOn = true;
@@ -1390,6 +1461,7 @@ export class GhosttyTerminalSurface {
       cursorOn: this.cursorOn,
       previousCursorY: this.renderedCursorY,
       focused: this.focused,
+      hoveredLinkRange: this.hoveredLink?.range ?? null,
       ...(this.theme.selectionBackground !== undefined
         ? { selectionBackground: this.theme.selectionBackground }
         : {}),
@@ -1466,12 +1538,41 @@ export class GhosttyTerminalSurface {
     };
   }
 
-  private linkAt(clientX: number, clientY: number): string | null {
+  private linkAt(clientX: number, clientY: number): TerminalLinkWithRange | null {
     if (!this.snapshot) return null;
     const cell = this.cellAt(clientX, clientY);
     const explicitHyperlink = this.core.hyperlinkAt(cell.x, cell.y);
-    if (explicitHyperlink) return explicitHyperlink;
-    return terminalLinkAtPosition(this.snapshot.rowData, cell.y, cell.x);
+    if (explicitHyperlink) {
+      const start = { ...cell };
+      const end = { ...cell };
+      while (true) {
+        const previous =
+          start.x > 0
+            ? { x: start.x - 1, y: start.y }
+            : start.y > 0 && this.snapshot.rowData[start.y]?.isWrapContinuation
+              ? { x: this.cols - 1, y: start.y - 1 }
+              : null;
+        if (!previous || this.core.hyperlinkAt(previous.x, previous.y) !== explicitHyperlink) break;
+        start.x = previous.x;
+        start.y = previous.y;
+      }
+      while (true) {
+        const next =
+          end.x + 1 < this.cols
+            ? { x: end.x + 1, y: end.y }
+            : end.y + 1 < this.rows && this.snapshot.rowData[end.y]?.wrapsToNext
+              ? { x: 0, y: end.y + 1 }
+              : null;
+        if (!next || this.core.hyperlinkAt(next.x, next.y) !== explicitHyperlink) break;
+        end.x = next.x;
+        end.y = next.y;
+      }
+      return {
+        text: explicitHyperlink,
+        range: { start, end },
+      };
+    }
+    return terminalLinkAtPositionWithRange(this.snapshot.rowData, cell.y, cell.x);
   }
 
   private sendMouse(
