@@ -6,7 +6,6 @@ import {
   PlusIcon,
   RefreshCwIcon,
   SettingsIcon,
-  UploadIcon,
 } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import type { CSSProperties, ReactNode } from "react";
@@ -1008,8 +1007,16 @@ function BackgroundActivityAdvancedDialog({
 }
 
 export function AppearanceSettingsPanel() {
-  const { appearanceMode, refreshTheme, resolvedTheme, setAppearanceMode, setTheme, theme } =
-    useTheme();
+  const {
+    appearanceMode,
+    refreshTheme,
+    resolvedTheme,
+    setAppearanceMode,
+    setTheme,
+    setThemeHalf,
+    theme,
+    themeHalves,
+  } = useTheme();
   const customThemes = useCustomThemes();
   const [isCreateThemeOpen, setIsCreateThemeOpen] = useState(false);
   const [isImportThemeOpen, setIsImportThemeOpen] = useState(false);
@@ -1027,27 +1034,7 @@ export function AppearanceSettingsPanel() {
 
   return (
     <SettingsPageContainer>
-      <SettingsSection
-        id="appearance"
-        title="Themes"
-        headerAction={
-          <div className="flex flex-wrap items-center justify-end gap-3">
-            <Button
-              className="h-7 rounded-md border border-border/70 bg-muted/30 px-2 text-xs font-medium text-foreground shadow-none hover:bg-accent/40"
-              size="xs"
-              variant="ghost"
-              onClick={() => setIsCreateThemeOpen(true)}
-            >
-              <PlusIcon />
-              Create theme
-            </Button>
-            <Button size="xs" variant="ghost" onClick={() => setIsImportThemeOpen(true)}>
-              <UploadIcon />
-              Import JSON
-            </Button>
-          </div>
-        }
-      >
+      <SettingsSection id="appearance" title="Appearance">
         <div id={searchableSetting("theme").id}>
           <ThemeLibrary
             appearanceMode={appearanceMode}
@@ -1058,7 +1045,9 @@ export function AppearanceSettingsPanel() {
             refreshTheme={refreshTheme}
             setAppearanceMode={setAppearanceMode}
             setTheme={setTheme}
+            setThemeHalf={setThemeHalf}
             theme={theme}
+            themeHalves={themeHalves}
             onCreateOpenChange={setIsCreateThemeOpen}
             onImportOpenChange={setIsImportThemeOpen}
           />

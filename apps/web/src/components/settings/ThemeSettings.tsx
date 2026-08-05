@@ -1,4 +1,4 @@
-import { DownloadIcon, PenLineIcon, Trash2Icon } from "lucide-react";
+import { DownloadIcon, PenLineIcon, PlusIcon, Trash2Icon, UploadIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "../../lib/utils";
 import {
@@ -7,6 +7,7 @@ import {
   serializeThemeFile,
   type ThemeAppearance,
   type ThemeDefinition,
+  type ThemeHalves,
   T3_CHAT_THEME,
   T3_EMBER_THEME,
   T3_GROVE_THEME,
@@ -29,6 +30,7 @@ import { ThemeImportDialog } from "./ThemeImportDialog";
 import {
   STANDARD_THEME_CARDS,
   getThemeCardDefinition,
+  previewColorsOf,
   ThemePreviewCircles,
   type ThemeCardDefinition,
   type ThemeMode,
@@ -59,7 +61,7 @@ function ThemeLibraryCard({
   isPersonal,
   onUse,
   onUseMode,
-  activeMode,
+  activeModes,
   onEdit,
   onDownload,
   onRemove,
@@ -69,7 +71,7 @@ function ThemeLibraryCard({
   isPersonal: boolean;
   onUse: () => void;
   onUseMode: (mode: ThemeMode) => void;
-  activeMode?: ThemeMode | null;
+  activeModes: ReadonlyArray<ThemeMode>;
   onEdit?: () => void;
   onDownload?: () => void;
   onRemove?: () => void;
@@ -89,7 +91,7 @@ function ThemeLibraryCard({
     >
       <ThemePreviewCircles
         label={theme.label}
-        activeMode={isActive ? (activeMode ?? theme.previews[0]?.mode ?? null) : null}
+        activeModes={activeModes}
         onSelectMode={onUseMode}
         previews={theme.previews}
       />
@@ -176,6 +178,8 @@ export function ThemeLibrary({
   isImportOpen,
   onCreateOpenChange,
   onImportOpenChange,
+  themeHalves,
+  setThemeHalf,
 }: {
   theme: string;
   setTheme: (theme: string) => boolean;
@@ -188,6 +192,8 @@ export function ThemeLibrary({
   isImportOpen: boolean;
   onCreateOpenChange: (open: boolean) => void;
   onImportOpenChange: (open: boolean) => void;
+  themeHalves: ThemeHalves | null;
+  setThemeHalf: (appearance: ThemeAppearance, themeId: string | null) => boolean;
 }) {
   const [themeToEdit, setThemeToEdit] = useState<ThemeDefinition | null>(null);
   const [themeToRemove, setThemeToRemove] = useState<ThemeDefinition | null>(null);
@@ -226,33 +232,6 @@ export function ThemeLibrary({
       return didSave;
     },
     [notifyThemeSaveFailure, setTheme],
-  );
-
-  const persistThemeMode = useCallback(
-    (nextTheme: string, nextMode: ThemeMode) => {
-      const previousMode = appearanceMode;
-      if (nextMode !== previousMode && !setAppearanceMode(nextMode)) {
-        notifyThemeSaveFailure();
-        return false;
-      }
-      if (setTheme(nextTheme)) return true;
-      if (nextMode !== previousMode) setAppearanceMode(previousMode);
-      notifyThemeSaveFailure();
-      return false;
-    },
-    [appearanceMode, notifyThemeSaveFailure, setAppearanceMode, setTheme],
-  );
-
-  const getActiveCardMode = useCallback(
-    (card: ThemeCardDefinition): ThemeMode | null => {
-      const modes = new Set(card.previews.map((preview) => preview.mode));
-      if (appearanceMode === "system" && modes.has("light") && modes.has("dark")) {
-        return "system";
-      }
-      if (appearanceMode !== "system" && modes.has(appearanceMode)) return appearanceMode;
-      return card.previews[0]?.mode ?? null;
-    },
-    [appearanceMode],
   );
 
   const handleRemoveTheme = useCallback((customTheme: ThemeDefinition) => {
@@ -313,73 +292,293 @@ export function ThemeLibrary({
     [persistTheme, refreshTheme, theme],
   );
 
+  // ----- Automatic-mode mixing -------------------------------------------
+  // The pair model: one theme owns light, one owns dark, and the global
+  // appearance mode (light / dark / auto) decides which is showing.
+  const baseCardId = getThemeDefinition(theme)?.id ?? null;
+  const lightOwner = themeHalves?.light ?? baseCardId;
+  const darkOwner = themeHalves?.dark ?? baseCardId;
+
+  const assignHalf = useCallback(
+    (appearance: ThemeAppearance, cardId: string | null) => {
+      if (!setThemeHalf(appearance, cardId)) notifyThemeSaveFailure();
+    },
+    [notifyThemeSaveFailure, setThemeHalf],
+  );
+
+  const cardDefById = (id: string | null): ThemeCardDefinition => {
+    if (id === null) return STANDARD_THEME_CARDS[0]!;
+    const definition = getThemeDefinition(id);
+    return definition ? getThemeCardDefinition(definition) : STANDARD_THEME_CARDS[0]!;
+  };
+
+  const pickColors = (id: string | null, appearance: ThemeAppearance) => {
+    const card = cardDefById(id);
+    return previewColorsOf(card, appearance) ?? card.previews[0]!.colors;
+  };
+
+  const setMode = (mode: ThemeMode) => {
+    if (!setAppearanceMode(mode)) notifyThemeSaveFailure();
+  };
+
+  // ----- Wireframe tiles on top, two-ball cards below --------------------
+  const handlePairPick = (cardId: string | null) => (mode: ThemeMode) => {
+    if (mode === "system") return;
+    assignHalf(mode, cardId);
+  };
+
+  // The Default card is the implicit fallback for an unpicked half; it never
+  // wears a ring, otherwise it shows selections the user cannot clear.
+  const pickedModesFor = (cardId: string | null): ThemeMode[] => {
+    if (cardId === null) return [];
+    const rings: ThemeMode[] = [];
+    if (lightOwner === cardId) rings.push("light");
+    if (darkOwner === cardId) rings.push("dark");
+    return rings;
+  };
+
+  const wireframeColors = (appearance: ThemeAppearance) =>
+    pickColors(appearance === "light" ? lightOwner : darkOwner, appearance);
+
+  // A simple miniature of the app: sidebar, a short conversation, the
+  // composer, and the orchestrator panel floating over the interface as an
+  // island with horizontal agent rows.
+  const renderWireframePane = (appearance: ThemeAppearance, clip?: "left" | "right") => {
+    const colors = wireframeColors(appearance);
+    const line = "rgb(127 127 127 / 0.25)";
+    return (
+      <span
+        className="absolute inset-0"
+        key={appearance + (clip ?? "")}
+        style={
+          clip === undefined
+            ? undefined
+            : {
+                clipPath:
+                  clip === "left"
+                    ? "polygon(0 0, calc(50% - 1px) 0, calc(50% - 1px) 100%, 0 100%)"
+                    : "polygon(calc(50% + 1px) 0, 100% 0, 100% 100%, calc(50% + 1px) 100%)",
+              }
+        }
+      >
+        <span className="absolute inset-0" style={{ backgroundColor: colors.canvas }} />
+        <span
+          className="absolute inset-y-0 left-0 w-[22%]"
+          style={{ backgroundColor: colors.sidebar, boxShadow: `inset -1px 0 0 ${line}` }}
+        />
+
+        {/* Sidebar: search, then thread rows */}
+        <span
+          className="absolute left-[3%] top-[8%] h-[8%] w-[16%] rounded-md"
+          style={{ backgroundColor: colors.surface, boxShadow: `inset 0 0 0 1px ${line}` }}
+        />
+        <span
+          className="absolute left-[3%] top-[22%] h-[7%] w-[16%] rounded-md"
+          style={{ backgroundColor: colors.accentSurface }}
+        />
+        <span
+          className="absolute left-[3%] top-[32%] h-[7%] w-[16%] rounded-md"
+          style={{ backgroundColor: colors.messageSurface, opacity: 0.7 }}
+        />
+        <span
+          className="absolute left-[3%] top-[42%] h-[7%] w-[16%] rounded-md"
+          style={{ backgroundColor: colors.messageSurface, opacity: 0.5 }}
+        />
+
+        {/* Conversation */}
+        <span
+          className="absolute right-[28%] top-[11%] h-[9%] w-[24%] rounded-lg"
+          style={{ backgroundColor: colors.messageSurface }}
+        />
+        <span
+          className="absolute left-[27%] top-[28%] h-[5%] w-[34%] rounded-sm"
+          style={{ backgroundColor: line }}
+        />
+        <span
+          className="absolute left-[27%] top-[38%] h-[5%] w-[26%] rounded-sm"
+          style={{ backgroundColor: line }}
+        />
+
+        {/* Composer */}
+        <span
+          className="absolute bottom-[8%] left-[26%] right-[6%] flex h-[15%] items-center justify-between rounded-md px-[2.5%]"
+          style={{
+            backgroundColor: colors.surface,
+            boxShadow: `inset 0 0 0 1px ${line}`,
+          }}
+        >
+          <span
+            className="block h-[26%] w-[34%] rounded-full"
+            style={{ backgroundColor: line, opacity: 0.7 }}
+          />
+          <span
+            className="block aspect-square h-[58%] rounded-full"
+            style={{ backgroundColor: colors.messageAction }}
+          />
+        </span>
+
+        {/* Orchestrator island floating over the composer */}
+        <span
+          className="absolute right-[5%] top-[8%] h-[46%] w-[20%] rounded-lg"
+          style={{
+            backgroundColor: colors.surface,
+            boxShadow: `inset 0 0 0 1px ${line}, 0 2px 5px rgb(0 0 0 / 0.14)`,
+          }}
+        >
+          {[0, 1, 2].map((row) => (
+            <span
+              className="absolute left-[11%] right-[11%] flex items-center gap-[5%]"
+              key={row}
+              style={{ top: `${10 + row * 30}%`, height: "20%" }}
+            >
+              <span
+                className="block aspect-square h-[26%] rounded-full"
+                style={{
+                  backgroundColor:
+                    row === 0 ? "#34d399" : row === 1 ? colors.messageAction : "#fbbf24",
+                  opacity: 0.55,
+                }}
+              />
+              <span
+                className="block h-[30%] w-[52%] rounded-sm"
+                style={{ backgroundColor: line }}
+              />
+            </span>
+          ))}
+        </span>
+      </span>
+    );
+  };
+
+  const renderWireframe = (mode: ThemeMode) => (
+    <span
+      aria-hidden
+      className="relative block h-[8.75rem] w-full overflow-hidden rounded-lg border border-border/60"
+    >
+      {mode === "system"
+        ? [renderWireframePane("light", "left"), renderWireframePane("dark", "right")]
+        : renderWireframePane(mode === "dark" ? "dark" : "light")}
+    </span>
+  );
+
+  const renderModeTiles = () => (
+    <div
+      aria-label="Appearance mode"
+      className="mx-auto grid w-full max-w-[56rem] grid-cols-3 gap-3 px-3 sm:px-4"
+      role="group"
+    >
+      {(["system", "light", "dark"] as const).map((mode) => {
+        const isActive = appearanceMode === mode;
+        return (
+          <button
+            aria-label={mode === "system" ? "Follow the system appearance" : `Use ${mode} mode`}
+            aria-pressed={isActive}
+            className={cn(
+              "flex cursor-pointer flex-col items-stretch gap-1.5 rounded-xl border p-2 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+              isActive
+                ? "border-transparent bg-accent/30"
+                : "border-border/70 bg-card/60 hover:bg-accent/10",
+            )}
+            key={mode}
+            style={isActive ? { boxShadow: "inset 0 0 0 1px var(--ring)" } : undefined}
+            onClick={() => setMode(mode)}
+            type="button"
+          >
+            {renderWireframe(mode)}
+            <span
+              className={cn(
+                "flex items-center justify-center text-xs font-medium",
+                isActive ? "text-foreground" : "text-muted-foreground",
+              )}
+            >
+              {mode === "system" ? "System" : mode === "light" ? "Light" : "Dark"}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+
+  const renderPairGrid = () => (
+    <div
+      className="mx-auto grid w-full max-w-[56rem] gap-2 px-3 sm:px-4"
+      style={{ gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 17rem), 1fr))" }}
+    >
+      {STANDARD_THEME_CARDS.map((standardTheme) => (
+        <ThemeLibraryCard
+          activeModes={pickedModesFor(null)}
+          isActive={false}
+          isPersonal={false}
+          key={standardTheme.id}
+          onUse={() => persistTheme(appearanceMode === "system" ? "system" : appearanceMode)}
+          onUseMode={handlePairPick(null)}
+          theme={standardTheme}
+        />
+      ))}
+      {MAINTAINER_THEMES.map((maintainerTheme) => {
+        const card = getThemeCardDefinition(maintainerTheme);
+        return (
+          <ThemeLibraryCard
+            activeModes={pickedModesFor(maintainerTheme.id)}
+            isActive={false}
+            isPersonal={false}
+            key={maintainerTheme.id}
+            onUse={() => persistTheme(maintainerTheme.id)}
+            onUseMode={handlePairPick(maintainerTheme.id)}
+            theme={card}
+          />
+        );
+      })}
+      {customThemes.map((customTheme) => {
+        const card = getThemeCardDefinition(customTheme);
+        return (
+          <ThemeLibraryCard
+            activeModes={pickedModesFor(customTheme.id)}
+            isActive={false}
+            isPersonal
+            key={customTheme.id}
+            onEdit={() => setThemeToEdit(customTheme)}
+            onDownload={() =>
+              downloadThemeFile(`${customTheme.id}.json`, serializeThemeFile(customTheme))
+            }
+            onRemove={() => handleRemoveTheme(customTheme)}
+            onUse={() => persistTheme(customTheme.id)}
+            onUseMode={handlePairPick(customTheme.id)}
+            theme={card}
+          />
+        );
+      })}
+    </div>
+  );
+
   return (
     <div className="space-y-3">
       <p className="px-3 text-[13px] leading-[1.45] text-muted-foreground/80 sm:px-4">
         Choose how T3 Code looks. Use a built-in theme or make your own.
       </p>
-      <div
-        className="mx-auto grid w-full max-w-[56rem] gap-2 px-3 sm:px-4"
-        style={{ gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 17rem), 1fr))" }}
-      >
-        {STANDARD_THEME_CARDS.map((standardTheme) => (
-          <ThemeLibraryCard
-            activeMode={
-              theme === "system" || theme === "light" || theme === "dark"
-                ? appearanceMode === "system"
-                  ? "system"
-                  : appearanceMode
-                : null
-            }
-            isActive={theme === "system" || theme === "light" || theme === "dark"}
-            isPersonal={false}
-            key={standardTheme.id}
-            onUse={() => persistTheme(appearanceMode === "system" ? "system" : appearanceMode)}
-            onUseMode={(mode) => persistThemeMode(mode === "system" ? "system" : mode, mode)}
-            theme={standardTheme}
-          />
-        ))}
-        {MAINTAINER_THEMES.map((maintainerTheme) => {
-          const isActive = getThemeDefinition(theme)?.id === maintainerTheme.id;
-          const card = getThemeCardDefinition(maintainerTheme);
-          return (
-            <ThemeLibraryCard
-              activeMode={isActive ? getActiveCardMode(card) : null}
-              isActive={isActive}
-              isPersonal={false}
-              key={maintainerTheme.id}
-              onUse={() => persistTheme(maintainerTheme.id)}
-              onUseMode={(mode) => persistThemeMode(maintainerTheme.id, mode)}
-              theme={card}
-            />
-          );
-        })}
-        {customThemes.map((customTheme) => {
-          const isActive = getThemeDefinition(theme)?.id === customTheme.id;
-          const card = getThemeCardDefinition(customTheme);
-          return (
-            <ThemeLibraryCard
-              activeMode={isActive ? getActiveCardMode(card) : null}
-              isActive={isActive}
-              isPersonal
-              key={customTheme.id}
-              onEdit={() => setThemeToEdit(customTheme)}
-              onDownload={() =>
-                downloadThemeFile(`${customTheme.id}.json`, serializeThemeFile(customTheme))
-              }
-              onRemove={() => handleRemoveTheme(customTheme)}
-              onUse={() => persistTheme(customTheme.id)}
-              onUseMode={(mode) => persistThemeMode(customTheme.id, mode)}
-              theme={card}
-            />
-          );
-        })}
-      </div>
-      {customThemes.length === 0 ? (
-        <div className="mx-3 rounded-xl border border-dashed border-border/80 bg-muted/20 px-4 py-3 text-xs text-muted-foreground sm:mx-4">
-          Your themes will show up here.
+      <h3 className="px-3 text-sm font-medium tracking-[-0.005em] text-foreground sm:px-4">
+        Color scheme
+      </h3>
+      {renderModeTiles()}
+      <div className="flex min-h-8 flex-wrap items-center justify-between gap-3 px-3 pt-2 sm:px-4">
+        <h3 className="text-sm font-medium tracking-[-0.005em] text-foreground">Themes</h3>
+        <div className="flex flex-wrap items-center justify-end gap-3">
+          <Button
+            className="h-7 rounded-md border border-border/70 bg-muted/30 px-2 text-xs font-medium text-foreground shadow-none hover:bg-accent/40"
+            size="xs"
+            variant="ghost"
+            onClick={() => onCreateOpenChange(true)}
+          >
+            <PlusIcon />
+            Create theme
+          </Button>
+          <Button size="xs" variant="ghost" onClick={() => onImportOpenChange(true)}>
+            <UploadIcon />
+            Import JSON
+          </Button>
         </div>
-      ) : null}
+      </div>
+      {renderPairGrid()}
       <ThemeEditorDialog
         editingTheme={themeToEdit}
         initialAppearance={initialAppearance}
