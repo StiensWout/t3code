@@ -161,6 +161,10 @@ export function ThemeEditorDialog({
   >({ light: false, dark: false });
   const [error, setError] = useState<string | null>(null);
   const [isPeeking, setIsPeeking] = useState(false);
+  // The draft only reaches the live app once this open has been seeded;
+  // previewing in the seeding commit would paint the previous session's
+  // colors for a frame.
+  const [isDraftSeeded, setIsDraftSeeded] = useState(false);
   const previousOpenRef = useRef(false);
 
   useEffect(() => {
@@ -195,17 +199,19 @@ export function ThemeEditorDialog({
       setSimpleColorsDirtyByAppearance({ light: false, dark: false });
       setColorsByAppearance(nextColors);
       setError(null);
+      setIsDraftSeeded(true);
     }
+    if (!open && isDraftSeeded) setIsDraftSeeded(false);
     previousOpenRef.current = open;
-  }, [editingTheme, initialAppearance, open, seedName, seedTheme]);
+  }, [editingTheme, initialAppearance, isDraftSeeded, open, seedName, seedTheme]);
 
   // The whole app wears the draft while the editor is open, so a role change
   // is judged on the real interface rather than a miniature. The stored theme
   // comes back when the editor closes, including on cancel.
   useEffect(() => {
-    if (!open) return;
+    if (!open || !isDraftSeeded) return;
     applyThemeColorPreview(colorsByAppearance[activeAppearance], activeAppearance);
-  }, [activeAppearance, colorsByAppearance, open]);
+  }, [activeAppearance, colorsByAppearance, isDraftSeeded, open]);
 
   useEffect(() => {
     if (!open) return;
