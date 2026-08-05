@@ -680,9 +680,12 @@ export function useSettingsRestore(onRestored?: () => void) {
     );
     if (!confirmed) return;
 
+    // Only touch the theme keys that are actually dirty, so a theme-storage
+    // failure cannot block restoring unrelated settings.
     const previousTheme = theme;
-    const previousFollowSystem = followSystem;
-    if (!setTheme("system")) {
+    const needsThemeReset = previousTheme !== "system";
+    const needsFollowSystemReset = !followSystem;
+    if (needsThemeReset && !setTheme("system")) {
       toastManager.add(
         stackedThreadToast({
           type: "error",
@@ -692,9 +695,8 @@ export function useSettingsRestore(onRestored?: () => void) {
       );
       return;
     }
-    if (!setFollowSystem(true)) {
-      setTheme(previousTheme);
-      setFollowSystem(previousFollowSystem);
+    if (needsFollowSystemReset && !setFollowSystem(true)) {
+      if (needsThemeReset) setTheme(previousTheme);
       toastManager.add(
         stackedThreadToast({
           type: "error",
