@@ -22,6 +22,7 @@ import {
   updateCustomTheme,
   CUSTOM_THEMES_STORAGE_KEY,
   createManagedThemeColors,
+  createVividThemeColors,
   getDefaultThemeColors,
   THEME_FILE_VERSION,
 } from "./themePalette";
@@ -59,6 +60,39 @@ describe("theme files", () => {
     expect(contrastRatio(dark.accentForeground, dark.accent)).toBeGreaterThanOrEqual(4.5);
     expect(light.error).toBe(lightDefaults.error);
     expect(dark.warning).toBe(darkDefaults.warning);
+  });
+
+  it("derives readable, distinctive vivid palettes from exact seeds", () => {
+    const seeds: ReadonlyArray<["light" | "dark", string, string]> = [
+      ["light", "#f4f9f2", "#1d8a4e"],
+      ["dark", "#101a2c", "#4f8fe8"],
+      ["dark", "#211a23", "#df5398"],
+      ["light", "#fdf6ec", "#c2571b"],
+    ];
+    for (const [appearance, canvas, accent] of seeds) {
+      const colors = createVividThemeColors(appearance, canvas, accent);
+      // Exact seeds are honored.
+      expect(colors.canvas).toBe(canvas);
+      expect(colors.accent).toBe(accent);
+      // Readability is solved per surface.
+      expect(contrastRatio(colors.text, colors.canvas)).toBeGreaterThanOrEqual(7);
+      expect(contrastRatio(colors.textMuted, colors.canvas)).toBeGreaterThanOrEqual(4.5);
+      expect(contrastRatio(colors.accentForeground, colors.accent)).toBeGreaterThanOrEqual(4.5);
+      expect(
+        contrastRatio(colors.messageActionForeground, colors.messageAction),
+      ).toBeGreaterThanOrEqual(4.5);
+      expect(contrastRatio(colors.messageForeground, colors.messageSurface)).toBeGreaterThanOrEqual(
+        4.5,
+      );
+      expect(contrastRatio(colors.secondaryForeground, colors.secondary)).toBeGreaterThanOrEqual(
+        4.5,
+      );
+      expect(contrastRatio(colors.sidebarForeground, colors.sidebar)).toBeGreaterThanOrEqual(4.5);
+      // The companion action is a distinct voice, not the accent again.
+      expect(colors.messageAction).not.toBe(colors.accent);
+      // Update family follows the theme, not the default palette.
+      expect(colors.update).toBe(accent);
+    }
   });
 
   it("merges a small user file onto the matching contrast-safe base palette", () => {

@@ -518,6 +518,261 @@ function themeRelativeLuminance(color: ThemeRgbColor): number {
   return 0.2126 * linearize(color.r) + 0.7152 * linearize(color.g) + 0.0722 * linearize(color.b);
 }
 
+// ---------------------------------------------------------------------------
+// Vivid palette engine: perceptual (OKLCH) derivation for user-created themes.
+// Built-in themes keep the legacy derivation so their shipped palettes and the
+// boot splash copies stay byte-identical.
+
+type ThemeOklch = { L: number; C: number; h: number };
+
+function srgbChannelToLinear(channel: number): number {
+  const c = channel / 255;
+  return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+}
+
+function linearChannelToSrgb(channel: number): number {
+  const c = channel <= 0.0031308 ? channel * 12.92 : 1.055 * channel ** (1 / 2.4) - 0.055;
+  return Math.round(Math.min(1, Math.max(0, c)) * 255);
+}
+
+function themeRgbToOklch(color: ThemeRgbColor): ThemeOklch {
+  const r = srgbChannelToLinear(color.r);
+  const g = srgbChannelToLinear(color.g);
+  const b = srgbChannelToLinear(color.b);
+  const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+  const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+  const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+  const L = 0.2104542553 * l + 0.793617785 * m - 0.0040720468 * s;
+  const a = 1.9779984951 * l - 2.428592205 * m + 0.4505937099 * s;
+  const bb = 0.0259040371 * l + 0.7827717662 * m - 0.808675766 * s;
+  return { L, C: Math.hypot(a, bb), h: (Math.atan2(bb, a) * 180) / Math.PI };
+}
+
+function oklchToRgbUnclamped({ L, C, h }: ThemeOklch): { r: number; g: number; b: number } {
+  const hr = (h * Math.PI) / 180;
+  const a = C * Math.cos(hr);
+  const bb = C * Math.sin(hr);
+  const l = (L + 0.3963377774 * a + 0.2158037573 * bb) ** 3;
+  const m = (L - 0.1055613458 * a - 0.0638541728 * bb) ** 3;
+  const s = (L - 0.0894841775 * a - 1.291485548 * bb) ** 3;
+  return {
+    r: 4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+    g: -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+    b: -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s,
+  };
+}
+
+/** Convert to sRGB, walking chroma toward grey until the color is in gamut. */
+function themeOklchToRgb(color: ThemeOklch): ThemeRgbColor {
+  let { C } = color;
+  for (let step = 0; step < 12; step += 1) {
+    const linear = oklchToRgbUnclamped({ ...color, C });
+    const inGamut = [linear.r, linear.g, linear.b].every(
+      (channel) => channel >= -0.0001 && channel <= 1.0001,
+    );
+    if (inGamut) {
+      return {
+        r: linearChannelToSrgb(linear.r),
+        g: linearChannelToSrgb(linear.g),
+        b: linearChannelToSrgb(linear.b),
+      };
+    }
+    C *= 0.82;
+  }
+  const linear = oklchToRgbUnclamped({ ...color, C: 0 });
+  return {
+    r: linearChannelToSrgb(linear.r),
+    g: linearChannelToSrgb(linear.g),
+    b: linearChannelToSrgb(linear.b),
+  };
+}
+
+/** Binary-search the lightness that reaches the contrast target against a background. */
+function solveOklchLightness(
+  base: ThemeOklch,
+  against: ThemeRgbColor,
+  minContrast: number,
+  direction: "lighter" | "darker",
+): ThemeOklch {
+  let low = direction === "lighter" ? base.L : 0;
+  let high = direction === "lighter" ? 1 : base.L;
+  let candidate = { ...base };
+  if (themeContrastRatio(themeOklchToRgb(candidate), against) >= minContrast) return candidate;
+  for (let step = 0; step < 18; step += 1) {
+    const mid = (low + high) / 2;
+    candidate = { ...base, L: mid };
+    const contrast = themeContrastRatio(themeOklchToRgb(candidate), against);
+    if (contrast >= minContrast) {
+      if (direction === "lighter") high = mid;
+      else low = mid;
+    } else {
+      if (direction === "lighter") low = mid;
+      else high = mid;
+    }
+  }
+  return { ...base, L: direction === "lighter" ? high : low };
+}
+
+/**
+ * Derive a full palette from two exact seed colors, in OKLCH. Surfaces climb a
+ * perceptually even lightness ramp that carries the accent hue at low chroma,
+ * a companion action color is rotated off the accent, and every foreground is
+ * contrast-solved against its own surface.
+ */
+export function createVividThemeColors(
+  appearance: ThemeAppearance,
+  backgroundValue: string,
+  accentValue: string,
+): ThemeColors {
+  const defaults = getDefaultThemeColors(appearance);
+  const dark = appearance === "dark";
+  const canvasRgb = parseThemeRgbColor(
+    backgroundValue,
+    dark ? { r: 24, g: 15, b: 27 } : { r: 250, g: 245, b: 250 },
+  );
+  const accentRgb = parseThemeRgbColor(accentValue, { r: 168, g: 67, b: 112 });
+  const canvas = themeRgbToOklch(canvasRgb);
+  const accent = themeRgbToOklch(accentRgb);
+  const hue = accent.C < 0.02 ? canvas.h : accent.h;
+  const tintC = Math.min(0.045, Math.max(0.008, accent.C * 0.22));
+  const step = dark ? 1 : -1;
+
+  const surfaceAt = (deltaL: number, chroma = tintC): ThemeOklch => ({
+    L: Math.min(0.98, Math.max(0.05, canvas.L + step * deltaL)),
+    C: chroma,
+    h: hue,
+  });
+  const hex = (color: ThemeOklch) => themeRgbToHexColor(themeOklchToRgb(color));
+
+  // Text carries a whisper of the accent hue instead of falling back to a
+  // fixed foreground, and is solved to WCAG AAA against the canvas.
+  const textBase: ThemeOklch = {
+    L: dark ? 0.95 : 0.2,
+    C: Math.min(0.035, accent.C * 0.25),
+    h: hue,
+  };
+  const text = solveOklchLightness(textBase, canvasRgb, 7, dark ? "lighter" : "darker");
+  const textRgb = themeOklchToRgb(text);
+  const textMuted = solveOklchLightness(
+    { ...textBase, L: dark ? 0.78 : 0.42, C: Math.min(0.06, accent.C * 0.4) },
+    canvasRgb,
+    4.6,
+    dark ? "lighter" : "darker",
+  );
+
+  // The companion action rotates off the accent so a two-color theme still
+  // gets the dual-voice character of the hand-tuned palettes.
+  const action: ThemeOklch = {
+    L: Math.min(0.85, Math.max(0.35, accent.L + (dark ? 0.06 : -0.02))),
+    C: Math.max(accent.C * 0.9, 0.06),
+    h: (hue + 50) % 360,
+  };
+  const actionRgb = themeOklchToRgb(action);
+  const actionForeground = readableThemeForeground(actionRgb);
+  const accentForeground = readableThemeForeground(accentRgb);
+
+  const chrome = surfaceAt(0.025);
+  const sidebar = surfaceAt(0.045, tintC * 1.4);
+  const sidebarRgb = themeOklchToRgb(sidebar);
+  const surface = surfaceAt(0.015);
+  const surfaceRaised = surfaceAt(0.05);
+  const surfaceOverlay = surfaceAt(0.075);
+  const border = surfaceAt(dark ? 0.16 : 0.12, Math.min(0.07, accent.C * 0.35));
+  const input = surfaceAt(dark ? 0.21 : 0.16, Math.min(0.08, accent.C * 0.4));
+  const secondary = surfaceAt(dark ? 0.1 : 0.06, Math.min(0.09, accent.C * 0.5));
+  const secondaryRgb = themeOklchToRgb(secondary);
+  const muted = surfaceAt(dark ? 0.06 : 0.04, Math.min(0.06, accent.C * 0.35));
+  const accentSurface = surfaceAt(dark ? 0.13 : 0.08, Math.min(0.11, accent.C * 0.55));
+  const accentSurfaceRgb = themeOklchToRgb(accentSurface);
+  const messageSurface = surfaceAt(dark ? 0.16 : 0.1, Math.min(0.13, accent.C * 0.6));
+  const messageSurfaceRgb = themeOklchToRgb(messageSurface);
+  const codeBackground = surfaceAt(0.035, tintC * 0.8);
+  const updateSurface = surfaceAt(dark ? 0.14 : 0.09, Math.min(0.12, accent.C * 0.55));
+
+  const foregroundOn = (surfaceRgb: ThemeRgbColor): string =>
+    themeRgbToHexColor(
+      themeOklchToRgb(solveOklchLightness(textBase, surfaceRgb, 4.6, dark ? "lighter" : "darker")),
+    );
+
+  const actionHover: ThemeOklch = { ...action, L: action.L + (dark ? 0.06 : -0.06) };
+
+  return {
+    ...defaults,
+    canvas: themeRgbToHexColor(canvasRgb),
+    chrome: hex(chrome),
+    toolbar: hex(chrome),
+    toolbarForeground: themeRgbToHexColor(textRgb),
+    toolbarBorder: hex(surfaceAt(dark ? 0.14 : 0.1, Math.min(0.08, accent.C * 0.4))),
+    toolbarControl: hex(surfaceAt(dark ? 0.09 : 0.05, tintC * 1.3)),
+    toolbarControlForeground: themeRgbToHexColor(textRgb),
+    toolbarControlHover: hex(surfaceAt(dark ? 0.14 : 0.09, tintC * 1.6)),
+    surface: hex(surface),
+    surfaceRaised: hex(surfaceRaised),
+    surfaceOverlay: hex(surfaceOverlay),
+    text: themeRgbToHexColor(textRgb),
+    textMuted: hex(textMuted),
+    border: hex(border),
+    input: hex(input),
+    focus: themeRgbToHexColor(accentRgb),
+    accent: themeRgbToHexColor(accentRgb),
+    accentForeground: themeRgbToHexColor(accentForeground),
+    secondary: hex(secondary),
+    secondaryForeground: foregroundOn(secondaryRgb),
+    muted: hex(muted),
+    mutedForeground: hex(textMuted),
+    placeholder: hex(
+      solveOklchLightness(
+        { ...textBase, L: dark ? 0.72 : 0.5 },
+        canvasRgb,
+        4.5,
+        dark ? "lighter" : "darker",
+      ),
+    ),
+    secondaryLabel: hex(textMuted),
+    iconMuted: hex(
+      solveOklchLightness(
+        { ...textBase, L: dark ? 0.7 : 0.5 },
+        canvasRgb,
+        3,
+        dark ? "lighter" : "darker",
+      ),
+    ),
+    update: themeRgbToHexColor(accentRgb),
+    updateForeground: foregroundOn(themeOklchToRgb(updateSurface)),
+    updateSurface: hex(updateSurface),
+    accentSurface: hex(accentSurface),
+    accentSurfaceForeground: foregroundOn(accentSurfaceRgb),
+    messageSurface: hex(messageSurface),
+    messageForeground: foregroundOn(messageSurfaceRgb),
+    messageAction: themeRgbToHexColor(actionRgb),
+    messageActionForeground: themeRgbToHexColor(actionForeground),
+    messageActionHover: hex(actionHover),
+    codeBackground: hex(codeBackground),
+    codeForeground: themeRgbToHexColor(textRgb),
+    sidebar: hex(sidebar),
+    sidebarForeground: foregroundOn(sidebarRgb),
+    sidebarMutedForeground: hex(
+      solveOklchLightness(
+        { ...textBase, L: dark ? 0.75 : 0.45 },
+        sidebarRgb,
+        4.5,
+        dark ? "lighter" : "darker",
+      ),
+    ),
+    sidebarControlSurface: hex(surfaceAt(dark ? 0.1 : 0.07, tintC * 1.5)),
+    sidebarRowHover: hex(surfaceAt(dark ? 0.08 : 0.06, Math.min(0.08, accent.C * 0.45))),
+    sidebarRowActive: hex(surfaceAt(dark ? 0.12 : 0.09, Math.min(0.1, accent.C * 0.55))),
+    sidebarRowSelected: hex(surfaceAt(dark ? 0.14 : 0.1, Math.min(0.11, accent.C * 0.6))),
+    sidebarBorder: hex(surfaceAt(dark ? 0.17 : 0.12, Math.min(0.08, accent.C * 0.4))),
+    terminalBackground: themeRgbToHexColor(canvasRgb),
+    terminalForeground: themeRgbToHexColor(textRgb),
+    terminalCursor: themeRgbToHexColor(accentRgb),
+    terminalSelection: hex(surfaceAt(dark ? 0.18 : 0.12, Math.min(0.12, accent.C * 0.55))),
+    terminalScrollbar: hex(surfaceAt(dark ? 0.22 : 0.16, tintC)),
+    terminalScrollbarHover: hex(surfaceAt(dark ? 0.3 : 0.22, tintC)),
+  };
+}
+
 function themeContrastRatio(first: ThemeRgbColor, second: ThemeRgbColor): number {
   const firstLuminance = themeRelativeLuminance(first);
   const secondLuminance = themeRelativeLuminance(second);
