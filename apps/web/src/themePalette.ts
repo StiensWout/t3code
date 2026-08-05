@@ -312,7 +312,7 @@ const T3_CHAT_LIGHT_COLORS: ThemeColors = {
   surfaceRaised: "#f7f1f7",
   surfaceOverlay: "#ffffff",
   text: "#501854",
-  textMuted: "#906b93",
+  textMuted: "#84608a",
   border: "#e0d3e1",
   input: "#d7c5d9",
   focus: "#a84370",
