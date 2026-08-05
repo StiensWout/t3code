@@ -469,10 +469,23 @@ export function useTheme() {
   const setTheme = useCallback((next: Theme): boolean => {
     if (typeof window === "undefined") return false;
     try {
-      // Choosing a whole theme replaces any automatic-mode mix. Clearing the
-      // mix first keeps storage coherent if the preference write fails.
+      // Choosing a whole theme replaces any automatic-mode mix. The mix is
+      // captured first so a failed preference write can put it back instead
+      // of erasing it or leaving it attached to the new theme.
+      const previousHalvesRaw = window.localStorage.getItem(THEME_HALVES_STORAGE_KEY);
       window.localStorage.removeItem(THEME_HALVES_STORAGE_KEY);
-      writeThemePreference(next);
+      try {
+        writeThemePreference(next);
+      } catch (cause) {
+        if (previousHalvesRaw !== null) {
+          try {
+            window.localStorage.setItem(THEME_HALVES_STORAGE_KEY, previousHalvesRaw);
+          } catch {
+            // Storage is failing wholesale; the outer handler reports it.
+          }
+        }
+        throw cause;
+      }
     } catch (cause) {
       const error = isThemeStorageError(cause)
         ? cause

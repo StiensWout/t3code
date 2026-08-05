@@ -335,7 +335,7 @@ const T3_CHAT_LIGHT_COLORS: ThemeColors = {
   sidebarRowActive: "#eed3ee",
   sidebarRowSelected: "#f0d7f0",
   sidebarBorder: "#efbdeb",
-  terminalBackground: "#faf5fa",
+  terminalBackground: "#f5ecf5",
   terminalForeground: "#501854",
   terminalCursor: "#db2777",
   terminalSelection: "#f1c4e6",
