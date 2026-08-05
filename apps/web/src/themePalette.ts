@@ -652,8 +652,21 @@ export function createManagedThemeColors(
     0.12,
   );
 
+  // The update family follows the accent instead of inheriting the default
+  // palette's brand color, so generated themes carry their own identity in
+  // update pills and banners. Error and warning stay semantic defaults.
+  const updateSurface = mixThemeRgbColors(canvas, accent, appearance === "dark" ? 0.32 : 0.16);
+  const updateForeground = mixThemeRgbColors(
+    accent,
+    appearance === "dark" ? THEME_WHITE_FOREGROUND : THEME_BLACK_FOREGROUND,
+    0.35,
+  );
+
   return {
     ...defaults,
+    update: themeRgbToHexColor(accent),
+    updateForeground: themeRgbToHexColor(updateForeground),
+    updateSurface: themeRgbToHexColor(updateSurface),
     canvas: themeRgbToHexColor(canvas),
     chrome: themeRgbToHexColor(chrome),
     toolbar: themeRgbToHexColor(chrome),
