@@ -641,8 +641,15 @@ export function createManagedThemeColors(
   const toolbarControl = mixThemeRgbColors(chrome, accent, appearance === "dark" ? 0.2 : 0.08);
   const toolbarBorder = mixThemeRgbColors(chrome, accent, appearance === "dark" ? 0.35 : 0.14);
   const accentForeground = readableThemeForeground(accent);
-  const codeBackground = mixThemeRgbColors(canvas, text, appearance === "dark" ? 0.18 : 0.025);
-  const terminalBackground = mixThemeRgbColors(canvas, text, appearance === "dark" ? 0.2 : 0.035);
+  // Code and terminal are large surfaces: they keep the canvas hue instead of
+  // drifting toward the foreground grey. Dark code recedes slightly below the
+  // canvas, light code picks up a whisper of the text tint, and the terminal
+  // sits on the canvas itself — matching the hand-tuned T3 Chat palettes.
+  const codeBackground =
+    appearance === "dark"
+      ? mixThemeRgbColors(canvas, THEME_BLACK_FOREGROUND, 0.25)
+      : mixThemeRgbColors(canvas, text, 0.025);
+  const terminalBackground = canvas;
   const messageActionHover = mixThemeRgbColors(
     accent,
     accentForeground === THEME_LIGHT_FOREGROUND || accentForeground === THEME_WHITE_FOREGROUND
