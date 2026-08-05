@@ -521,6 +521,7 @@ export class GhosttyTerminalSurface {
   private fontSize: number;
   private requestedFontSize: number;
   private fontEpoch = 0;
+  private pendingFontEpoch: number | null = null;
   private readonly resizeObserver: ResizeObserver;
   private readonly scrollbarThumb: HTMLDivElement;
   private snapshot: GhosttySnapshot | null = null;
@@ -712,8 +713,10 @@ export class GhosttyTerminalSurface {
     // The fields only change together with their metrics after the load, and
     // the epoch lets the newest overlapping call win regardless of load order.
     const epoch = ++this.fontEpoch;
+    this.pendingFontEpoch = epoch;
     const fontFamily = await loadTerminalFontFamily(font.family, fontSize);
     if (this.disposed || epoch !== this.fontEpoch) return;
+    this.pendingFontEpoch = null;
     this.fontFamily = fontFamily;
     this.requestedFontFamily = font.family;
     this.requestedFontSize = fontSize;
@@ -743,6 +746,9 @@ export class GhosttyTerminalSurface {
 
   private readonly onFontsLoaded = () => {
     if (this.disposed) return;
+    // The explicit load validates every style and applies the newest request.
+    // Its own loading events must not revalidate the previously applied face.
+    if (this.pendingFontEpoch !== null) return;
     // A face may become available after an earlier fallback measurement. Run
     // the fixed-width guard again before using its newly loaded metrics.
     const fontFamily = terminalFontFamily(this.requestedFontFamily);
