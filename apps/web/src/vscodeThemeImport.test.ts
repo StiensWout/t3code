@@ -1,0 +1,148 @@
+import { describe, expect, it } from "vite-plus/test";
+
+import { getThemeColorsForMode, THEME_FILE_VERSION } from "./themePalette";
+import { isVsCodeThemeFile, parseVsCodeThemeFile } from "./vscodeThemeImport";
+
+function contrastRatio(first: string, second: string): number {
+  const toChannels = (value: string) => {
+    const hex = value.slice(1);
+    return [0, 1, 2].map(
+      (channel) => Number.parseInt(hex.slice(channel * 2, channel * 2 + 2), 16) / 255,
+    );
+  };
+  const luminance = (value: string) =>
+    toChannels(value)
+      .map((channel) => (channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4))
+      .reduce((sum, channel, index) => sum + channel * [0.2126, 0.7152, 0.0722][index]!, 0);
+  const lighter = Math.max(luminance(first), luminance(second));
+  const darker = Math.min(luminance(first), luminance(second));
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+// Shaped like a real workbench theme: dotted keys, alpha overlays, and a lot
+// of roles simply left out.
+const VSCODE_DARK = {
+  name: "pierre-dark-soft",
+  type: "dark",
+  colors: {
+    "editor.background": "#171717",
+    "editor.foreground": "#d4d4d4",
+    foreground: "#d4d4d4",
+    "sideBar.background": "#101010",
+    "sideBar.foreground": "#8a8a8a",
+    "sideBar.border": "#1d1d1d",
+    focusBorder: "#69b1ff",
+    "button.background": "#69b1ff",
+    "button.foreground": "#171717",
+    "input.border": "#2c2c2c",
+    "input.placeholderForeground": "#525252",
+    "terminal.background": "#101010",
+    "terminal.foreground": "#8a8a8a",
+    "list.hoverBackground": "#1f3e5e59",
+    "list.activeSelectionBackground": "#1f3e5e99",
+  },
+  tokenColors: [],
+};
+
+describe("VS Code theme import", () => {
+  it("recognises workbench themes and rejects our own files", () => {
+    expect(isVsCodeThemeFile(VSCODE_DARK)).toBe(true);
+    expect(isVsCodeThemeFile({ type: "dark", tokenColors: [] })).toBe(true);
+    expect(
+      isVsCodeThemeFile({
+        version: THEME_FILE_VERSION,
+        name: "Aurora",
+        appearance: "light",
+        colors: { canvas: "#ffffff" },
+      }),
+    ).toBe(false);
+    expect(isVsCodeThemeFile("nope")).toBe(false);
+  });
+
+  it("carries the editor surfaces and accent across", () => {
+    const theme = parseVsCodeThemeFile(VSCODE_DARK);
+    expect(theme.label).toBe("pierre-dark-soft");
+    expect(theme.appearance).toBe("dark");
+    expect(theme.colors.canvas).toBe("#171717");
+    expect(theme.colors.text).toBe("#d4d4d4");
+    expect(theme.colors.accent).toBe("#69b1ff");
+    expect(theme.colors.sidebar).toBe("#101010");
+    expect(theme.colors.terminalBackground).toBe("#101010");
+  });
+
+  it("flattens alpha overlays onto the surface they sit on", () => {
+    const theme = parseVsCodeThemeFile(VSCODE_DARK);
+    // #1f3e5e59 over the #101010 sidebar, not left semi-transparent.
+    expect(theme.colors.sidebarRowHover).toMatch(/^#[0-9a-f]{6}$/);
+    expect(theme.colors.sidebarRowHover).not.toBe("#1f3e5e59");
+    expect(theme.colors.sidebarRowSelected).not.toBe(theme.colors.sidebar);
+  });
+
+  it("fills every role the file omits with a readable derived value", () => {
+    const theme = parseVsCodeThemeFile(VSCODE_DARK);
+    const colors = getThemeColorsForMode(theme, "dark")!;
+    for (const value of Object.values(colors)) {
+      expect(value).toMatch(/^#[0-9a-f]{3,8}$/i);
+    }
+    expect(contrastRatio(colors.text, colors.canvas)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(colors.sidebarForeground, colors.sidebar)).toBeGreaterThanOrEqual(4.5);
+    expect(
+      contrastRatio(colors.messageActionForeground, colors.messageAction),
+    ).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("falls back to the editor background when the type is missing or odd", () => {
+    const untyped = parseVsCodeThemeFile({
+      name: "Untyped",
+      colors: { "editor.background": "#fdfdfd", "editor.foreground": "#202020" },
+    });
+    expect(untyped.appearance).toBe("light");
+    const hc = parseVsCodeThemeFile({
+      name: "High contrast",
+      type: "hc-light",
+      colors: { "editor.background": "#ffffff" },
+    });
+    expect(hc.appearance).toBe("light");
+  });
+
+  it("keeps an unreadable foreground out of the palette", () => {
+    const theme = parseVsCodeThemeFile({
+      name: "Unreadable",
+      type: "dark",
+      colors: { "editor.background": "#101010", "editor.foreground": "#111111" },
+    });
+    expect(theme.colors.text).not.toBe("#111111");
+    expect(contrastRatio(theme.colors.text, theme.colors.canvas)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("reads wide-gamut color() notation", () => {
+    // Themes authored for P3 displays (the shipped Pierre "vibrant" pair) use
+    // this instead of hex.
+    const theme = parseVsCodeThemeFile({
+      name: "Vibrant",
+      type: "dark",
+      colors: {
+        "editor.background": "color(display-p3 0.039216 0.039216 0.039216)",
+        "editor.foreground": "color(display-p3 0.980392 0.980392 0.980392)",
+        focusBorder: "color(display-p3 0.308664 0.645271 1.000000)",
+        "editor.selectionBackground": "color(display-p3 0.308664 0.645271 1.000000 / 0.300000)",
+      },
+    });
+    expect(theme.colors.canvas).toMatch(/^#0[89ab]/);
+    expect(theme.colors.text).toMatch(/^#f[a-f0-9]/);
+    // The P3 blue lands in sRGB blue, not black or a clipped grey.
+    const accent = theme.colors.accent;
+    const [red, green, blue] = [1, 3, 5].map((index) =>
+      Number.parseInt(accent.slice(index, index + 2), 16),
+    ) as [number, number, number];
+    expect(blue).toBeGreaterThan(200);
+    expect(blue).toBeGreaterThan(red);
+    expect(green).toBeGreaterThan(red);
+  });
+
+  it("explains a file with no editor background", () => {
+    expect(() => parseVsCodeThemeFile({ name: "Empty", type: "dark", colors: {} })).toThrow(
+      /editor\.background/,
+    );
+  });
+});

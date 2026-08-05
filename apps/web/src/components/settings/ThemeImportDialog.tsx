@@ -8,6 +8,7 @@ import {
   removeCustomTheme,
   type ThemeDefinition,
 } from "../../themePalette";
+import { isVsCodeThemeFile, parseVsCodeThemeFile } from "../../vscodeThemeImport";
 import { Alert } from "../ui/alert";
 import { Button } from "../ui/button";
 import {
@@ -215,7 +216,12 @@ export function ThemeImportDialog({
       return;
     }
     try {
-      const installedTheme = installCustomTheme(parseThemeFile(JSON.parse(json)));
+      const parsed: unknown = JSON.parse(json);
+      // VS Code themes are converted on the way in; anything else has to be
+      // one of our own files.
+      const installedTheme = installCustomTheme(
+        isVsCodeThemeFile(parsed) ? parseVsCodeThemeFile(parsed) : parseThemeFile(parsed),
+      );
       if (!onImported(installedTheme)) {
         // Roll the install back so a retry can run it again instead of
         // failing on the already-taken theme id.
@@ -244,7 +250,10 @@ export function ThemeImportDialog({
       <DialogPopup className="max-w-3xl overflow-hidden">
         <DialogHeader>
           <DialogTitle>Add a theme</DialogTitle>
-          <DialogDescription>Drop in a JSON file or paste one below.</DialogDescription>
+          <DialogDescription>
+            Drop in a theme JSON file or paste one below. VS Code color themes are converted
+            automatically.
+          </DialogDescription>
         </DialogHeader>
         <DialogPanel className="space-y-4">
           <div
@@ -270,7 +279,7 @@ export function ThemeImportDialog({
             <div className="min-w-0">
               <p className="text-sm font-medium">Theme file</p>
               <p className="truncate text-xs text-muted-foreground">
-                {fileName ?? "Drop a .json file here, choose one, or paste the contents below."}
+                {fileName ?? "Drop a T3 Code or VS Code theme .json here, or paste it below."}
               </p>
             </div>
             <Button
