@@ -1,6 +1,7 @@
-import { PlusIcon } from "lucide-react";
+import { EyeIcon, PlusIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  applyThemeColorPreview,
   THEME_COLOR_ROLES,
   THEME_FILE_VERSION,
   createVividThemeColors,
@@ -132,6 +133,7 @@ export function ThemeEditorDialog({
   initialAppearance,
   seedTheme,
   seedName,
+  restoreTheme,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -143,6 +145,8 @@ export function ThemeEditorDialog({
   seedTheme?: ThemeDefinition | null;
   /** Prefilled name for an explicit duplicate; a plain create stays unnamed. */
   seedName?: string | undefined;
+  /** Reapplies the stored theme once the draft stops being previewed. */
+  restoreTheme: () => void;
 }) {
   const isEditing = editingTheme !== null;
   const [name, setName] = useState("");
@@ -156,6 +160,7 @@ export function ThemeEditorDialog({
     Record<ThemeAppearance, boolean>
   >({ light: false, dark: false });
   const [error, setError] = useState<string | null>(null);
+  const [isPeeking, setIsPeeking] = useState(false);
   const previousOpenRef = useRef(false);
 
   useEffect(() => {
@@ -193,6 +198,30 @@ export function ThemeEditorDialog({
     }
     previousOpenRef.current = open;
   }, [editingTheme, initialAppearance, open, seedName, seedTheme]);
+
+  // The whole app wears the draft while the editor is open, so a role change
+  // is judged on the real interface rather than a miniature. The stored theme
+  // comes back when the editor closes, including on cancel.
+  useEffect(() => {
+    if (!open) return;
+    applyThemeColorPreview(colorsByAppearance[activeAppearance], activeAppearance);
+  }, [activeAppearance, colorsByAppearance, open]);
+
+  useEffect(() => {
+    if (!open) return;
+    return () => {
+      restoreTheme();
+    };
+  }, [open, restoreTheme]);
+
+  // Holding the peek control fades the editor and its scrim out of the way.
+  useEffect(() => {
+    if (!isPeeking) return;
+    document.documentElement.dataset.themeEditorPeek = "true";
+    return () => {
+      delete document.documentElement.dataset.themeEditorPeek;
+    };
+  }, [isPeeking]);
 
   const updateColor = useCallback(
     (role: ThemeColorRole, value: string) => {
@@ -444,8 +473,28 @@ export function ThemeEditorDialog({
   // The same miniature app wireframe as the Appearance settings screen, fed
   // with the live draft palette for the appearance being edited.
   const renderPreviewColumn = () => (
-    <div className="sm:sticky sm:top-0 sm:self-start">
+    <div className="space-y-2 sm:sticky sm:top-0 sm:self-start">
       <ThemeWireframe className="h-40" panes={[{ colors: colorsByAppearance[activeAppearance] }]} />
+      {/* The app already wears the draft; this just moves the editor aside so
+          the rest of it can be seen. Hold rather than toggle, so the editor
+          can never be left hidden. */}
+      <Button
+        className="w-full"
+        size="xs"
+        variant="outline"
+        onBlur={() => setIsPeeking(false)}
+        onKeyDown={(event) => {
+          if (event.key === " " || event.key === "Enter") setIsPeeking(true);
+        }}
+        onKeyUp={() => setIsPeeking(false)}
+        onPointerCancel={() => setIsPeeking(false)}
+        onPointerDown={() => setIsPeeking(true)}
+        onPointerLeave={() => setIsPeeking(false)}
+        onPointerUp={() => setIsPeeking(false)}
+      >
+        <EyeIcon />
+        Hold to see the app
+      </Button>
     </div>
   );
 

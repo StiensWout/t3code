@@ -1384,6 +1384,27 @@ const APP_THEME_VARIABLES: Readonly<Record<ThemeColorRole, string>> = {
   terminalScrollbarHover: "--app-theme-terminal-scrollbar-hover",
 };
 
+/** Marks the document as wearing an unsaved draft rather than a stored theme. */
+export const THEME_PREVIEW_ID = "__preview";
+
+/**
+ * Paint a draft palette onto the live app without installing it, so the editor
+ * can be judged against the real interface instead of a miniature. Callers
+ * restore the stored theme (refreshTheme) when the draft goes away.
+ */
+export function applyThemeColorPreview(colors: ThemeColors, appearance: ThemeAppearance): void {
+  if (typeof document === "undefined") return;
+  const root = document.documentElement;
+  if (!root?.style) return;
+
+  root.dataset.themeId = THEME_PREVIEW_ID;
+  root.classList.toggle("dark", appearance === "dark");
+  for (const [role, value] of Object.entries(colors) as Array<[ThemeColorRole, string]>) {
+    // A half-typed hex keeps the last good value instead of blanking the role.
+    if (isThemeColor(value)) root.style.setProperty(APP_THEME_VARIABLES[role], value);
+  }
+}
+
 export function applyThemePalette(theme: ThemePreference, appearance?: ThemeAppearance): void {
   if (typeof document === "undefined") return;
 

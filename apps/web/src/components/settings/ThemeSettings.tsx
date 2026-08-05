@@ -569,6 +569,7 @@ export function ThemeLibrary({
         initialAppearance={initialAppearance}
         seedTheme={themeToSeed ?? activeThemeForAppearance}
         seedName={themeToSeed ? `${themeToSeed.label} copy` : undefined}
+        restoreTheme={refreshTheme}
         onSaved={themeToEdit ? handleEditedTheme : handleCreatedTheme}
         onOpenChange={(open) => {
           if (!open) {
