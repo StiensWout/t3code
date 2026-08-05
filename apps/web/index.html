@@ -16,6 +16,7 @@
         const CUSTOM_THEMES_STORAGE_KEY = "t3code:themes:v1";
         const THEME_FOLLOW_SYSTEM_STORAGE_KEY = "t3code:theme-follow-system";
         const THEME_APPEARANCE_MODE_STORAGE_KEY = "t3code:theme-appearance-mode";
+        const THEME_HALVES_STORAGE_KEY = "t3code:theme-halves:v1";
         const SPLASH_COLORS = {
           light: {
             background: "#ffffff",
@@ -251,19 +252,55 @@
             : appearanceMode === "system"
               ? prefersDark
               : appearanceMode === "dark";
+          // An automatic-mode mix can point each appearance at a different
+          // theme; the resolved appearance keeps driving light/dark and only
+          // the palette swaps. Mirrors the runtime's resolveThemeHalf.
+          let effectiveThemeId = themeId;
+          let effectiveCustomTheme = customTheme;
+          let effectiveThemeMode = themeMode;
+          let effectiveIsThemed = isThemed;
+          try {
+            const wantedMode = isDark ? "dark" : "light";
+            const halvesRaw = JSON.parse(
+              window.localStorage.getItem(THEME_HALVES_STORAGE_KEY) ?? "null",
+            );
+            const halfId = isRecord(halvesRaw) ? halvesRaw[wantedMode] : null;
+            if (typeof halfId === "string") {
+              const halfBuiltIn = BUILT_IN_THEME_MODES[halfId] ?? null;
+              const halfCustom = halfBuiltIn ? null : findCustomTheme(halfId);
+              const halfModes =
+                halfBuiltIn ??
+                (halfCustom
+                  ? ["light", "dark"].filter(
+                      (mode) => mode === halfCustom.appearance || halfCustom.variants?.[mode],
+                    )
+                  : null);
+              if (halfModes && halfModes.includes(wantedMode)) {
+                effectiveThemeId = halfId;
+                effectiveCustomTheme = halfCustom;
+                effectiveThemeMode = wantedMode;
+                effectiveIsThemed = true;
+              }
+            }
+          } catch {
+            // A malformed mix degrades to the base preference.
+          }
           const customColors =
-            isThemed && customTheme
-              ? themeMode === customTheme.appearance
-                ? customTheme.colors
-                : (customTheme.variants?.[themeMode] ?? customTheme.colors)
+            effectiveIsThemed && effectiveCustomTheme
+              ? effectiveThemeMode === effectiveCustomTheme.appearance
+                ? effectiveCustomTheme.colors
+                : (effectiveCustomTheme.variants?.[effectiveThemeMode] ??
+                  effectiveCustomTheme.colors)
               : null;
           const customDefaults =
-            customTheme && themeMode ? DEFAULT_THEME_PALETTES[themeMode] : null;
+            effectiveCustomTheme && effectiveThemeMode
+              ? DEFAULT_THEME_PALETTES[effectiveThemeMode]
+              : null;
           // The runtime tolerates individual malformed colors, so fall back
           // per role rather than dropping the theme.
           const builtInSplash =
-            isThemed && !customTheme && themeMode
-              ? (BUILT_IN_THEME_PALETTES[themeId]?.[themeMode] ?? null)
+            effectiveIsThemed && !effectiveCustomTheme && effectiveThemeMode
+              ? (BUILT_IN_THEME_PALETTES[effectiveThemeId]?.[effectiveThemeMode] ?? null)
               : null;
           const fallbackSplash = isDark ? SPLASH_COLORS.dark : SPLASH_COLORS.light;
           const customSplash = customColors
@@ -279,8 +316,10 @@
                   : (customDefaults?.accent ?? fallbackSplash.accent),
               }
             : null;
-          if (isThemed) {
-            document.documentElement.dataset.themeId = customTheme ? customTheme.id : themeId;
+          if (effectiveIsThemed) {
+            document.documentElement.dataset.themeId = effectiveCustomTheme
+              ? effectiveCustomTheme.id
+              : effectiveThemeId;
           } else {
             delete document.documentElement.dataset.themeId;
           }

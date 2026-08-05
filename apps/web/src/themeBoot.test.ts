@@ -300,6 +300,41 @@ describe("index.html boot script", () => {
     }
   });
 
+  it("applies the matching half of an automatic mix to the splash", () => {
+    const storage = {
+      [THEME_STORAGE_KEY]: "t3-chat",
+      [THEME_APPEARANCE_MODE_STORAGE_KEY]: "system",
+      "t3code:theme-halves:v1": JSON.stringify({ dark: "t3-grove" }),
+    };
+
+    const dark = runBootScript({ storage, prefersDark: true });
+    expect(dark.isDark).toBe(true);
+    expect(dark.themeId).toBe("t3-grove");
+    expect(dark.bootVariables["--boot-background"]).toBe(
+      getThemeColorsForMode(T3_GROVE_THEME, "dark")!.canvas,
+    );
+
+    const light = runBootScript({ storage, prefersDark: false });
+    expect(light.isDark).toBe(false);
+    expect(light.themeId).toBe("t3-chat");
+    expect(light.bootVariables["--boot-background"]).toBe(
+      getThemeColorsForMode(T3_CHAT_THEME, "light")!.canvas,
+    );
+  });
+
+  it("ignores a mix half that names an unknown theme", () => {
+    const boot = runBootScript({
+      storage: {
+        [THEME_STORAGE_KEY]: "t3-chat",
+        [THEME_APPEARANCE_MODE_STORAGE_KEY]: "system",
+        "t3code:theme-halves:v1": JSON.stringify({ dark: "gone-theme" }),
+      },
+      prefersDark: true,
+    });
+    expect(boot.themeId).toBe("t3-chat");
+    expect(boot.isDark).toBe(true);
+  });
+
   it("uses runtime defaults for malformed custom roles", () => {
     const boot = runBootScript({
       storage: {

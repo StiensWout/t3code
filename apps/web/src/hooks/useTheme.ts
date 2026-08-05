@@ -8,11 +8,16 @@ import {
   invalidateCustomThemes,
   isKnownThemePreference,
   getThemePreferenceMode,
+  parseThemeHalves,
   resolveDesktopTheme,
   resolveThemeAppearance,
+  resolveThemeHalf,
   THEME_APPEARANCE_MODE_STORAGE_KEY,
   THEME_FOLLOW_SYSTEM_STORAGE_KEY,
+  THEME_HALVES_STORAGE_KEY,
   ThemePreference,
+  type ThemeAppearance,
+  type ThemeHalves,
   type ThemePreferenceMode,
 } from "../themePalette";
 
@@ -22,6 +27,7 @@ type ThemeSnapshot = {
   systemDark: boolean;
   followSystem: boolean;
   appearanceMode: ThemePreferenceMode;
+  themeHalves: ThemeHalves | null;
 };
 
 type DesktopThemeBridge = Pick<DesktopBridge, "setTheme">;
@@ -33,7 +39,21 @@ const DEFAULT_THEME_SNAPSHOT: ThemeSnapshot = {
   systemDark: false,
   followSystem: true,
   appearanceMode: "system",
+  themeHalves: null,
 };
+
+function readStoredThemeHalves(): ThemeHalves | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return parseThemeHalves(window.localStorage.getItem(THEME_HALVES_STORAGE_KEY));
+  } catch {
+    return null;
+  }
+}
+
+function themeHalvesSignature(halves: ThemeHalves | null): string {
+  return `${halves?.light ?? ""}|${halves?.dark ?? ""}`;
+}
 const THEME_COLOR_META_NAME = "theme-color";
 const DYNAMIC_THEME_COLOR_SELECTOR = `meta[name="${THEME_COLOR_META_NAME}"][data-dynamic-theme-color="true"]`;
 
@@ -260,11 +280,13 @@ function applyTheme(theme: Theme, suppressTransitions = false) {
   const appearanceMode = readStoredAppearanceMode(theme);
   const followSystem = appearanceMode === "system";
   const systemDark = followSystem ? getSystemDark() : false;
+  const themeHalves = readStoredThemeHalves();
   if (
     lastAppliedTheme?.theme === theme &&
     lastAppliedTheme.systemDark === systemDark &&
     lastAppliedTheme.followSystem === followSystem &&
-    lastAppliedTheme.appearanceMode === appearanceMode
+    lastAppliedTheme.appearanceMode === appearanceMode &&
+    themeHalvesSignature(lastAppliedTheme.themeHalves) === themeHalvesSignature(themeHalves)
   ) {
     syncDesktopTheme(theme, followSystem, appearanceMode);
     return;
@@ -279,10 +301,10 @@ function applyTheme(theme: Theme, suppressTransitions = false) {
     followSystem,
     appearanceMode,
   );
-  applyThemePalette(theme, resolvedAppearance);
+  applyThemePalette(resolveThemeHalf(theme, themeHalves, resolvedAppearance), resolvedAppearance);
   const isDark = resolvedAppearance === "dark";
   document.documentElement.classList.toggle("dark", isDark);
-  lastAppliedTheme = { theme, systemDark, followSystem, appearanceMode };
+  lastAppliedTheme = { theme, systemDark, followSystem, appearanceMode, themeHalves };
   syncBrowserChromeTheme();
   syncDesktopTheme(theme, followSystem, appearanceMode);
   if (suppressTransitions) {
@@ -352,18 +374,20 @@ function getSnapshot(): ThemeSnapshot {
   const appearanceMode = readStoredAppearanceMode(theme);
   const followSystem = appearanceMode === "system";
   const systemDark = followSystem ? getSystemDark() : false;
+  const themeHalves = readStoredThemeHalves();
 
   if (
     lastSnapshot &&
     lastSnapshot.theme === theme &&
     lastSnapshot.systemDark === systemDark &&
     lastSnapshot.followSystem === followSystem &&
-    lastSnapshot.appearanceMode === appearanceMode
+    lastSnapshot.appearanceMode === appearanceMode &&
+    themeHalvesSignature(lastSnapshot.themeHalves) === themeHalvesSignature(themeHalves)
   ) {
     return lastSnapshot;
   }
 
-  lastSnapshot = { theme, systemDark, followSystem, appearanceMode };
+  lastSnapshot = { theme, systemDark, followSystem, appearanceMode, themeHalves };
   return lastSnapshot;
 }
 
@@ -385,7 +409,7 @@ function handleStorageChange(e: StorageEvent) {
   } else if (e.key === THEME_FOLLOW_SYSTEM_STORAGE_KEY) {
     applyTheme(getStored(), true);
     emitChange();
-  } else if (e.key === THEME_APPEARANCE_MODE_STORAGE_KEY) {
+  } else if (e.key === THEME_APPEARANCE_MODE_STORAGE_KEY || e.key === THEME_HALVES_STORAGE_KEY) {
     applyTheme(getStored(), true);
     emitChange();
   } else if (e.key === CUSTOM_THEMES_STORAGE_KEY || e.key === null) {
@@ -439,6 +463,8 @@ export function useTheme() {
     if (typeof window === "undefined") return false;
     try {
       writeThemePreference(next);
+      // Choosing a whole theme replaces any automatic-mode mix.
+      window.localStorage.removeItem(THEME_HALVES_STORAGE_KEY);
     } catch (cause) {
       const error = isThemeStorageError(cause)
         ? cause
@@ -499,6 +525,39 @@ export function useTheme() {
     [setAppearanceMode, theme],
   );
 
+  const setThemeHalf = useCallback(
+    (appearance: ThemeAppearance, themeId: string | null): boolean => {
+      if (typeof window === "undefined") return false;
+      try {
+        const current = readStoredThemeHalves() ?? {};
+        const next: { light?: string; dark?: string } = { ...current };
+        if (themeId === null) delete next[appearance];
+        else next[appearance] = themeId;
+        if (next.light === undefined && next.dark === undefined) {
+          window.localStorage.removeItem(THEME_HALVES_STORAGE_KEY);
+        } else {
+          window.localStorage.setItem(THEME_HALVES_STORAGE_KEY, JSON.stringify(next));
+        }
+      } catch (cause) {
+        const error = new ThemeStorageError({
+          operation: "write",
+          storageKey: THEME_HALVES_STORAGE_KEY,
+          cause,
+        });
+        console.error(error.message, {
+          operation: error.operation,
+          storageKey: error.storageKey,
+          ...safeErrorLogAttributes(error),
+        });
+        return false;
+      }
+      applyTheme(getStored(), true);
+      emitChange();
+      return true;
+    },
+    [],
+  );
+
   const refreshTheme = useCallback(() => {
     if (typeof window === "undefined") return;
     lastAppliedTheme = null;
@@ -516,9 +575,11 @@ export function useTheme() {
     setTheme,
     setAppearanceMode,
     setFollowSystem,
+    setThemeHalf,
     refreshTheme,
     followSystem: snapshot.followSystem,
     appearanceMode: snapshot.appearanceMode,
     resolvedTheme,
+    themeHalves: snapshot.themeHalves,
   } as const;
 }

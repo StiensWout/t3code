@@ -3,17 +3,18 @@ import * as Schema from "effect/Schema";
 export const T3_CHAT_THEME_ID = "t3-chat" as const;
 export const T3_CHAT_THEME_LABEL = "T3 Chat";
 export const T3_GROVE_THEME_ID = "t3-grove" as const;
-export const T3_GROVE_THEME_LABEL = "T3 Grove";
+export const T3_GROVE_THEME_LABEL = "Grove";
 export const T3_OCEAN_THEME_ID = "t3-ocean" as const;
-export const T3_OCEAN_THEME_LABEL = "T3 Ocean";
+export const T3_OCEAN_THEME_LABEL = "Ocean";
 export const T3_EMBER_THEME_ID = "t3-ember" as const;
-export const T3_EMBER_THEME_LABEL = "T3 Ember";
+export const T3_EMBER_THEME_LABEL = "Ember";
 export const T3_IRIS_THEME_ID = "t3-iris" as const;
-export const T3_IRIS_THEME_LABEL = "T3 Iris";
+export const T3_IRIS_THEME_LABEL = "Iris";
 export const THEME_FILE_VERSION = 1 as const;
 export const CUSTOM_THEMES_STORAGE_KEY = "t3code:themes:v1";
 export const THEME_FOLLOW_SYSTEM_STORAGE_KEY = "t3code:theme-follow-system";
 export const THEME_APPEARANCE_MODE_STORAGE_KEY = "t3code:theme-appearance-mode";
+export const THEME_HALVES_STORAGE_KEY = "t3code:theme-halves:v1";
 
 const LEGACY_T3_CHAT_DARK_THEME_ID = "t3-chat-dark";
 
@@ -1138,4 +1139,40 @@ export function resolveDesktopTheme(
 export function isKnownThemePreference(theme: string): boolean {
   if (theme === "light" || theme === "dark" || theme === "system") return true;
   return getThemeDefinition(theme) !== null;
+}
+
+/**
+ * An automatic-mode mix: a different theme per resolved appearance. Halves
+ * only name real themes that can render their half; anything else is dropped
+ * so a stale mix degrades to the base preference.
+ */
+export type ThemeHalves = Readonly<{ light?: string; dark?: string }>;
+
+export function parseThemeHalves(raw: string | null): ThemeHalves | null {
+  if (!raw) return null;
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (!isRecord(value)) return null;
+    const halves: { light?: string; dark?: string } = {};
+    for (const appearance of ["light", "dark"] as const) {
+      const themeId = value[appearance];
+      if (typeof themeId !== "string") continue;
+      const definition = getThemeDefinition(themeId);
+      if (definition && getThemeColorsForMode(definition, appearance) !== null) {
+        halves[appearance] = themeId;
+      }
+    }
+    return halves.light !== undefined || halves.dark !== undefined ? halves : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The theme that should render the given appearance under a mix, if any. */
+export function resolveThemeHalf(
+  theme: ThemePreference,
+  halves: ThemeHalves | null,
+  appearance: ThemeAppearance,
+): ThemePreference {
+  return halves?.[appearance] ?? theme;
 }
