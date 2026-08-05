@@ -625,14 +625,18 @@ export function createVividThemeColors(
   accentValue: string,
 ): ThemeColors {
   const defaults = getDefaultThemeColors(appearance);
-  const dark = appearance === "dark";
   const canvasRgb = parseThemeRgbColor(
     backgroundValue,
-    dark ? { r: 24, g: 15, b: 27 } : { r: 250, g: 245, b: 250 },
+    appearance === "dark" ? { r: 24, g: 15, b: 27 } : { r: 250, g: 245, b: 250 },
   );
   const accentRgb = parseThemeRgbColor(accentValue, { r: 168, g: 67, b: 112 });
   const canvas = themeRgbToOklch(canvasRgb);
   const accent = themeRgbToOklch(accentRgb);
+  // The ramp and every contrast search follow the canvas the user actually
+  // picked, not the appearance slot, so a dark canvas saved as a light theme
+  // still gets light text and raised surfaces. 0.179 is the relative
+  // luminance where white and black text have equal contrast headroom.
+  const dark = themeRelativeLuminance(canvasRgb) < 0.179;
   const hue = accent.C < 0.02 ? canvas.h : accent.h;
   const tintC = Math.min(0.045, Math.max(0.008, accent.C * 0.22));
   const step = dark ? 1 : -1;

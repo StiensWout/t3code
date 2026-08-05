@@ -459,7 +459,7 @@ export function ThemeEditorDialog({
               {renderAppearanceButtons()}
               <div className="space-y-3">
                 {renderColorsHeader()}
-                {renderGuidedColorFields()}
+                {isAdvanced ? null : renderGuidedColorFields()}
               </div>
             </div>
             {renderPreviewColumn()}

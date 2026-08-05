@@ -68,6 +68,9 @@ describe("theme files", () => {
       ["dark", "#101a2c", "#4f8fe8"],
       ["dark", "#211a23", "#df5398"],
       ["light", "#fdf6ec", "#c2571b"],
+      // Inverted canvases: the palette follows the picked color, not the slot.
+      ["light", "#111827", "#8ab4f8"],
+      ["dark", "#f5ecf5", "#a84370"],
     ];
     for (const [appearance, canvas, accent] of seeds) {
       const colors = createVividThemeColors(appearance, canvas, accent);
