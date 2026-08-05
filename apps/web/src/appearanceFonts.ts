@@ -25,6 +25,22 @@ export const DEFAULT_SANS_FONT_STACK =
 export const DEFAULT_CODE_FONT_STACK =
   '"SF Mono", "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace';
 
+export const TYPOGRAPHY_ADVANCED_STORAGE_KEY = "t3code:typography-advanced";
+
+/**
+ * Simple typography treats the terminal as another monospace surface. In
+ * Advanced mode an empty terminal preference means the terminal default,
+ * keeping later code-font changes isolated to code surfaces.
+ */
+export function resolveTerminalFontPreference(input: {
+  readonly advanced: boolean;
+  readonly code: string;
+  readonly terminal: string;
+}): string {
+  if (input.advanced) return input.terminal;
+  return input.terminal.trim() || input.code;
+}
+
 function quoteFontFamilyName(name: string): string {
   const bare = name.trim();
   if (bare.length === 0) return "";
