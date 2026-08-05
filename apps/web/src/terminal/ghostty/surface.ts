@@ -403,6 +403,13 @@ export function isTerminalLinkPointerGesture(
     : event.ctrlKey && !event.metaKey;
 }
 
+export function shouldShowTerminalLinkHover(
+  mouseTracking: boolean,
+  linkModifierActive: boolean,
+): boolean {
+  return !mouseTracking || linkModifierActive;
+}
+
 export function ghosttyMouseButton(button: number): number | null {
   switch (button) {
     case 0:
@@ -510,7 +517,8 @@ export class GhosttyTerminalSurface {
   private mouseReportingButton: number | null = null;
   private linkActivationPointerId: number | null = null;
   private hoveredLink: TerminalLinkWithRange | null = null;
-  private hoverPointer: { x: number; y: number; allowInMouseTracking: boolean } | null = null;
+  private hoverPointer: { x: number; y: number } | null = null;
+  private linkModifierActive = false;
   private selectionClickSequence: TerminalSelectionClickSequence | null = null;
   private selectionMoved = false;
   private composing = false;
@@ -882,6 +890,7 @@ export class GhosttyTerminalSurface {
   }
 
   private readonly onKeyDown = (event: KeyboardEvent) => {
+    this.updateLinkModifier(event);
     // Presses handled outside the terminal must also swallow their release:
     // beforeKey runs side effects (keybindings, navigation sends), so it cannot
     // be consulted again on keyup, and Kitty report-event-types sessions would
@@ -933,6 +942,7 @@ export class GhosttyTerminalSurface {
   };
 
   private readonly onKeyUp = (event: KeyboardEvent) => {
+    this.updateLinkModifier(event);
     if (this.suppressedKeyCodes.delete(event.code)) return;
     if (event.isComposing || this.composing || event.key === "Process" || event.keyCode === 229) {
       return;
@@ -954,6 +964,8 @@ export class GhosttyTerminalSurface {
 
   private readonly onBlur = () => {
     this.focused = false;
+    this.linkModifierActive = false;
+    this.refreshHoveredLink();
     // Suppressions survive blur deliberately: a shortcut that moves focus (for
     // example terminal-toggle) must still swallow its own keyup if focus comes
     // back before release. Stale entries are harmless — an encoding keydown
@@ -1098,7 +1110,10 @@ export class GhosttyTerminalSurface {
       shouldReportTerminalMouse(this.core.isMouseAnyEventTracking(), event)
     ) {
       event.preventDefault();
-      this.clearHoveredLink("default");
+      this.hoverPointer = { x: event.clientX, y: event.clientY };
+      this.linkModifierActive = isTerminalLinkPointerGesture(event);
+      this.setHoveredLink(null);
+      this.canvas.style.cursor = "default";
       this.sendMouse("motion", this.buttonFromButtons(event.buttons), event);
       return;
     }
@@ -1167,11 +1182,15 @@ export class GhosttyTerminalSurface {
   }
 
   private updateHoverCursor(event: PointerEvent): void {
-    this.hoverPointer = {
-      x: event.clientX,
-      y: event.clientY,
-      allowInMouseTracking: isTerminalLinkPointerGesture(event),
-    };
+    this.hoverPointer = { x: event.clientX, y: event.clientY };
+    this.linkModifierActive = isTerminalLinkPointerGesture(event);
+    this.refreshHoveredLink();
+  }
+
+  private updateLinkModifier(event: Pick<KeyboardEvent, "ctrlKey" | "metaKey">): void {
+    const active = isTerminalLinkPointerGesture(event);
+    if (active === this.linkModifierActive) return;
+    this.linkModifierActive = active;
     this.refreshHoveredLink();
   }
 
@@ -1188,7 +1207,7 @@ export class GhosttyTerminalSurface {
   private refreshHoveredLink(): void {
     const pointer = this.hoverPointer;
     const link =
-      pointer && (!this.core.isMouseTracking() || pointer.allowInMouseTracking)
+      pointer && shouldShowTerminalLinkHover(this.core.isMouseTracking(), this.linkModifierActive)
         ? this.linkAt(pointer.x, pointer.y)
         : null;
     this.setHoveredLink(link);
