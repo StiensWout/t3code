@@ -378,12 +378,19 @@ function ThemeColorPickerPanel({
   const [hsv, setHsv] = useState(() => themeHexToHsv(normalizedValue));
   const [hexDraft, setHexDraft] = useState(normalizedValue);
   const [rgbDraft, setRgbDraft] = useState(() => themeRgbValue(normalizedValue));
+  const [isDragging, setIsDragging] = useState(false);
+  const isEditingTextRef = useRef(false);
   const currentColor = themeHsvToHex(hsv.h, hsv.s, hsv.v);
   const currentRgb = themeRgbValue(currentColor);
 
   useEffect(() => {
-    setHexDraft(normalizedValue);
-    setRgbDraft(themeRgbValue(normalizedValue));
+    // While a text field is focused, the incoming value may be the guided
+    // editor's readability-adjusted echo of what is being typed; rewriting the
+    // draft would fight the keystrokes. The swatch still tracks via hsv.
+    if (!isEditingTextRef.current) {
+      setHexDraft(normalizedValue);
+      setRgbDraft(themeRgbValue(normalizedValue));
+    }
     // Keep the current hue/saturation when the incoming value is just our own
     // change echoed back; hex → HSV is lossy for greys, white, and black.
     setHsv((current) =>
@@ -431,12 +438,34 @@ function ThemeColorPickerPanel({
     commitHsv({ ...hsv, h: (hsv.h + direction * step + 360) % 360 });
   };
 
+  const handlePlaneKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (!["ArrowDown", "ArrowLeft", "ArrowRight", "ArrowUp"].includes(event.key)) return;
+    event.preventDefault();
+    const step = event.shiftKey ? 0.1 : 0.02;
+    const nextHsv = { ...hsv };
+    if (event.key === "ArrowLeft") nextHsv.s = clampThemeColor(hsv.s - step);
+    if (event.key === "ArrowRight") nextHsv.s = clampThemeColor(hsv.s + step);
+    if (event.key === "ArrowUp") nextHsv.v = clampThemeColor(hsv.v + step);
+    if (event.key === "ArrowDown") nextHsv.v = clampThemeColor(hsv.v - step);
+    commitHsv(nextHsv);
+  };
+
   const handlePointerDown = (handler: (event: PointerEvent<HTMLDivElement>) => void) => {
     return (event: PointerEvent<HTMLDivElement>) => {
       event.currentTarget.setPointerCapture(event.pointerId);
+      setIsDragging(true);
       handler(event);
     };
   };
+
+  const stopDragging = () => setIsDragging(false);
+
+  // Thumbs travel inside the control by half their own size so they never
+  // clip at the extremes; movement only animates for keyboard steps and
+  // click-to-jump, never while dragging.
+  const thumbTransition = isDragging
+    ? undefined
+    : "left 80ms linear, top 80ms linear, background-color 80ms linear";
 
   const handleHexChange = (nextValue: string) => {
     setHexDraft(nextValue);
@@ -470,20 +499,31 @@ function ThemeColorPickerPanel({
       </div>
       <div className="grid gap-3 px-3 pb-3 pt-3">
         <div
-          className="relative h-32 cursor-crosshair touch-none overflow-hidden rounded-lg"
+          aria-label={`${label} saturation and brightness`}
+          aria-valuetext={`saturation ${Math.round(hsv.s * 100)}%, brightness ${Math.round(hsv.v * 100)}%`}
+          className="relative h-32 cursor-crosshair touch-none overflow-hidden rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-popover"
+          role="slider"
           style={{
             backgroundColor: `hsl(${hsv.h} 100% 50%)`,
             backgroundImage:
               "linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, transparent)",
           }}
+          tabIndex={0}
+          onKeyDown={handlePlaneKeyDown}
+          onLostPointerCapture={stopDragging}
           onPointerDown={handlePointerDown(updateFromPlane)}
           onPointerMove={(event) => {
             if (event.currentTarget.hasPointerCapture(event.pointerId)) updateFromPlane(event);
           }}
+          onPointerUp={stopDragging}
         >
           <span
             className="pointer-events-none absolute size-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white shadow-[0_0_0_1px_rgb(0_0_0/0.4)]"
-            style={{ left: `${hsv.s * 100}%`, top: `${(1 - hsv.v) * 100}%` }}
+            style={{
+              left: `calc(${hsv.s} * (100% - 0.75rem) + 0.375rem)`,
+              top: `calc(${1 - hsv.v} * (100% - 0.75rem) + 0.375rem)`,
+              transition: thumbTransition,
+            }}
           />
         </div>
         <div
@@ -491,21 +531,33 @@ function ThemeColorPickerPanel({
           aria-valuemax={360}
           aria-valuemin={0}
           aria-valuenow={Math.round(hsv.h)}
-          className="relative h-2.5 cursor-pointer touch-none rounded-full shadow-[inset_0_0_0_1px_rgb(0_0_0_/_12%)]"
+          className="relative flex h-6 cursor-pointer touch-none items-center rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-popover"
           role="slider"
-          style={{
-            background: "linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00)",
-          }}
           tabIndex={0}
           onKeyDown={handleHueKeyDown}
+          onLostPointerCapture={stopDragging}
           onPointerDown={handlePointerDown(updateFromHue)}
           onPointerMove={(event) => {
             if (event.currentTarget.hasPointerCapture(event.pointerId)) updateFromHue(event);
           }}
+          onPointerUp={stopDragging}
         >
           <span
+            aria-hidden
+            className="h-2.5 w-full rounded-full shadow-[inset_0_0_0_1px_rgb(0_0_0_/_12%)]"
+            style={{
+              background: "linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00)",
+            }}
+          />
+          <span
             className="pointer-events-none absolute top-1/2 size-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white shadow-[0_0_0_1px_rgb(0_0_0/0.4)]"
-            style={{ left: `${(hsv.h / 360) * 100}%`, backgroundColor: currentColor }}
+            style={{
+              left: `calc(${hsv.h / 360} * (100% - 1rem) + 0.5rem)`,
+              // The ball shows the pure hue so it stays visually anchored to
+              // the track; the header swatch carries the full current color.
+              backgroundColor: `hsl(${hsv.h} 100% 50%)`,
+              transition: thumbTransition,
+            }}
           />
         </div>
         <div className="grid grid-cols-2 gap-2">
@@ -522,10 +574,14 @@ function ThemeColorPickerPanel({
                 aria-label={`${label} picker hex value`}
                 className="h-8 min-w-0 flex-1 bg-transparent font-mono text-xs text-foreground outline-none"
                 onBlur={() => {
+                  isEditingTextRef.current = false;
                   setHexDraft(currentColor);
                   setRgbDraft(currentRgb);
                 }}
                 onChange={(event) => handleHexChange(event.currentTarget.value)}
+                onFocus={() => {
+                  isEditingTextRef.current = true;
+                }}
                 spellCheck={false}
                 value={hexDraft}
               />
@@ -540,10 +596,14 @@ function ThemeColorPickerPanel({
                 aria-label={`${label} picker RGB value`}
                 className="h-8 min-w-0 flex-1 bg-transparent font-mono text-xs text-foreground outline-none"
                 onBlur={() => {
+                  isEditingTextRef.current = false;
                   setHexDraft(currentColor);
                   setRgbDraft(currentRgb);
                 }}
                 onChange={(event) => handleRgbChange(event.currentTarget.value)}
+                onFocus={() => {
+                  isEditingTextRef.current = true;
+                }}
                 spellCheck={false}
                 value={rgbDraft}
               />
@@ -1230,28 +1290,50 @@ function downloadThemeFile(filename: string, contents: string): void {
   URL.revokeObjectURL(url);
 }
 
+// Interpolating in oklab keeps the glow falloff perceptually even (no gray
+// mid-tones or banding rings), and premultiplied alpha keeps the fade to
+// transparent clean.
 function getThemePreviewStyle(
   colors: ThemeCardPreview["colors"],
   mode: ThemeAppearance,
+  shape: "full" | "split" = "full",
 ): CSSProperties {
   const isDark = mode === "dark";
-  const accentX = isDark ? 24 : 76;
-  const accentY = isDark ? 76 : 24;
-  const actionX = isDark ? 76 : 24;
+  // The canvas carries the ball's light/dark identity, so it stays dominant:
+  // a near-true base with a contained accent glow, instead of an accent wash
+  // that makes both modes read alike.
   const modeBase = isDark
-    ? `color-mix(in srgb, ${colors.canvas} 25%, #09090b)`
-    : `color-mix(in srgb, ${colors.canvas} 25%, #ffffff)`;
+    ? `color-mix(in oklab, ${colors.canvas} 80%, #09090b)`
+    : `color-mix(in oklab, ${colors.canvas} 80%, #ffffff)`;
+  // The split ball shows dark in the top-left triangle and light in the
+  // bottom-right, so each half aims its glow at its own visible corner
+  // instead of at the seam.
+  const accentPosition =
+    shape === "split" ? (isDark ? "26% 26%" : "74% 74%") : isDark ? "28% 78%" : "72% 22%";
+  const actionPosition = isDark ? "82% 18%" : "18% 82%";
   const accentFade = isDark ? 62 : 72;
-  const actionFade = isDark ? 54 : 64;
-  const gradient = [
-    `radial-gradient(circle at ${accentX}% ${accentY}%, ${colors.accent} 0%, color-mix(in srgb, ${colors.accent} ${accentFade}%, transparent) 30%, transparent 60%)`,
-    `radial-gradient(circle at ${actionX}% ${accentY}%, ${colors.messageAction} 0%, color-mix(in srgb, ${colors.messageAction} ${actionFade}%, transparent) 20%, transparent 48%)`,
-    `linear-gradient(145deg, ${modeBase} 0%, ${modeBase} 100%)`,
-  ].join(", ");
+  const layers = [
+    `radial-gradient(circle at ${accentPosition} in oklab, ${colors.accent} 0%, color-mix(in oklab, ${colors.accent} ${accentFade}%, transparent) 28%, transparent 58%)`,
+  ];
+  if (shape === "full") {
+    // The action color is a soft tint from the opposite corner, not a second
+    // light source — two bright hotspots read as headlights.
+    layers.push(
+      `radial-gradient(circle at ${actionPosition} in oklab, color-mix(in oklab, ${colors.messageAction} 45%, transparent) 0%, transparent 55%)`,
+    );
+  }
   return {
     backgroundColor: modeBase,
-    backgroundImage: gradient,
+    backgroundImage: layers.join(", "),
   };
+}
+
+// The gradient halves of each ball can match the card surface, so every ball
+// carries a faint mode-appropriate inner ring to keep its silhouette legible.
+function themePreviewEdgeShadow(mode: ThemeAppearance): string {
+  return mode === "dark"
+    ? "inset 0 0 0 1px rgb(255 255 255 / 0.14), 0 1px 2px rgb(0 0 0 / 0.18)"
+    : "inset 0 0 0 1px rgb(0 0 0 / 0.10), 0 1px 2px rgb(0 0 0 / 0.08)";
 }
 
 function ThemePreviewCircle({
@@ -1264,8 +1346,11 @@ function ThemePreviewCircle({
   return (
     <span
       aria-hidden
-      className="block size-14 shrink-0 rounded-full border-2 border-background shadow-sm"
-      style={getThemePreviewStyle(colors, mode)}
+      className="block size-14 shrink-0 rounded-full border-2 border-background"
+      style={{
+        ...getThemePreviewStyle(colors, mode),
+        boxShadow: themePreviewEdgeShadow(mode),
+      }}
     />
   );
 }
@@ -1277,28 +1362,27 @@ function ThemePreviewAutoCircle({
   light: ThemeCardPreview["colors"];
   dark: ThemeCardPreview["colors"];
 }) {
+  // The halves stop short of the x + y = 100% diagonal so the card surface
+  // shows through as the seam; a mode-neutral inner ring outlines the circle.
   return (
     <span
       aria-hidden
-      className="relative block size-14 shrink-0 overflow-hidden rounded-full border-2 border-background shadow-sm"
+      className="relative block size-14 shrink-0 overflow-hidden rounded-full border-2 border-background"
+      style={{ boxShadow: "inset 0 0 0 1px rgb(127 127 127 / 0.22), 0 1px 2px rgb(0 0 0 / 0.10)" }}
     >
       <span
         className="absolute inset-0"
         style={{
-          ...getThemePreviewStyle(dark, "dark"),
-          clipPath: "polygon(0 0, 100% 0, 0 100%)",
+          ...getThemePreviewStyle(dark, "dark", "split"),
+          clipPath: "polygon(0 0, calc(100% - 2px) 0, 0 calc(100% - 2px))",
         }}
       />
       <span
         className="absolute inset-0"
         style={{
-          ...getThemePreviewStyle(light, "light"),
-          clipPath: "polygon(100% 0, 100% 100%, 0 100%)",
+          ...getThemePreviewStyle(light, "light", "split"),
+          clipPath: "polygon(100% 2px, 100% 100%, 2px 100%)",
         }}
-      />
-      <span
-        className="pointer-events-none absolute left-1/2 top-[-8%] h-[116%] w-px bg-background"
-        style={{ transform: "rotate(45deg)" }}
       />
     </span>
   );
@@ -1326,7 +1410,7 @@ function ThemePreviewCircles({
         aria-label={`Use ${label} ${mode === "system" ? "automatic" : mode} mode`}
         aria-pressed={isActive}
         className={cn(
-          "relative flex size-[68px] shrink-0 cursor-pointer items-center justify-center rounded-full p-1 outline-none transition-transform hover:scale-105 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card",
+          "relative flex size-[68px] shrink-0 transform-gpu cursor-pointer items-center justify-center rounded-full p-1 outline-none transition-transform hover:scale-105 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card",
           isActive && "hover:scale-100",
         )}
         key={mode}
