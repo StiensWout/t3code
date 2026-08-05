@@ -215,24 +215,6 @@ function getManagedEditorColors(
   );
 }
 
-/**
- * Whether a palette matches what the guided editor would generate from its
- * canvas and accent, allowing one step of hex rounding drift per channel.
- * Hand-tuned palettes must open in advanced mode so guided regeneration does
- * not silently discard them.
- */
-function areThemeEditorColorsManaged(
-  appearance: ThemeAppearance,
-  colors: ThemeEditorColors,
-): boolean {
-  const managed = getManagedEditorColors(appearance, colors);
-  return THEME_COLOR_ROLES.every((role) => {
-    const actual = themeHexToRgb(colors[role]);
-    const expected = themeHexToRgb(managed[role]);
-    return actual.every((channel, index) => Math.abs(channel - (expected[index] ?? 0)) <= 2);
-  });
-}
-
 function getThemeRoleLabel(role: ThemeColorRole): string {
   const labels: Partial<Record<ThemeColorRole, string>> = {
     canvas: "Background",
@@ -743,12 +725,10 @@ function ThemeEditorDialog({
       setName(editingTheme?.label ?? "");
       setModeSelection(editingTheme && getThemeModes(editingTheme).length > 1 ? "both" : "single");
       setActiveAppearance(nextAppearance);
-      setIsAdvanced(
-        editingTheme !== null &&
-          getThemeModes(editingTheme).some(
-            (mode) => !areThemeEditorColorsManaged(mode, nextColors[mode]),
-          ),
-      );
+      // Themes saved by the guided editor carry the managed flag; anything
+      // else (imports, hand-edited files, older saves) opens in advanced mode
+      // so guided regeneration cannot silently discard hand-tuned colors.
+      setIsAdvanced(editingTheme !== null && editingTheme.managed !== true);
       setSimpleColorsDirtyByAppearance({ light: false, dark: false });
       setColorsByAppearance(nextColors);
       setError(null);
@@ -838,6 +818,7 @@ function ThemeEditorDialog({
         appearance: baseAppearance,
         colors: colorsForSave[baseAppearance],
         ...(variants ? { variants } : {}),
+        ...(isAdvanced ? {} : { managed: true }),
       };
       const savedTheme = editingTheme
         ? updateCustomTheme(parseThemeFile(themeFile))
