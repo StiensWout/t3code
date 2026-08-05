@@ -266,17 +266,20 @@ export function ThemeLibrary({
 
   const handleConfirmRemoveTheme = useCallback(() => {
     if (!themeToRemove) return;
+    const removesBase = getThemeDefinition(theme)?.id === themeToRemove.id;
     // Keep the theme installed if we cannot move the selection off it; the
     // dialog stays open so the user can retry or cancel.
-    if (
-      getThemeDefinition(theme)?.id === themeToRemove.id &&
-      !persistTheme(appearanceMode === "system" ? "system" : appearanceMode)
-    ) {
+    if (removesBase && !persistTheme(appearanceMode === "system" ? "system" : appearanceMode)) {
       return;
     }
-    // A mix half pointing at the removed theme falls back to the base.
     for (const appearance of ["light", "dark"] as const) {
-      if (themeHalves?.[appearance] === themeToRemove.id && !setThemeHalf(appearance, null)) {
+      const half = themeHalves?.[appearance];
+      if (half === undefined) continue;
+      // Writing a base preference clears the whole mix, so halves that name a
+      // surviving theme are written back; halves on the removed theme fall
+      // back to the base.
+      const next = half === themeToRemove.id ? null : removesBase ? half : undefined;
+      if (next !== undefined && !setThemeHalf(appearance, next)) {
         notifyThemeRemovalFailure();
         return;
       }
