@@ -1112,6 +1112,8 @@ export class GhosttyTerminalSurface {
       event.preventDefault();
       this.hoverPointer = { x: event.clientX, y: event.clientY };
       this.linkModifierActive = isTerminalLinkPointerGesture(event);
+      // A drag whose press was already sent to the terminal application cannot
+      // turn into link activation midway through, so link feedback would lie.
       this.setHoveredLink(null);
       this.canvas.style.cursor = "default";
       this.sendMouse("motion", this.buttonFromButtons(event.buttons), event);
@@ -1251,6 +1253,13 @@ export class GhosttyTerminalSurface {
       this.mouseReportingButton = null;
       if (this.canvas.hasPointerCapture(event.pointerId)) {
         this.canvas.releasePointerCapture(event.pointerId);
+      }
+      if (event.type === "pointercancel") {
+        this.clearHoveredLink();
+      } else {
+        this.hoverPointer = { x: event.clientX, y: event.clientY };
+        this.linkModifierActive = isTerminalLinkPointerGesture(event);
+        this.refreshHoveredLink();
       }
       return;
     }
