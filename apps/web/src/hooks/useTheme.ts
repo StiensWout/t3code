@@ -241,8 +241,8 @@ export function syncBrowserChromeTheme() {
 
   document.documentElement.style.backgroundColor = backgroundColor;
   document.body.style.backgroundColor = backgroundColor;
-  // Update every theme-color meta: the browser reads whichever media-scoped
-  // element matches the OS, so mutating a single element is not enough.
+  // Update every theme-color meta so any element another layer added (for
+  // example a media-scoped one) carries the resolved color too.
   const themeColorMetas = document.querySelectorAll<HTMLMetaElement>(
     `meta[name="${THEME_COLOR_META_NAME}"]`,
   );

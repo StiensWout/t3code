@@ -110,18 +110,24 @@ const STANDARD_THEME_PREVIEW_COLORS: Record<
   },
 };
 
-function getStandardThemeCards(): ReadonlyArray<ThemeCardDefinition> {
-  return [
-    {
-      id: "default",
-      label: "Default",
-      previews: (["light", "dark"] as const).map((mode) => ({
-        mode,
-        colors: STANDARD_THEME_PREVIEW_COLORS[mode],
-      })),
-    },
-  ];
-}
+const STANDARD_THEME_CARDS: ReadonlyArray<ThemeCardDefinition> = [
+  {
+    id: "default",
+    label: "Default",
+    previews: (["light", "dark"] as const).map((mode) => ({
+      mode,
+      colors: STANDARD_THEME_PREVIEW_COLORS[mode],
+    })),
+  },
+];
+
+const MAINTAINER_THEMES: ReadonlyArray<ThemeDefinition> = [
+  T3_CHAT_THEME,
+  T3_GROVE_THEME,
+  T3_OCEAN_THEME,
+  T3_EMBER_THEME,
+  T3_IRIS_THEME,
+];
 
 function getThemeCardDefinition(theme: ThemeDefinition): ThemeCardDefinition {
   return {
@@ -1287,7 +1293,9 @@ function downloadThemeFile(filename: string, contents: string): void {
   anchor.href = url;
   anchor.download = filename;
   anchor.click();
-  URL.revokeObjectURL(url);
+  // Revoking synchronously can abort the download in some browsers; give the
+  // browser time to open the stream first.
+  setTimeout(() => URL.revokeObjectURL(url), 30_000);
 }
 
 // Interpolating in oklab keeps the glow falloff perceptually even (no gray
@@ -1570,6 +1578,10 @@ export function ThemeLibrary({
   customThemes,
   initialAppearance,
   refreshTheme,
+  isCreateOpen,
+  isImportOpen,
+  onCreateOpenChange,
+  onImportOpenChange,
 }: {
   theme: string;
   setTheme: (theme: string) => boolean;
@@ -1578,24 +1590,20 @@ export function ThemeLibrary({
   customThemes: ReadonlyArray<ThemeDefinition>;
   initialAppearance: ThemeAppearance;
   refreshTheme: () => void;
+  isCreateOpen: boolean;
+  isImportOpen: boolean;
+  onCreateOpenChange: (open: boolean) => void;
+  onImportOpenChange: (open: boolean) => void;
 }) {
-  const [isImportOpen, setIsImportOpen] = useState(false);
-  const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [themeToEdit, setThemeToEdit] = useState<ThemeDefinition | null>(null);
   const [themeToRemove, setThemeToRemove] = useState<ThemeDefinition | null>(null);
   // Keep the last removal target so the dialog title stays populated while the
   // close animation plays after confirming.
   const lastThemeToRemoveRef = useRef<ThemeDefinition | null>(null);
-  if (themeToRemove) lastThemeToRemoveRef.current = themeToRemove;
+  useEffect(() => {
+    if (themeToRemove) lastThemeToRemoveRef.current = themeToRemove;
+  }, [themeToRemove]);
   const removeDialogTheme = themeToRemove ?? lastThemeToRemoveRef.current;
-  const standardThemes = getStandardThemeCards();
-  const maintainerThemes = [
-    T3_CHAT_THEME,
-    T3_GROVE_THEME,
-    T3_OCEAN_THEME,
-    T3_EMBER_THEME,
-    T3_IRIS_THEME,
-  ];
 
   const notifyThemeSaveFailure = useCallback(() => {
     toastManager.add(
@@ -1712,25 +1720,7 @@ export function ThemeLibrary({
   );
 
   return (
-    <div className="space-y-3 pt-2">
-      <div className="flex min-h-8 flex-wrap items-center justify-between gap-3 px-3 sm:px-4">
-        <h3 className="text-sm font-medium tracking-[-0.005em] text-foreground">Themes</h3>
-        <div className="flex flex-wrap items-center justify-end gap-3">
-          <Button
-            className="h-7 rounded-md border border-border/70 bg-muted/30 px-2 text-xs font-medium text-foreground shadow-none hover:bg-accent/40"
-            size="xs"
-            variant="ghost"
-            onClick={() => setIsCreateOpen(true)}
-          >
-            <PlusIcon />
-            Create theme
-          </Button>
-          <Button size="xs" variant="ghost" onClick={() => setIsImportOpen(true)}>
-            <UploadIcon />
-            Import JSON
-          </Button>
-        </div>
-      </div>
+    <div className="space-y-3">
       <p className="px-3 text-[13px] leading-[1.45] text-muted-foreground/80 sm:px-4">
         Choose how T3 Code looks. Use a built-in theme or make your own.
       </p>
@@ -1738,7 +1728,7 @@ export function ThemeLibrary({
         className="mx-auto grid w-full max-w-[56rem] gap-2 px-3 sm:px-4"
         style={{ gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 17rem), 1fr))" }}
       >
-        {standardThemes.map((standardTheme) => (
+        {STANDARD_THEME_CARDS.map((standardTheme) => (
           <ThemeLibraryCard
             activeMode={
               theme === "system" || theme === "light" || theme === "dark"
@@ -1755,7 +1745,7 @@ export function ThemeLibrary({
             theme={standardTheme}
           />
         ))}
-        {maintainerThemes.map((maintainerTheme) => {
+        {MAINTAINER_THEMES.map((maintainerTheme) => {
           const isActive = getThemeDefinition(theme)?.id === maintainerTheme.id;
           const card = getThemeCardDefinition(maintainerTheme);
           return (
@@ -1802,7 +1792,7 @@ export function ThemeLibrary({
         onSaved={themeToEdit ? handleEditedTheme : handleCreatedTheme}
         onOpenChange={(open) => {
           if (!open) {
-            setIsCreateOpen(false);
+            onCreateOpenChange(false);
             setThemeToEdit(null);
           }
         }}
@@ -1820,7 +1810,7 @@ export function ThemeLibrary({
           );
           return true;
         }}
-        onOpenChange={setIsImportOpen}
+        onOpenChange={onImportOpenChange}
         open={isImportOpen}
       />
       <AlertDialog

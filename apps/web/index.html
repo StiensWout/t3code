@@ -6,8 +6,6 @@
       name="viewport"
       content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
     />
-    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
-    <meta name="theme-color" content="#0a0a0a" media="(prefers-color-scheme: dark)" />
     <meta name="theme-color" content="#0a0a0a" />
     <link rel="icon" href="/favicon.ico" sizes="48x48" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
@@ -141,9 +139,8 @@
           "t3-iris",
           "t3-chat-dark",
         ];
-        // Update every theme-color meta (including the media-scoped ones) so
-        // the browser picks up the resolved color regardless of which element
-        // its media query matches.
+        // Update every theme-color meta so any element another layer added
+        // carries the resolved color too.
         const setThemeColor = (color) => {
           for (const meta of document.querySelectorAll('meta[name="theme-color"]')) {
             meta.setAttribute("content", color);
