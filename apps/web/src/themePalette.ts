@@ -717,13 +717,41 @@ export function getDefaultThemeColors(appearance: ThemeAppearance): ThemeColors 
   return appearance === "dark" ? DEFAULT_DARK_THEME_COLORS : T3_CHAT_LIGHT_COLORS;
 }
 
+/**
+ * A companion action color in the T3 Chat mold: the flagship palette pairs its
+ * accent (#a84370) with a distinct message action (#db2777), which gives send
+ * buttons, status pills, and the theme preview balls a second voice. The
+ * derived foreground and hover follow the same rules as the managed generator.
+ */
+function themeActionColors(
+  action: string,
+): Pick<ThemeColors, "messageAction" | "messageActionForeground" | "messageActionHover"> {
+  const rgb = parseThemeRgbColor(action, THEME_DARK_FOREGROUND);
+  const foreground = readableThemeForeground(rgb);
+  const towardOpposite =
+    foreground === THEME_LIGHT_FOREGROUND || foreground === THEME_WHITE_FOREGROUND
+      ? THEME_BLACK_FOREGROUND
+      : THEME_WHITE_FOREGROUND;
+  return {
+    messageAction: action,
+    messageActionForeground: themeRgbToHexColor(foreground),
+    messageActionHover: themeRgbToHexColor(mixThemeRgbColors(rgb, towardOpposite, 0.12)),
+  };
+}
+
 export const T3_GROVE_THEME: ThemeDefinition = {
   id: T3_GROVE_THEME_ID,
   label: T3_GROVE_THEME_LABEL,
   appearance: "light",
-  colors: createManagedThemeColors("light", "#f2f8f4", "#19734a"),
+  colors: {
+    ...createManagedThemeColors("light", "#f2f8f4", "#19734a"),
+    ...themeActionColors("#8f6410"),
+  },
   variants: {
-    dark: createManagedThemeColors("dark", "#1d2b24", "#69d69a"),
+    dark: {
+      ...createManagedThemeColors("dark", "#1d2b24", "#69d69a"),
+      ...themeActionColors("#e3b34e"),
+    },
   },
 };
 
@@ -731,9 +759,15 @@ export const T3_OCEAN_THEME: ThemeDefinition = {
   id: T3_OCEAN_THEME_ID,
   label: T3_OCEAN_THEME_LABEL,
   appearance: "light",
-  colors: createManagedThemeColors("light", "#f2f7fb", "#2878b8"),
+  colors: {
+    ...createManagedThemeColors("light", "#f2f7fb", "#2878b8"),
+    ...themeActionColors("#0a6f75"),
+  },
   variants: {
-    dark: createManagedThemeColors("dark", "#1b2938", "#70b9ee"),
+    dark: {
+      ...createManagedThemeColors("dark", "#1b2938", "#70b9ee"),
+      ...themeActionColors("#5bd0d6"),
+    },
   },
 };
 
@@ -741,9 +775,15 @@ export const T3_EMBER_THEME: ThemeDefinition = {
   id: T3_EMBER_THEME_ID,
   label: T3_EMBER_THEME_LABEL,
   appearance: "light",
-  colors: createManagedThemeColors("light", "#fff6ef", "#c4602f"),
+  colors: {
+    ...createManagedThemeColors("light", "#fff6ef", "#c4602f"),
+    ...themeActionColors("#b23535"),
+  },
   variants: {
-    dark: createManagedThemeColors("dark", "#30231e", "#f39a62"),
+    dark: {
+      ...createManagedThemeColors("dark", "#30231e", "#f39a62"),
+      ...themeActionColors("#f78a7a"),
+    },
   },
 };
 
@@ -751,9 +791,15 @@ export const T3_IRIS_THEME: ThemeDefinition = {
   id: T3_IRIS_THEME_ID,
   label: T3_IRIS_THEME_LABEL,
   appearance: "light",
-  colors: createManagedThemeColors("light", "#f7f4fc", "#7254b9"),
+  colors: {
+    ...createManagedThemeColors("light", "#f7f4fc", "#7254b9"),
+    ...themeActionColors("#a82c87"),
+  },
   variants: {
-    dark: createManagedThemeColors("dark", "#29243b", "#ad92f5"),
+    dark: {
+      ...createManagedThemeColors("dark", "#29243b", "#ad92f5"),
+      ...themeActionColors("#f099d8"),
+    },
   },
 };
 

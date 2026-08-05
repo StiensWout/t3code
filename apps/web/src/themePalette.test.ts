@@ -178,6 +178,9 @@ describe("theme files", () => {
         expect(
           contrastRatio(colors!.messageForeground, colors!.messageSurface),
         ).toBeGreaterThanOrEqual(4.5);
+        expect(
+          contrastRatio(colors!.messageActionForeground, colors!.messageAction),
+        ).toBeGreaterThanOrEqual(4.5);
       }
     }
   });
