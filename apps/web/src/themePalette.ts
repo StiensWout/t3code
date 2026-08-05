@@ -283,8 +283,10 @@ const T3_CHAT_LIGHT_COLORS: ThemeColors = {
   // The main panel leans into the pink family; the paler #faf5fa moves to
   // the code surface so both official shades stay in play.
   canvas: "#f5ecf5",
-  chrome: "#f3e4f6",
-  toolbar: "#f3e4f6",
+  // Sits just off the canvas so the top bar meets it with a soft seam
+  // instead of a hard hue step.
+  chrome: "#f4e8f5",
+  toolbar: "#f4e8f5",
   toolbarForeground: "#501854",
   toolbarBorder: "#e0d3e1",
   toolbarControl: "#efe7f0",
