@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import type { GhosttyCell, GhosttyRow } from "./core";
 import {
@@ -11,6 +11,7 @@ import {
   isTerminalCopyShortcut,
   isTerminalLinkPointerGesture,
   isTerminalPasteShortcut,
+  loadTerminalFontFamily,
   shouldBlinkTerminalCursor,
   shouldReportTerminalMouse,
   shouldShowTerminalLinkHover,
@@ -295,6 +296,43 @@ describe("application mouse reporting", () => {
 });
 
 describe("terminal font resolution", () => {
+  it("validates the requested face after its styles load", async () => {
+    let loaded = false;
+    const context = {
+      font: "",
+      measureText(text: string) {
+        const proportional = loaded && this.font.includes("Proportional Test");
+        return { width: proportional && text === "i" ? 6 : 10 } as TextMetrics;
+      },
+    };
+    const getContext = vi
+      .spyOn(HTMLCanvasElement.prototype, "getContext")
+      .mockReturnValue(context as never);
+    const load = vi.fn(async () => {
+      loaded = true;
+      return [];
+    });
+    const previousFonts = Object.getOwnPropertyDescriptor(document, "fonts");
+    Object.defineProperty(document, "fonts", {
+      configurable: true,
+      value: { load },
+    });
+
+    try {
+      await expect(loadTerminalFontFamily("Proportional Test", 12)).resolves.toBe(
+        DEFAULT_TERMINAL_FONT_FAMILY,
+      );
+      expect(load).toHaveBeenCalledTimes(4);
+    } finally {
+      getContext.mockRestore();
+      if (previousFonts === undefined) {
+        Reflect.deleteProperty(document, "fonts");
+      } else {
+        Object.defineProperty(document, "fonts", previousFonts);
+      }
+    }
+  });
+
   it("keeps the glyph fallbacks behind a custom text face", () => {
     expect(terminalFontFamily()).toBe(DEFAULT_TERMINAL_FONT_FAMILY);
     expect(terminalFontFamily("  ")).toBe(DEFAULT_TERMINAL_FONT_FAMILY);

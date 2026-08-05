@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  areFontAdvancesMonospace,
   clampCodeFontSize,
   clampInterfaceFontSize,
   clampPromptFontSize,
@@ -11,6 +12,19 @@ import {
   resolveDefaultFamilyLabel,
   resolveTerminalFontPreference,
 } from "./appearanceFonts";
+
+describe("areFontAdvancesMonospace", () => {
+  it("accepts a fixed advance and rejects any proportional glyph", () => {
+    expect(areFontAdvancesMonospace([10, 10, 10, 10])).toBe(true);
+    expect(areFontAdvancesMonospace([10, 10, 7, 10])).toBe(false);
+    expect(areFontAdvancesMonospace([10, 10.02])).toBe(false);
+  });
+
+  it("fails open when canvas metrics are unavailable", () => {
+    expect(areFontAdvancesMonospace([])).toBe(true);
+    expect(areFontAdvancesMonospace([Number.NaN, Number.NaN])).toBe(true);
+  });
+});
 
 describe("cssFontFamilies", () => {
   it("returns null for effectively empty input", () => {
