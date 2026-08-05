@@ -74,6 +74,13 @@ describe("resolveTerminalFontPreference", () => {
     expect(
       resolveTerminalFontPreference({ advanced: false, code: "Fira Code", terminal: "" }),
     ).toBe("Fira Code");
+    expect(
+      resolveTerminalFontPreference({
+        advanced: false,
+        code: "Fira Code",
+        terminal: "Berkeley Mono",
+      }),
+    ).toBe("Fira Code");
   });
 
   it("keeps code and terminal fonts independent in advanced mode", () => {

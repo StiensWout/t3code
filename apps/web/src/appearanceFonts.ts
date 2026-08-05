@@ -38,7 +38,7 @@ export function resolveTerminalFontPreference(input: {
   readonly terminal: string;
 }): string {
   if (input.advanced) return input.terminal;
-  return input.terminal.trim() || input.code;
+  return input.code;
 }
 
 function quoteFontFamilyName(name: string): string {
