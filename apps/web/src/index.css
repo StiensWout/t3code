@@ -1163,6 +1163,7 @@ html[data-theme-id] [data-chat-header] {
 html[data-theme-id] [data-chat-header] [data-slot="button"],
 html[data-theme-id] [data-chat-header] [data-slot="menu-trigger"],
 html[data-theme-id] [data-chat-header] [data-panel-layout-controls] [data-slot="tooltip-trigger"],
+html[data-theme-id] [data-chat-header] [data-toolbar-control],
 html[data-theme-id] [data-chat-header] [data-slot="toggle"] {
   --control-icon-color: var(--toolbar-control-foreground);
   background-color: var(--toolbar-control);
@@ -1183,7 +1184,9 @@ html[data-theme-id]
   [data-panel-layout-controls]
   [data-slot="tooltip-trigger"][data-pressed],
 html[data-theme-id] [data-chat-header] [data-slot="toggle"]:hover,
-html[data-theme-id] [data-chat-header] [data-slot="toggle"][data-pressed] {
+html[data-theme-id] [data-chat-header] [data-slot="toggle"][data-pressed],
+html[data-theme-id] [data-chat-header] [data-toolbar-control]:hover,
+html[data-theme-id] [data-chat-header] [data-toolbar-control][data-pressed] {
   background-color: var(--toolbar-control-hover);
 }
 
