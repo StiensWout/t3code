@@ -221,13 +221,19 @@ export function ThemeEditorDialog({
   }, [open, restoreTheme]);
 
   // Holding the peek control fades the editor and its scrim out of the way.
+  // Closing counts as releasing: the flag hides every dialog in the app, so it
+  // must not survive a dismissal mid-hold (pointer down, then Escape).
   useEffect(() => {
-    if (!isPeeking) return;
+    if (!open) setIsPeeking(false);
+  }, [open]);
+
+  useEffect(() => {
+    if (!isPeeking || !open) return;
     document.documentElement.dataset.themeEditorPeek = "true";
     return () => {
       delete document.documentElement.dataset.themeEditorPeek;
     };
-  }, [isPeeking]);
+  }, [isPeeking, open]);
 
   const updateColor = useCallback(
     (role: ThemeColorRole, value: string) => {
