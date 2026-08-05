@@ -3,9 +3,15 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import indexHtml from "../index.html?raw";
 import {
   CUSTOM_THEMES_STORAGE_KEY,
+  getThemeColorsForMode,
   invalidateCustomThemes,
   isKnownThemePreference,
   resolveThemeAppearance,
+  T3_CHAT_THEME,
+  T3_EMBER_THEME,
+  T3_GROVE_THEME,
+  T3_IRIS_THEME,
+  T3_OCEAN_THEME,
   THEME_APPEARANCE_MODE_STORAGE_KEY,
   THEME_FOLLOW_SYSTEM_STORAGE_KEY,
 } from "./themePalette";
@@ -250,21 +256,38 @@ describe("index.html boot script", () => {
     expect(aurora.metaContent).toBe("#241329");
   });
 
-  it.each([
-    ["t3-chat", "#291c28", "#211a23"],
-    ["t3-grove", "#1e2f26", "#1b2821"],
-    ["t3-ocean", "#1b2733", "#17212b"],
-    ["t3-ember", "#31231c", "#291e1a"],
-    ["t3-iris", "#221d31", "#1d1929"],
-  ])("uses the %s dark splash palette", (theme, chrome, background) => {
-    const boot = runBootScript({
-      storage: { [THEME_STORAGE_KEY]: theme, [THEME_FOLLOW_SYSTEM_STORAGE_KEY]: "true" },
-      prefersDark: true,
-    });
-    expect(boot.themeId).toBe(theme);
-    expect(boot.isDark).toBe(true);
-    expect(boot.backgroundColor).toBe(chrome);
-    expect(boot.bootVariables["--boot-background"]).toBe(background);
+  // Asserting against the real palette definitions (not literals) turns the
+  // boot script's hand-maintained copy into a CI-enforced contract: any
+  // palette change breaks this test until the copy in index.html is updated.
+  it("keeps every built-in boot splash in sync with the real palettes", () => {
+    for (const theme of [
+      T3_CHAT_THEME,
+      T3_GROVE_THEME,
+      T3_OCEAN_THEME,
+      T3_EMBER_THEME,
+      T3_IRIS_THEME,
+    ]) {
+      // The boot script resolves every built-in from a light base appearance.
+      expect(theme.appearance).toBe("light");
+      for (const mode of ["light", "dark"] as const) {
+        const colors = getThemeColorsForMode(theme, mode);
+        expect(colors).not.toBeNull();
+        const boot = runBootScript({
+          storage: {
+            [THEME_STORAGE_KEY]: theme.id,
+            [THEME_APPEARANCE_MODE_STORAGE_KEY]: mode,
+          },
+          prefersDark: mode === "dark",
+        });
+        expect(boot.themeId).toBe(theme.id);
+        expect(boot.isDark).toBe(mode === "dark");
+        expect(boot.bootVariables["--boot-background"]).toBe(colors!.canvas);
+        expect(boot.bootVariables["--boot-foreground"]).toBe(colors!.text);
+        expect(boot.bootVariables["--boot-accent"]).toBe(colors!.accent);
+        expect(boot.backgroundColor).toBe(colors!.chrome);
+        expect(boot.metaContent).toBe(colors!.chrome);
+      }
+    }
   });
 
   it("uses runtime defaults for malformed custom roles", () => {
