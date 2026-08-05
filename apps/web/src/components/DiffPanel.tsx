@@ -160,13 +160,13 @@ const DIFF_PANEL_UNSAFE_CSS = `
   --diffs-line-bg: light-dark(
     color-mix(
       in lab,
-      var(--background) 88%,
-      color-mix(in srgb, var(--background) 50%, var(--diffs-modified-base))
+      var(--code-background) 88%,
+      color-mix(in srgb, var(--code-background) 50%, var(--diffs-modified-base))
     ),
     color-mix(
       in lab,
-      var(--background) 80%,
-      color-mix(in srgb, var(--background) 70%, var(--diffs-modified-base))
+      var(--code-background) 80%,
+      color-mix(in srgb, var(--code-background) 70%, var(--diffs-modified-base))
     )
   ) !important;
 }
@@ -175,13 +175,13 @@ const DIFF_PANEL_UNSAFE_CSS = `
   --diffs-line-bg: light-dark(
     color-mix(
       in lab,
-      var(--background) 91%,
-      color-mix(in srgb, var(--background) 35%, var(--diffs-modified-base))
+      var(--code-background) 91%,
+      color-mix(in srgb, var(--code-background) 35%, var(--diffs-modified-base))
     ),
     color-mix(
       in lab,
-      var(--background) 85%,
-      color-mix(in srgb, var(--background) 60%, var(--diffs-modified-base))
+      var(--code-background) 85%,
+      color-mix(in srgb, var(--code-background) 60%, var(--diffs-modified-base))
     )
   ) !important;
 }
@@ -229,13 +229,13 @@ const DIFF_PANEL_UNSAFE_CSS = `
 }
 
 [data-diffs-header]:hover {
-  background-color: color-mix(in srgb, var(--background) 97%, var(--foreground)) !important;
+  background-color: color-mix(in srgb, var(--code-background) 97%, var(--code-foreground)) !important;
 }
 
 :is([data-separator="line-info"], [data-separator="line-info-basic"]) {
   height: 24px !important;
   margin-block: 0 !important;
-  background-color: var(--background) !important;
+  background-color: var(--code-background) !important;
 }
 
 :is([data-separator="line-info"], [data-separator="line-info-basic"])
@@ -249,7 +249,7 @@ const DIFF_PANEL_UNSAFE_CSS = `
   gap: 8px;
   padding-inline: 0 !important;
   background-color: transparent !important;
-  color: color-mix(in srgb, var(--foreground) 52%, var(--background)) !important;
+  color: color-mix(in srgb, var(--code-foreground) 52%, var(--code-background)) !important;
   font-family: var(--font-sans) !important;
   font-size: 11px !important;
   text-decoration: none !important;
@@ -273,7 +273,7 @@ const DIFF_PANEL_UNSAFE_CSS = `
   height: 1px;
   flex: 1 1 auto;
   content: "";
-  background-color: color-mix(in srgb, var(--background) 92%, var(--foreground));
+  background-color: color-mix(in srgb, var(--code-background) 92%, var(--code-foreground));
 }
 
 :is([data-separator="line-info"], [data-separator="line-info-basic"])[data-expand-index]
@@ -302,7 +302,7 @@ const DIFF_PANEL_UNSAFE_CSS = `
     [data-expand-button]
   ):hover
   [data-separator-content] {
-  color: color-mix(in srgb, var(--foreground) 76%, var(--background)) !important;
+  color: color-mix(in srgb, var(--code-foreground) 76%, var(--code-background)) !important;
 }
 
 :is([data-separator="line-info"], [data-separator="line-info-basic"]):has(
@@ -313,7 +313,7 @@ const DIFF_PANEL_UNSAFE_CSS = `
     [data-expand-button]
   ):hover
   [data-unmodified-lines]::after {
-  background-color: color-mix(in srgb, var(--background) 84%, var(--foreground));
+  background-color: color-mix(in srgb, var(--code-background) 84%, var(--code-foreground));
 }
 
 [data-diffs-header] [data-header-content] {
@@ -353,7 +353,7 @@ const DIFF_PANEL_UNSAFE_CSS = `
 }
 
 [data-title]:hover {
-  color: color-mix(in srgb, var(--foreground) 84%, var(--primary)) !important;
+  color: color-mix(in srgb, var(--code-foreground) 84%, var(--primary)) !important;
   text-decoration-color: currentColor;
 }
 `;
