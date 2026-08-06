@@ -637,6 +637,51 @@ function solveOklchLightness(
   return { ...base, L: direction === "lighter" ? high : low };
 }
 
+/** Red and amber, in OKLCH degrees. */
+const THEME_ERROR_HUE = 25;
+const THEME_WARNING_HUE = 75;
+
+/**
+ * Status colors keep their meaning (red, amber) but adopt the palette's own
+ * lightness, so a generated theme does not inherit the default brand pink on
+ * destructive buttons. The solid tone stays dark enough for the white label
+ * those buttons use, while the surface/foreground pair serves alerts.
+ */
+function semanticThemeFamily(
+  hue: number,
+  canvas: ThemeOklch,
+  canvasRgb: ThemeRgbColor,
+  dark: boolean,
+): { solid: string; surface: string; foreground: string } {
+  const step = dark ? 1 : -1;
+  const hex = (color: ThemeOklch) => themeRgbToHexColor(themeOklchToRgb(color));
+  const solved = solveOklchLightness(
+    { L: dark ? 0.62 : 0.52, C: 0.15, h: hue },
+    canvasRgb,
+    4.5,
+    dark ? "lighter" : "darker",
+  );
+  const surface: ThemeOklch = {
+    L: Math.min(0.98, Math.max(0.05, canvas.L + step * (dark ? 0.12 : 0.07))),
+    C: 0.05,
+    h: hue,
+  };
+  const surfaceRgb = themeOklchToRgb(surface);
+  return {
+    // Cap the solid so white text on it keeps its contrast.
+    solid: hex({ ...solved, L: Math.min(solved.L, 0.62) }),
+    surface: hex(surface),
+    foreground: hex(
+      solveOklchLightness(
+        { L: dark ? 0.9 : 0.35, C: 0.06, h: hue },
+        surfaceRgb,
+        4.5,
+        dark ? "lighter" : "darker",
+      ),
+    ),
+  };
+}
+
 /**
  * Derive a full palette from two exact seed colors, in OKLCH. Surfaces climb a
  * perceptually even lightness ramp that carries the accent hue at low chroma,
@@ -723,8 +768,17 @@ export function createVividThemeColors(
 
   const actionHover: ThemeOklch = { ...action, L: action.L + (dark ? 0.06 : -0.06) };
 
+  const errorFamily = semanticThemeFamily(THEME_ERROR_HUE, canvas, canvasRgb, dark);
+  const warningFamily = semanticThemeFamily(THEME_WARNING_HUE, canvas, canvasRgb, dark);
+
   return {
     ...defaults,
+    error: errorFamily.solid,
+    errorForeground: errorFamily.foreground,
+    errorSurface: errorFamily.surface,
+    warning: warningFamily.solid,
+    warningForeground: warningFamily.foreground,
+    warningSurface: warningFamily.surface,
     canvas: themeRgbToHexColor(canvasRgb),
     // The top bar shares the canvas so the main panel reads as one surface.
     chrome: themeRgbToHexColor(canvasRgb),
@@ -947,8 +1001,24 @@ export function createManagedThemeColors(
     0.35,
   );
 
+  const canvasOklch = themeRgbToOklch(canvas);
+  const isDarkAppearance = appearance === "dark";
+  const errorFamily = semanticThemeFamily(THEME_ERROR_HUE, canvasOklch, canvas, isDarkAppearance);
+  const warningFamily = semanticThemeFamily(
+    THEME_WARNING_HUE,
+    canvasOklch,
+    canvas,
+    isDarkAppearance,
+  );
+
   return {
     ...defaults,
+    error: errorFamily.solid,
+    errorForeground: errorFamily.foreground,
+    errorSurface: errorFamily.surface,
+    warning: warningFamily.solid,
+    warningForeground: warningFamily.foreground,
+    warningSurface: warningFamily.surface,
     update: themeRgbToHexColor(accent),
     updateForeground: themeRgbToHexColor(updateForeground),
     updateSurface: themeRgbToHexColor(updateSurface),

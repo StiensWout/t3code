@@ -60,8 +60,30 @@ describe("theme files", () => {
     expect(contrastRatio(dark.textMuted, dark.canvas)).toBeGreaterThanOrEqual(4.5);
     expect(contrastRatio(light.accentForeground, light.accent)).toBeGreaterThanOrEqual(4.5);
     expect(contrastRatio(dark.accentForeground, dark.accent)).toBeGreaterThanOrEqual(4.5);
-    expect(light.error).toBe(lightDefaults.error);
-    expect(dark.warning).toBe(darkDefaults.warning);
+    // Status colors are derived per palette rather than inheriting the brand
+    // pink: red stays red, amber stays amber, and the white label on a
+    // destructive button keeps its contrast.
+    const channels = (value: string) =>
+      [1, 3, 5].map((index) => Number.parseInt(value.slice(index, index + 2), 16)) as [
+        number,
+        number,
+        number,
+      ];
+    for (const colors of [light, dark]) {
+      const [errorRed, errorGreen, errorBlue] = channels(colors.error);
+      expect(errorRed).toBeGreaterThan(errorGreen);
+      expect(errorRed).toBeGreaterThan(errorBlue);
+      // The default dark error was a pink (blue above green); red must lead.
+      expect(errorGreen).toBeGreaterThanOrEqual(errorBlue);
+      expect(contrastRatio(colors.error, "#ffffff")).toBeGreaterThanOrEqual(3);
+      expect(contrastRatio(colors.errorForeground, colors.errorSurface)).toBeGreaterThanOrEqual(
+        4.5,
+      );
+      const [warnRed, warnGreen, warnBlue] = channels(colors.warning);
+      expect(warnRed).toBeGreaterThan(warnBlue);
+      expect(warnGreen).toBeGreaterThan(warnBlue);
+    }
+    expect(dark.error).not.toBe(darkDefaults.error);
   });
 
   it("derives readable, distinctive vivid palettes from exact seeds", () => {
