@@ -1,12 +1,11 @@
+import { ChevronDownIcon, ChevronUpIcon, PlusIcon, XIcon } from "lucide-react";
 import {
-  ArrowLeftIcon,
-  ArrowRightIcon,
-  ChevronDownIcon,
-  ChevronUpIcon,
-  PlusIcon,
-  XIcon,
-} from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import {
   applyThemeColorPreview,
   THEME_COLOR_ROLES,
@@ -157,7 +156,20 @@ export function ThemeEditorPanel({
   const [error, setError] = useState<string | null>(null);
   const [isMinimized, setIsMinimized] = useState(false);
   const [roleQuery, setRoleQuery] = useState("");
-  const [side, setSide] = useState<"left" | "right">("right");
+  // Null parks the panel at its default corner; a value is a dragged spot,
+  // kept clamped so the header can always be grabbed again.
+  const [position, setPosition] = useState<{ x: number; y: number } | null>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const dragOffsetRef = useRef<{ dx: number; dy: number } | null>(null);
+  useEffect(() => {
+    if (position === null) return;
+    const clamp = () =>
+      setPosition((current) => (current ? clampPosition(current.x, current.y) : current));
+    window.addEventListener("resize", clamp);
+    return () => window.removeEventListener("resize", clamp);
+    // oxlint-disable-next-line exhaustive-deps -- clampPosition reads live layout only.
+  }, [position === null]);
+
   // The draft only reaches the live app once this open has been seeded;
   // previewing in the seeding commit would paint the previous session's
   // colors for a frame.
@@ -489,19 +501,55 @@ export function ThemeEditorPanel({
     );
   };
 
+  const clampPosition = (x: number, y: number) => {
+    const panel = panelRef.current;
+    const margin = 8;
+    const width = panel?.offsetWidth ?? 0;
+    return {
+      x: Math.min(Math.max(x, margin), Math.max(margin, window.innerWidth - width - margin)),
+      // Keep at least the header on screen even when dragged far down.
+      y: Math.min(Math.max(y, margin), Math.max(margin, window.innerHeight - 48)),
+    };
+  };
+
+  const handleDragPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    // Buttons in the header keep their own behavior.
+    if ((event.target as HTMLElement).closest("button, input, a")) return;
+    const rect = panelRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    dragOffsetRef.current = { dx: event.clientX - rect.x, dy: event.clientY - rect.y };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const handleDragPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const offset = dragOffsetRef.current;
+    if (!offset) return;
+    setPosition(clampPosition(event.clientX - offset.dx, event.clientY - offset.dy));
+  };
+
+  const endDrag = () => {
+    dragOffsetRef.current = null;
+  };
+
   return (
     <div
       aria-label={isEditing ? "Edit theme" : "Create theme"}
       className={cn(
-        "fixed bottom-4 z-40 flex max-h-[min(42rem,calc(100dvh-6rem))] w-[min(26rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-xl",
-        // The panel parks opposite the sidebar and can swap sides when it
-        // covers what is being judged.
-        side === "right" ? "right-4" : "left-4",
+        "fixed z-40 flex max-h-[min(42rem,calc(100dvh-6rem))] w-[min(26rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-xl",
+        position === null && "bottom-4 right-4",
         isMinimized && "max-h-none",
       )}
+      ref={panelRef}
       role="dialog"
+      style={position ? { left: position.x, top: position.y } : undefined}
     >
-      <div className="flex items-center gap-1 border-b border-border/70 px-3 py-2">
+      <div
+        className="flex cursor-grab touch-none select-none items-center gap-1 border-b border-border/70 px-3 py-2 active:cursor-grabbing"
+        onPointerCancel={endDrag}
+        onPointerDown={handleDragPointerDown}
+        onPointerMove={handleDragPointerMove}
+        onPointerUp={endDrag}
+      >
         <div className="min-w-0 flex-1">
           <h2 className="truncate text-sm font-medium">
             {isEditing ? "Edit theme" : "Create theme"}
@@ -510,14 +558,6 @@ export function ThemeEditorPanel({
             <p className="truncate text-xs text-muted-foreground">Previewing on the app</p>
           )}
         </div>
-        <Button
-          aria-label={side === "right" ? "Move panel to the left" : "Move panel to the right"}
-          size="icon-xs"
-          variant="ghost"
-          onClick={() => setSide(side === "right" ? "left" : "right")}
-        >
-          {side === "right" ? <ArrowLeftIcon /> : <ArrowRightIcon />}
-        </Button>
         <Button
           aria-label={isMinimized ? "Expand the theme editor" : "Minimize the theme editor"}
           size="icon-xs"

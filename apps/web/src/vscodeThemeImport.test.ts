@@ -61,7 +61,7 @@ describe("VS Code theme import", () => {
 
   it("carries the editor surfaces and accent across", () => {
     const theme = parseVsCodeThemeFile(VSCODE_DARK);
-    expect(theme.label).toBe("pierre-dark-soft");
+    expect(theme.label).toBe("VS Code · pierre-dark-soft");
     expect(theme.appearance).toBe("dark");
     expect(theme.colors.canvas).toBe("#171717");
     expect(theme.colors.text).toBe("#d4d4d4");

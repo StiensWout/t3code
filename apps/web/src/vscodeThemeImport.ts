@@ -164,7 +164,8 @@ function resolveName(value: Record<string, unknown>): string {
   const candidate = [value.displayName, value.name].find(
     (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
   );
-  return (candidate ?? "VS Code theme").trim().slice(0, 48);
+  // The prefix marks the theme as imported in the library; labels cap at 48.
+  return `VS Code · ${(candidate ?? "theme").trim()}`.slice(0, 48);
 }
 
 export function parseVsCodeThemeFile(value: unknown): ThemeDefinition {
