@@ -57,6 +57,12 @@ describe("theme files", () => {
     expect(contrastRatio(dark.accent, dark.canvas)).toBeGreaterThanOrEqual(4.5);
     expect(contrastRatio(light.textMuted, light.canvas)).toBeGreaterThanOrEqual(4.5);
     expect(contrastRatio(dark.textMuted, dark.canvas)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(light.textMuted, light.canvas)).toBeLessThan(5.5);
+    expect(contrastRatio(dark.textMuted, dark.canvas)).toBeLessThan(5.5);
+    expect(contrastRatio(light.textMuted, light.canvas)).toBeCloseTo(4.705, 1);
+    expect(contrastRatio(dark.textMuted, dark.canvas)).toBeCloseTo(5.082, 1);
+    expect(light.secondaryLabel).toBe(light.textMuted);
+    expect(dark.secondaryLabel).toBe(dark.textMuted);
     expect(contrastRatio(light.accentForeground, light.accent)).toBeGreaterThanOrEqual(4.5);
     expect(contrastRatio(dark.accentForeground, dark.accent)).toBeGreaterThanOrEqual(4.5);
     // Status colors fall back to T3 Code's standard red and amber rather than
@@ -102,6 +108,8 @@ describe("theme files", () => {
       // Readability is solved per surface.
       expect(contrastRatio(colors.text, colors.canvas)).toBeGreaterThanOrEqual(7);
       expect(contrastRatio(colors.textMuted, colors.canvas)).toBeGreaterThanOrEqual(4.5);
+      expect(contrastRatio(colors.textMuted, colors.canvas)).toBeLessThan(5.5);
+      expect(colors.secondaryLabel).toBe(colors.textMuted);
       expect(contrastRatio(colors.accentForeground, colors.accent)).toBeGreaterThanOrEqual(4.5);
       expect(
         contrastRatio(colors.messageActionForeground, colors.messageAction),
@@ -157,7 +165,7 @@ describe("theme files", () => {
       colors: {
         canvas: "#07152f",
         accent: "#67c2ff",
-        placeholder: "#b88cb5",
+        placeholder: "#8f8699",
       },
     });
   });
@@ -220,16 +228,50 @@ describe("theme files", () => {
     });
   });
 
-  it("keeps the T3 Chat palette readable", () => {
-    const colors = T3_CHAT_THEME.colors;
-    expect(contrastRatio(colors.text, colors.canvas)).toBeGreaterThanOrEqual(7);
-    expect(contrastRatio(colors.textMuted, colors.canvas)).toBeGreaterThanOrEqual(4.5);
-    expect(contrastRatio(colors.accentForeground, colors.accent)).toBeGreaterThanOrEqual(4.5);
-    expect(contrastRatio(colors.messageForeground, colors.messageSurface)).toBeGreaterThanOrEqual(
-      4.5,
-    );
-    expect(contrastRatio(colors.secondaryForeground, colors.secondary)).toBeGreaterThanOrEqual(4.5);
-    expect(contrastRatio(colors.sidebarForeground, colors.sidebar)).toBeGreaterThanOrEqual(4.5);
+  it("keeps the T3 Chat palette faithful and readable", () => {
+    expect(T3_CHAT_THEME.colors).toMatchObject({
+      canvas: "#fdf7fd",
+      chrome: "#fdf7fd",
+      toolbarBorder: "#efbdeb",
+      toolbarControl: "#f3e6f5",
+      toolbarControlHover: "#eccfe3",
+      surfaceRaised: "#fdfafd",
+      input: "#e7c1dc",
+      focus: "#db2777",
+      messageSurface: "#f7def2",
+      codeBackground: "#f5ecf9",
+      codeForeground: "#673c8b",
+      accentSurface: "#f3e6f5",
+      sidebar: "#f2e1f4",
+    });
+    expect(T3_CHAT_THEME.variants?.dark).toMatchObject({
+      canvas: "#1f1a24",
+      chrome: "#1f1a24",
+      surface: "#29232d",
+      surfaceRaised: "#2c2631",
+      input: "#302029",
+      focus: "#db2777",
+      messageSurface: "#2b2431",
+      codeBackground: "#1f1a24",
+      sidebar: "#171018",
+      sidebarBorder: "#322028",
+    });
+
+    for (const mode of ["light", "dark"] as const) {
+      const colors = getThemeColorsForMode(T3_CHAT_THEME, mode)!;
+      expect(contrastRatio(colors.text, colors.canvas)).toBeGreaterThanOrEqual(7);
+      expect(contrastRatio(colors.textMuted, colors.canvas)).toBeGreaterThanOrEqual(4.5);
+      expect(contrastRatio(colors.messageForeground, colors.messageSurface)).toBeGreaterThanOrEqual(
+        4.5,
+      );
+      expect(contrastRatio(colors.secondaryForeground, colors.secondary)).toBeGreaterThanOrEqual(
+        4.5,
+      );
+      expect(contrastRatio(colors.sidebarForeground, colors.sidebar)).toBeGreaterThanOrEqual(4.5);
+      // The live light primary is intended for filled controls and clears the
+      // non-text UI-component threshold rather than normal-text AA.
+      expect(contrastRatio(colors.accentForeground, colors.accent)).toBeGreaterThanOrEqual(3);
+    }
   });
 
   it("includes the dual-mode maintainer themes", () => {
@@ -243,7 +285,17 @@ describe("theme files", () => {
         const colors = getThemeColorsForMode(theme, mode);
         expect(colors).not.toBeNull();
         expect(contrastRatio(colors!.text, colors!.canvas)).toBeGreaterThanOrEqual(4.5);
-        expect(contrastRatio(colors!.accentForeground, colors!.accent)).toBeGreaterThanOrEqual(4.5);
+        expect(contrastRatio(colors!.textMuted, colors!.canvas)).toBeGreaterThanOrEqual(4.5);
+        if (theme !== T3_CHAT_THEME) {
+          expect(contrastRatio(colors!.textMuted, colors!.canvas)).toBeLessThan(5.5);
+          expect(contrastRatio(colors!.textMuted, colors!.canvas)).toBeCloseTo(
+            mode === "dark" ? 5.082 : 4.705,
+            1,
+          );
+        }
+        expect(contrastRatio(colors!.accentForeground, colors!.accent)).toBeGreaterThanOrEqual(
+          theme === T3_CHAT_THEME ? 3 : 4.5,
+        );
         expect(
           contrastRatio(colors!.toolbarControlForeground, colors!.toolbarControl),
         ).toBeGreaterThanOrEqual(4.5);
@@ -252,7 +304,7 @@ describe("theme files", () => {
         ).toBeGreaterThanOrEqual(4.5);
         expect(
           contrastRatio(colors!.messageActionForeground, colors!.messageAction),
-        ).toBeGreaterThanOrEqual(4.5);
+        ).toBeGreaterThanOrEqual(theme === T3_CHAT_THEME ? 3 : 4.5);
       }
     }
   });

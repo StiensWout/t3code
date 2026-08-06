@@ -301,132 +301,148 @@ function legacyThemeMode(theme: ThemePreference): ThemeAppearance | null {
  * Maintainer palettes use product color roles rather than Tailwind or component
  * names so the same definitions can feed other clients and native surfaces.
  */
-// Anchored to the t3.chat light palette: #a84370 primary, #db2777 ring,
-// #501854 foreground, and its pink-tinted surface family.
+// Measured from the live t3.chat default theme. Translucent chat surfaces are
+// flattened over --chat-background so this opaque palette reproduces the
+// pixels users see after T3 Chat's blur and noise layers are composited.
 const T3_CHAT_LIGHT_COLORS: ThemeColors = {
-  // The main panel leans into the pink family; the paler #faf5fa moves to
-  // the code surface so both official shades stay in play.
-  canvas: "#f5ecf5",
-  // The top bar shares the main panel's surface family: same canvas, same
-  // border, controls on the panel's own raised surface — no chrome seam.
-  chrome: "#f5ecf5",
-  toolbar: "#f5ecf5",
+  canvas: "#fdf7fd",
+  // T3 Code's workspace header belongs to the chat panel, so keep it seamless
+  // with the light chat canvas rather than mapping it to T3 Chat's outer shell.
+  chrome: "#fdf7fd",
+  toolbar: "#fdf7fd",
   toolbarForeground: "#501854",
-  toolbarBorder: "#e0d3e1",
-  toolbarControl: "#efe7f0",
+  toolbarBorder: "#efbdeb",
+  // T3 Chat's light chrome controls sit on its pale gradient-noise surface,
+  // not the substantially darker solid accent token.
+  toolbarControl: "#f3e6f5",
   toolbarControlForeground: "#501854",
-  toolbarControlHover: "#e8d5e9",
-  surface: "#efe7f0",
-  surfaceRaised: "#f7f1f7",
-  // Popovers, menus, and outline controls sit on the overlay; pure white
-  // reads unthemed against the pink family.
-  surfaceOverlay: "#fcf6fc",
+  toolbarControlHover: "#eccfe3",
+  surface: "#faf3fb",
+  surfaceRaised: "#fdfafd",
+  surfaceOverlay: "#ffffff",
   text: "#501854",
-  textMuted: "#84608a",
-  border: "#e0d3e1",
-  input: "#d7c5d9",
-  focus: "#a84370",
-  accent: "#a84370",
+  textMuted: "#ac1668",
+  border: "#eee1ed",
+  input: "#e7c1dc",
+  focus: "#db2777",
+  accent: "#e33f86",
   accentForeground: "#ffffff",
   secondary: "#f1c4e6",
   secondaryForeground: "#77347c",
-  muted: "#f6e5f3",
-  mutedForeground: "#834588",
-  placeholder: "#955a99",
-  secondaryLabel: "#7c4181",
-  iconMuted: "#8d4f92",
-  error: "#ab4347",
-  errorForeground: "#7f2f33",
-  errorSurface: "#f9e2e3",
-  warning: "#a65f19",
-  warningForeground: "#7d4510",
-  warningSurface: "#fff0d7",
-  update: "#a84370",
-  updateForeground: "#7c2f5c",
-  updateSurface: "#f6d9ec",
-  accentSurface: "#f1c4e6",
-  accentSurfaceForeground: "#77347c",
-  messageSurface: "#f1c4e6",
-  messageForeground: "#501854",
-  messageAction: "#a84370",
+  muted: "#eaa7cb",
+  mutedForeground: "#ac1668",
+  placeholder: "#ad83b0",
+  secondaryLabel: "#ac1668",
+  iconMuted: "#ac1668",
+  error: "#f7086c",
+  errorForeground: "#9d174d",
+  errorSurface: "#fde4f1",
+  warning: "#f59e0b",
+  warningForeground: "#b45309",
+  warningSurface: "#fcf0ea",
+  update: "#e33f86",
+  updateForeground: "#ac1668",
+  updateSurface: "#fadfef",
+  accentSurface: "#f3e6f5",
+  accentSurfaceForeground: "#454554",
+  messageSurface: "#f7def2",
+  messageForeground: "#492c61",
+  messageAction: "#e33f86",
   messageActionForeground: "#ffffff",
-  messageActionHover: "#933a63",
-  codeBackground: "#faf5fa",
-  codeForeground: "#501854",
-  sidebar: "#f3e4f6",
-  sidebarForeground: "#8f2a70",
-  sidebarMutedForeground: "#a5619e",
-  sidebarControlSurface: "#edd7ee",
-  sidebarRowHover: "#f7e8f7",
-  sidebarRowActive: "#eed3ee",
-  sidebarRowSelected: "#f0d7f0",
-  sidebarBorder: "#efbdeb",
-  terminalBackground: "#f5ecf5",
+  messageActionHover: "#d56698",
+  // T3 Chat uses a light lavender code surface in light mode. Keeping the
+  // dark plum pair here also leaked the dark palette into T3 Code's diffs.
+  codeBackground: "#f5ecf9",
+  codeForeground: "#673c8b",
+  // The live sidebar is transparent over T3 Chat's outer shell. Use that
+  // rendered shell color rather than its unused, darker sidebar token.
+  sidebar: "#f2e1f4",
+  sidebarForeground: "#454554",
+  sidebarMutedForeground: "#ac1668",
+  sidebarControlSurface: "#f8f8f7",
+  sidebarRowHover: "#f8f8f7",
+  sidebarRowActive: "#f8f8f7",
+  sidebarRowSelected: "#f8f8f7",
+  sidebarBorder: "#eceae9",
+  terminalBackground: "#fdf7fd",
   terminalForeground: "#501854",
   terminalCursor: "#db2777",
   terminalSelection: "#f1c4e6",
-  terminalScrollbar: "#ddaed8",
-  terminalScrollbarHover: "#c98cc2",
+  terminalScrollbar: "#e7c1dc",
+  terminalScrollbarHover: "#eaa7cb",
 };
 
-const DEFAULT_DARK_THEME_COLORS: ThemeColors = {
-  canvas: "#180f1b",
-  chrome: "#180f1b",
-  toolbar: "#180f1b",
-  toolbarForeground: "#f4d8f0",
-  toolbarBorder: "#5c345b",
-  toolbarControl: "#221323",
-  toolbarControlForeground: "#f4d8f0",
-  toolbarControlHover: "#42243f",
-  surface: "#221323",
-  surfaceRaised: "#2a182b",
-  surfaceOverlay: "#2c192d",
-  text: "#faeaf9",
-  textMuted: "#c99cc4",
-  border: "#5c345b",
-  input: "#6e3a6a",
-  focus: "#f06cab",
-  accent: "#df4c96",
-  accentForeground: "#2a1022",
-  secondary: "#3a2040",
-  secondaryForeground: "#f1c9ed",
-  muted: "#321b35",
-  mutedForeground: "#c99cc4",
-  placeholder: "#b88cb5",
-  secondaryLabel: "#c49bc0",
-  iconMuted: "#c99cc4",
-  error: "#f0719d",
-  errorForeground: "#ffdbe8",
-  errorSurface: "#4a1d31",
-  warning: "#efb56b",
-  warningForeground: "#ffe3b5",
-  warningSurface: "#493018",
-  update: "#f06cab",
-  updateForeground: "#ffd8f4",
-  updateSurface: "#4c2042",
-  accentSurface: "#492244",
-  accentSurfaceForeground: "#ffd8f4",
-  messageSurface: "#522447",
-  messageForeground: "#ffe9fa",
-  messageAction: "#df4c96",
-  messageActionForeground: "#2a1022",
-  messageActionHover: "#f06cab",
-  codeBackground: "#120d14",
-  codeForeground: "#faeaf9",
-  sidebar: "#241329",
-  sidebarForeground: "#f4d8f0",
-  sidebarMutedForeground: "#c49bc0",
-  sidebarControlSurface: "#342039",
-  sidebarRowHover: "#35203a",
-  sidebarRowActive: "#42243f",
-  sidebarRowSelected: "#3e203b",
-  sidebarBorder: "#5c345b",
-  terminalBackground: "#180f1b",
-  terminalForeground: "#faeaf9",
-  terminalCursor: "#f06cab",
-  terminalSelection: "#6b2f5d",
-  terminalScrollbar: "#6b3b6d",
-  terminalScrollbarHover: "#875083",
+const T3_CHAT_DARK_COLORS: ThemeColors = {
+  canvas: "#1f1a24",
+  // T3 Code's workspace header belongs to the chat panel, so keep it seamless
+  // with the canvas rather than mapping it to T3 Chat's outer shell.
+  chrome: "#1f1a24",
+  toolbar: "#1f1a24",
+  toolbarForeground: "#f9f8fb",
+  toolbarBorder: "#27242c",
+  toolbarControl: "#362d3d",
+  toolbarControlForeground: "#d4c7e1",
+  toolbarControlHover: "#463753",
+  // Cards and panels stay in T3 Chat's plum surface family. Near-black here
+  // made the right-panel surface picker look unrelated to the chat canvas.
+  surface: "#29232d",
+  // Pre-composited for the composer's 80% glass layer; this resolves to the
+  // measured #29232d input fill over the canvas.
+  surfaceRaised: "#2c2631",
+  surfaceOverlay: "#100a0e",
+  text: "#f9f8fb",
+  textMuted: "#e7d0dd",
+  border: "#27242c",
+  input: "#302029",
+  focus: "#db2777",
+  accent: "#a3004c",
+  accentForeground: "#fbd0e8",
+  secondary: "#362d3d",
+  secondaryForeground: "#d4c7e1",
+  muted: "#423a45",
+  mutedForeground: "#e7d0dd",
+  placeholder: "#8f8699",
+  secondaryLabel: "#e7d0dd",
+  iconMuted: "#d4c7e1",
+  error: "#9d174d",
+  errorForeground: "#fbd0e8",
+  errorSurface: "#331a2b",
+  warning: "#f59e0b",
+  warningForeground: "#fbbf24",
+  warningSurface: "#412f20",
+  update: "#a3004c",
+  updateForeground: "#fbd0e8",
+  updateSurface: "#37152b",
+  accentSurface: "#463753",
+  accentSurfaceForeground: "#f8f1f5",
+  messageSurface: "#2b2431",
+  messageForeground: "#f2ebfa",
+  messageAction: "#a3004c",
+  messageActionForeground: "#fbd0e8",
+  messageActionHover: "#a2004c",
+  // Diffs and file previews are full workspace surfaces in T3 Code. Keep them
+  // continuous with the themed canvas instead of dropping to near-black.
+  codeBackground: "#1f1a24",
+  codeForeground: "#d8c3ef",
+  // The live sidebar starts from #131314, then gains its hue from a pink
+  // gradient/noise stack. This pre-grain base lands on the same #1a131a
+  // visible shell color after our surface-grain layer is composited.
+  sidebar: "#171018",
+  sidebarForeground: "#f4f4f5",
+  sidebarMutedForeground: "#e7d0dd",
+  sidebarControlSurface: "#261922",
+  sidebarRowHover: "#261922",
+  sidebarRowActive: "#261922",
+  sidebarRowSelected: "#261922",
+  // T3 Chat draws the chat panel edge in this muted pink. The resize rail uses
+  // the same role on hover, so it stays pink instead of falling back to black.
+  sidebarBorder: "#322028",
+  terminalBackground: "#1f1a24",
+  terminalForeground: "#f9f8fb",
+  terminalCursor: "#db2777",
+  terminalSelection: "#362d3d",
+  terminalScrollbar: "#302029",
+  terminalScrollbarHover: "#423a45",
 };
 
 /**
@@ -887,12 +903,7 @@ export function createVividThemeColors(
   };
   const text = solveOklchLightness(textBase, canvasRgb, 7, dark ? "lighter" : "darker");
   const textRgb = themeOklchToRgb(text);
-  const textMuted = solveOklchLightness(
-    { ...textBase, L: dark ? 0.78 : 0.42, C: Math.min(0.06, accent.C * 0.4) },
-    canvasRgb,
-    4.6,
-    dark ? "lighter" : "darker",
-  );
+  const textMutedRgb = standardMutedThemeText(canvasRgb, textRgb);
 
   // The companion action rotates off the accent so a two-color theme still
   // gets the dual-voice character of the hand-tuned palettes.
@@ -945,7 +956,7 @@ export function createVividThemeColors(
     surfaceRaised: hex(surfaceRaised),
     surfaceOverlay: hex(surfaceOverlay),
     text: themeRgbToHexColor(textRgb),
-    textMuted: hex(textMuted),
+    textMuted: themeRgbToHexColor(textMutedRgb),
     border: hex(border),
     input: hex(input),
     focus: themeRgbToHexColor(accentRgb),
@@ -954,24 +965,10 @@ export function createVividThemeColors(
     secondary: hex(secondary),
     secondaryForeground: foregroundOn(secondaryRgb),
     muted: hex(muted),
-    mutedForeground: hex(textMuted),
-    placeholder: hex(
-      solveOklchLightness(
-        { ...textBase, L: dark ? 0.72 : 0.5 },
-        canvasRgb,
-        4.5,
-        dark ? "lighter" : "darker",
-      ),
-    ),
-    secondaryLabel: hex(textMuted),
-    iconMuted: hex(
-      solveOklchLightness(
-        { ...textBase, L: dark ? 0.7 : 0.5 },
-        canvasRgb,
-        3,
-        dark ? "lighter" : "darker",
-      ),
-    ),
+    mutedForeground: themeRgbToHexColor(textMutedRgb),
+    placeholder: themeRgbToHexColor(textMutedRgb),
+    secondaryLabel: themeRgbToHexColor(textMutedRgb),
+    iconMuted: themeRgbToHexColor(textMutedRgb),
     update: themeRgbToHexColor(accentRgb),
     updateForeground: foregroundOn(themeOklchToRgb(updateSurface)),
     updateSurface: hex(updateSurface),
@@ -986,14 +983,7 @@ export function createVividThemeColors(
     codeForeground: themeRgbToHexColor(textRgb),
     sidebar: hex(sidebar),
     sidebarForeground: foregroundOn(sidebarRgb),
-    sidebarMutedForeground: hex(
-      solveOklchLightness(
-        { ...textBase, L: dark ? 0.75 : 0.45 },
-        sidebarRgb,
-        4.5,
-        dark ? "lighter" : "darker",
-      ),
-    ),
+    sidebarMutedForeground: themeRgbToHexColor(standardMutedThemeText(sidebarRgb, textRgb)),
     sidebarControlSurface: hex(surfaceAt(dark ? 0.1 : 0.07, tintC * 1.5)),
     sidebarRowHover: hex(surfaceAt(dark ? 0.08 : 0.06, Math.min(0.08, accent.C * 0.45))),
     sidebarRowActive: hex(surfaceAt(dark ? 0.12 : 0.09, Math.min(0.1, accent.C * 0.55))),
@@ -1036,7 +1026,43 @@ function readableThemeText(
   minimumRatio: number,
 ): ThemeRgbColor {
   const softened = mixThemeRgbColors(foreground, background, amount);
-  return themeContrastRatio(softened, background) >= minimumRatio ? softened : foreground;
+  if (themeContrastRatio(softened, background) >= minimumRatio) return softened;
+
+  // Find the quietest point between the requested mix and the primary
+  // foreground that still clears the contrast floor. Returning the primary
+  // foreground here made secondary labels jump from slightly too dim to full
+  // brightness, which is especially conspicuous in dark custom themes.
+  let readable = foreground;
+  let lowerAmount = 0;
+  let upperAmount = amount;
+  for (let index = 0; index < 12; index += 1) {
+    const candidateAmount = (lowerAmount + upperAmount) / 2;
+    const candidate = mixThemeRgbColors(foreground, background, candidateAmount);
+    if (themeContrastRatio(candidate, background) >= minimumRatio) {
+      readable = candidate;
+      lowerAmount = candidateAmount;
+    } else {
+      upperAmount = candidateAmount;
+    }
+  }
+  return readable;
+}
+
+// Match the perceived strength of the stock palettes rather than choosing an
+// arbitrary foreground mix. These are the measured contrast ratios of zinc-500
+// on the standard light canvas and #818181 on the standard dark canvas.
+const STANDARD_LIGHT_MUTED_CONTRAST = 4.705;
+const STANDARD_DARK_MUTED_CONTRAST = 5.082;
+
+function standardMutedThemeText(
+  background: ThemeRgbColor,
+  foreground: ThemeRgbColor,
+): ThemeRgbColor {
+  const target =
+    themeRelativeLuminance(background) < 0.179
+      ? STANDARD_DARK_MUTED_CONTRAST
+      : STANDARD_LIGHT_MUTED_CONTRAST;
+  return readableThemeText(background, foreground, 1, target);
 }
 
 function managedThemeBackground(value: string, appearance: ThemeAppearance): ThemeRgbColor {
@@ -1118,6 +1144,7 @@ export function createManagedThemeColors(
     ? parseThemeRgbColor(accentValue, { r: 168, g: 67, b: 112 })
     : managedThemeAccent(accentValue, appearance, canvas);
   const text = readableThemeForeground(canvas);
+  const textMuted = standardMutedThemeText(canvas, text);
   // The top bar is part of the main panel, not a separate chrome layer: it
   // shares the canvas, and its controls sit on the panel's own surfaces.
   const chrome = canvas;
@@ -1172,7 +1199,7 @@ export function createManagedThemeColors(
     surfaceRaised: themeRgbToHexColor(surfaceRaised),
     surfaceOverlay: themeRgbToHexColor(surfaceOverlay),
     text: themeRgbToHexColor(text),
-    textMuted: themeRgbToHexColor(readableThemeText(canvas, text, 0.25, 4.5)),
+    textMuted: themeRgbToHexColor(textMuted),
     // Borders blend through the accent before lightening so control chrome
     // carries the theme hue like the hand-tuned palettes (#5c345b, #e0d3e1)
     // instead of flattening to grey.
@@ -1196,10 +1223,10 @@ export function createManagedThemeColors(
     secondary: themeRgbToHexColor(secondary),
     secondaryForeground: themeRgbToHexColor(readableThemeForeground(secondary)),
     muted: themeRgbToHexColor(muted),
-    mutedForeground: themeRgbToHexColor(readableThemeText(canvas, text, 0.2, 4.5)),
-    placeholder: themeRgbToHexColor(readableThemeText(canvas, text, 0.12, 4.5)),
-    secondaryLabel: themeRgbToHexColor(readableThemeText(canvas, text, 0.18, 4.5)),
-    iconMuted: themeRgbToHexColor(readableThemeText(canvas, text, 0.18, 3)),
+    mutedForeground: themeRgbToHexColor(textMuted),
+    placeholder: themeRgbToHexColor(textMuted),
+    secondaryLabel: themeRgbToHexColor(textMuted),
+    iconMuted: themeRgbToHexColor(textMuted),
     accentSurface: themeRgbToHexColor(accentSurface),
     accentSurfaceForeground: themeRgbToHexColor(readableThemeForeground(accentSurface)),
     messageSurface: themeRgbToHexColor(messageSurface),
@@ -1211,7 +1238,7 @@ export function createManagedThemeColors(
     codeForeground: themeRgbToHexColor(readableThemeForeground(codeBackground)),
     sidebar: themeRgbToHexColor(sidebar),
     sidebarForeground: themeRgbToHexColor(readableThemeForeground(sidebar)),
-    sidebarMutedForeground: themeRgbToHexColor(readableThemeText(sidebar, text, 0.2, 4.5)),
+    sidebarMutedForeground: themeRgbToHexColor(standardMutedThemeText(sidebar, text)),
     sidebarControlSurface: themeRgbToHexColor(
       mixThemeRgbColors(sidebar, text, appearance === "dark" ? 0.16 : 0.08),
     ),
@@ -1242,20 +1269,19 @@ export const T3_CHAT_THEME: ThemeDefinition = {
   appearance: "light",
   colors: T3_CHAT_LIGHT_COLORS,
   variants: {
-    dark: createManagedThemeColors("dark", "#211a23", "#b5226a"),
+    dark: T3_CHAT_DARK_COLORS,
   },
 };
 
-/** Dark defaults are only used when creating a custom dark theme. */
+/** Theme-file defaults follow the flagship palette for the requested mode. */
 export function getDefaultThemeColors(appearance: ThemeAppearance): ThemeColors {
-  return appearance === "dark" ? DEFAULT_DARK_THEME_COLORS : T3_CHAT_LIGHT_COLORS;
+  return appearance === "dark" ? T3_CHAT_DARK_COLORS : T3_CHAT_LIGHT_COLORS;
 }
 
 /**
- * A companion action color in the T3 Chat mold: the flagship palette pairs its
- * accent (#a84370) with a distinct message action (#db2777), which gives send
- * buttons, status pills, and the theme preview balls a second voice. The
- * derived foreground and hover follow the same rules as the managed generator.
+ * A companion action color in the T3 Chat mold. This gives send buttons,
+ * status pills, and theme previews a second voice; foreground and hover follow
+ * the same rules as the managed generator.
  */
 function themeActionColors(
   action: string,
