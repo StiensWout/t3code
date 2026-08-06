@@ -9,7 +9,9 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "../../lib/utils";
 import {
+  getThemeColorsForMode,
   getThemeDefinition,
+  getThemeModes,
   removeCustomTheme,
   serializeThemeFile,
   type ThemeAppearance,
@@ -66,7 +68,6 @@ function downloadThemeFile(filename: string, contents: string): void {
 function ThemeLibraryCard({
   theme,
   isActive,
-  isPersonal,
   onUse,
   onUseMode,
   activeModes,
@@ -77,7 +78,6 @@ function ThemeLibraryCard({
 }: {
   theme: ThemeCardDefinition;
   isActive: boolean;
-  isPersonal: boolean;
   onUse: () => void;
   onUseMode: (mode: ThemeMode) => void;
   activeModes: ReadonlyArray<ThemeMode>;
@@ -120,11 +120,6 @@ function ThemeLibraryCard({
             >
               {theme.label}
             </button>
-            {isPersonal ? (
-              <span className="shrink-0 rounded-full bg-accent px-1.5 py-0.5 text-[10px] font-medium text-accent-foreground">
-                Personal
-              </span>
-            ) : null}
           </div>
         </div>
         {onEdit || onDuplicate || onDownload || onRemove ? (
@@ -322,11 +317,15 @@ export function ThemeLibrary({
       }
       // A first pick over an unthemed base pairs the whole theme: the other
       // half follows along until the user refines it, so Auto never mixes an
-      // explicit pick with the generic default by accident.
+      // explicit pick with the generic default by accident. Themes with one
+      // appearance stay on their own side.
+      const definition = cardId === null ? null : getThemeDefinition(cardId);
       if (
         cardId !== null &&
         baseCardId === null &&
         themeHalves?.[otherAppearance] === undefined &&
+        definition !== null &&
+        getThemeColorsForMode(definition, otherAppearance) !== null &&
         !setThemeHalf(otherAppearance, cardId)
       ) {
         notifyThemeSaveFailure();
@@ -444,7 +443,6 @@ export function ThemeLibrary({
         <ThemeLibraryCard
           activeModes={pickedModesFor(null)}
           isActive={false}
-          isPersonal={false}
           key={standardTheme.id}
           onUse={() => persistTheme(appearanceMode === "system" ? "system" : appearanceMode)}
           onUseMode={handlePairPick(null)}
@@ -457,7 +455,6 @@ export function ThemeLibrary({
           <ThemeLibraryCard
             activeModes={pickedModesFor(maintainerTheme.id)}
             isActive={false}
-            isPersonal={false}
             key={maintainerTheme.id}
             onDuplicate={() =>
               openThemeEditor({
@@ -479,7 +476,6 @@ export function ThemeLibrary({
           <ThemeLibraryCard
             activeModes={pickedModesFor(customTheme.id)}
             isActive={false}
-            isPersonal
             key={customTheme.id}
             onDuplicate={() =>
               openThemeEditor({
@@ -501,7 +497,11 @@ export function ThemeLibrary({
               downloadThemeFile(`${customTheme.id}.json`, serializeThemeFile(customTheme))
             }
             onRemove={() => handleRemoveTheme(customTheme)}
-            onUse={() => persistTheme(customTheme.id)}
+            onUse={() => {
+              const modes = getThemeModes(customTheme);
+              if (modes.length === 1) assignHalf(modes[0]!, customTheme.id);
+              else persistTheme(customTheme.id);
+            }}
             onUseMode={handlePairPick(customTheme.id)}
             theme={card}
           />

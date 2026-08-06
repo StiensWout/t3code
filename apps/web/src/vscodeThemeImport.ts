@@ -160,12 +160,22 @@ function resolveAppearance(value: Record<string, unknown>, canvas: VsCodeRgb): T
   return relativeLuminance(canvas) < 0.179 ? "dark" : "light";
 }
 
+/** Extension `name` fields are often package slugs; read them as words. */
+function humanizeThemeName(raw: string): string {
+  const trimmed = raw.trim();
+  if (/\s/.test(trimmed) || !/[-_.]/.test(trimmed)) return trimmed;
+  return trimmed
+    .split(/[-_.]+/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
 function resolveName(value: Record<string, unknown>): string {
   const candidate = [value.displayName, value.name].find(
     (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
   );
-  // The prefix marks the theme as imported in the library; labels cap at 48.
-  return `VS Code · ${(candidate ?? "theme").trim()}`.slice(0, 48);
+  return humanizeThemeName(candidate ?? "VS Code theme").slice(0, 48);
 }
 
 export function parseVsCodeThemeFile(value: unknown): ThemeDefinition {

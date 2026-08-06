@@ -61,7 +61,8 @@ describe("VS Code theme import", () => {
 
   it("carries the editor surfaces and accent across", () => {
     const theme = parseVsCodeThemeFile(VSCODE_DARK);
-    expect(theme.label).toBe("VS Code · pierre-dark-soft");
+    // The slug name is read as words; a displayName would win verbatim.
+    expect(theme.label).toBe("Pierre Dark Soft");
     expect(theme.appearance).toBe("dark");
     expect(theme.colors.canvas).toBe("#171717");
     expect(theme.colors.text).toBe("#d4d4d4");
