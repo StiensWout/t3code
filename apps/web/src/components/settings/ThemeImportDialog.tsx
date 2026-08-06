@@ -8,7 +8,7 @@ import {
   removeCustomTheme,
   type ThemeDefinition,
 } from "../../themePalette";
-import { isVsCodeThemeFile, parseVsCodeThemeFile } from "../../vscodeThemeImport";
+import { isVsCodeThemeFile, pairVsCodeThemes, parseVsCodeThemeFile } from "../../vscodeThemeImport";
 import { Alert } from "../ui/alert";
 import { Button } from "../ui/button";
 import {
@@ -142,10 +142,13 @@ export function ThemeImportDialog({
   open,
   onOpenChange,
   onImported,
+  onImportedMany,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onImported: (theme: ThemeDefinition) => boolean;
+  /** Batch imports install without activating; the caller reports them. */
+  onImportedMany: (themes: ReadonlyArray<ThemeDefinition>) => void;
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [json, setJson] = useState("");
@@ -153,6 +156,7 @@ export function ThemeImportDialog({
   const [error, setError] = useState<string | null>(null);
   const [isReading, setIsReading] = useState(false);
   const [isDropTarget, setIsDropTarget] = useState(false);
+  const [importTab, setImportTab] = useState<"file" | "paste">("file");
   const importRequestRef = useRef(0);
 
   useEffect(() => {
@@ -192,23 +196,82 @@ export function ThemeImportDialog({
     }
   }, []);
 
+  // Several files at once import as a batch: VS Code families pair their
+  // light and dark variants, everything installs without activating, and the
+  // single-file flow keeps filling the editor for review.
+  const readThemeBatch = useCallback(
+    async (files: ReadonlyArray<File>) => {
+      const requestId = ++importRequestRef.current;
+      setIsReading(true);
+      const failures: string[] = [];
+      const parsed: ThemeDefinition[] = [];
+      try {
+        for (const file of files) {
+          const oversized = describeOversizedThemeFile(file.size);
+          if (oversized) {
+            failures.push(`${file.name}: too large`);
+            continue;
+          }
+          try {
+            const value: unknown = JSON.parse(await file.text());
+            parsed.push(
+              isVsCodeThemeFile(value) ? parseVsCodeThemeFile(value) : parseThemeFile(value),
+            );
+          } catch (cause) {
+            failures.push(
+              `${file.name}: ${cause instanceof Error ? cause.message : "not a theme file"}`,
+            );
+          }
+        }
+        if (requestId !== importRequestRef.current) return;
+        const installed: ThemeDefinition[] = [];
+        for (const theme of pairVsCodeThemes(parsed)) {
+          try {
+            installed.push(installCustomTheme(theme));
+          } catch (cause) {
+            failures.push(
+              `${theme.label}: ${cause instanceof Error ? cause.message : "could not install"}`,
+            );
+          }
+        }
+        if (installed.length > 0) onImportedMany(installed);
+        if (failures.length > 0) {
+          setError(failures.join(" — "));
+        } else if (installed.length > 0) {
+          onOpenChange(false);
+        }
+      } finally {
+        if (requestId === importRequestRef.current) setIsReading(false);
+      }
+    },
+    [onImportedMany, onOpenChange],
+  );
+
+  const readThemeFiles = useCallback(
+    (files: ReadonlyArray<File>) => {
+      if (files.length === 0) return;
+      if (files.length === 1) void readThemeFile(files[0]!);
+      else void readThemeBatch(files);
+    },
+    [readThemeBatch, readThemeFile],
+  );
+
   const handleFileChange = useCallback(
     (event: ChangeEvent<HTMLInputElement>) => {
-      const file = event.currentTarget.files?.[0];
+      const files = [...(event.currentTarget.files ?? [])];
       event.currentTarget.value = "";
-      if (file) void readThemeFile(file);
+      readThemeFiles(files);
     },
-    [readThemeFile],
+    [readThemeFiles],
   );
 
   const handleDrop = useCallback(
     (event: DragEvent<HTMLDivElement>) => {
       event.preventDefault();
       setIsDropTarget(false);
-      const file = event.dataTransfer.files[0];
-      if (file) void readThemeFile(file);
+      readThemeFiles([...event.dataTransfer.files]);
     },
-    [readThemeFile],
+    [readThemeFiles],
   );
 
   const handleSubmit = useCallback(() => {
@@ -253,68 +316,93 @@ export function ThemeImportDialog({
       <DialogPopup className="max-w-3xl overflow-hidden">
         <DialogHeader>
           <DialogTitle>Add a theme</DialogTitle>
-          <DialogDescription>
-            Drop in a theme JSON file or paste one below. VS Code color themes are converted
-            automatically.
-          </DialogDescription>
+          <DialogDescription>Upload theme files or paste JSON.</DialogDescription>
         </DialogHeader>
         <DialogPanel className="space-y-4">
-          <div
-            className={cn(
-              "flex flex-wrap items-center justify-between gap-3 rounded-xl border border-dashed px-3 py-3 transition-colors",
-              isDropTarget ? "border-ring bg-accent/20" : "border-border/80 bg-muted/20",
-            )}
-            onDragEnter={(event) => {
-              event.preventDefault();
-              setIsDropTarget(true);
-            }}
-            onDragOver={(event) => {
-              event.preventDefault();
-              setIsDropTarget(true);
-            }}
-            onDragLeave={(event) => {
-              // Ignore moves between children of the drop zone.
-              if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
-              setIsDropTarget(false);
-            }}
-            onDrop={handleDrop}
-          >
-            <div className="min-w-0">
-              <p className="text-sm font-medium">Theme file</p>
-              <p className="truncate text-xs text-muted-foreground">
-                {fileName ?? "Drop a T3 Code or VS Code theme .json here, or paste it below."}
-              </p>
-            </div>
-            <Button
-              disabled={isReading}
-              size="sm"
-              variant="outline"
-              onClick={() => fileInputRef.current?.click()}
-            >
-              <UploadIcon />
-              {isReading ? "Reading…" : "Choose JSON file"}
-            </Button>
-            <input
-              ref={fileInputRef}
-              accept=".json,application/json"
-              className="sr-only"
-              onChange={handleFileChange}
-              type="file"
-            />
-          </div>
-
-          <div className="space-y-2">
-            <div className="flex items-baseline justify-between gap-3">
-              <label className="text-sm font-medium" htmlFor="theme-json-editor">
-                Paste theme JSON
-              </label>
-              <span className="text-xs text-muted-foreground">JSON</span>
-            </div>
-            <ThemeJsonEditor id="theme-json-editor" onChange={setJson} value={json} />
-            <p className="text-xs leading-relaxed text-muted-foreground">
-              Export an existing theme to get a full file you can tweak.
-            </p>
-          </div>
+          {(() => {
+            const dropHandlers = {
+              onDragEnter: (event: DragEvent<HTMLDivElement>) => {
+                event.preventDefault();
+                setIsDropTarget(true);
+              },
+              onDragOver: (event: DragEvent<HTMLDivElement>) => {
+                event.preventDefault();
+                setIsDropTarget(true);
+              },
+              onDragLeave: (event: DragEvent<HTMLDivElement>) => {
+                // Ignore moves between children of the drop zone.
+                if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+                setIsDropTarget(false);
+              },
+              onDrop: handleDrop,
+            };
+            const fileInput = (
+              <input
+                ref={fileInputRef}
+                accept=".json,application/json"
+                className="sr-only"
+                onChange={handleFileChange}
+                multiple
+                type="file"
+              />
+            );
+            const chooseButton = (label = "Choose files") => (
+              <Button
+                disabled={isReading}
+                size="sm"
+                variant="outline"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <UploadIcon />
+                {isReading ? "Reading…" : label}
+              </Button>
+            );
+            const editorSection = () => (
+              <div className="space-y-2">
+                <div className="flex items-baseline justify-between gap-3">
+                  <label className="text-sm font-medium" htmlFor="theme-json-editor">
+                    Theme JSON
+                  </label>
+                </div>
+                <ThemeJsonEditor id="theme-json-editor" onChange={setJson} value={json} />
+              </div>
+            );
+            return (
+              <div className="space-y-3">
+                <div aria-label="Import source" className="grid grid-cols-2 gap-2" role="group">
+                  {(["file", "paste"] as const).map((tab) => (
+                    <Button
+                      aria-pressed={importTab === tab}
+                      key={tab}
+                      style={
+                        importTab === tab ? { boxShadow: "inset 0 0 0 1px var(--ring)" } : undefined
+                      }
+                      variant={importTab === tab ? "secondary" : "outline"}
+                      onClick={() => setImportTab(tab)}
+                    >
+                      {tab === "file" ? "Upload files" : "Paste JSON"}
+                    </Button>
+                  ))}
+                </div>
+                {importTab === "file" ? (
+                  <div
+                    className={cn(
+                      "flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed px-4 py-12 text-center transition-colors",
+                      isDropTarget ? "border-ring bg-accent/20" : "border-border/80 bg-muted/20",
+                    )}
+                    {...dropHandlers}
+                  >
+                    <p className="text-sm font-medium">{fileName ?? "Drop .json files"}</p>
+                    <p className="text-xs text-muted-foreground">T3 Code or VS Code</p>
+                    {chooseButton()}
+                    {fileInput}
+                  </div>
+                ) : (
+                  editorSection()
+                )}
+              </div>
+            );
+          })()}
 
           {error ? (
             <Alert aria-live="polite" variant="error">

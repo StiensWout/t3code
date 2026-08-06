@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { getThemeColorsForMode, THEME_FILE_VERSION } from "./themePalette";
-import { isVsCodeThemeFile, parseVsCodeThemeFile } from "./vscodeThemeImport";
+import { isVsCodeThemeFile, pairVsCodeThemes, parseVsCodeThemeFile } from "./vscodeThemeImport";
 
 function contrastRatio(first: string, second: string): number {
   const toChannels = (value: string) => {
@@ -161,6 +161,53 @@ describe("VS Code theme import", () => {
     expect(blue).toBeGreaterThan(200);
     expect(blue).toBeGreaterThan(red);
     expect(green).toBeGreaterThan(red);
+  });
+
+  it("pairs light and dark files from one family into dual-mode themes", () => {
+    const make = (name: string, type: "light" | "dark") =>
+      parseVsCodeThemeFile({
+        name,
+        type,
+        colors: {
+          "editor.background": type === "dark" ? "#101014" : "#fdfdfd",
+          "editor.foreground": type === "dark" ? "#e6e6e6" : "#1f1f1f",
+          focusBorder: "#69b1ff",
+        },
+      });
+    const themes = pairVsCodeThemes([
+      make("github-dark", "dark"),
+      make("github-light", "light"),
+      make("github-dark-colorblind", "dark"),
+      make("github-light-colorblind", "light"),
+      make("github-dark-dimmed", "dark"),
+    ]);
+
+    const labels = themes.map((theme) => theme.label);
+    expect(labels).toEqual(["Github", "Github Colorblind", "Github Dark Dimmed"]);
+    const github = themes[0]!;
+    expect(github.appearance).toBe("light");
+    expect(getThemeColorsForMode(github, "dark")).not.toBeNull();
+    expect(getThemeColorsForMode(github, "dark")!.canvas).toBe("#101014");
+    expect(github.colors.canvas).toBe("#fdfdfd");
+    // The unpaired dimmed variant stays a single dark theme.
+    expect(getThemeColorsForMode(themes[2]!, "light")).toBeNull();
+  });
+
+  it("does not guess when a family is ambiguous", () => {
+    const make = (name: string, type: "light" | "dark") =>
+      parseVsCodeThemeFile({
+        name,
+        type,
+        colors: { "editor.background": type === "dark" ? "#101014" : "#fdfdfd" },
+      });
+    const themes = pairVsCodeThemes([
+      make("solar-dark", "dark"),
+      make("solar-dark-soft", "dark"),
+      make("solar-light", "light"),
+    ]);
+    // "solar-dark-soft" groups under its own key with no light partner, so
+    // it keeps its full name; the remaining pair merges.
+    expect(themes.map((theme) => theme.label).sort()).toEqual(["Solar", "Solar Dark Soft"]);
   });
 
   it("explains a file with no editor background", () => {

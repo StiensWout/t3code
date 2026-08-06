@@ -540,12 +540,24 @@ export function ThemeLibrary({
           </Button>
           <Button size="xs" variant="ghost" onClick={() => onImportOpenChange(true)}>
             <UploadIcon />
-            Import JSON
+            Import theme
           </Button>
         </div>
       </div>
       {renderPairGrid()}
       <ThemeImportDialog
+        onImportedMany={(importedThemes) => {
+          toastManager.add(
+            stackedThreadToast({
+              type: "success",
+              title:
+                importedThemes.length === 1
+                  ? `${importedThemes[0]!.label} added`
+                  : `${importedThemes.length} themes added`,
+              description: importedThemes.map((imported) => imported.label).join(", "),
+            }),
+          );
+        }}
         onImported={(importedTheme) => {
           if (!persistTheme(importedTheme.id)) return false;
           toastManager.add(

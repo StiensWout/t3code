@@ -1,5 +1,6 @@
 import {
   createVividThemeColors,
+  getThemeModes,
   parseThemeFile,
   THEME_FILE_VERSION,
   type ThemeAppearance,
@@ -315,4 +316,59 @@ export function parseVsCodeThemeFile(value: unknown): ThemeDefinition {
     appearance,
     colors: { ...derived, ...overrides },
   });
+}
+
+/**
+ * Extensions ship a family of themes (GitHub: dark, light, dark-colorblind,
+ * light-colorblind, dark-dimmed, ...). When several are imported together,
+ * a light and a dark file whose names differ only by the appearance word
+ * become one dual-mode theme; everything else stays its own theme.
+ */
+export function pairVsCodeThemes(
+  themes: ReadonlyArray<ThemeDefinition>,
+): ReadonlyArray<ThemeDefinition> {
+  const stripAppearance = (label: string) =>
+    label
+      .replace(/\b(?:light|dark)\b/gi, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+  type Group = { light: ThemeDefinition[]; dark: ThemeDefinition[]; order: number };
+  const groups = new Map<string, Group>();
+  const passthrough: Array<{ theme: ThemeDefinition; order: number }> = [];
+  themes.forEach((theme, order) => {
+    // Only single-appearance themes with an appearance word in the name can
+    // pair; anything else is already what the user asked for.
+    const key = stripAppearance(theme.label);
+    if (getThemeModes(theme).length !== 1 || key === theme.label || key.length === 0) {
+      passthrough.push({ theme, order });
+      return;
+    }
+    const group = groups.get(key) ?? { light: [], dark: [], order };
+    group[theme.appearance].push(theme);
+    groups.set(key, group);
+  });
+
+  const paired: Array<{ theme: ThemeDefinition; order: number }> = [];
+  for (const [key, group] of groups) {
+    // Ambiguity (two darks for one light) is not guessed at.
+    if (group.light.length === 1 && group.dark.length === 1) {
+      paired.push({
+        order: group.order,
+        theme: parseThemeFile({
+          version: THEME_FILE_VERSION,
+          name: key,
+          appearance: "light",
+          colors: group.light[0]!.colors,
+          variants: { dark: group.dark[0]!.colors },
+        }),
+      });
+      continue;
+    }
+    for (const theme of [...group.light, ...group.dark]) {
+      paired.push({ theme, order: group.order });
+    }
+  }
+
+  return [...passthrough, ...paired].sort((a, b) => a.order - b.order).map((entry) => entry.theme);
 }
