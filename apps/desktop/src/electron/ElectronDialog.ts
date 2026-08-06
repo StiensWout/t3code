@@ -81,6 +81,12 @@ export interface ElectronDialogPickFolderInput {
   readonly defaultPath: Option.Option<string>;
 }
 
+export interface ElectronDialogPickFilesInput {
+  readonly owner: Option.Option<Electron.BrowserWindow>;
+  readonly defaultPath: Option.Option<string>;
+  readonly filters: readonly Electron.FileFilter[];
+}
+
 export interface ElectronDialogConfirmInput {
   readonly owner: Option.Option<Electron.BrowserWindow>;
   readonly message: string;
@@ -92,6 +98,9 @@ export class ElectronDialog extends Context.Service<
     readonly pickFolder: (
       input: ElectronDialogPickFolderInput,
     ) => Effect.Effect<Option.Option<string>, ElectronDialogPickFolderError>;
+    readonly pickFiles: (
+      input: ElectronDialogPickFilesInput,
+    ) => Effect.Effect<readonly string[], ElectronDialogPickFolderError>;
     readonly confirm: (
       input: ElectronDialogConfirmInput,
     ) => Effect.Effect<boolean, ElectronDialogConfirmError>;
@@ -136,6 +145,32 @@ export const make = ElectronDialog.of({
       return Option.none();
     }
     return Option.fromNullishOr(result.filePaths[0]);
+  }),
+  pickFiles: Effect.fn("desktop.electron.dialog.pickFiles")(function* (input) {
+    const ownerWindowId = Option.match(input.owner, {
+      onNone: () => null,
+      onSome: (owner) => owner.id,
+    });
+    const defaultPath = Option.getOrNull(input.defaultPath);
+    const openDialogOptions: Electron.OpenDialogOptions = {
+      properties: ["openFile", "multiSelections"],
+      filters: [...input.filters],
+      ...(defaultPath === null ? {} : { defaultPath }),
+    };
+    const result = yield* Effect.tryPromise({
+      try: () =>
+        Option.match(input.owner, {
+          onNone: () => Electron.dialog.showOpenDialog(openDialogOptions),
+          onSome: (owner) => Electron.dialog.showOpenDialog(owner, openDialogOptions),
+        }),
+      catch: (cause) =>
+        new ElectronDialogPickFolderError({
+          ownerWindowId,
+          defaultPath,
+          cause,
+        }),
+    });
+    return result.canceled ? [] : result.filePaths;
   }),
   confirm: Effect.fn("desktop.electron.dialog.confirm")(function* (input) {
     const normalizedMessage = input.message.trim();

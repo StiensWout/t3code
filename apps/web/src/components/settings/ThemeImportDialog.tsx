@@ -147,6 +147,9 @@ function ThemeJsonEditor({
   );
 }
 
+/** What the import pipeline needs from a file; DOM File satisfies it. */
+type ImportableThemeFile = { name: string; size: number; text: () => Promise<string> };
+
 export function ThemeImportDialog({
   open,
   onOpenChange,
@@ -184,7 +187,7 @@ export function ThemeImportDialog({
     setConflicts(null);
   }, [open]);
 
-  const readThemeFile = useCallback(async (file: File) => {
+  const readThemeFile = useCallback(async (file: ImportableThemeFile) => {
     // Check the size first: reading a large file is what locks the UI, so it
     // never gets read at all.
     const oversized = describeOversizedThemeFile(file.size);
@@ -213,7 +216,7 @@ export function ThemeImportDialog({
   // light and dark variants, everything installs without activating, and the
   // single-file flow keeps filling the editor for review.
   const readThemeBatch = useCallback(
-    async (files: ReadonlyArray<File>) => {
+    async (files: ReadonlyArray<ImportableThemeFile>) => {
       const requestId = ++importRequestRef.current;
       setIsReading(true);
       const failures: string[] = [];
@@ -269,13 +272,34 @@ export function ThemeImportDialog({
   );
 
   const readThemeFiles = useCallback(
-    (files: ReadonlyArray<File>) => {
+    (files: ReadonlyArray<ImportableThemeFile>) => {
       if (files.length === 0) return;
       if (files.length === 1) void readThemeFile(files[0]!);
       else void readThemeBatch(files);
     },
     [readThemeBatch, readThemeFile],
   );
+
+  // On desktop the native picker opens in ~/.vscode/extensions (when it
+  // exists) and reads the files in the main process; the browser input is
+  // the fallback everywhere else.
+  const openFilePicker = useCallback(() => {
+    const bridge = window.desktopBridge;
+    if (bridge?.pickThemeFiles) {
+      void bridge.pickThemeFiles().then((picked) => {
+        if (!picked || picked.length === 0) return;
+        readThemeFiles(
+          picked.map((file) => ({
+            name: file.name,
+            size: file.size,
+            text: () => Promise.resolve(file.text),
+          })),
+        );
+      });
+      return;
+    }
+    fileInputRef.current?.click();
+  }, [readThemeFiles]);
 
   const handleFileChange = useCallback(
     (event: ChangeEvent<HTMLInputElement>) => {
@@ -435,12 +459,7 @@ export function ThemeImportDialog({
               />
             );
             const chooseButton = (label = "Choose files") => (
-              <Button
-                disabled={isReading}
-                size="sm"
-                variant="outline"
-                onClick={() => fileInputRef.current?.click()}
-              >
+              <Button disabled={isReading} size="sm" variant="outline" onClick={openFilePicker}>
                 <UploadIcon />
                 {isReading ? "Reading…" : label}
               </Button>
