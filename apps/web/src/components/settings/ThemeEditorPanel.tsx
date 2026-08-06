@@ -168,8 +168,16 @@ export function ThemeEditorPanel({
   // Null parks the panel at its default corner; a value is a dragged spot,
   // kept clamped so the header can always be grabbed again.
   const [position, setPosition] = useState<{ x: number; y: number } | null>(null);
+  // Null keeps the responsive default size; a value is a corner-grip resize.
+  const [size, setSize] = useState<{ width: number; height: number } | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const dragOffsetRef = useRef<{ dx: number; dy: number } | null>(null);
+  const resizeStartRef = useRef<{
+    pointerX: number;
+    pointerY: number;
+    width: number;
+    height: number;
+  } | null>(null);
   useEffect(() => {
     if (position === null) return;
     const clamp = () =>
@@ -656,6 +664,43 @@ export function ThemeEditorPanel({
     dragOffsetRef.current = null;
   };
 
+  const handleResizePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const rect = panelRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    event.preventDefault();
+    // The grip drags the bottom-right corner, so the top-left must hold
+    // still; the default parking spot is anchored bottom-right and would
+    // slide, so it converts to an explicit position first.
+    if (position === null) setPosition(clampPosition(rect.x, rect.y));
+    resizeStartRef.current = {
+      pointerX: event.clientX,
+      pointerY: event.clientY,
+      width: rect.width,
+      height: rect.height,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const handleResizePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const start = resizeStartRef.current;
+    if (!start) return;
+    const margin = 8;
+    setSize({
+      width: Math.min(
+        Math.max(start.width + event.clientX - start.pointerX, 280),
+        window.innerWidth - margin * 2,
+      ),
+      height: Math.min(
+        Math.max(start.height + event.clientY - start.pointerY, 220),
+        window.innerHeight - margin * 2,
+      ),
+    });
+  };
+
+  const endResize = () => {
+    resizeStartRef.current = null;
+  };
+
   return (
     <div
       aria-label={isEditing ? "Edit theme" : "Create theme"}
@@ -666,7 +711,13 @@ export function ThemeEditorPanel({
       )}
       ref={panelRef}
       role="dialog"
-      style={position ? { left: position.x, top: position.y } : undefined}
+      style={{
+        ...(position ? { left: position.x, top: position.y } : {}),
+        ...(size ? { width: size.width } : {}),
+        // A chosen height only applies expanded; minimized keeps hugging the
+        // header. The viewport stays the ceiling either way.
+        ...(size && !isMinimized ? { height: size.height, maxHeight: "calc(100dvh - 1rem)" } : {}),
+      }}
     >
       <div
         className="flex cursor-grab touch-none select-none items-center gap-1 border-b border-border/70 px-3 py-2 active:cursor-grabbing"
@@ -741,6 +792,25 @@ export function ThemeEditorPanel({
                 </>
               )}
             </Button>
+          </div>
+          <div
+            aria-hidden
+            className="absolute bottom-0 right-0 z-10 flex size-5 cursor-se-resize touch-none select-none items-end justify-end p-1 text-muted-foreground/70"
+            onPointerCancel={endResize}
+            onPointerDown={handleResizePointerDown}
+            onPointerMove={handleResizePointerMove}
+            onPointerUp={endResize}
+          >
+            <svg
+              className="size-2.5"
+              fill="none"
+              stroke="currentColor"
+              strokeLinecap="round"
+              strokeWidth="1.2"
+              viewBox="0 0 8 8"
+            >
+              <path d="M7 1 1 7M7 4.5 4.5 7" />
+            </svg>
           </div>
         </>
       )}
