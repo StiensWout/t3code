@@ -217,8 +217,14 @@ export function parseVsCodeThemeFile(value: unknown): ThemeDefinition {
   const accentHex = accentColor ? flattenOver(accentColor, canvas) : null;
 
   // The derived palette is the floor: every role starts contrast-solved, then
-  // the theme's own workbench colors replace what it actually specified.
-  const derived = createVividThemeColors(appearance, canvasHex, accentHex ?? canvasHex);
+  // the theme's own workbench colors replace what it actually specified. The
+  // floor derives from a muted accent -- the vivid engine carries the accent
+  // hue into every surface, which washes an imported neutral palette (a gray
+  // theme with a blue focusBorder would get blue code and text surfaces).
+  const mutedAccentHex = accentColor
+    ? flattenOver({ r: accentColor.r, g: accentColor.g, b: accentColor.b, a: 0.2 }, canvas)
+    : null;
+  const derived = createVividThemeColors(appearance, canvasHex, mutedAccentHex ?? canvasHex);
   const sidebarHex =
     solidOver(canvas, "sideBar.background", "activityBar.background") ?? derived.sidebar;
   const sidebar = hexToRgb(sidebarHex);

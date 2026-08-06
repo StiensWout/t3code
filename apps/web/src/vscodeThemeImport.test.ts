@@ -215,6 +215,21 @@ describe("VS Code theme import", () => {
     expect(themes.map((theme) => theme.label).sort()).toEqual(["Solar", "Solar Dark Soft"]);
   });
 
+  it("keeps derived surfaces neutral instead of washing them with the accent", () => {
+    // A gray theme with a blue focusBorder: roles the file omits (code
+    // surface, plain surfaces) must stay near the canvas, not turn blue.
+    const theme = parseVsCodeThemeFile(VSCODE_DARK);
+    const spread = (value: string) => {
+      const channels = [1, 3, 5].map((index) => Number.parseInt(value.slice(index, index + 2), 16));
+      return Math.max(...channels) - Math.min(...channels);
+    };
+    expect(spread(theme.colors.codeBackground)).toBeLessThanOrEqual(8);
+    expect(spread(theme.colors.surface)).toBeLessThanOrEqual(8);
+    expect(spread(theme.colors.text)).toBeLessThanOrEqual(12);
+    // The accent itself keeps the file's color.
+    expect(theme.colors.accent).toBe("#69b1ff");
+  });
+
   it("tells same-named variants apart by their file names", () => {
     // Dracula ships dracula.json and dracula-soft.json that both say
     // "Dracula" inside.
