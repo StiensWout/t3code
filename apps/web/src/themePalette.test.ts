@@ -120,6 +120,25 @@ describe("theme files", () => {
     }
   });
 
+  it("keys status colors off the canvas, not the appearance slot", () => {
+    // Inverted seeds: a dark canvas in the light slot must still get the dark
+    // status pair, or the alert foreground lands on a dark surface unreadable.
+    const inverted = [
+      createVividThemeColors("light", "#111827", "#8ab4f8"),
+      createVividThemeColors("dark", "#f5ecf5", "#a84370"),
+      createManagedThemeColors("light", "#0d1117", "#69b1ff", { exactSeeds: true }),
+      createManagedThemeColors("dark", "#fdfdfd", "#c2571b", { exactSeeds: true }),
+    ];
+    for (const colors of inverted) {
+      expect(contrastRatio(colors.errorForeground, colors.errorSurface)).toBeGreaterThanOrEqual(
+        4.5,
+      );
+      expect(contrastRatio(colors.warningForeground, colors.warningSurface)).toBeGreaterThanOrEqual(
+        4.5,
+      );
+    }
+  });
+
   it("merges a small user file onto the matching contrast-safe base palette", () => {
     const theme = parseThemeFile({
       version: THEME_FILE_VERSION,

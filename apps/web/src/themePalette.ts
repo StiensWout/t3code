@@ -663,10 +663,7 @@ const STANDARD_STATUS_COLORS = {
  * (the unthemed app uses 8% in light and 16% in dark), so alerts still sit on
  * the palette while the signal color stays standard.
  */
-function standardStatusColors(
-  canvas: ThemeRgbColor,
-  appearance: ThemeAppearance,
-): {
+function standardStatusColors(canvas: ThemeRgbColor): {
   error: string;
   errorForeground: string;
   errorSurface: string;
@@ -674,14 +671,38 @@ function standardStatusColors(
   warningForeground: string;
   warningSurface: string;
 } {
+  // Keyed off the canvas rather than the appearance slot: a dark canvas saved
+  // as a light theme still needs the dark pair, or the alert foreground lands
+  // on a dark surface unreadable.
+  const appearance: ThemeAppearance = themeRelativeLuminance(canvas) < 0.179 ? "dark" : "light";
   const standard = STANDARD_STATUS_COLORS[appearance];
   const surfaceMix = appearance === "dark" ? 0.16 : 0.08;
   const surfaceOf = (value: string) =>
-    themeRgbToHexColor(mixThemeRgbColors(canvas, parseThemeRgbColor(value, canvas), surfaceMix));
+    mixThemeRgbColors(canvas, parseThemeRgbColor(value, canvas), surfaceMix);
+  // The standard foregrounds are tuned against the unthemed canvas; on a
+  // tinted one they can fall just short, so lightness is nudged until the
+  // pair clears 4.5 while the hue stays standard.
+  const readableOn = (foreground: string, surface: ThemeRgbColor) =>
+    themeRgbToHexColor(
+      themeOklchToRgb(
+        solveOklchLightness(
+          themeRgbToOklch(parseThemeRgbColor(foreground, canvas)),
+          surface,
+          // A hair above 4.5: the solve happens in OKLCH and the result is
+          // quantized to 8-bit hex, which can shave the last hundredth off.
+          4.6,
+          appearance === "dark" ? "lighter" : "darker",
+        ),
+      ),
+    );
+  const errorSurface = surfaceOf(standard.error);
+  const warningSurface = surfaceOf(standard.warning);
   return {
     ...standard,
-    errorSurface: surfaceOf(standard.error),
-    warningSurface: surfaceOf(standard.warning),
+    errorForeground: readableOn(standard.errorForeground, errorSurface),
+    errorSurface: themeRgbToHexColor(errorSurface),
+    warningForeground: readableOn(standard.warningForeground, warningSurface),
+    warningSurface: themeRgbToHexColor(warningSurface),
   };
 }
 
@@ -773,7 +794,7 @@ export function createVividThemeColors(
 
   return {
     ...defaults,
-    ...standardStatusColors(canvasRgb, appearance),
+    ...standardStatusColors(canvasRgb),
     canvas: themeRgbToHexColor(canvasRgb),
     // The top bar shares the canvas so the main panel reads as one surface.
     chrome: themeRgbToHexColor(canvasRgb),
@@ -998,7 +1019,7 @@ export function createManagedThemeColors(
 
   return {
     ...defaults,
-    ...standardStatusColors(canvas, appearance),
+    ...standardStatusColors(canvas),
     update: themeRgbToHexColor(accent),
     updateForeground: themeRgbToHexColor(updateForeground),
     updateSurface: themeRgbToHexColor(updateSurface),
