@@ -466,14 +466,21 @@ export function useThreadActions() {
           ),
         );
       }
+      const wokeAt = resolved
+        ? threadWokeAt(resolved.thread, { now: new Date().toISOString() })
+        : null;
       // Settle is a high-frequency lifecycle action and stays silent — no
       // toast.
-      return settleThreadMutation({
+      const result = await settleThreadMutation({
         environmentId: target.environmentId,
         input: { threadId: target.threadId },
       });
+      if (result._tag === "Success" && wokeAt !== null) {
+        markThreadVisited(scopedThreadKey(target), wokeAt);
+      }
+      return result;
     },
-    [resolveThreadTarget, settleThreadMutation],
+    [markThreadVisited, resolveThreadTarget, settleThreadMutation],
   );
 
   const unsettleThread = useCallback(

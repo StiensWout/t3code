@@ -287,7 +287,6 @@ import {
   readFileAsDataUrl,
   reconcileMountedTerminalThreadIds,
   resolveThreadMetadataUpdateForNextTurn,
-  resolveThreadVisitedAt,
   resolveSendEnvMode,
   revokeBlobPreviewUrl,
   revokeUserMessagePreviewUrls,
@@ -1237,9 +1236,6 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const activeServerThread = serverThread ?? loadingServerThread;
   const markThreadVisited = useUiStateStore((store) => store.markThreadVisited);
-  const activeThreadLastVisitedAt = useUiStateStore(
-    (store) => store.threadLastVisitedAtById[routeThreadKey],
-  );
   const settings = useEnvironmentSettings(environmentId);
   // New-thread defaults live in the primary environment's settings.json (the
   // settings UI never writes to remote environments), so read them from the
@@ -4004,31 +4000,10 @@ function ChatViewContent(props: ChatViewProps) {
     );
     return () => window.clearTimeout(id);
   }, [activeThreadShell?.snoozedUntil, activeThreadSnoozed, snoozeWakeTick]);
-  useEffect(() => {
-    if (!serverThread?.id) return;
-    const visitedAt = resolveThreadVisitedAt({
-      threadUpdatedAt: serverThread.updatedAt,
-      wokeAt: activeThreadWokeAt,
-    });
-    const visitedAtMs = Date.parse(visitedAt);
-    if (Number.isNaN(visitedAtMs)) return;
-    const lastVisitedAtMs = activeThreadLastVisitedAt
-      ? Date.parse(activeThreadLastVisitedAt)
-      : Number.NaN;
-    if (!Number.isNaN(lastVisitedAtMs) && lastVisitedAtMs >= visitedAtMs) return;
-
-    markThreadVisited(
-      scopedThreadKey(scopeThreadRef(serverThread.environmentId, serverThread.id)),
-      visitedAt,
-    );
-  }, [
-    activeThreadLastVisitedAt,
-    activeThreadWokeAt,
-    markThreadVisited,
-    serverThread?.environmentId,
-    serverThread?.id,
-    serverThread?.updatedAt,
-  ]);
+  const acknowledgeActiveThreadWoke = useCallback(() => {
+    if (activeThreadRef === null || activeThreadWokeAt === null) return;
+    markThreadVisited(scopedThreadKey(activeThreadRef), activeThreadWokeAt);
+  }, [activeThreadRef, activeThreadWokeAt, markThreadVisited]);
   const activeThreadSettled = useMemo(() => {
     if (activeThreadShell === null || !supportsSettlement) return false;
     return effectiveSettled(activeThreadShell, {
@@ -5070,6 +5045,7 @@ function ChatViewContent(props: ChatViewProps) {
         failure = startResult;
       } else {
         turnStartSucceeded = true;
+        acknowledgeActiveThreadWoke();
       }
     }
 
@@ -5429,6 +5405,7 @@ function ChatViewContent(props: ChatViewProps) {
       }
 
       if (failure === null) {
+        acknowledgeActiveThreadWoke();
         // Optimistically open the plan sidebar when implementing (not refining).
         // "default" mode here means the agent is executing the plan, which produces
         // step-tracking activities that the sidebar will display.
@@ -5458,6 +5435,7 @@ function ChatViewContent(props: ChatViewProps) {
     [
       activeThread,
       activeProposedPlan,
+      acknowledgeActiveThreadWoke,
       beginLocalDispatch,
       isConnecting,
       isSendBusy,

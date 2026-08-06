@@ -25,7 +25,6 @@ import {
   reconcileMountedTerminalThreadIds,
   reconcileRetainedMountedThreadIds,
   resolveThreadMetadataUpdateForNextTurn,
-  resolveThreadVisitedAt,
   resolveSendEnvMode,
   startNewThreadForProject,
   shouldShowBranchMismatchBanner,
@@ -36,32 +35,6 @@ const environmentId = EnvironmentId.make("environment-local");
 const projectId = ProjectId.make("project-1");
 const threadId = ThreadId.make("thread-1");
 const now = "2026-03-29T00:00:00.000Z";
-
-describe("resolveThreadVisitedAt", () => {
-  it("uses the wake timestamp when it is newer than the thread projection", () => {
-    expect(
-      resolveThreadVisitedAt({
-        threadUpdatedAt: "2026-03-29T00:00:00.000Z",
-        wokeAt: "2026-03-29T01:00:00.000Z",
-      }),
-    ).toBe("2026-03-29T01:00:00.000Z");
-  });
-
-  it("keeps the latest valid thread timestamp otherwise", () => {
-    expect(
-      resolveThreadVisitedAt({
-        threadUpdatedAt: "2026-03-29T01:00:00.000Z",
-        wokeAt: "2026-03-29T00:00:00.000Z",
-      }),
-    ).toBe("2026-03-29T01:00:00.000Z");
-    expect(
-      resolveThreadVisitedAt({
-        threadUpdatedAt: "2026-03-29T01:00:00.000Z",
-        wokeAt: "not-a-date",
-      }),
-    ).toBe("2026-03-29T01:00:00.000Z");
-  });
-});
 
 function makeThread(overrides: Partial<Thread> = {}): Thread {
   return {
