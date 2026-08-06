@@ -175,6 +175,10 @@ export function ThemeEditorPanel({
   const resizeStartRef = useRef<{
     pointerX: number;
     pointerY: number;
+    // Where the panel's top-left sits: the grip only moves the opposite
+    // corner, so the room to grow is measured from here.
+    left: number;
+    top: number;
     width: number;
     height: number;
   } | null>(null);
@@ -675,6 +679,8 @@ export function ThemeEditorPanel({
     resizeStartRef.current = {
       pointerX: event.clientX,
       pointerY: event.clientY,
+      left: rect.x,
+      top: rect.y,
       width: rect.width,
       height: rect.height,
     };
@@ -685,14 +691,18 @@ export function ThemeEditorPanel({
     const start = resizeStartRef.current;
     if (!start) return;
     const margin = 8;
+    const MIN_WIDTH = 280;
+    const MIN_HEIGHT = 220;
+    // Grow only into the space right of and below the panel's own corner,
+    // otherwise a panel parked away from the top-left pushes its far edges
+    // (and this grip) off screen.
+    const maxWidth = Math.max(MIN_WIDTH, window.innerWidth - margin - start.left);
+    const maxHeight = Math.max(MIN_HEIGHT, window.innerHeight - margin - start.top);
     setSize({
-      width: Math.min(
-        Math.max(start.width + event.clientX - start.pointerX, 280),
-        window.innerWidth - margin * 2,
-      ),
+      width: Math.min(Math.max(start.width + event.clientX - start.pointerX, MIN_WIDTH), maxWidth),
       height: Math.min(
-        Math.max(start.height + event.clientY - start.pointerY, 220),
-        window.innerHeight - margin * 2,
+        Math.max(start.height + event.clientY - start.pointerY, MIN_HEIGHT),
+        maxHeight,
       ),
     });
   };
