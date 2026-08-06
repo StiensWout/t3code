@@ -191,6 +191,7 @@ export function ThemeLibrary({
   setAppearanceMode,
   customThemes,
   initialAppearance,
+  refreshTheme,
   isImportOpen,
   onImportOpenChange,
   themeHalves,
@@ -202,6 +203,7 @@ export function ThemeLibrary({
   setAppearanceMode: (mode: ThemeMode) => boolean;
   customThemes: ReadonlyArray<ThemeDefinition>;
   initialAppearance: ThemeAppearance;
+  refreshTheme: () => void;
   isImportOpen: boolean;
   onImportOpenChange: (open: boolean) => void;
   themeHalves: ThemeHalves | null;
@@ -546,14 +548,28 @@ export function ThemeLibrary({
       </div>
       {renderPairGrid()}
       <ThemeImportDialog
-        onImportedMany={(importedThemes) => {
+        onImportedMany={(importedThemes, { updated }) => {
+          // An updated theme that is showing (as the base or either half)
+          // needs its palette re-applied.
+          if (
+            updated &&
+            importedThemes.some(
+              (imported) =>
+                getThemeDefinition(theme)?.id === imported.id ||
+                themeHalves?.light === imported.id ||
+                themeHalves?.dark === imported.id,
+            )
+          ) {
+            refreshTheme();
+          }
+          const verb = updated ? "updated" : "added";
           toastManager.add(
             stackedThreadToast({
               type: "success",
               title:
                 importedThemes.length === 1
-                  ? `${importedThemes[0]!.label} added`
-                  : `${importedThemes.length} themes added`,
+                  ? `${importedThemes[0]!.label} ${verb}`
+                  : `${importedThemes.length} themes ${verb}`,
               description: importedThemes.map((imported) => imported.label).join(", "),
             }),
           );

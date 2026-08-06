@@ -3,12 +3,21 @@ import type { ChangeEvent, DragEvent, UIEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "../../lib/utils";
 import {
+  getCustomThemes,
   installCustomTheme,
   parseThemeFile,
   removeCustomTheme,
+  THEME_FILE_VERSION,
+  updateCustomTheme,
   type ThemeDefinition,
 } from "../../themePalette";
-import { isVsCodeThemeFile, pairVsCodeThemes, parseVsCodeThemeFile } from "../../vscodeThemeImport";
+import {
+  humanizeThemeName,
+  isVsCodeThemeFile,
+  pairVsCodeThemes,
+  parseVsCodeThemeFile,
+  resolveThemeLabelCollisions,
+} from "../../vscodeThemeImport";
 import { Alert } from "../ui/alert";
 import { Button } from "../ui/button";
 import {
@@ -148,7 +157,7 @@ export function ThemeImportDialog({
   onOpenChange: (open: boolean) => void;
   onImported: (theme: ThemeDefinition) => boolean;
   /** Batch imports install without activating; the caller reports them. */
-  onImportedMany: (themes: ReadonlyArray<ThemeDefinition>) => void;
+  onImportedMany: (themes: ReadonlyArray<ThemeDefinition>, context: { updated: boolean }) => void;
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [json, setJson] = useState("");
@@ -157,6 +166,9 @@ export function ThemeImportDialog({
   const [isReading, setIsReading] = useState(false);
   const [isDropTarget, setIsDropTarget] = useState(false);
   const [importTab, setImportTab] = useState<"file" | "paste">("file");
+  // Imports whose id is already installed wait here for an update-or-copy
+  // decision instead of failing.
+  const [conflicts, setConflicts] = useState<ReadonlyArray<ThemeDefinition> | null>(null);
   const importRequestRef = useRef(0);
 
   useEffect(() => {
@@ -169,6 +181,7 @@ export function ThemeImportDialog({
     setFileName(null);
     setError(null);
     setIsReading(false);
+    setConflicts(null);
   }, [open]);
 
   const readThemeFile = useCallback(async (file: File) => {
@@ -204,7 +217,7 @@ export function ThemeImportDialog({
       const requestId = ++importRequestRef.current;
       setIsReading(true);
       const failures: string[] = [];
-      const parsed: ThemeDefinition[] = [];
+      const parsed: Array<{ theme: ThemeDefinition; sourceName: string }> = [];
       try {
         for (const file of files) {
           const oversized = describeOversizedThemeFile(file.size);
@@ -214,9 +227,10 @@ export function ThemeImportDialog({
           }
           try {
             const value: unknown = JSON.parse(await file.text());
-            parsed.push(
-              isVsCodeThemeFile(value) ? parseVsCodeThemeFile(value) : parseThemeFile(value),
-            );
+            parsed.push({
+              sourceName: file.name,
+              theme: isVsCodeThemeFile(value) ? parseVsCodeThemeFile(value) : parseThemeFile(value),
+            });
           } catch (cause) {
             failures.push(
               `${file.name}: ${cause instanceof Error ? cause.message : "not a theme file"}`,
@@ -225,7 +239,12 @@ export function ThemeImportDialog({
         }
         if (requestId !== importRequestRef.current) return;
         const installed: ThemeDefinition[] = [];
-        for (const theme of pairVsCodeThemes(parsed)) {
+        const conflicting: ThemeDefinition[] = [];
+        for (const theme of pairVsCodeThemes(resolveThemeLabelCollisions(parsed))) {
+          if (getCustomThemes().some((existing) => existing.id === theme.id)) {
+            conflicting.push(theme);
+            continue;
+          }
           try {
             installed.push(installCustomTheme(theme));
           } catch (cause) {
@@ -234,9 +253,11 @@ export function ThemeImportDialog({
             );
           }
         }
-        if (installed.length > 0) onImportedMany(installed);
+        if (installed.length > 0) onImportedMany(installed, { updated: false });
         if (failures.length > 0) {
           setError(failures.join(" — "));
+        } else if (conflicting.length > 0) {
+          setConflicts(conflicting);
         } else if (installed.length > 0) {
           onOpenChange(false);
         }
@@ -274,6 +295,67 @@ export function ThemeImportDialog({
     [readThemeFiles],
   );
 
+  /** Copy of an already-installed theme under the source file's name when
+   *  that differs (Dracula Soft), else the next free "Name v2". */
+  const versionedCopy = (
+    theme: ThemeDefinition,
+    preferredName?: string | null,
+  ): ThemeDefinition => {
+    if (preferredName && preferredName.toLowerCase() !== theme.label.toLowerCase()) {
+      const candidate = parseThemeFile({
+        version: THEME_FILE_VERSION,
+        name: preferredName.slice(0, 48),
+        appearance: theme.appearance,
+        colors: theme.colors,
+        ...(theme.variants ? { variants: theme.variants } : {}),
+        ...(theme.managed ? { managed: true } : {}),
+      });
+      if (!getCustomThemes().some((existing) => existing.id === candidate.id)) return candidate;
+    }
+    for (let version = 2; version < 100; version += 1) {
+      const id = `${theme.id}-v${version}`;
+      if (getCustomThemes().some((existing) => existing.id === id)) continue;
+      return parseThemeFile({
+        version: THEME_FILE_VERSION,
+        id,
+        name: `${theme.label} v${version}`.slice(0, 48),
+        appearance: theme.appearance,
+        colors: theme.colors,
+        ...(theme.variants ? { variants: theme.variants } : {}),
+        ...(theme.managed ? { managed: true } : {}),
+      });
+    }
+    throw new Error(`Too many copies of "${theme.label}".`);
+  };
+
+  const resolveConflicts = useCallback(
+    (mode: "update" | "copy") => {
+      if (!conflicts) return;
+      const resolved: ThemeDefinition[] = [];
+      const failures: string[] = [];
+      const preferredName =
+        conflicts.length === 1 && fileName
+          ? humanizeThemeName(fileName.replace(/\.[^.]+$/, ""))
+          : null;
+      for (const theme of conflicts) {
+        try {
+          resolved.push(
+            mode === "update"
+              ? updateCustomTheme(theme)
+              : installCustomTheme(versionedCopy(theme, preferredName)),
+          );
+        } catch (cause) {
+          failures.push(`${theme.label}: ${cause instanceof Error ? cause.message : "failed"}`);
+        }
+      }
+      if (resolved.length > 0) onImportedMany(resolved, { updated: mode === "update" });
+      setConflicts(null);
+      if (failures.length > 0) setError(failures.join(" — "));
+      else onOpenChange(false);
+    },
+    [conflicts, fileName, onImportedMany, onOpenChange],
+  );
+
   const handleSubmit = useCallback(() => {
     // Pasted text bypasses the file guard, so the same limit applies here.
     const oversized = describeOversizedThemeFile(json.length);
@@ -285,9 +367,15 @@ export function ThemeImportDialog({
       const parsed: unknown = JSON.parse(json);
       // VS Code themes are converted on the way in; anything else has to be
       // one of our own files.
-      const installedTheme = installCustomTheme(
-        isVsCodeThemeFile(parsed) ? parseVsCodeThemeFile(parsed) : parseThemeFile(parsed),
-      );
+      const theme = isVsCodeThemeFile(parsed)
+        ? parseVsCodeThemeFile(parsed)
+        : parseThemeFile(parsed);
+      if (getCustomThemes().some((existing) => existing.id === theme.id)) {
+        setError(null);
+        setConflicts([theme]);
+        return;
+      }
+      const installedTheme = installCustomTheme(theme);
       if (!onImported(installedTheme)) {
         // Roll the install back so a retry can run it again instead of
         // failing on the already-taken theme id.
@@ -367,6 +455,29 @@ export function ThemeImportDialog({
                 <ThemeJsonEditor id="theme-json-editor" onChange={setJson} value={json} />
               </div>
             );
+            if (conflicts) {
+              return (
+                <div className="space-y-3">
+                  <div className="rounded-xl border border-border/70 bg-muted/20 p-3">
+                    <p className="text-sm font-medium">Already installed</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {conflicts.map((theme) => theme.label).join(", ")}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button size="sm" onClick={() => resolveConflicts("update")}>
+                      Update existing
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => resolveConflicts("copy")}>
+                      Keep both
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => setConflicts(null)}>
+                      Back
+                    </Button>
+                  </div>
+                </div>
+              );
+            }
             return (
               <div className="space-y-3">
                 <div aria-label="Import source" className="grid grid-cols-2 gap-2" role="group">

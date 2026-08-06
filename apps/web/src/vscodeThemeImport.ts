@@ -162,7 +162,7 @@ function resolveAppearance(value: Record<string, unknown>, canvas: VsCodeRgb): T
 }
 
 /** Extension `name` fields are often package slugs; read them as words. */
-function humanizeThemeName(raw: string): string {
+export function humanizeThemeName(raw: string): string {
   const trimmed = raw.trim();
   if (/\s/.test(trimmed) || !/[-_.]/.test(trimmed)) return trimmed;
   return trimmed
@@ -371,4 +371,54 @@ export function pairVsCodeThemes(
   }
 
   return [...passthrough, ...paired].sort((a, b) => a.order - b.order).map((entry) => entry.theme);
+}
+
+/**
+ * Some extensions reuse one display name across every file: Dracula ships
+ * dracula.json and dracula-soft.json that both say "Dracula". When a batch
+ * carries the same id twice, the file names are the only thing that tells
+ * the variants apart, so colliding entries are relabelled from their file
+ * name (and numbered only when even that collides).
+ */
+export function resolveThemeLabelCollisions(
+  entries: ReadonlyArray<{ theme: ThemeDefinition; sourceName?: string | undefined }>,
+): ReadonlyArray<ThemeDefinition> {
+  const rename = (theme: ThemeDefinition, name: string): ThemeDefinition =>
+    parseThemeFile({
+      version: THEME_FILE_VERSION,
+      name: name.slice(0, 48),
+      appearance: theme.appearance,
+      colors: theme.colors,
+      ...(theme.variants ? { variants: theme.variants } : {}),
+      ...(theme.managed ? { managed: true } : {}),
+    });
+
+  const counts = new Map<string, number>();
+  for (const entry of entries) {
+    counts.set(entry.theme.id, (counts.get(entry.theme.id) ?? 0) + 1);
+  }
+  const relabelled = entries.map(({ theme, sourceName }) => {
+    if ((counts.get(theme.id) ?? 0) < 2) return theme;
+    const stem = sourceName?.replace(/\.[^.]+$/, "");
+    const fromFile = stem ? humanizeThemeName(stem) : null;
+    return fromFile && fromFile.toLowerCase() !== theme.label.toLowerCase()
+      ? rename(theme, fromFile)
+      : theme;
+  });
+
+  const seen = new Set<string>();
+  return relabelled.map((theme) => {
+    if (!seen.has(theme.id)) {
+      seen.add(theme.id);
+      return theme;
+    }
+    for (let suffix = 2; suffix < 100; suffix += 1) {
+      const candidate = rename(theme, `${theme.label} ${suffix}`);
+      if (!seen.has(candidate.id)) {
+        seen.add(candidate.id);
+        return candidate;
+      }
+    }
+    return theme;
+  });
 }

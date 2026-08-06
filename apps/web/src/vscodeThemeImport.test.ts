@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { getThemeColorsForMode, THEME_FILE_VERSION } from "./themePalette";
-import { isVsCodeThemeFile, pairVsCodeThemes, parseVsCodeThemeFile } from "./vscodeThemeImport";
+import {
+  isVsCodeThemeFile,
+  pairVsCodeThemes,
+  parseVsCodeThemeFile,
+  resolveThemeLabelCollisions,
+} from "./vscodeThemeImport";
 
 function contrastRatio(first: string, second: string): number {
   const toChannels = (value: string) => {
@@ -208,6 +213,29 @@ describe("VS Code theme import", () => {
     // "solar-dark-soft" groups under its own key with no light partner, so
     // it keeps its full name; the remaining pair merges.
     expect(themes.map((theme) => theme.label).sort()).toEqual(["Solar", "Solar Dark Soft"]);
+  });
+
+  it("tells same-named variants apart by their file names", () => {
+    // Dracula ships dracula.json and dracula-soft.json that both say
+    // "Dracula" inside.
+    const dracula = (bg: string) =>
+      parseVsCodeThemeFile({
+        name: "Dracula",
+        type: "dark",
+        colors: { "editor.background": bg, "editor.foreground": "#f8f8f2" },
+      });
+    const themes = resolveThemeLabelCollisions([
+      { theme: dracula("#282a36"), sourceName: "dracula.json" },
+      { theme: dracula("#22232e"), sourceName: "dracula-soft.json" },
+    ]);
+    expect(themes.map((theme) => theme.label)).toEqual(["Dracula", "Dracula Soft"]);
+    expect(themes.map((theme) => theme.id)).toEqual(["dracula", "dracula-soft"]);
+    // Without file names the second falls back to numbering.
+    const numbered = resolveThemeLabelCollisions([
+      { theme: dracula("#282a36") },
+      { theme: dracula("#22232e") },
+    ]);
+    expect(numbered.map((theme) => theme.label)).toEqual(["Dracula", "Dracula 2"]);
   });
 
   it("explains a file with no editor background", () => {

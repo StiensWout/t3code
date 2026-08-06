@@ -1054,6 +1054,7 @@ function BackgroundActivityAdvancedDialog({
 export function AppearanceSettingsPanel() {
   const {
     appearanceMode,
+    refreshTheme,
     resolvedTheme,
     setAppearanceMode,
     setTheme,
@@ -1083,6 +1084,7 @@ export function AppearanceSettingsPanel() {
             appearanceMode={appearanceMode}
             customThemes={customThemes}
             initialAppearance={resolvedTheme}
+            refreshTheme={refreshTheme}
             isImportOpen={isImportThemeOpen}
             setAppearanceMode={setAppearanceMode}
             setTheme={setTheme}
