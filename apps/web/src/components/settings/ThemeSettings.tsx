@@ -575,6 +575,20 @@ export function ThemeLibrary({
           );
         }}
         onImported={(importedTheme) => {
+          // Same rule as clicking the card: a one-appearance theme takes its
+          // side of the mix instead of becoming the base for both.
+          const modes = getThemeModes(importedTheme);
+          if (modes.length === 1) {
+            assignHalf(modes[0]!, importedTheme.id);
+            toastManager.add(
+              stackedThreadToast({
+                type: "success",
+                title: `${importedTheme.label} added`,
+                description: `It’s now your ${modes[0]!} theme.`,
+              }),
+            );
+            return true;
+          }
           if (!persistTheme(importedTheme.id)) return false;
           toastManager.add(
             stackedThreadToast({

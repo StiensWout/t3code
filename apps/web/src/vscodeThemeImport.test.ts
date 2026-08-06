@@ -253,6 +253,27 @@ describe("VS Code theme import", () => {
     expect(numbered.map((theme) => theme.label)).toEqual(["Dracula", "Dracula 2"]);
   });
 
+  it("falls back to the name when the displayName humanizes to nothing", () => {
+    const theme = parseVsCodeThemeFile({
+      displayName: "---",
+      name: "night-owl",
+      type: "dark",
+      colors: { "editor.background": "#011627" },
+    });
+    expect(theme.label).toBe("Night Owl");
+  });
+
+  it("keeps a pair whose stripped name is reserved as two single themes", () => {
+    const make = (name: string, type: "light" | "dark") =>
+      parseVsCodeThemeFile({
+        name,
+        type,
+        colors: { "editor.background": type === "dark" ? "#101014" : "#fdfdfd" },
+      });
+    const themes = pairVsCodeThemes([make("grove-light", "light"), make("grove-dark", "dark")]);
+    expect(themes.map((theme) => theme.label).sort()).toEqual(["Grove Dark", "Grove Light"]);
+  });
+
   it("explains a file with no editor background", () => {
     expect(() => parseVsCodeThemeFile({ name: "Empty", type: "dark", colors: {} })).toThrow(
       /editor\.background/,

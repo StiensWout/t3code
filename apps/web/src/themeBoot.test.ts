@@ -346,6 +346,23 @@ describe("index.html boot script", () => {
     expect(boot.themeId).toBe(GROVE_THEME.id);
   });
 
+  it("paints the half's splash when the base theme no longer exists", () => {
+    const boot = runBootScript({
+      storage: {
+        [THEME_STORAGE_KEY]: "gone-theme",
+        [THEME_APPEARANCE_MODE_STORAGE_KEY]: "system",
+        "t3code:theme-halves:v1": JSON.stringify({ dark: GROVE_THEME.id }),
+      },
+      prefersDark: true,
+    });
+    expect(boot.isDark).toBe(true);
+    expect(boot.themeId).toBe(GROVE_THEME.id);
+    expect(boot.themeSelected).toBe("true");
+    expect(boot.bootVariables["--boot-background"]).toBe(
+      getThemeColorsForMode(GROVE_THEME, "dark")!.canvas,
+    );
+  });
+
   it("resolves a legacy-prefixed mix half onto the renamed theme", () => {
     const boot = runBootScript({
       storage: {

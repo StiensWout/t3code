@@ -23,6 +23,21 @@ export class ElectronDialogPickFolderError extends Schema.TaggedErrorClass<Elect
   }
 }
 
+export class ElectronDialogPickFilesError extends Schema.TaggedErrorClass<ElectronDialogPickFilesError>()(
+  "ElectronDialogPickFilesError",
+  {
+    ownerWindowId: Schema.NullOr(Schema.Number),
+    defaultPath: Schema.NullOr(Schema.String),
+    cause: Schema.Defect(),
+  },
+) {
+  override get message(): string {
+    const owner = this.ownerWindowId === null ? "the application" : `window ${this.ownerWindowId}`;
+    const defaultPath = this.defaultPath === null ? "no default path" : this.defaultPath;
+    return `Failed to open the Electron file picker for ${owner} with ${defaultPath}.`;
+  }
+}
+
 export class ElectronDialogConfirmError extends Schema.TaggedErrorClass<ElectronDialogConfirmError>()(
   "ElectronDialogConfirmError",
   {
@@ -69,6 +84,7 @@ export class ElectronDialogShowErrorBoxError extends Schema.TaggedErrorClass<Ele
 
 export const ElectronDialogError = Schema.Union([
   ElectronDialogPickFolderError,
+  ElectronDialogPickFilesError,
   ElectronDialogConfirmError,
   ElectronDialogShowMessageBoxError,
   ElectronDialogShowErrorBoxError,
@@ -100,7 +116,7 @@ export class ElectronDialog extends Context.Service<
     ) => Effect.Effect<Option.Option<string>, ElectronDialogPickFolderError>;
     readonly pickFiles: (
       input: ElectronDialogPickFilesInput,
-    ) => Effect.Effect<readonly string[], ElectronDialogPickFolderError>;
+    ) => Effect.Effect<readonly string[], ElectronDialogPickFilesError>;
     readonly confirm: (
       input: ElectronDialogConfirmInput,
     ) => Effect.Effect<boolean, ElectronDialogConfirmError>;
@@ -164,7 +180,7 @@ export const make = ElectronDialog.of({
           onSome: (owner) => Electron.dialog.showOpenDialog(owner, openDialogOptions),
         }),
       catch: (cause) =>
-        new ElectronDialogPickFolderError({
+        new ElectronDialogPickFilesError({
           ownerWindowId,
           defaultPath,
           cause,

@@ -173,10 +173,14 @@ export function humanizeThemeName(raw: string): string {
 }
 
 function resolveName(value: Record<string, unknown>): string {
-  const candidate = [value.displayName, value.name].find(
-    (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
-  );
-  return humanizeThemeName(candidate ?? "VS Code theme").slice(0, 48);
+  // Judge candidates by their humanized form: a displayName of "---"
+  // humanizes to nothing and must fall through to the name.
+  for (const candidate of [value.displayName, value.name]) {
+    if (typeof candidate !== "string") continue;
+    const humanized = humanizeThemeName(candidate);
+    if (humanized.length > 0) return humanized.slice(0, 48);
+  }
+  return "VS Code theme";
 }
 
 export function parseVsCodeThemeFile(value: unknown): ThemeDefinition {
@@ -357,19 +361,26 @@ export function pairVsCodeThemes(
 
   const paired: Array<{ theme: ThemeDefinition; order: number }> = [];
   for (const [key, group] of groups) {
-    // Ambiguity (two darks for one light) is not guessed at.
+    // Ambiguity (two darks for one light) is not guessed at, and a pair
+    // whose stripped name collides with a built-in id ("Grove Light" +
+    // "Grove Dark" -> the reserved "grove") stays two single themes rather
+    // than failing the whole batch.
     if (group.light.length === 1 && group.dark.length === 1) {
-      paired.push({
-        order: group.order,
-        theme: parseThemeFile({
-          version: THEME_FILE_VERSION,
-          name: key,
-          appearance: "light",
-          colors: group.light[0]!.colors,
-          variants: { dark: group.dark[0]!.colors },
-        }),
-      });
-      continue;
+      try {
+        paired.push({
+          order: group.order,
+          theme: parseThemeFile({
+            version: THEME_FILE_VERSION,
+            name: key,
+            appearance: "light",
+            colors: group.light[0]!.colors,
+            variants: { dark: group.dark[0]!.colors },
+          }),
+        });
+        continue;
+      } catch {
+        // Fall through to the individual themes below.
+      }
     }
     for (const theme of [...group.light, ...group.dark]) {
       paired.push({ theme, order: group.order });
@@ -389,15 +400,21 @@ export function pairVsCodeThemes(
 export function resolveThemeLabelCollisions(
   entries: ReadonlyArray<{ theme: ThemeDefinition; sourceName?: string | undefined }>,
 ): ReadonlyArray<ThemeDefinition> {
-  const rename = (theme: ThemeDefinition, name: string): ThemeDefinition =>
-    parseThemeFile({
-      version: THEME_FILE_VERSION,
-      name: name.slice(0, 48),
-      appearance: theme.appearance,
-      colors: theme.colors,
-      ...(theme.variants ? { variants: theme.variants } : {}),
-      ...(theme.managed ? { managed: true } : {}),
-    });
+  // Null when the new name is unusable (reserved id, invalid characters).
+  const rename = (theme: ThemeDefinition, name: string): ThemeDefinition | null => {
+    try {
+      return parseThemeFile({
+        version: THEME_FILE_VERSION,
+        name: name.slice(0, 48),
+        appearance: theme.appearance,
+        colors: theme.colors,
+        ...(theme.variants ? { variants: theme.variants } : {}),
+        ...(theme.managed ? { managed: true } : {}),
+      });
+    } catch {
+      return null;
+    }
+  };
 
   const counts = new Map<string, number>();
   for (const entry of entries) {
@@ -407,9 +424,11 @@ export function resolveThemeLabelCollisions(
     if ((counts.get(theme.id) ?? 0) < 2) return theme;
     const stem = sourceName?.replace(/\.[^.]+$/, "");
     const fromFile = stem ? humanizeThemeName(stem) : null;
-    return fromFile && fromFile.toLowerCase() !== theme.label.toLowerCase()
-      ? rename(theme, fromFile)
-      : theme;
+    const renamed =
+      fromFile && fromFile.toLowerCase() !== theme.label.toLowerCase()
+        ? rename(theme, fromFile)
+        : null;
+    return renamed ?? theme;
   });
 
   const seen = new Set<string>();
@@ -420,7 +439,7 @@ export function resolveThemeLabelCollisions(
     }
     for (let suffix = 2; suffix < 100; suffix += 1) {
       const candidate = rename(theme, `${theme.label} ${suffix}`);
-      if (!seen.has(candidate.id)) {
+      if (candidate && !seen.has(candidate.id)) {
         seen.add(candidate.id);
         return candidate;
       }

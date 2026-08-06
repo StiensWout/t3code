@@ -340,7 +340,10 @@
           } else {
             delete document.documentElement.dataset.themeId;
           }
-          if (isKnownTheme && storedTheme !== null) {
+          // A resolved half is a selection even when the base theme is gone
+          // (deleting the base leaves the mix pointing at a real theme).
+          const hasSelection = halfThemeId !== null || (isKnownTheme && storedTheme !== null);
+          if (hasSelection) {
             document.documentElement.dataset.themeSelected = "true";
           } else {
             delete document.documentElement.dataset.themeSelected;
@@ -356,7 +359,7 @@
                 ? DARK_BACKGROUND
                 : LIGHT_BACKGROUND;
           document.documentElement.style.backgroundColor = chromeColor;
-          if (isKnownTheme && storedTheme !== null) {
+          if (hasSelection) {
             const splashColors = customSplash ?? builtInSplash ?? fallbackSplash;
             for (const [name, value] of Object.entries(splashColors)) {
               document.documentElement.style.setProperty(`--boot-${name}`, value);
