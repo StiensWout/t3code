@@ -865,7 +865,12 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
               the time/jump label yields to the settle affordance. */}
             {prBadge}
             <span className="relative ml-auto flex h-6 min-w-8 shrink-0 items-center justify-end">
-              <span className="inline-flex justify-end tabular-nums text-muted-foreground/55 transition-opacity group-hover/v2-row:opacity-0">
+              <span
+                className={cn(
+                  "inline-flex justify-end tabular-nums text-muted-foreground/55 transition-opacity",
+                  !isWokeStatus && "group-hover/v2-row:opacity-0",
+                )}
+              >
                 {variantAction === "unsnooze" && props.snoozeWakeLabelText !== null ? (
                   // Snoozed rows show when they come BACK, not when they were
                   // last touched — the return ticket is the row's whole story.
@@ -899,7 +904,10 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                     type="button"
                     aria-label="Wake thread now"
                     onClick={handleUnsnoozeClick}
-                    className="absolute inset-y-0 right-0 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-2 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover/v2-row:opacity-100"
+                    className={cn(
+                      "absolute inset-y-0 right-0 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-2 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover/v2-row:opacity-100",
+                      isWokeStatus && "group-hover/v2-row:static",
+                    )}
                   >
                     <AlarmClockOffIcon className="size-3" />
                   </button>
@@ -909,7 +917,10 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                   type="button"
                   aria-label="Un-settle thread"
                   onClick={handleUnsettleClick}
-                  className="absolute inset-y-0 right-0 -mr-1 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover/v2-row:opacity-100"
+                  className={cn(
+                    "absolute inset-y-0 right-0 -mr-1 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover/v2-row:opacity-100",
+                    isWokeStatus && "group-hover/v2-row:static",
+                  )}
                 >
                   <Undo2Icon className="mb-px size-3.5" />
                 </button>
@@ -918,7 +929,10 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                   type="button"
                   aria-label="Settle thread"
                   onClick={handleSettleClick}
-                  className="absolute inset-y-0 right-0 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-2 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover/v2-row:opacity-100"
+                  className={cn(
+                    "absolute inset-y-0 right-0 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-2 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover/v2-row:opacity-100",
+                    isWokeStatus && "group-hover/v2-row:static",
+                  )}
                 >
                   <CheckIcon className="size-3" />
                 </button>
