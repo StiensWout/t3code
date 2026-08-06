@@ -40,6 +40,8 @@ Commands are IDs like `terminal.toggle`, `commandPalette.toggle`, `preview.refre
 `filePicker.toggle` opens file search for the active project and defaults to `mod+p`.
 `projectSearch.toggle` searches inside the active project's files and defaults to `mod+shift+f`.
 Repeating either shortcut closes that search, and switching shortcuts replaces the open search.
+`themeEditor.toggle` opens or closes the floating theme editor and defaults to
+`mod+alt+shift+t`.
 
 The command palette searches active thread titles, projects, branches, user messages, and final
 agent responses across connected environments. Message matches show one labeled excerpt while
