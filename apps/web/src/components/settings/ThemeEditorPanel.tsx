@@ -29,7 +29,7 @@ import { Alert } from "../ui/alert";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Switch } from "../ui/switch";
-import { getThemeRoleLabel, ThemeColorField, ThemeColorPicker } from "./ThemeColorPicker";
+import { getThemeRoleLabel, ThemeColorField } from "./ThemeColorPicker";
 import { ThemeWireframe } from "./ThemeWireframe";
 
 const THEME_EDITOR_PRIMARY_ROLES: ReadonlyArray<ThemeColorRole> = [
@@ -68,25 +68,21 @@ const THEME_EDITOR_ADVANCED_ROLES = THEME_COLOR_ROLES.filter(
 const THEME_EDITOR_ROLE_GROUPS: ReadonlyArray<{
   id: string;
   title: string;
-  description: string;
   roles: ReadonlyArray<ThemeColorRole>;
 }> = [
   {
     id: "main",
-    title: "Main colors",
-    description: "Surfaces, text, accents, and message actions.",
+    title: "Main",
     roles: THEME_EDITOR_PRIMARY_ROLES,
   },
   {
     id: "status",
-    title: "Status colors",
-    description: "Errors, warnings, and update notices.",
+    title: "Status",
     roles: THEME_EDITOR_STATUS_ROLES,
   },
   {
     id: "additional",
-    title: "Additional colors",
-    description: "Fine-tune the remaining interface, code, and terminal roles.",
+    title: "Other",
     roles: THEME_EDITOR_ADVANCED_ROLES,
   },
 ];
@@ -160,8 +156,6 @@ export function ThemeEditorPanel({
   >({ light: false, dark: false });
   const [error, setError] = useState<string | null>(null);
   const [isMinimized, setIsMinimized] = useState(false);
-  const [openGroupIds, setOpenGroupIds] = useState<ReadonlyArray<string>>(["main"]);
-  const [focusedRole, setFocusedRole] = useState<ThemeColorRole | null>(null);
   const [roleQuery, setRoleQuery] = useState("");
   const [side, setSide] = useState<"left" | "right">("right");
   // The draft only reaches the live app once this open has been seeded;
@@ -383,11 +377,6 @@ export function ThemeEditorPanel({
           Dual mode
         </Button>
       </div>
-      <p className="text-xs leading-relaxed text-muted-foreground">
-        {modeSelection === "both"
-          ? "Separate light and dark palettes."
-          : "One palette for light and dark."}
-      </p>
     </div>
   );
 
@@ -422,11 +411,9 @@ export function ThemeEditorPanel({
   const renderColorsHeader = () => (
     <div className="flex items-start justify-between gap-3">
       <div>
-        <h3 className="text-sm font-medium">{isAdvanced ? "Theme colors" : "Guided colors"}</h3>
-        <p className="text-xs leading-relaxed text-muted-foreground">
-          {isAdvanced
-            ? "Full control over every color role."
-            : "Pick two colors — T3 Code builds the rest."}
+        <h3 className="text-sm font-medium">Colors</h3>
+        <p className="text-xs text-muted-foreground">
+          {isAdvanced ? "Every role" : "Two colors, rest derived"}
         </p>
       </div>
       <label className="flex shrink-0 cursor-pointer items-center gap-2 pt-0.5 text-sm font-medium">
@@ -456,196 +443,7 @@ export function ThemeEditorPanel({
     </div>
   );
 
-  // ---- Color layout options (ui.sh picker round) --------------------------
-  const guidedFields = (columns: string) => (
-    <div className={columns}>
-      {THEME_EDITOR_SIMPLE_ROLES.map((role) => (
-        <ThemeColorField
-          key={role}
-          onChange={updateColor}
-          role={role}
-          label={role === "canvas" ? "Background tint" : "Accent color"}
-          value={colorsByAppearance[activeAppearance][role]}
-        />
-      ))}
-    </div>
-  );
-
-  const groupHeading = (group: (typeof THEME_EDITOR_ROLE_GROUPS)[number]) => (
-    <div>
-      <h4 className="text-sm font-medium">{group.title}</h4>
-      <p className="text-xs leading-relaxed text-muted-foreground">{group.description}</p>
-    </div>
-  );
-
-  // 1. Today's layout: two fields per row inside a narrow panel.
-  const renderTwoColumn = () =>
-    isAdvanced ? (
-      <div className="space-y-4 rounded-lg border p-3">
-        {THEME_EDITOR_ROLE_GROUPS.map((group) => (
-          <div className="space-y-2" key={group.id}>
-            {groupHeading(group)}
-            {renderRoleFields(group.roles, "grid gap-2 sm:grid-cols-2")}
-          </div>
-        ))}
-      </div>
-    ) : (
-      guidedFields("grid gap-2 sm:grid-cols-2")
-    );
-
-  // 2. One field per row: full-width swatch, name, and hex.
-  const renderOnePerLine = () =>
-    isAdvanced ? (
-      <div className="space-y-4 rounded-lg border p-3">
-        {THEME_EDITOR_ROLE_GROUPS.map((group) => (
-          <div className="space-y-2" key={group.id}>
-            {groupHeading(group)}
-            {renderRoleFields(group.roles, "grid gap-1")}
-          </div>
-        ))}
-      </div>
-    ) : (
-      guidedFields("grid gap-1")
-    );
-
-  // 3. Groups collapse, so the list you are working in is the only one open.
-  const renderCollapsibleGroups = () =>
-    isAdvanced ? (
-      <div className="divide-y divide-border/70 rounded-lg border">
-        {THEME_EDITOR_ROLE_GROUPS.map((group) => {
-          const isOpen = openGroupIds.includes(group.id);
-          return (
-            <div key={group.id}>
-              <button
-                aria-expanded={isOpen}
-                className="flex w-full cursor-pointer items-center justify-between gap-2 px-3 py-2 text-left outline-none hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-ring"
-                type="button"
-                onClick={() =>
-                  setOpenGroupIds(
-                    isOpen
-                      ? openGroupIds.filter((id) => id !== group.id)
-                      : [...openGroupIds, group.id],
-                  )
-                }
-              >
-                <span className="min-w-0">
-                  <span className="block text-sm font-medium">{group.title}</span>
-                  <span className="block text-xs text-muted-foreground">
-                    {group.roles.length} colors
-                  </span>
-                </span>
-                {isOpen ? (
-                  <ChevronUpIcon className="size-4 shrink-0" />
-                ) : (
-                  <ChevronDownIcon className="size-4 shrink-0" />
-                )}
-              </button>
-              {isOpen ? (
-                <div className="px-3 pb-3">{renderRoleFields(group.roles, "grid gap-1")}</div>
-              ) : null}
-            </div>
-          );
-        })}
-      </div>
-    ) : (
-      guidedFields("grid gap-1")
-    );
-
-  // 4. Swatches first: scan the palette, then open one to edit it.
-  const renderSwatchGrid = () => {
-    const roles = isAdvanced
-      ? THEME_EDITOR_ROLE_GROUPS.flatMap((group) => group.roles)
-      : THEME_EDITOR_SIMPLE_ROLES;
-    return (
-      <div className="space-y-3">
-        {focusedRole ? (
-          <div className="rounded-lg border p-2">
-            <ThemeColorField
-              onChange={updateColor}
-              role={focusedRole}
-              value={colorsByAppearance[activeAppearance][focusedRole]}
-            />
-          </div>
-        ) : (
-          <p className="text-xs text-muted-foreground">Pick a swatch to edit it.</p>
-        )}
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(4.5rem,1fr))] gap-2">
-          {roles.map((role) => {
-            const value = colorsByAppearance[activeAppearance][role];
-            return (
-              <button
-                aria-label={getThemeRoleLabel(role)}
-                aria-pressed={focusedRole === role}
-                className={cn(
-                  "flex cursor-pointer flex-col items-start gap-1 rounded-md border border-border/70 p-1.5 text-left outline-none hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-ring",
-                  focusedRole === role && "border-ring bg-accent/30",
-                )}
-                key={role}
-                type="button"
-                onClick={() => setFocusedRole(role)}
-              >
-                <span
-                  className="h-6 w-full rounded border border-border/60"
-                  style={{ backgroundColor: isThemeColor(value) ? value : "transparent" }}
-                />
-                <span className="w-full truncate text-[10px] leading-tight text-muted-foreground">
-                  {getThemeRoleLabel(role)}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-    );
-  };
-
-  // 5. Stacked rows: the name gets its own line, so nothing truncates.
-  const renderStackedRows = () => {
-    const renderStacked = (roles: ReadonlyArray<ThemeColorRole>) => (
-      <div className="grid gap-2">
-        {roles.map((role) => {
-          const value = colorsByAppearance[activeAppearance][role];
-          return (
-            <div className="rounded-md border border-border/70 px-2 py-1.5" key={role}>
-              <span className="block text-xs font-medium text-foreground">
-                {getThemeRoleLabel(role)}
-              </span>
-              <div className="mt-1 flex items-center gap-2">
-                <ThemeColorPicker
-                  label={getThemeRoleLabel(role)}
-                  onChange={(nextValue) => updateColor(role, nextValue)}
-                  value={isThemeColor(value) ? value : "#000000"}
-                />
-                <Input
-                  aria-label={`${getThemeRoleLabel(role)} hex value`}
-                  className="h-7 flex-1 font-mono text-xs"
-                  nativeInput
-                  onChange={(event) => updateColor(role, event.currentTarget.value)}
-                  size="sm"
-                  value={value}
-                />
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    );
-    return isAdvanced ? (
-      <div className="space-y-4 rounded-lg border p-3">
-        {THEME_EDITOR_ROLE_GROUPS.map((group) => (
-          <div className="space-y-2" key={group.id}>
-            {groupHeading(group)}
-            {renderStacked(group.roles)}
-          </div>
-        ))}
-      </div>
-    ) : (
-      renderStacked(THEME_EDITOR_SIMPLE_ROLES)
-    );
-  };
-
-  // 6. One flat list with a filter, for going straight to a known role.
-  const renderFilterableList = () => {
+  const renderColorFields = () => {
     const query = roleQuery.trim().toLowerCase();
     const groups = THEME_EDITOR_ROLE_GROUPS.map((group) => ({
       ...group,
@@ -658,7 +456,7 @@ export function ThemeEditorPanel({
         <Input
           aria-label="Filter colors"
           onChange={(event) => setRoleQuery(event.currentTarget.value)}
-          placeholder="Filter colors"
+          placeholder="Filter"
           size="sm"
           value={roleQuery}
         />
@@ -672,12 +470,22 @@ export function ThemeEditorPanel({
             </div>
           ))}
           {groups.length === 0 ? (
-            <p className="text-xs text-muted-foreground">No colors match “{roleQuery}”.</p>
+            <p className="text-xs text-muted-foreground">No matches.</p>
           ) : null}
         </div>
       </div>
     ) : (
-      guidedFields("grid gap-1")
+      <div className="grid gap-1">
+        {THEME_EDITOR_SIMPLE_ROLES.map((role) => (
+          <ThemeColorField
+            key={role}
+            onChange={updateColor}
+            role={role}
+            label={role === "canvas" ? "Background" : "Accent"}
+            value={colorsByAppearance[activeAppearance][role]}
+          />
+        ))}
+      </div>
     );
   };
 
@@ -699,9 +507,7 @@ export function ThemeEditorPanel({
             {isEditing ? "Edit theme" : "Create theme"}
           </h2>
           {isMinimized ? null : (
-            <p className="truncate text-xs text-muted-foreground">
-              Browse the app — it is wearing this draft.
-            </p>
+            <p className="truncate text-xs text-muted-foreground">Previewing on the app</p>
           )}
         </div>
         <Button
@@ -742,26 +548,7 @@ export function ThemeEditorPanel({
             {renderAppearanceButtons()}
             <div className="space-y-3">
               {renderColorsHeader()}
-              <div className="contents" data-uidotsh-pick="Color layout">
-                <div className="contents" data-uidotsh-option="Two column (current)">
-                  {renderTwoColumn()}
-                </div>
-                <div className="contents" data-uidotsh-option="One per line" hidden>
-                  {renderOnePerLine()}
-                </div>
-                <div className="contents" data-uidotsh-option="Collapsible groups" hidden>
-                  {renderCollapsibleGroups()}
-                </div>
-                <div className="contents" data-uidotsh-option="Swatch grid" hidden>
-                  {renderSwatchGrid()}
-                </div>
-                <div className="contents" data-uidotsh-option="Stacked rows" hidden>
-                  {renderStackedRows()}
-                </div>
-                <div className="contents" data-uidotsh-option="Filterable list" hidden>
-                  {renderFilterableList()}
-                </div>
-              </div>
+              {renderColorFields()}
             </div>
 
             {error ? (

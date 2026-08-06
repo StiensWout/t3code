@@ -441,7 +441,7 @@ function ThemeColorPickerPanel({
   );
 }
 
-export function ThemeColorPicker({
+function ThemeColorPicker({
   label,
   value,
   onChange,
@@ -495,7 +495,7 @@ export const ThemeColorField = memo(function ThemeColorField({
   const swatchValue = isColorValue ? value : "#000000";
 
   return (
-    <div className="group flex min-h-11 min-w-0 items-center gap-2 border-b border-border/70 px-1.5 py-1.5 transition-colors hover:bg-accent/40">
+    <div className="group flex min-h-11 min-w-0 items-center gap-2 border-b border-border/70 px-1.5 py-1.5">
       <ThemeColorPicker
         label={label}
         onChange={(nextValue) => onChange(role, nextValue)}

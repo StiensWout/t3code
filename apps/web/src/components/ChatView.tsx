@@ -5697,11 +5697,8 @@ function ChatViewContent(props: ChatViewProps) {
     <div
       className={cn(
         "workspace-titlebar-controls z-50 gap-1 [-webkit-app-region:no-drag]",
-        // Both states anchor on the same offset so opening a panel does not
-        // slide the toggles sideways; the maximize control grows the group
-        // leftward instead of pushing them.
         rightPanelOpen && !shouldUsePlanSidebarSheet
-          ? "right-[var(--workspace-controls-right)]"
+          ? "right-2 wco:right-[var(--workspace-controls-right)]"
           : "mr-px",
       )}
     >
