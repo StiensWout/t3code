@@ -3,7 +3,7 @@ import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { isThemeColor, type ThemeColorRole } from "../../themePalette";
 import { Input } from "../ui/input";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
-function getThemeRoleLabel(role: ThemeColorRole): string {
+export function getThemeRoleLabel(role: ThemeColorRole): string {
   const labels: Partial<Record<ThemeColorRole, string>> = {
     canvas: "Background",
     toolbar: "Toolbar background",
@@ -441,7 +441,7 @@ function ThemeColorPickerPanel({
   );
 }
 
-function ThemeColorPicker({
+export function ThemeColorPicker({
   label,
   value,
   onChange,
