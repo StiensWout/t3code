@@ -72,17 +72,17 @@ const THEME_EDITOR_ROLE_GROUPS: ReadonlyArray<{
 }> = [
   {
     id: "main",
-    title: "Main",
+    title: "Main colors",
     roles: THEME_EDITOR_PRIMARY_ROLES,
   },
   {
     id: "status",
-    title: "Status",
+    title: "Status colors",
     roles: THEME_EDITOR_STATUS_ROLES,
   },
   {
     id: "additional",
-    title: "Other",
+    title: "Other colors",
     roles: THEME_EDITOR_ADVANCED_ROLES,
   },
 ];
@@ -503,7 +503,7 @@ export function ThemeEditorPanel({
   ]);
 
   const renderNameField = () => (
-    <label className="block space-y-2">
+    <label className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] items-center gap-3">
       <span className="text-sm font-medium">Theme name</span>
       <Input
         autoFocus
@@ -548,7 +548,7 @@ export function ThemeEditorPanel({
   };
 
   const renderAppearanceButtons = () => (
-    <div className="space-y-2">
+    <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] items-center gap-3">
       <span className="text-sm font-medium">Appearance</span>
       <div aria-label="Theme appearance" className="grid grid-cols-2 gap-2" role="group">
         {renderAppearanceButton("light")}
@@ -558,21 +558,33 @@ export function ThemeEditorPanel({
   );
 
   const renderColorsHeader = () => (
-    <div className="flex items-start justify-between gap-3">
+    <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] items-start gap-3">
       <div>
         <h3 className="text-sm font-medium">Colors</h3>
-        <p className="text-xs text-muted-foreground">
-          {isAdvanced ? "Every role" : "Two colors, rest derived"}
-        </p>
+        {isAdvanced ? null : (
+          <p className="text-xs text-muted-foreground">Two colors, rest derived</p>
+        )}
       </div>
-      <label className="flex shrink-0 cursor-pointer items-center gap-2 pt-0.5 text-sm font-medium">
-        <span>Advanced</span>
-        <Switch
-          aria-label="Use advanced theme colors"
-          checked={isAdvanced}
-          onCheckedChange={(checked) => handleAdvancedChange(Boolean(checked))}
-        />
-      </label>
+      <div className="flex min-w-0 items-start gap-3">
+        {isAdvanced ? (
+          <Input
+            aria-label="Filter colors"
+            className="min-w-0 flex-1"
+            onChange={(event) => setRoleQuery(event.currentTarget.value)}
+            placeholder="Filter colors"
+            size="sm"
+            value={roleQuery}
+          />
+        ) : null}
+        <label className="ml-auto flex shrink-0 cursor-pointer items-center gap-2 pt-0.5 text-sm font-medium">
+          <span>Advanced</span>
+          <Switch
+            aria-label="Use advanced theme colors"
+            checked={isAdvanced}
+            onCheckedChange={(checked) => handleAdvancedChange(Boolean(checked))}
+          />
+        </label>
+      </div>
     </div>
   );
 
@@ -601,27 +613,14 @@ export function ThemeEditorPanel({
       ),
     })).filter((group) => group.roles.length > 0);
     return isAdvanced ? (
-      <div className="space-y-2">
-        <Input
-          aria-label="Filter colors"
-          onChange={(event) => setRoleQuery(event.currentTarget.value)}
-          placeholder="Filter"
-          size="sm"
-          value={roleQuery}
-        />
-        <div className="space-y-3 rounded-lg border p-3">
-          {groups.map((group) => (
-            <div className="space-y-1" key={group.id}>
-              <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                {group.title}
-              </span>
-              {renderRoleFields(group.roles, "grid gap-1")}
-            </div>
-          ))}
-          {groups.length === 0 ? (
-            <p className="text-xs text-muted-foreground">No matches.</p>
-          ) : null}
-        </div>
+      <div className="space-y-5">
+        {groups.map((group) => (
+          <section className="space-y-2" key={group.id}>
+            <h4 className="text-sm font-medium text-foreground">{group.title}</h4>
+            {renderRoleFields(group.roles, "grid gap-1")}
+          </section>
+        ))}
+        {groups.length === 0 ? <p className="text-xs text-muted-foreground">No matches.</p> : null}
       </div>
     ) : (
       <div className="grid gap-1">
@@ -715,7 +714,7 @@ export function ThemeEditorPanel({
     <div
       aria-label={isEditing ? "Edit theme" : "Create theme"}
       className={cn(
-        "fixed z-40 flex max-h-[min(42rem,calc(100dvh-6rem))] w-[min(26rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-xl",
+        "dialog-glass fixed z-[55] flex max-h-[min(42rem,calc(100dvh-6rem))] w-[min(26rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-xl border text-popover-foreground",
         position === null && "bottom-4 right-4",
         isMinimized && "max-h-none",
       )}
@@ -764,7 +763,7 @@ export function ThemeEditorPanel({
 
       {isMinimized ? null : (
         <>
-          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-3 py-3">
+          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto py-3 pl-3 pr-1.5">
             {renderNameField()}
             {/* Inline and above the color list: the panel scrolls, and an
                 error parked below every role would go unseen. */}

@@ -141,12 +141,14 @@ export function ThemePreviewCircle({
   return (
     <span
       aria-hidden
-      className="block size-14 shrink-0 rounded-full border-2 border-background"
-      style={{
-        ...getThemePreviewStyle(colors, mode),
-        boxShadow: themePreviewEdgeShadow(mode),
-      }}
-    />
+      className="relative block size-14 shrink-0 overflow-hidden rounded-full border-2 border-background"
+      style={{ boxShadow: themePreviewEdgeShadow(mode) }}
+    >
+      <span
+        className="absolute inset-0 scale-110 rounded-full blur-[3px]"
+        style={getThemePreviewStyle(colors, mode)}
+      />
+    </span>
   );
 }
 
