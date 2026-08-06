@@ -22,7 +22,6 @@ import { Alert } from "../ui/alert";
 import { Button } from "../ui/button";
 import {
   Dialog,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogPanel,
@@ -168,7 +167,6 @@ export function ThemeImportDialog({
   const [error, setError] = useState<string | null>(null);
   const [isReading, setIsReading] = useState(false);
   const [isDropTarget, setIsDropTarget] = useState(false);
-  const [importTab, setImportTab] = useState<"file" | "paste">("file");
   // Imports whose id is already installed wait here for an update-or-copy
   // decision instead of failing.
   const [conflicts, setConflicts] = useState<ReadonlyArray<ThemeDefinition> | null>(null);
@@ -428,7 +426,6 @@ export function ThemeImportDialog({
       <DialogPopup className="max-w-3xl overflow-hidden">
         <DialogHeader>
           <DialogTitle>Add a theme</DialogTitle>
-          <DialogDescription>Upload theme files or paste JSON.</DialogDescription>
         </DialogHeader>
         <DialogPanel className="space-y-4">
           {(() => {
@@ -498,38 +495,24 @@ export function ThemeImportDialog({
               );
             }
             return (
-              <div className="space-y-3">
-                <div aria-label="Import source" className="grid grid-cols-2 gap-2" role="group">
-                  {(["file", "paste"] as const).map((tab) => (
-                    <Button
-                      aria-pressed={importTab === tab}
-                      key={tab}
-                      style={
-                        importTab === tab ? { boxShadow: "inset 0 0 0 1px var(--ring)" } : undefined
-                      }
-                      variant={importTab === tab ? "secondary" : "outline"}
-                      onClick={() => setImportTab(tab)}
-                    >
-                      {tab === "file" ? "Upload files" : "Paste JSON"}
-                    </Button>
-                  ))}
-                </div>
-                {importTab === "file" ? (
-                  <div
-                    className={cn(
-                      "flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed px-4 py-12 text-center transition-colors",
-                      isDropTarget ? "border-ring bg-accent/20" : "border-border/80 bg-muted/20",
-                    )}
-                    {...dropHandlers}
-                  >
-                    <p className="text-sm font-medium">{fileName ?? "Drop .json files"}</p>
-                    <p className="text-xs text-muted-foreground">T3 Code or VS Code</p>
-                    {chooseButton()}
-                    {fileInput}
+              <div className="space-y-4">
+                <div
+                  className={cn(
+                    "flex flex-wrap items-center justify-between gap-3 rounded-xl border border-dashed px-3 py-3 transition-colors",
+                    isDropTarget ? "border-ring bg-accent/20" : "border-border/80 bg-muted/20",
+                  )}
+                  {...dropHandlers}
+                >
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium">Theme file</p>
+                    <p className="truncate text-xs text-muted-foreground">
+                      {fileName ?? "Drop T3 Code or VS Code .json files"}
+                    </p>
                   </div>
-                ) : (
-                  editorSection()
-                )}
+                  {chooseButton()}
+                  {fileInput}
+                </div>
+                {editorSection()}
               </div>
             );
           })()}
