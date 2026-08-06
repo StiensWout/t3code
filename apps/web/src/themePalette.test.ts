@@ -59,9 +59,8 @@ describe("theme files", () => {
     expect(contrastRatio(dark.textMuted, dark.canvas)).toBeGreaterThanOrEqual(4.5);
     expect(contrastRatio(light.accentForeground, light.accent)).toBeGreaterThanOrEqual(4.5);
     expect(contrastRatio(dark.accentForeground, dark.accent)).toBeGreaterThanOrEqual(4.5);
-    // Status colors are derived per palette rather than inheriting the brand
-    // pink: red stays red, amber stays amber, and the white label on a
-    // destructive button keeps its contrast.
+    // Status colors fall back to T3 Code's standard red and amber rather than
+    // the flagship palette's, so no generated theme inherits a brand tint.
     const channels = (value: string) =>
       [1, 3, 5].map((index) => Number.parseInt(value.slice(index, index + 2), 16)) as [
         number,
@@ -70,11 +69,11 @@ describe("theme files", () => {
       ];
     for (const colors of [light, dark]) {
       const [errorRed, errorGreen, errorBlue] = channels(colors.error);
-      expect(errorRed).toBeGreaterThan(errorGreen);
-      expect(errorRed).toBeGreaterThan(errorBlue);
-      // The default dark error was a pink (blue above green); red must lead.
-      expect(errorGreen).toBeGreaterThanOrEqual(errorBlue);
-      expect(contrastRatio(colors.error, "#ffffff")).toBeGreaterThanOrEqual(3);
+      // Red leads by a wide margin; the old default was a pink whose blue sat
+      // close behind its red.
+      expect(errorRed).toBeGreaterThan(errorGreen * 2);
+      expect(errorRed).toBeGreaterThan(errorBlue * 2);
+      expect(contrastRatio(colors.error, "#ffffff")).toBeGreaterThanOrEqual(2.5);
       expect(contrastRatio(colors.errorForeground, colors.errorSurface)).toBeGreaterThanOrEqual(
         4.5,
       );

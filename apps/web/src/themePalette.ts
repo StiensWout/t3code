@@ -637,58 +637,51 @@ function solveOklchLightness(
   return { ...base, L: direction === "lighter" ? high : low };
 }
 
-/** Red and amber, in OKLCH degrees. */
-const THEME_ERROR_HUE = 25;
-const THEME_WARNING_HUE = 75;
+/**
+ * The status colors T3 Code shows without a theme, read from the app's own
+ * tokens (red-500 / amber-500 families). Generated palettes fall back to
+ * these instead of the flagship theme's, so an imported or created theme
+ * never inherits a brand tint on destructive buttons and warnings.
+ */
+const STANDARD_STATUS_COLORS = {
+  light: {
+    error: "#fb2c36",
+    errorForeground: "#c10007",
+    warning: "#fe9a00",
+    warningForeground: "#bb4d00",
+  },
+  dark: {
+    error: "#fb414a",
+    errorForeground: "#ff6467",
+    warning: "#fe9a00",
+    warningForeground: "#ffb900",
+  },
+} as const;
 
 /**
- * Status colors keep their meaning (red, amber) but adopt the palette's own
- * lightness, so a generated theme does not inherit the default brand pink on
- * destructive buttons. The solid tone stays dark enough for the white label
- * those buttons use, while the surface/foreground pair serves alerts.
+ * Status surfaces are the standard color laid over the theme's own canvas
+ * (the unthemed app uses 8% in light and 16% in dark), so alerts still sit on
+ * the palette while the signal color stays standard.
  */
-function semanticThemeFamily(
-  baseHue: number,
-  canvas: ThemeOklch,
-  canvasRgb: ThemeRgbColor,
-  dark: boolean,
-  accent?: ThemeOklch,
-): { solid: string; surface: string; foreground: string } {
-  const step = dark ? 1 : -1;
-  const hex = (color: ThemeOklch) => themeRgbToHexColor(themeOklchToRgb(color));
-  // Lean the hue toward the palette's accent, capped so red stays red and
-  // amber stays amber: each theme gets its own cast of the same signal.
-  const hue = (() => {
-    if (!accent || accent.C < 0.02) return baseHue;
-    const delta = ((((accent.h - baseHue) % 360) + 540) % 360) - 180;
-    const MAX_SHIFT = 14;
-    return (baseHue + Math.max(-MAX_SHIFT, Math.min(MAX_SHIFT, delta * 0.35)) + 360) % 360;
-  })();
-  const chroma = accent ? Math.min(0.19, Math.max(0.12, accent.C * 0.9 + 0.06)) : 0.15;
-  const solved = solveOklchLightness(
-    { L: dark ? 0.62 : 0.52, C: chroma, h: hue },
-    canvasRgb,
-    4.5,
-    dark ? "lighter" : "darker",
-  );
-  const surface: ThemeOklch = {
-    L: Math.min(0.98, Math.max(0.05, canvas.L + step * (dark ? 0.12 : 0.07))),
-    C: 0.05,
-    h: hue,
-  };
-  const surfaceRgb = themeOklchToRgb(surface);
+function standardStatusColors(
+  canvas: ThemeRgbColor,
+  appearance: ThemeAppearance,
+): {
+  error: string;
+  errorForeground: string;
+  errorSurface: string;
+  warning: string;
+  warningForeground: string;
+  warningSurface: string;
+} {
+  const standard = STANDARD_STATUS_COLORS[appearance];
+  const surfaceMix = appearance === "dark" ? 0.16 : 0.08;
+  const surfaceOf = (value: string) =>
+    themeRgbToHexColor(mixThemeRgbColors(canvas, parseThemeRgbColor(value, canvas), surfaceMix));
   return {
-    // Cap the solid so white text on it keeps its contrast.
-    solid: hex({ ...solved, L: Math.min(solved.L, 0.62) }),
-    surface: hex(surface),
-    foreground: hex(
-      solveOklchLightness(
-        { L: dark ? 0.9 : 0.35, C: 0.06, h: hue },
-        surfaceRgb,
-        4.5,
-        dark ? "lighter" : "darker",
-      ),
-    ),
+    ...standard,
+    errorSurface: surfaceOf(standard.error),
+    warningSurface: surfaceOf(standard.warning),
   };
 }
 
@@ -778,17 +771,9 @@ export function createVividThemeColors(
 
   const actionHover: ThemeOklch = { ...action, L: action.L + (dark ? 0.06 : -0.06) };
 
-  const errorFamily = semanticThemeFamily(THEME_ERROR_HUE, canvas, canvasRgb, dark, accent);
-  const warningFamily = semanticThemeFamily(THEME_WARNING_HUE, canvas, canvasRgb, dark, accent);
-
   return {
     ...defaults,
-    error: errorFamily.solid,
-    errorForeground: errorFamily.foreground,
-    errorSurface: errorFamily.surface,
-    warning: warningFamily.solid,
-    warningForeground: warningFamily.foreground,
-    warningSurface: warningFamily.surface,
+    ...standardStatusColors(canvasRgb, appearance),
     canvas: themeRgbToHexColor(canvasRgb),
     // The top bar shares the canvas so the main panel reads as one surface.
     chrome: themeRgbToHexColor(canvasRgb),
@@ -1011,32 +996,9 @@ export function createManagedThemeColors(
     0.35,
   );
 
-  const canvasOklch = themeRgbToOklch(canvas);
-  const isDarkAppearance = appearance === "dark";
-  const accentOklch = themeRgbToOklch(accent);
-  const errorFamily = semanticThemeFamily(
-    THEME_ERROR_HUE,
-    canvasOklch,
-    canvas,
-    isDarkAppearance,
-    accentOklch,
-  );
-  const warningFamily = semanticThemeFamily(
-    THEME_WARNING_HUE,
-    canvasOklch,
-    canvas,
-    isDarkAppearance,
-    accentOklch,
-  );
-
   return {
     ...defaults,
-    error: errorFamily.solid,
-    errorForeground: errorFamily.foreground,
-    errorSurface: errorFamily.surface,
-    warning: warningFamily.solid,
-    warningForeground: warningFamily.foreground,
-    warningSurface: warningFamily.surface,
+    ...standardStatusColors(canvas, appearance),
     update: themeRgbToHexColor(accent),
     updateForeground: themeRgbToHexColor(updateForeground),
     updateSurface: themeRgbToHexColor(updateSurface),
