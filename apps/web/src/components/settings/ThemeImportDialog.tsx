@@ -318,7 +318,7 @@ export function ThemeImportDialog({
   );
 
   /** Copy of an already-installed theme under the source file's name when
-   *  that differs (Dracula Soft), else the next free "Name v2". */
+   *  that differs (Dracula Soft), else the next free "Name (1)". */
   const versionedCopy = (
     theme: ThemeDefinition,
     preferredName?: string | null,
@@ -334,18 +334,17 @@ export function ThemeImportDialog({
       });
       if (!getCustomThemes().some((existing) => existing.id === candidate.id)) return candidate;
     }
-    for (let version = 2; version < 100; version += 1) {
-      const id = `${theme.id}-v${version}`;
-      if (getCustomThemes().some((existing) => existing.id === id)) continue;
-      return parseThemeFile({
+    for (let copy = 1; copy < 100; copy += 1) {
+      const candidate = parseThemeFile({
         version: THEME_FILE_VERSION,
-        id,
-        name: `${theme.label} v${version}`.slice(0, 48),
+        name: `${theme.label.slice(0, 48 - ` (${copy})`.length)} (${copy})`,
         appearance: theme.appearance,
         colors: theme.colors,
         ...(theme.variants ? { variants: theme.variants } : {}),
         ...(theme.managed ? { managed: true } : {}),
       });
+      if (getCustomThemes().some((existing) => existing.id === candidate.id)) continue;
+      return candidate;
     }
     throw new Error(`Too many copies of "${theme.label}".`);
   };

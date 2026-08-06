@@ -9,7 +9,6 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "../../lib/utils";
 import {
-  getThemeColorsForMode,
   getThemeDefinition,
   getThemeModes,
   removeCustomTheme,
@@ -34,6 +33,7 @@ import {
 } from "../ui/alert-dialog";
 import { Button } from "../ui/button";
 import { stackedThreadToast, toastManager } from "../ui/toast";
+import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 import { ThemeImportDialog } from "./ThemeImportDialog";
 import { useThemeEditorStore } from "./themeEditorStore";
 import {
@@ -86,101 +86,141 @@ function ThemeLibraryCard({
   onDownload?: () => void;
   onRemove?: () => void;
 }) {
+  // A one-appearance theme can only take its own side of the mix, so the card
+  // tooltip promises exactly what clicking it does.
+  const cardModes = theme.previews.map((preview) => preview.mode);
   return (
     // The card surface stays a plain div (buttons cannot nest inside a button
     // role); the title button and mode circles carry the accessible actions,
     // while the card click is a pointer-only convenience.
-    <div
-      className={cn(
-        "cursor-pointer overflow-hidden rounded-xl border border-border/70 bg-card/60 transition-colors hover:bg-accent/10",
-        isActive && "bg-accent/30",
-      )}
-      data-theme-library-card={theme.id}
-      onClick={onUse}
-      style={isActive ? { boxShadow: "inset 0 0 0 1px var(--ring)" } : undefined}
-    >
-      <ThemePreviewCircles
-        label={theme.label}
-        activeModes={activeModes}
-        onSelectMode={onUseMode}
-        previews={theme.previews}
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <div
+            className={cn(
+              "cursor-pointer overflow-hidden rounded-xl border border-border/70 bg-card/60 transition-colors hover:bg-accent/10",
+              isActive && "bg-accent/30",
+            )}
+            data-theme-library-card={theme.id}
+            onClick={onUse}
+            style={isActive ? { boxShadow: "inset 0 0 0 1px var(--ring)" } : undefined}
+          >
+            <ThemePreviewCircles
+              label={theme.label}
+              activeModes={activeModes}
+              onSelectMode={onUseMode}
+              previews={theme.previews}
+            />
+            <div className="flex items-center gap-2 px-3 pb-3 pt-2">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-1.5">
+                  <button
+                    aria-label={`Use ${theme.label} theme${isActive ? ", currently active" : ""}`}
+                    aria-pressed={isActive}
+                    className="min-w-0 cursor-pointer truncate rounded-sm text-left text-sm font-medium text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card"
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onUse();
+                    }}
+                  >
+                    {theme.label}
+                  </button>
+                </div>
+              </div>
+              {onEdit || onDuplicate || onDownload || onRemove ? (
+                <div className="flex shrink-0 items-center gap-1">
+                  {onDuplicate ? (
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <Button
+                            aria-label={`Duplicate ${theme.label}`}
+                            size="icon-xs"
+                            variant="ghost"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              onDuplicate();
+                            }}
+                          >
+                            <CopyIcon />
+                          </Button>
+                        }
+                      />
+                      <TooltipPopup>Duplicate theme</TooltipPopup>
+                    </Tooltip>
+                  ) : null}
+                  {onEdit ? (
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <Button
+                            aria-label={`Edit ${theme.label}`}
+                            size="icon-xs"
+                            variant="ghost"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              onEdit();
+                            }}
+                          >
+                            <PenLineIcon />
+                          </Button>
+                        }
+                      />
+                      <TooltipPopup>Edit theme</TooltipPopup>
+                    </Tooltip>
+                  ) : null}
+                  {onDownload ? (
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <Button
+                            aria-label={`Export ${theme.label}`}
+                            size="icon-xs"
+                            variant="ghost"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              onDownload();
+                            }}
+                          >
+                            <DownloadIcon />
+                          </Button>
+                        }
+                      />
+                      <TooltipPopup>Export theme file</TooltipPopup>
+                    </Tooltip>
+                  ) : null}
+                  {onRemove ? (
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <Button
+                            aria-label={`Remove ${theme.label}`}
+                            size="icon-xs"
+                            variant="ghost"
+                            className="text-muted-foreground hover:text-destructive"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              onRemove();
+                            }}
+                          >
+                            <Trash2Icon />
+                          </Button>
+                        }
+                      />
+                      <TooltipPopup>Remove theme</TooltipPopup>
+                    </Tooltip>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          </div>
+        }
       />
-      <div className="flex items-center gap-2 px-3 pb-3 pt-2">
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1.5">
-            <button
-              aria-label={`Use ${theme.label} theme${isActive ? ", currently active" : ""}`}
-              aria-pressed={isActive}
-              className="min-w-0 cursor-pointer truncate rounded-sm text-left text-sm font-medium text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card"
-              type="button"
-              onClick={(event) => {
-                event.stopPropagation();
-                onUse();
-              }}
-            >
-              {theme.label}
-            </button>
-          </div>
-        </div>
-        {onEdit || onDuplicate || onDownload || onRemove ? (
-          <div className="flex shrink-0 items-center gap-1">
-            {onDuplicate ? (
-              <Button
-                aria-label={`Duplicate ${theme.label}`}
-                size="icon-xs"
-                variant="ghost"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onDuplicate();
-                }}
-              >
-                <CopyIcon />
-              </Button>
-            ) : null}
-            {onEdit ? (
-              <Button
-                aria-label={`Edit ${theme.label}`}
-                size="icon-xs"
-                variant="ghost"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onEdit();
-                }}
-              >
-                <PenLineIcon />
-              </Button>
-            ) : null}
-            {onDownload ? (
-              <Button
-                aria-label={`Export ${theme.label}`}
-                size="icon-xs"
-                variant="ghost"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onDownload();
-                }}
-              >
-                <DownloadIcon />
-              </Button>
-            ) : null}
-            {onRemove ? (
-              <Button
-                aria-label={`Remove ${theme.label}`}
-                size="icon-xs"
-                variant="ghost"
-                className="text-muted-foreground hover:text-destructive"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onRemove();
-                }}
-              >
-                <Trash2Icon />
-              </Button>
-            ) : null}
-          </div>
-        ) : null}
-      </div>
-    </div>
+      <TooltipPopup>
+        {cardModes.length > 1 ? "Use for both light and dark" : `Use for ${cardModes[0]} mode only`}
+      </TooltipPopup>
+    </Tooltip>
   );
 }
 
@@ -315,22 +355,6 @@ export function ThemeLibrary({
       }
       if (!setThemeHalf(appearance, cardId)) {
         notifyThemeSaveFailure();
-        return;
-      }
-      // A first pick over an unthemed base pairs the whole theme: the other
-      // half follows along until the user refines it, so Auto never mixes an
-      // explicit pick with the generic default by accident. Themes with one
-      // appearance stay on their own side.
-      const definition = cardId === null ? null : getThemeDefinition(cardId);
-      if (
-        cardId !== null &&
-        baseCardId === null &&
-        themeHalves?.[otherAppearance] === undefined &&
-        definition !== null &&
-        getThemeColorsForMode(definition, otherAppearance) !== null &&
-        !setThemeHalf(otherAppearance, cardId)
-      ) {
-        notifyThemeSaveFailure();
       }
     },
     [
@@ -437,79 +461,85 @@ export function ThemeLibrary({
   );
 
   const renderPairGrid = () => (
-    <div
-      className="mx-auto grid w-full max-w-[56rem] gap-2 px-3 sm:px-4"
-      style={{ gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 17rem), 1fr))" }}
-    >
-      {STANDARD_THEME_CARDS.map((standardTheme) => (
-        <ThemeLibraryCard
-          activeModes={pickedModesFor(null)}
-          isActive={false}
-          key={standardTheme.id}
-          onUse={() => persistTheme(appearanceMode === "system" ? "system" : appearanceMode)}
-          onUseMode={handlePairPick(null)}
-          theme={standardTheme}
-        />
-      ))}
-      {MAINTAINER_THEMES.map((maintainerTheme) => {
-        const card = getThemeCardDefinition(maintainerTheme);
-        return (
+    // One shared provider so every tooltip in the grid hands off instantly to
+    // the next hovered trigger instead of stacking on top of it. The card
+    // tooltip briefly showing while crossing between a card's two circles is
+    // accepted — scoping the group tighter makes the handoffs feel sluggish.
+    <TooltipProvider>
+      <div
+        className="mx-auto grid w-full max-w-[56rem] gap-2 px-3 sm:px-4"
+        style={{ gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 17rem), 1fr))" }}
+      >
+        {STANDARD_THEME_CARDS.map((standardTheme) => (
           <ThemeLibraryCard
-            activeModes={pickedModesFor(maintainerTheme.id)}
+            activeModes={pickedModesFor(null)}
             isActive={false}
-            key={maintainerTheme.id}
-            onDuplicate={() =>
-              openThemeEditor({
-                editingThemeId: null,
-                seedThemeId: maintainerTheme.id,
-                seedName: `${maintainerTheme.label} copy`,
-                initialAppearance,
-              })
-            }
-            onUse={() => persistTheme(maintainerTheme.id)}
-            onUseMode={handlePairPick(maintainerTheme.id)}
-            theme={card}
+            key={standardTheme.id}
+            onUse={() => persistTheme(appearanceMode === "system" ? "system" : appearanceMode)}
+            onUseMode={handlePairPick(null)}
+            theme={standardTheme}
           />
-        );
-      })}
-      {customThemes.map((customTheme) => {
-        const card = getThemeCardDefinition(customTheme);
-        return (
-          <ThemeLibraryCard
-            activeModes={pickedModesFor(customTheme.id)}
-            isActive={false}
-            key={customTheme.id}
-            onDuplicate={() =>
-              openThemeEditor({
-                editingThemeId: null,
-                seedThemeId: customTheme.id,
-                seedName: `${customTheme.label} copy`,
-                initialAppearance,
-              })
-            }
-            onEdit={() =>
-              openThemeEditor({
-                editingThemeId: customTheme.id,
-                seedThemeId: null,
-                seedName: null,
-                initialAppearance,
-              })
-            }
-            onDownload={() =>
-              downloadThemeFile(`${customTheme.id}.json`, serializeThemeFile(customTheme))
-            }
-            onRemove={() => handleRemoveTheme(customTheme)}
-            onUse={() => {
-              const modes = getThemeModes(customTheme);
-              if (modes.length === 1) assignHalf(modes[0]!, customTheme.id);
-              else persistTheme(customTheme.id);
-            }}
-            onUseMode={handlePairPick(customTheme.id)}
-            theme={card}
-          />
-        );
-      })}
-    </div>
+        ))}
+        {MAINTAINER_THEMES.map((maintainerTheme) => {
+          const card = getThemeCardDefinition(maintainerTheme);
+          return (
+            <ThemeLibraryCard
+              activeModes={pickedModesFor(maintainerTheme.id)}
+              isActive={false}
+              key={maintainerTheme.id}
+              onDuplicate={() =>
+                openThemeEditor({
+                  editingThemeId: null,
+                  seedThemeId: maintainerTheme.id,
+                  seedName: `${maintainerTheme.label} copy`,
+                  initialAppearance,
+                })
+              }
+              onUse={() => persistTheme(maintainerTheme.id)}
+              onUseMode={handlePairPick(maintainerTheme.id)}
+              theme={card}
+            />
+          );
+        })}
+        {customThemes.map((customTheme) => {
+          const card = getThemeCardDefinition(customTheme);
+          return (
+            <ThemeLibraryCard
+              activeModes={pickedModesFor(customTheme.id)}
+              isActive={false}
+              key={customTheme.id}
+              onDuplicate={() =>
+                openThemeEditor({
+                  editingThemeId: null,
+                  seedThemeId: customTheme.id,
+                  seedName: `${customTheme.label} copy`,
+                  initialAppearance,
+                })
+              }
+              onEdit={() =>
+                openThemeEditor({
+                  editingThemeId: customTheme.id,
+                  seedThemeId: null,
+                  seedName: null,
+                  initialAppearance,
+                })
+              }
+              onDownload={() =>
+                downloadThemeFile(`${customTheme.id}.json`, serializeThemeFile(customTheme))
+              }
+              onRemove={() => handleRemoveTheme(customTheme)}
+              onUse={() => {
+                const modes = getThemeModes(customTheme);
+                if (modes.length === 1) assignHalf(modes[0]!, customTheme.id);
+                else persistTheme(customTheme.id);
+              }}
+              onUseMode={handlePairPick(customTheme.id)}
+              theme={card}
+            />
+          );
+        })}
+      </div>
+    </TooltipProvider>
   );
 
   return (

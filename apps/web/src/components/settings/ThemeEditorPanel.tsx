@@ -11,25 +11,26 @@ import {
   THEME_COLOR_ROLES,
   THEME_FILE_VERSION,
   createVividThemeColors,
-  getDefaultThemeColors,
+  getCustomThemes,
+  getStandardThemeColors,
   getThemeColorsForMode,
   getThemeModes,
   installCustomTheme,
   isThemeColor,
   parseThemeFile,
   removeCustomTheme,
+  themeIdFromName,
   updateCustomTheme,
   type ThemeAppearance,
   type ThemeColorRole,
   type ThemeDefinition,
 } from "../../themePalette";
 import { cn } from "../../lib/utils";
-import { Alert } from "../ui/alert";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Switch } from "../ui/switch";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { getThemeRoleLabel, ThemeColorField } from "./ThemeColorPicker";
-import { ThemeWireframe } from "./ThemeWireframe";
 
 const THEME_EDITOR_PRIMARY_ROLES: ReadonlyArray<ThemeColorRole> = [
   "canvas",
@@ -87,11 +88,13 @@ const THEME_EDITOR_ROLE_GROUPS: ReadonlyArray<{
 ];
 
 type ThemeEditorColors = Record<ThemeColorRole, string>;
-type ThemeEditorModeSelection = "single" | "both";
 type ThemeEditorColorsByAppearance = Record<ThemeAppearance, ThemeEditorColors>;
 
+// A draft with no source theme starts as the standard T3 Code look — the
+// palette on screen when no theme is installed — so creating from the default
+// theme changes nothing until the user edits a color.
 function getThemeEditorDefaults(appearance: ThemeAppearance): ThemeEditorColors {
-  return { ...getDefaultThemeColors(appearance) };
+  return { ...getStandardThemeColors(appearance) };
 }
 
 function getThemeEditorColorsByAppearance(): ThemeEditorColorsByAppearance {
@@ -109,7 +112,7 @@ function getManagedEditorColors(
   appearance: ThemeAppearance,
   colors: ThemeEditorColors,
 ): ThemeEditorColors {
-  const defaults = getDefaultThemeColors(appearance);
+  const defaults = getStandardThemeColors(appearance);
   // The editor keeps the user's exact picks and derives the rest through the
   // perceptual vivid engine, so a two-color theme carries its own identity.
   return createVividThemeColors(
@@ -131,7 +134,14 @@ export function ThemeEditorPanel({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSaved: (theme: ThemeDefinition, context: { created: boolean }) => boolean;
+  onSaved: (
+    theme: ThemeDefinition,
+    context: {
+      created: boolean;
+      /** Set when a create merged its palette into an existing theme. */
+      mergedAppearance?: ThemeAppearance;
+    },
+  ) => boolean;
   editingTheme: ThemeDefinition | null;
   initialAppearance: ThemeAppearance;
   /** The theme a new theme starts from, so tuning what you already use is a
@@ -144,7 +154,6 @@ export function ThemeEditorPanel({
 }) {
   const isEditing = editingTheme !== null;
   const [name, setName] = useState("");
-  const [modeSelection, setModeSelection] = useState<ThemeEditorModeSelection>("single");
   const [activeAppearance, setActiveAppearance] = useState<ThemeAppearance>(initialAppearance);
   const [isAdvanced, setIsAdvanced] = useState(false);
   const [colorsByAppearance, setColorsByAppearance] = useState<ThemeEditorColorsByAppearance>(() =>
@@ -197,7 +206,6 @@ export function ThemeEditorPanel({
       }
 
       setName(editingTheme?.label ?? seedName ?? "");
-      setModeSelection(sourceTheme && getThemeModes(sourceTheme).length > 1 ? "both" : "single");
       setActiveAppearance(nextAppearance);
       // Themes saved by the guided editor carry the managed flag; anything
       // else (imports, hand-edited files, older saves) opens in advanced mode
@@ -213,6 +221,54 @@ export function ThemeEditorPanel({
     if (!open && isDraftSeeded) setIsDraftSeeded(false);
     previousOpenRef.current = open;
   }, [editingTheme, initialAppearance, isDraftSeeded, open, seedName, seedTheme]);
+
+  // A name an installed theme already uses combines instead of failing:
+  // creating adds the new palette to that theme, and renaming an existing
+  // theme onto it folds the edited palette in and retires the old entry —
+  // light "My Theme" plus a dark "My Theme" become one theme with both modes.
+  // Labels are matched as well as derived ids: a rename keeps a theme's
+  // original id, so its label is the only name a user can see and retype.
+  const nameTargetId = themeIdFromName(name);
+  const normalizedName = name.trim().toLowerCase();
+  const mergeTarget =
+    normalizedName === ""
+      ? null
+      : (getCustomThemes().find(
+          (theme) =>
+            theme.id !== editingTheme?.id &&
+            (theme.id === nameTargetId || theme.label.trim().toLowerCase() === normalizedName),
+        ) ?? null);
+  const takenAppearances = mergeTarget ? getThemeModes(mergeTarget) : [];
+  const editableAppearances = editingTheme ? getThemeModes(editingTheme) : null;
+
+  // The appearance a mode button would produce can be blocked two ways: the
+  // merge target already has that palette, or the theme being edited never
+  // had it (adding one is a create-with-same-name away).
+  const appearanceLockReason = (appearance: ThemeAppearance): string | null => {
+    if (editableAppearances && !editableAppearances.includes(appearance)) {
+      return `“${editingTheme?.label}” has no ${appearance} palette. Create a theme with the same name to add one.`;
+    }
+    if (!isEditing && takenAppearances.includes(appearance)) {
+      return `“${mergeTarget?.label}” already has a ${appearance} palette.`;
+    }
+    return null;
+  };
+
+  // Typing a name whose theme already owns the selected appearance flips the
+  // draft to the free side, so the merge affordance works without a manual
+  // toggle. Both sides taken leaves the selection alone; save is blocked with
+  // an explanation instead.
+  const mergeTargetId = mergeTarget?.id ?? null;
+  const takenAppearancesKey = takenAppearances.join(",");
+  useEffect(() => {
+    if (isEditing || mergeTargetId === null) return;
+    const taken = takenAppearancesKey.split(",").filter(Boolean) as ThemeAppearance[];
+    if (taken.length !== 1) return;
+    setActiveAppearance((current) => {
+      if (!taken.includes(current)) return current;
+      return taken[0] === "light" ? "dark" : "light";
+    });
+  }, [isEditing, mergeTargetId, takenAppearancesKey]);
 
   // The whole app wears the draft while the editor is open, so a role change
   // is judged on the real interface rather than a miniature. The stored theme
@@ -261,7 +317,9 @@ export function ThemeEditorPanel({
       // Regenerate every appearance the theme will save, not just the visible
       // one, so the palettes shown after toggling match what gets saved.
       const managedAppearances: ReadonlyArray<ThemeAppearance> =
-        modeSelection === "both" ? ["light", "dark"] : [activeAppearance];
+        editingTheme && getThemeModes(editingTheme).length > 1
+          ? ["light", "dark"]
+          : [activeAppearance];
       setSimpleColorsDirtyByAppearance((current) => {
         const next = { ...current };
         for (const appearance of managedAppearances) next[appearance] = true;
@@ -275,7 +333,7 @@ export function ThemeEditorPanel({
         return next;
       });
     },
-    [activeAppearance, modeSelection],
+    [activeAppearance, editingTheme],
   );
 
   const handleSubmit = useCallback(() => {
@@ -285,9 +343,6 @@ export function ThemeEditorPanel({
     }
 
     try {
-      const baseAppearance =
-        editingTheme && modeSelection === "both" ? editingTheme.appearance : activeAppearance;
-      const variantAppearance = baseAppearance === "light" ? "dark" : "light";
       // Only regenerate palettes the user actually touched in guided mode, so
       // untouched appearances save exactly what the editor displayed.
       const colorsForSave = !isAdvanced
@@ -300,28 +355,110 @@ export function ThemeEditorPanel({
               : colorsByAppearance.dark,
           }
         : colorsByAppearance;
-      const variants =
-        modeSelection === "both"
-          ? { [variantAppearance]: colorsForSave[variantAppearance] }
-          : undefined;
-      const themeFile = {
-        version: THEME_FILE_VERSION,
-        ...(editingTheme ? { id: editingTheme.id } : {}),
-        name,
-        appearance: baseAppearance,
-        colors: colorsForSave[baseAppearance],
-        ...(variants ? { variants } : {}),
-        ...(isAdvanced ? {} : { managed: true }),
-      };
-      const savedTheme = editingTheme
-        ? updateCustomTheme(parseThemeFile(themeFile))
-        : installCustomTheme(parseThemeFile(themeFile));
-      if (!onSaved(savedTheme, { created: editingTheme === null })) {
-        if (!editingTheme) {
+
+      let savedTheme: ThemeDefinition;
+      let mergedAppearance: ThemeAppearance | null = null;
+      let retiredTheme: ThemeDefinition | null = null;
+      if (editingTheme && mergeTarget) {
+        // Renamed onto another installed theme: this theme's palettes fold
+        // into it and the edited entry retires, so both cards become one.
+        // Colliding palettes cannot merge — neither side should be silently
+        // overwritten.
+        const editedModes = getThemeModes(editingTheme);
+        const collision = editedModes.find((mode) => takenAppearances.includes(mode));
+        if (collision) {
+          setError(`“${mergeTarget.label}” already has a ${collision} palette. Pick another name.`);
+          return;
+        }
+        mergedAppearance = editedModes[0] ?? null;
+        savedTheme = updateCustomTheme(
+          parseThemeFile({
+            version: THEME_FILE_VERSION,
+            id: mergeTarget.id,
+            name: mergeTarget.label,
+            appearance: mergeTarget.appearance,
+            colors: mergeTarget.colors,
+            variants: {
+              ...mergeTarget.variants,
+              ...Object.fromEntries(editedModes.map((mode) => [mode, colorsForSave[mode]])),
+            },
+            ...(mergeTarget.managed === true && !isAdvanced ? { managed: true } : {}),
+          }),
+        );
+        retiredTheme = editingTheme;
+        removeCustomTheme(editingTheme.id);
+      } else if (editingTheme) {
+        const baseAppearance = editingTheme.appearance;
+        const variantAppearance = baseAppearance === "light" ? "dark" : "light";
+        savedTheme = updateCustomTheme(
+          parseThemeFile({
+            version: THEME_FILE_VERSION,
+            id: editingTheme.id,
+            name,
+            appearance: baseAppearance,
+            colors: colorsForSave[baseAppearance],
+            ...(getThemeModes(editingTheme).length > 1
+              ? { variants: { [variantAppearance]: colorsForSave[variantAppearance] } }
+              : {}),
+            ...(isAdvanced ? {} : { managed: true }),
+          }),
+        );
+      } else if (mergeTarget) {
+        if (takenAppearances.includes(activeAppearance)) {
+          setError(
+            `“${mergeTarget.label}” already has light and dark palettes. Pick another name.`,
+          );
+          return;
+        }
+        // The new palette joins the existing theme as its other mode; its
+        // stored palettes are untouched. The guided (managed) flag only
+        // survives when every palette in the theme came from the guided
+        // editor.
+        mergedAppearance = activeAppearance;
+        savedTheme = updateCustomTheme(
+          parseThemeFile({
+            version: THEME_FILE_VERSION,
+            id: mergeTarget.id,
+            name: mergeTarget.label,
+            appearance: mergeTarget.appearance,
+            colors: mergeTarget.colors,
+            variants: {
+              ...mergeTarget.variants,
+              [activeAppearance]: colorsForSave[activeAppearance],
+            },
+            ...(mergeTarget.managed === true && !isAdvanced ? { managed: true } : {}),
+          }),
+        );
+      } else {
+        savedTheme = installCustomTheme(
+          parseThemeFile({
+            version: THEME_FILE_VERSION,
+            name,
+            appearance: activeAppearance,
+            colors: colorsForSave[activeAppearance],
+            ...(isAdvanced ? {} : { managed: true }),
+          }),
+        );
+      }
+      if (
+        !onSaved(savedTheme, {
+          created: editingTheme === null && mergedAppearance === null,
+          ...(mergedAppearance ? { mergedAppearance } : {}),
+        })
+      ) {
+        if (!editingTheme && mergedAppearance === null) {
           // Roll the install back so a retry can run it again instead of
           // failing on the already-taken theme id.
           try {
             removeCustomTheme(savedTheme.id);
+          } catch {
+            // Storage is failing wholesale; the error below covers it.
+          }
+        } else if (mergeTarget && mergedAppearance !== null) {
+          // Put the pre-merge definitions back for the same reason.
+          try {
+            updateCustomTheme(mergeTarget);
+            if (retiredTheme) installCustomTheme(retiredTheme);
           } catch {
             // Storage is failing wholesale; the error below covers it.
           }
@@ -345,11 +482,12 @@ export function ThemeEditorPanel({
     editingTheme,
     isAdvanced,
     isEditing,
-    modeSelection,
+    mergeTarget,
     name,
     onOpenChange,
     onSaved,
     simpleColorsDirtyByAppearance,
+    takenAppearances,
   ]);
 
   const renderNameField = () => (
@@ -357,65 +495,52 @@ export function ThemeEditorPanel({
       <span className="text-sm font-medium">Theme name</span>
       <Input
         autoFocus
-        onChange={(event) => setName(event.currentTarget.value)}
+        onChange={(event) => {
+          setName(event.currentTarget.value);
+          // Most save failures are name collisions; retyping is the fix, so
+          // the stale message goes with the old name.
+          setError(null);
+        }}
         placeholder={isEditing ? "Theme name" : "e.g. Aurora"}
         value={name}
       />
     </label>
   );
 
-  const renderModeButtons = () => (
-    <div className="space-y-2">
-      <span className="text-sm font-medium">Modes</span>
-      <div aria-label="Modes" className="grid grid-cols-2 gap-2" role="group">
-        <Button
-          aria-pressed={modeSelection === "single"}
-          style={
-            modeSelection === "single" ? { boxShadow: "inset 0 0 0 1px var(--ring)" } : undefined
-          }
-          variant={modeSelection === "single" ? "secondary" : "outline"}
-          onClick={() => setModeSelection("single")}
-        >
-          One mode
-        </Button>
-        <Button
-          aria-pressed={modeSelection === "both"}
-          style={
-            modeSelection === "both" ? { boxShadow: "inset 0 0 0 1px var(--ring)" } : undefined
-          }
-          variant={modeSelection === "both" ? "secondary" : "outline"}
-          onClick={() => setModeSelection("both")}
-        >
-          Dual mode
-        </Button>
-      </div>
-    </div>
-  );
+  const renderAppearanceButton = (appearance: ThemeAppearance) => {
+    const isActive = activeAppearance === appearance;
+    const lockReason = appearanceLockReason(appearance);
+    // A locked mode stays hoverable so the tooltip can say why it is off;
+    // a real disabled attribute would swallow the pointer events.
+    const button = (
+      <Button
+        aria-disabled={lockReason !== null}
+        aria-pressed={isActive}
+        className={lockReason !== null ? "opacity-50" : undefined}
+        style={isActive ? { boxShadow: "inset 0 0 0 1px var(--ring)" } : undefined}
+        variant={isActive ? "secondary" : "outline"}
+        onClick={() => {
+          if (lockReason === null) setActiveAppearance(appearance);
+        }}
+      >
+        {appearance === "light" ? "Light" : "Dark"}
+      </Button>
+    );
+    if (lockReason === null) return button;
+    return (
+      <Tooltip>
+        <TooltipTrigger render={button} />
+        <TooltipPopup>{lockReason}</TooltipPopup>
+      </Tooltip>
+    );
+  };
 
   const renderAppearanceButtons = () => (
     <div className="space-y-2">
       <span className="text-sm font-medium">Appearance</span>
       <div aria-label="Theme appearance" className="grid grid-cols-2 gap-2" role="group">
-        <Button
-          aria-pressed={activeAppearance === "light"}
-          style={
-            activeAppearance === "light" ? { boxShadow: "inset 0 0 0 1px var(--ring)" } : undefined
-          }
-          variant={activeAppearance === "light" ? "secondary" : "outline"}
-          onClick={() => setActiveAppearance("light")}
-        >
-          Light
-        </Button>
-        <Button
-          aria-pressed={activeAppearance === "dark"}
-          style={
-            activeAppearance === "dark" ? { boxShadow: "inset 0 0 0 1px var(--ring)" } : undefined
-          }
-          variant={activeAppearance === "dark" ? "secondary" : "outline"}
-          onClick={() => setActiveAppearance("dark")}
-        >
-          Dark
-        </Button>
+        {renderAppearanceButton("light")}
+        {renderAppearanceButton("dark")}
       </div>
     </div>
   );
@@ -580,22 +705,18 @@ export function ThemeEditorPanel({
         <>
           <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-3 py-3">
             {renderNameField()}
-            <ThemeWireframe
-              className="h-28"
-              panes={[{ colors: colorsByAppearance[activeAppearance] }]}
-            />
-            {renderModeButtons()}
+            {/* Inline and above the color list: the panel scrolls, and an
+                error parked below every role would go unseen. */}
+            {error ? (
+              <p aria-live="polite" className="text-sm text-destructive">
+                {error}
+              </p>
+            ) : null}
             {renderAppearanceButtons()}
             <div className="space-y-3">
               {renderColorsHeader()}
               {renderColorFields()}
             </div>
-
-            {error ? (
-              <Alert aria-live="polite" variant="error">
-                {error}
-              </Alert>
-            ) : null}
           </div>
           <div className="flex items-center justify-end gap-2 border-t border-border/70 px-3 py-2">
             <Button size="sm" variant="ghost" onClick={() => onOpenChange(false)}>
@@ -603,7 +724,16 @@ export function ThemeEditorPanel({
             </Button>
             <Button disabled={!name.trim()} size="sm" onClick={handleSubmit}>
               {isEditing ? (
-                "Save changes"
+                mergeTarget ? (
+                  `Merge into “${mergeTarget.label}”`
+                ) : (
+                  "Save changes"
+                )
+              ) : mergeTarget ? (
+                <>
+                  <PlusIcon />
+                  {`Add ${activeAppearance} palette`}
+                </>
               ) : (
                 <>
                   <PlusIcon />

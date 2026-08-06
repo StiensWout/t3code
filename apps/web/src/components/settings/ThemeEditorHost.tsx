@@ -1,7 +1,7 @@
 import { useCallback } from "react";
 
 import { useTheme } from "../../hooks/useTheme";
-import { getThemeDefinition, type ThemeDefinition } from "../../themePalette";
+import { getThemeDefinition, type ThemeAppearance, type ThemeDefinition } from "../../themePalette";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { ThemeEditorPanel } from "./ThemeEditorPanel";
 import { useThemeEditorStore } from "./themeEditorStore";
@@ -20,7 +20,32 @@ export function ThemeEditorHost() {
   // editor is open resolves to null there, so the save becomes a create even
   // though the session still names it.
   const handleSaved = useCallback(
-    (savedTheme: ThemeDefinition, { created }: { created: boolean }) => {
+    (
+      savedTheme: ThemeDefinition,
+      { created, mergedAppearance }: { created: boolean; mergedAppearance?: ThemeAppearance },
+    ) => {
+      // A merge completed an existing theme's light/dark pair; activating the
+      // whole theme shows the new palette right away.
+      if (mergedAppearance) {
+        if (!setTheme(savedTheme.id)) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Could not save your theme",
+              description: "Browser storage is unavailable, so the change was not kept.",
+            }),
+          );
+          return false;
+        }
+        toastManager.add(
+          stackedThreadToast({
+            type: "success",
+            title: `${savedTheme.label} updated`,
+            description: `Its ${mergedAppearance} palette was added.`,
+          }),
+        );
+        return true;
+      }
       if (!created) {
         // The edited theme may be showing through the base preference or either
         // half of the mix; the preference itself is untouched (a setTheme here
