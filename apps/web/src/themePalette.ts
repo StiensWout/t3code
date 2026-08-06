@@ -648,15 +648,25 @@ const THEME_WARNING_HUE = 75;
  * those buttons use, while the surface/foreground pair serves alerts.
  */
 function semanticThemeFamily(
-  hue: number,
+  baseHue: number,
   canvas: ThemeOklch,
   canvasRgb: ThemeRgbColor,
   dark: boolean,
+  accent?: ThemeOklch,
 ): { solid: string; surface: string; foreground: string } {
   const step = dark ? 1 : -1;
   const hex = (color: ThemeOklch) => themeRgbToHexColor(themeOklchToRgb(color));
+  // Lean the hue toward the palette's accent, capped so red stays red and
+  // amber stays amber: each theme gets its own cast of the same signal.
+  const hue = (() => {
+    if (!accent || accent.C < 0.02) return baseHue;
+    const delta = ((((accent.h - baseHue) % 360) + 540) % 360) - 180;
+    const MAX_SHIFT = 14;
+    return (baseHue + Math.max(-MAX_SHIFT, Math.min(MAX_SHIFT, delta * 0.35)) + 360) % 360;
+  })();
+  const chroma = accent ? Math.min(0.19, Math.max(0.12, accent.C * 0.9 + 0.06)) : 0.15;
   const solved = solveOklchLightness(
-    { L: dark ? 0.62 : 0.52, C: 0.15, h: hue },
+    { L: dark ? 0.62 : 0.52, C: chroma, h: hue },
     canvasRgb,
     4.5,
     dark ? "lighter" : "darker",
@@ -768,8 +778,8 @@ export function createVividThemeColors(
 
   const actionHover: ThemeOklch = { ...action, L: action.L + (dark ? 0.06 : -0.06) };
 
-  const errorFamily = semanticThemeFamily(THEME_ERROR_HUE, canvas, canvasRgb, dark);
-  const warningFamily = semanticThemeFamily(THEME_WARNING_HUE, canvas, canvasRgb, dark);
+  const errorFamily = semanticThemeFamily(THEME_ERROR_HUE, canvas, canvasRgb, dark, accent);
+  const warningFamily = semanticThemeFamily(THEME_WARNING_HUE, canvas, canvasRgb, dark, accent);
 
   return {
     ...defaults,
@@ -1003,12 +1013,20 @@ export function createManagedThemeColors(
 
   const canvasOklch = themeRgbToOklch(canvas);
   const isDarkAppearance = appearance === "dark";
-  const errorFamily = semanticThemeFamily(THEME_ERROR_HUE, canvasOklch, canvas, isDarkAppearance);
+  const accentOklch = themeRgbToOklch(accent);
+  const errorFamily = semanticThemeFamily(
+    THEME_ERROR_HUE,
+    canvasOklch,
+    canvas,
+    isDarkAppearance,
+    accentOklch,
+  );
   const warningFamily = semanticThemeFamily(
     THEME_WARNING_HUE,
     canvasOklch,
     canvas,
     isDarkAppearance,
+    accentOklch,
   );
 
   return {

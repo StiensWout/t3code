@@ -49,7 +49,6 @@ describe("theme files", () => {
   it("derives a readable palette from extreme simple-editor colors", () => {
     const light = createManagedThemeColors("light", "#111827", "#ffff00");
     const dark = createManagedThemeColors("dark", "#ffffff", "#ffff00");
-    const lightDefaults = getDefaultThemeColors("light");
     const darkDefaults = getDefaultThemeColors("dark");
 
     expect(light.canvas).not.toBe("#111827");
