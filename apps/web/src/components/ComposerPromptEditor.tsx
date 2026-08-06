@@ -188,7 +188,7 @@ class ComposerMentionNode extends DecoratorNode<React.ReactElement> {
 
   override createDOM(): HTMLElement {
     const dom = document.createElement("span");
-    dom.className = "composer-inline-chip relative inline-flex align-middle leading-none";
+    dom.className = "composer-inline-chip relative inline-flex align-[-0.125em] leading-none";
     return dom;
   }
 
@@ -326,7 +326,7 @@ class ComposerSkillNode extends DecoratorNode<React.ReactElement> {
 
   override createDOM(): HTMLElement {
     const dom = document.createElement("span");
-    dom.className = "composer-inline-chip relative inline-flex align-middle leading-none";
+    dom.className = "composer-inline-chip relative inline-flex align-[-0.125em] leading-none";
     return dom;
   }
 
@@ -397,7 +397,7 @@ class ComposerTerminalContextNode extends DecoratorNode<React.ReactElement> {
 
   override createDOM(): HTMLElement {
     const dom = document.createElement("span");
-    dom.className = "composer-inline-chip relative inline-flex align-middle leading-none";
+    dom.className = "composer-inline-chip relative inline-flex align-[-0.125em] leading-none";
     return dom;
   }
 
