@@ -1618,6 +1618,10 @@ const APP_THEME_VARIABLES: Readonly<Record<ThemeColorRole, string>> = {
   terminalScrollbarHover: "--app-theme-terminal-scrollbar-hover",
 };
 
+export function getThemeColorVariable(role: ThemeColorRole): string {
+  return APP_THEME_VARIABLES[role];
+}
+
 /** Marks the document as wearing an unsaved draft rather than a stored theme. */
 export const THEME_PREVIEW_ID = "__preview";
 
