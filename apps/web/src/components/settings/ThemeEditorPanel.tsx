@@ -196,13 +196,36 @@ export function ThemeEditorPanel({
     height: number;
   } | null>(null);
   useEffect(() => {
-    if (position === null) return;
-    const clamp = () =>
-      setPosition((current) => (current ? clampPosition(current.x, current.y) : current));
+    if (!open) return;
+    // A panel sized wider than the window can no longer be clamped back into
+    // view by position alone -- its right edge (close, minimize, the grip)
+    // stays off screen. So the size shrinks to fit first, then the position
+    // is re-clamped against the new size.
+    const clamp = () => {
+      const margin = 8;
+      let clampedWidth: number | undefined;
+      let clampedHeight: number | undefined;
+      setSize((current) => {
+        if (!current) return current;
+        clampedWidth = Math.max(280, Math.min(current.width, window.innerWidth - margin * 2));
+        clampedHeight = Math.max(220, Math.min(current.height, window.innerHeight - margin * 2));
+        return { width: clampedWidth, height: clampedHeight };
+      });
+      setPosition((current) => {
+        if (!current) return current;
+        const clamped = clampPosition(current.x, current.y, clampedWidth);
+        // Dragging may park the panel with only its header showing, but a
+        // window resize should pull the whole thing back into view when it
+        // fits -- otherwise the grip ends up below the fold.
+        const height = clampedHeight ?? panelRef.current?.offsetHeight ?? 0;
+        const maxY = Math.max(margin, window.innerHeight - height - margin);
+        return { x: clamped.x, y: Math.min(clamped.y, maxY) };
+      });
+    };
     window.addEventListener("resize", clamp);
     return () => window.removeEventListener("resize", clamp);
     // oxlint-disable-next-line exhaustive-deps -- clampPosition reads live layout only.
-  }, [position === null]);
+  }, [open]);
 
   // The draft only reaches the live app once this open has been seeded;
   // previewing in the seeding commit would paint the previous session's
@@ -386,7 +409,26 @@ export function ThemeEditorPanel({
     const highlightedRoles = selectedHighlightRolesKey.split(",") as Array<ThemeColorRole>;
     const refreshHighlights = () => setUsageCount(highlightThemeRoleUsage(highlightedRoles));
     refreshHighlights();
+    // A refresh snapshots computed styles for the whole tree twice, so it is
+    // throttled rather than run per frame: a streaming reply or a virtualized
+    // list mutates the DOM continuously and would otherwise stall the main
+    // thread for as long as the inspector is open.
+    const MIN_REFRESH_INTERVAL_MS = 500;
     let refreshFrame: number | null = null;
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+    let lastRefreshAt = performance.now();
+    const scheduleRefresh = () => {
+      if (refreshFrame !== null || refreshTimer !== null) return;
+      const wait = Math.max(0, MIN_REFRESH_INTERVAL_MS - (performance.now() - lastRefreshAt));
+      const run = () => {
+        refreshFrame = null;
+        refreshTimer = null;
+        lastRefreshAt = performance.now();
+        refreshHighlights();
+      };
+      if (wait === 0) refreshFrame = requestAnimationFrame(run);
+      else refreshTimer = setTimeout(run, wait);
+    };
     const observer = new MutationObserver((mutations) => {
       if (
         mutations.every(
@@ -398,10 +440,7 @@ export function ThemeEditorPanel({
       ) {
         return;
       }
-      refreshFrame ??= requestAnimationFrame(() => {
-        refreshFrame = null;
-        refreshHighlights();
-      });
+      scheduleRefresh();
     });
     observer.observe(document.body, { childList: true, subtree: true });
     let spotlightFrame: number | null = null;
@@ -416,6 +455,7 @@ export function ThemeEditorPanel({
     return () => {
       observer.disconnect();
       if (refreshFrame !== null) cancelAnimationFrame(refreshFrame);
+      if (refreshTimer !== null) clearTimeout(refreshTimer);
       if (spotlightFrame !== null) cancelAnimationFrame(spotlightFrame);
       window.removeEventListener("resize", scheduleSpotlightRefresh);
       window.removeEventListener("scroll", scheduleSpotlightRefresh, true);
@@ -862,10 +902,12 @@ export function ThemeEditorPanel({
     );
   };
 
-  const clampPosition = (x: number, y: number) => {
+  const clampPosition = (x: number, y: number, widthOverride?: number) => {
     const panel = panelRef.current;
     const margin = 8;
-    const width = panel?.offsetWidth ?? 0;
+    // The caller passes a width when it has just shrunk the panel: the DOM
+    // still reports the old one until React commits.
+    const width = widthOverride ?? panel?.offsetWidth ?? 0;
     return {
       x: Math.min(Math.max(x, margin), Math.max(margin, window.innerWidth - width - margin)),
       // Keep at least the header on screen even when dragged far down.
