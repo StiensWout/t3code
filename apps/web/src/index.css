@@ -864,7 +864,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 @utility surface-grain {
   background-image: var(--surface-grain);
   background-repeat: repeat;
-  background-size: 256px 256px;
+  background-size: var(--surface-grain-size);
 }
 
 /* Suppress all transitions during theme changes */
@@ -1139,6 +1139,29 @@ html.dark[data-theme-id] {
   --terminal-scrollbar-hover: var(--app-theme-terminal-scrollbar-hover);
 }
 
+/* T3 Chat's composer is a translucent lift over --chat-background. Route its
+   measured flattened color through the raised-surface role instead of deriving
+   another tint from the canvas, which made the dark composer too red. */
+html[data-theme-id] .chat-composer-glass-shell {
+  --chat-composer-glass-surface: var(--app-theme-surface-raised);
+}
+
+html[data-theme-id]:not(.dark) .chat-composer-glass-shell {
+  --chat-composer-outline: var(--app-theme-toolbar-border);
+}
+
+html.dark[data-theme-id] .chat-composer-glass-shell {
+  --chat-composer-outline: color-mix(in srgb, var(--app-theme-input) 30%, var(--background));
+  --chat-composer-highlight: color-mix(in srgb, var(--app-theme-input) 12%, transparent);
+}
+
+html.dark[data-theme-id="t3-chat"] .chat-composer-glass-shell {
+  /* T3 Chat's visible composer edge is a dark plum, not the stock translucent
+     white outline. Its highlight is derived from --chat-input-gradient. */
+  --chat-composer-outline: #241e28;
+  --chat-composer-highlight: color-mix(in srgb, #432d48 12%, transparent);
+}
+
 html[data-theme-id]:not(.dark) {
   color-scheme: light;
 }
@@ -1218,6 +1241,24 @@ html[data-theme-id] .chat-markdown .chat-markdown-chrome-action {
   color: color-mix(in srgb, var(--code-foreground) 72%, transparent);
 }
 
+/* T3 Chat renders inline code and compact chat artifacts with its translucent
+   secondary surface flattened over the light chat canvas. The raw muted and
+   secondary tokens are substantially darker than those visible pixels. */
+html[data-theme-id="t3-chat"]:not(.dark) .chat-markdown :not(pre) > code,
+html[data-theme-id="t3-chat"]:not(.dark) [data-changed-files-state],
+html[data-theme-id="t3-chat"]:not(.dark) [data-changed-files-header] {
+  background-color: var(--message-surface);
+}
+
+html[data-theme-id="t3-chat"]:not(.dark) .chat-markdown :not(pre) > code,
+html[data-theme-id="t3-chat"]:not(.dark) [data-changed-files-state] {
+  border-color: transparent;
+}
+
+html[data-theme-id="t3-chat"]:not(.dark) .chat-markdown :not(pre) > code {
+  color: var(--message-foreground);
+}
+
 html[data-theme-id] .chat-markdown .chat-markdown-chrome-action:hover,
 html[data-theme-id] .chat-markdown .chat-markdown-chrome-action[aria-pressed="true"] {
   color: var(--code-foreground);
@@ -1245,6 +1286,23 @@ html[data-theme-id] [data-sidebar-version="v2"] {
   --sidebar-border: var(--app-theme-sidebar-border);
   --sidebar-stage-fade: var(--app-theme-sidebar);
   background-color: var(--sidebar);
+}
+
+/* Keep the navigation edge as quiet as the standard palettes. Theme files may
+   still use sidebarBorder for controls and internal separators, but the outer
+   divider should not become more prominent just because a palette is vivid. */
+html[data-theme-id] [data-app-sidebar] {
+  border-color: color-mix(in srgb, var(--sidebar-foreground) 10%, transparent);
+}
+
+html.dark[data-theme-id] [data-app-sidebar] {
+  border-color: color-mix(in srgb, var(--sidebar-foreground) 8%, transparent);
+}
+
+/* T3 Chat's panel divider is deliberately pink, and its resize affordance
+   keeps that color while hovered. Do not neutralize this branded edge. */
+html.dark[data-theme-id="t3-chat"] [data-app-sidebar] {
+  border-color: var(--sidebar-border);
 }
 
 .theme-json-key {
@@ -1307,12 +1365,21 @@ body {
    grain's subtle brightening and stand out against the body. */
 :root {
   --surface-grain: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E");
+  --surface-grain-size: 256px 256px;
+}
+
+/* The live T3 Chat texture is a 128px grayscale tile with a constant 7/255
+   alpha. Keep our procedural texture cheap while matching that scale and
+   strength for the branded preset. */
+html[data-theme-id="t3-chat"] {
+  --surface-grain: url("data:image/svg+xml,%3Csvg viewBox='0 0 128 128' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.02745'/%3E%3C/svg%3E");
+  --surface-grain-size: 128px 128px;
 }
 
 body {
   background-image: var(--surface-grain);
   background-repeat: repeat;
-  background-size: 256px 256px;
+  background-size: var(--surface-grain-size);
 }
 
 pre,
@@ -1863,13 +1930,20 @@ label:has(> select#reasoning-effort) select {
 
 /* Diffs theme bridge (match diff surfaces to app palette) */
 .diff-panel-viewport {
-  background: color-mix(in srgb, var(--background) 94%, var(--card));
+  background: var(--background);
+}
+
+/* Diffs live directly on the panel canvas. Normal chat code blocks may use a
+   raised code surface, but carrying that fill into the diff creates a card-like
+   rectangle that does not belong in the panel. */
+.diff-render-surface {
+  --code-background: var(--background);
 }
 
 .diff-render-file,
-.diff-render-surface > diffs-container {
-  border: 1px solid var(--border);
-  border-radius: 0.5rem;
+.diff-render-surface diffs-container {
+  border: 0;
+  border-radius: 0;
   overflow: clip;
   background: var(--code-background);
   color: var(--code-foreground);
@@ -1877,6 +1951,7 @@ label:has(> select#reasoning-effort) select {
 
 /* Pierre's file renderer owns its own surface tokens. Keep the root of a file
    preview on the same themeable code surface as the diff panel. */
+.diff-render-surface diffs-container,
 .file-preview-virtualizer diffs-container {
   --diffs-bg: var(--code-background) !important;
   --diffs-light-bg: var(--code-background) !important;

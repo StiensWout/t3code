@@ -319,7 +319,7 @@ function ThemeColorPickerPanel({
           <p className="text-[11px] text-muted-foreground">Choose a color</p>
         </div>
         <span
-          className="size-7 shrink-0 rounded-full border border-border shadow-sm"
+          className="size-7 shrink-0 rounded-full shadow-sm"
           style={{ backgroundColor: currentColor }}
         />
       </div>
@@ -456,19 +456,19 @@ function ThemeColorPicker({
         render={
           <button
             aria-label={`Choose ${label} color`}
-            className="relative flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-full border border-border transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+            className="relative flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-full border border-foreground/30 transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
             title={`Choose ${label} color`}
             type="button"
           >
             <span
-              className="absolute inset-0.5 rounded-full shadow-[inset_0_0_0_1px_rgb(255_255_255_/_28%),0_1px_2px_rgb(0_0_0_/_14%)] dark:shadow-[inset_0_0_0_1px_rgb(255_255_255_/_18%),0_1px_2px_rgb(0_0_0_/_30%)]"
+              className="absolute inset-0 rounded-full shadow-sm"
               style={{ backgroundColor: value }}
             />
           </button>
         }
       />
       <PopoverPopup
-        align="start"
+        align="end"
         className="overflow-hidden rounded-2xl border border-border/70 p-0 shadow-2xl [--viewport-inline-padding:0px] [&_[data-slot=popover-viewport]]:p-0"
         side="bottom"
         sideOffset={10}
@@ -495,24 +495,26 @@ export const ThemeColorField = memo(function ThemeColorField({
   const swatchValue = isColorValue ? value : "#000000";
 
   return (
-    <div className="group flex min-h-11 min-w-0 items-center gap-2 border-b border-border/70 px-1.5 py-1.5">
-      <ThemeColorPicker
-        label={label}
-        onChange={(nextValue) => onChange(role, nextValue)}
-        value={swatchValue}
-      />
-      <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">{label}</span>
-      <Input
-        aria-invalid={!isColorValue}
-        aria-label={`${label} hex value`}
-        className="w-28 shrink-0 rounded-none border-0 border-b border-input bg-transparent font-mono text-xs text-foreground shadow-none focus-within:border-ring focus-within:ring-0"
-        id={`${role}-hex`}
-        nativeInput
-        onChange={(event) => onChange(role, event.currentTarget.value)}
-        size="sm"
-        unstyled
-        value={value}
-      />
+    <div className="group flex min-h-11 min-w-0 items-center gap-2 py-1.5">
+      <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">{label}</span>
+      <div className="ml-auto flex shrink-0 items-center gap-2">
+        <ThemeColorPicker
+          label={label}
+          onChange={(nextValue) => onChange(role, nextValue)}
+          value={swatchValue}
+        />
+        <Input
+          aria-invalid={!isColorValue}
+          aria-label={`${label} hex value`}
+          className="w-28 shrink-0 rounded-md border-0 bg-black/10 font-mono text-xs text-foreground shadow-none focus-within:bg-black/15 focus-within:ring-0 dark:bg-black/20 dark:focus-within:bg-black/25 [&_[data-slot=input]]:text-right"
+          id={`${role}-hex`}
+          nativeInput
+          onChange={(event) => onChange(role, event.currentTarget.value)}
+          size="sm"
+          unstyled
+          value={value}
+        />
+      </div>
     </div>
   );
 });

@@ -1,6 +1,11 @@
 import { create } from "zustand";
 
-import type { ThemeAppearance } from "../../themePalette";
+import {
+  getThemeDefinition,
+  type ThemeAppearance,
+  type ThemeHalves,
+  type ThemePreference,
+} from "../../themePalette";
 
 /**
  * The theme editor lives above the router so a draft survives navigation: the
@@ -39,3 +44,25 @@ export const useThemeEditorStore = create<ThemeEditorStore>((set) => ({
   openThemeEditor: (session) => set({ session: { ...session, id: ++nextSessionId } }),
   closeThemeEditor: () => set({ session: null }),
 }));
+
+export function toggleThemeEditorForTheme(input: {
+  theme: ThemePreference;
+  themeHalves: ThemeHalves | null;
+  initialAppearance: ThemeAppearance;
+}): void {
+  const store = useThemeEditorStore.getState();
+  if (store.session) {
+    store.closeThemeEditor();
+    return;
+  }
+
+  const baseThemeId = getThemeDefinition(input.theme)?.id ?? null;
+  const activeThemeId = input.themeHalves?.[input.initialAppearance] ?? baseThemeId;
+  const seedThemeId = activeThemeId ? (getThemeDefinition(activeThemeId)?.id ?? null) : null;
+  store.openThemeEditor({
+    editingThemeId: null,
+    seedThemeId,
+    seedName: null,
+    initialAppearance: input.initialAppearance,
+  });
+}
