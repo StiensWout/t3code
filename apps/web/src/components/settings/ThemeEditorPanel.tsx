@@ -216,8 +216,12 @@ export function ThemeEditorPanel({
         const clamped = clampPosition(current.x, current.y, clampedWidth);
         // Dragging may park the panel with only its header showing, but a
         // window resize should pull the whole thing back into view when it
-        // fits -- otherwise the grip ends up below the fold.
-        const height = clampedHeight ?? panelRef.current?.offsetHeight ?? 0;
+        // fits -- otherwise the grip ends up below the fold. Minimized, the
+        // stored height is not applied (the panel hugs its header), so the
+        // rendered height is what has to fit.
+        const height = isMinimized
+          ? (panelRef.current?.offsetHeight ?? 0)
+          : (clampedHeight ?? panelRef.current?.offsetHeight ?? 0);
         const maxY = Math.max(margin, window.innerHeight - height - margin);
         return { x: clamped.x, y: Math.min(clamped.y, maxY) };
       });
@@ -225,7 +229,7 @@ export function ThemeEditorPanel({
     window.addEventListener("resize", clamp);
     return () => window.removeEventListener("resize", clamp);
     // oxlint-disable-next-line exhaustive-deps -- clampPosition reads live layout only.
-  }, [open]);
+  }, [isMinimized, open]);
 
   // The draft only reaches the live app once this open has been seeded;
   // previewing in the seeding commit would paint the previous session's
