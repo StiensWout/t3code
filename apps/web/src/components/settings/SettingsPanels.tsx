@@ -73,7 +73,12 @@ import {
 import { isElectron } from "../../env";
 import { buildHostedChannelSelectionUrl, type HostedAppChannel } from "../../hostedPairing";
 import { useCustomThemes } from "../../hooks/useCustomThemes";
-import { readThemeHalves, readThemePreference, useTheme } from "../../hooks/useTheme";
+import {
+  readAppearanceModePreference,
+  readThemeHalves,
+  readThemePreference,
+  useTheme,
+} from "../../hooks/useTheme";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { usePrimarySettings, useUpdatePrimarySettings } from "../../hooks/useSettings";
 import { useThreadActions } from "../../hooks/useThreadActions";
@@ -702,7 +707,9 @@ export function useSettingsRestore(onRestored?: () => void) {
     const liveHalves = readThemeHalves();
     const needsThemeReset = previousTheme !== "system";
     const needsMixReset = liveHalves !== null;
-    const needsFollowSystemReset = !followSystem;
+    // Same for the appearance mode: trusting the render-time value would skip
+    // the reset and report success while a non-system mode stayed in storage.
+    const needsFollowSystemReset = readAppearanceModePreference(previousTheme) !== "system";
     const notifyThemeRestoreFailure = () => {
       toastManager.add(
         stackedThreadToast({
@@ -764,7 +771,6 @@ export function useSettingsRestore(onRestored?: () => void) {
   }, [
     changedSettingLabels,
     clearThemeHalves,
-    followSystem,
     onRestored,
     setFollowSystem,
     setTheme,

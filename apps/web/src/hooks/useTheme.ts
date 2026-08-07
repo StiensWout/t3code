@@ -132,7 +132,7 @@ function isThemePreferenceMode(value: string | null): value is ThemePreferenceMo
   return value === "light" || value === "dark" || value === "system";
 }
 
-function readStoredAppearanceMode(theme: Theme): ThemePreferenceMode {
+export function readAppearanceModePreference(theme: Theme): ThemePreferenceMode {
   if (typeof window !== "undefined") {
     try {
       const raw = window.localStorage.getItem(THEME_APPEARANCE_MODE_STORAGE_KEY);
@@ -284,7 +284,7 @@ export function syncBrowserChromeTheme() {
 
 function applyTheme(theme: Theme, suppressTransitions = false) {
   if (typeof document === "undefined" || typeof window === "undefined") return;
-  const appearanceMode = readStoredAppearanceMode(theme);
+  const appearanceMode = readAppearanceModePreference(theme);
   const followSystem = appearanceMode === "system";
   const systemDark = followSystem ? getSystemDark() : false;
   const themeHalves = readStoredThemeHalves();
@@ -381,7 +381,7 @@ function getSnapshot(): ThemeSnapshot {
   if (!snapshotStale && lastSnapshot) return lastSnapshot;
   snapshotStale = false;
   const theme = getStored();
-  const appearanceMode = readStoredAppearanceMode(theme);
+  const appearanceMode = readAppearanceModePreference(theme);
   const followSystem = appearanceMode === "system";
   const systemDark = followSystem ? getSystemDark() : false;
   const themeHalves = readStoredThemeHalves();
@@ -407,7 +407,7 @@ function getServerSnapshot() {
 
 function handleSystemAppearanceChange() {
   const storedTheme = getStored();
-  if (readStoredAppearanceMode(storedTheme) === "system") applyTheme(storedTheme, true);
+  if (readAppearanceModePreference(storedTheme) === "system") applyTheme(storedTheme, true);
   emitChange();
 }
 
@@ -539,7 +539,7 @@ export function useTheme() {
 
   const setFollowSystem = useCallback(
     (nextFollowSystem: boolean): boolean => {
-      const currentMode = readStoredAppearanceMode(theme);
+      const currentMode = readAppearanceModePreference(theme);
       const nextMode = nextFollowSystem
         ? "system"
         : currentMode === "system"

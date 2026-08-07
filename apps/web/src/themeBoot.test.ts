@@ -95,7 +95,7 @@ function runBootScript(options: {
   };
 }
 
-/** Mirrors getStored + readStoredAppearanceMode + resolveThemeAppearance from the runtime. */
+/** Mirrors getStored + readAppearanceModePreference + resolveThemeAppearance from the runtime. */
 function runtimeResolvedAppearance(
   storage: Record<string, string>,
   prefersDark: boolean,
