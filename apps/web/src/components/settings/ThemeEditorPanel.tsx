@@ -661,7 +661,19 @@ export function ThemeEditorPanel({
           }),
         );
         retiredTheme = editingTheme;
-        removeCustomTheme(editingTheme.id);
+        try {
+          removeCustomTheme(editingTheme.id);
+        } catch (cause) {
+          // The merge already persisted. Leaving it while the edited theme
+          // survives would collide on every retry, so the target goes back to
+          // its pre-merge palettes before the failure surfaces.
+          try {
+            updateCustomTheme(mergeTarget);
+          } catch {
+            // Storage is failing wholesale; the rethrow below reports it.
+          }
+          throw cause;
+        }
       } else if (editingTheme) {
         const baseAppearance = editingTheme.appearance;
         const variantAppearance = baseAppearance === "light" ? "dark" : "light";
