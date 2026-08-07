@@ -1,4 +1,4 @@
-import { ChevronDownIcon, ChevronUpIcon, PlusIcon, XIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronUpIcon, MousePointer2Icon, PlusIcon, XIcon } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -31,6 +31,16 @@ import { Input } from "../ui/input";
 import { Switch } from "../ui/switch";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { getThemeRoleLabel, ThemeColorField } from "./ThemeColorPicker";
+import {
+  clearThemeInspectorHover,
+  clearThemeInspectorHighlights,
+  highlightThemeRoleUsage,
+  inspectThemeRoleAtElement,
+  inspectThemeRoleFromUtilitiesAtElement,
+  refreshThemeInspectorSpotlight,
+  showThemeInspectorHover,
+  type ThemeElementInspection,
+} from "./themeInspector";
 
 const THEME_EDITOR_PRIMARY_ROLES: ReadonlyArray<ThemeColorRole> = [
   "canvas",
@@ -165,6 +175,9 @@ export function ThemeEditorPanel({
   const [error, setError] = useState<string | null>(null);
   const [isMinimized, setIsMinimized] = useState(false);
   const [roleQuery, setRoleQuery] = useState("");
+  const [isInspecting, setIsInspecting] = useState(false);
+  const [selectedRole, setSelectedRole] = useState<ThemeColorRole | null>(null);
+  const [usageCount, setUsageCount] = useState<number | null>(null);
   // Null parks the panel at its default corner; a value is a dragged spot,
   // kept clamped so the header can always be grabbed again.
   const [position, setPosition] = useState<{ x: number; y: number } | null>(null);
@@ -227,6 +240,9 @@ export function ThemeEditorPanel({
       setIsAdvanced(sourceTheme !== null && sourceTheme.managed !== true);
       setSimpleColorsDirtyByAppearance({ light: false, dark: false });
       setColorsByAppearance(nextColors);
+      setSelectedRole(null);
+      setUsageCount(null);
+      setIsInspecting(false);
       setError(null);
       setIsDraftSeeded(true);
     }
@@ -321,10 +337,213 @@ export function ThemeEditorPanel({
     [activeAppearance, isAdvanced],
   );
 
+  const selectThemeRole = useCallback((role: ThemeColorRole, reveal = false) => {
+    setSelectedRole(role);
+    if (!THEME_EDITOR_SIMPLE_ROLES.includes(role)) {
+      setIsAdvanced(true);
+      setRoleQuery("");
+    }
+    if (!reveal) return;
+
+    requestAnimationFrame(() => {
+      panelRef.current
+        ?.querySelector(`[data-theme-color-role="${role}"]`)
+        ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    });
+  }, []);
+
+  const toggleThemeRole = useCallback((role: ThemeColorRole) => {
+    setSelectedRole((current) => (current === role ? null : role));
+  }, []);
+
+  const clearInspectorSelection = useCallback(() => {
+    setSelectedRole(null);
+    setUsageCount(null);
+    setIsInspecting(false);
+  }, []);
+
+  const selectedHighlightRoles = selectedRole
+    ? !isAdvanced && THEME_EDITOR_SIMPLE_ROLES.includes(selectedRole)
+      ? THEME_COLOR_ROLES.filter(
+          (role) =>
+            colorsByAppearance[activeAppearance][role].trim().toLowerCase() ===
+            colorsByAppearance[activeAppearance][selectedRole].trim().toLowerCase(),
+        )
+      : [selectedRole]
+    : [];
+  const selectedHighlightRolesKey = selectedHighlightRoles.join(",");
+
+  useEffect(() => {
+    clearThemeInspectorHighlights();
+    if (!open || selectedRole === null) {
+      setUsageCount(null);
+      return;
+    }
+    // Picking a new element needs the unobscured app, so suspend the existing
+    // spotlight while the picker is armed.
+    if (isInspecting) return;
+
+    const highlightedRoles = selectedHighlightRolesKey.split(",") as Array<ThemeColorRole>;
+    const refreshHighlights = () => setUsageCount(highlightThemeRoleUsage(highlightedRoles));
+    refreshHighlights();
+    let refreshFrame: number | null = null;
+    const observer = new MutationObserver((mutations) => {
+      if (
+        mutations.every(
+          (mutation) =>
+            mutation.target instanceof Element &&
+            (mutation.target.closest("#theme-inspector-spotlight") ||
+              mutation.target.closest("[data-theme-editor-panel]")),
+        )
+      ) {
+        return;
+      }
+      refreshFrame ??= requestAnimationFrame(() => {
+        refreshFrame = null;
+        refreshHighlights();
+      });
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    let spotlightFrame: number | null = null;
+    const scheduleSpotlightRefresh = () => {
+      spotlightFrame ??= requestAnimationFrame(() => {
+        spotlightFrame = null;
+        refreshThemeInspectorSpotlight();
+      });
+    };
+    window.addEventListener("resize", scheduleSpotlightRefresh);
+    window.addEventListener("scroll", scheduleSpotlightRefresh, true);
+    return () => {
+      observer.disconnect();
+      if (refreshFrame !== null) cancelAnimationFrame(refreshFrame);
+      if (spotlightFrame !== null) cancelAnimationFrame(spotlightFrame);
+      window.removeEventListener("resize", scheduleSpotlightRefresh);
+      window.removeEventListener("scroll", scheduleSpotlightRefresh, true);
+      clearThemeInspectorHighlights();
+    };
+  }, [isInspecting, open, selectedHighlightRolesKey, selectedRole]);
+
+  useEffect(() => {
+    if (!open || !isInspecting) {
+      clearThemeInspectorHover();
+      return;
+    }
+
+    let shouldDisarmAfterClick = false;
+    let hoverTarget: Element | null = null;
+    let hoverInspection: ThemeElementInspection | null = null;
+    let hoverTimer: number | null = null;
+    let hoverFrame: number | null = null;
+    const clearHoverTimer = () => {
+      if (hoverTimer === null) return;
+      window.clearTimeout(hoverTimer);
+      hoverTimer = null;
+    };
+    const clearHover = () => {
+      clearHoverTimer();
+      hoverTarget = null;
+      hoverInspection = null;
+      clearThemeInspectorHover();
+    };
+    const showInspection = (inspection: ThemeElementInspection) => {
+      hoverInspection = inspection;
+      showThemeInspectorHover(inspection, getThemeRoleLabel(inspection.role));
+    };
+    const handlePointerOver = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element) || target.closest("[data-theme-editor-panel]")) {
+        clearHover();
+        return;
+      }
+
+      clearHoverTimer();
+      hoverTarget = target;
+      hoverInspection = null;
+      const utilityInspection = inspectThemeRoleFromUtilitiesAtElement(target);
+      if (utilityInspection) {
+        showInspection(utilityInspection);
+        return;
+      }
+
+      clearThemeInspectorHover();
+      hoverTimer = window.setTimeout(() => {
+        hoverTimer = null;
+        if (hoverTarget !== target || !target.isConnected) return;
+        const inspection = inspectThemeRoleAtElement(target);
+        if (inspection) showInspection(inspection);
+      }, 140);
+    };
+    const handlePointerOut = (event: PointerEvent) => {
+      if (event.relatedTarget === null) clearHover();
+    };
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element) || target.closest("[data-theme-editor-panel]")) return;
+      event.preventDefault();
+      event.stopPropagation();
+      clearHoverTimer();
+      const inspection =
+        hoverTarget === target && hoverInspection
+          ? hoverInspection
+          : inspectThemeRoleAtElement(target);
+      if (!inspection) return;
+      clearHover();
+      selectThemeRole(inspection.role, true);
+      shouldDisarmAfterClick = true;
+    };
+    const blockInspectedClick = (event: MouseEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element) || target.closest("[data-theme-editor-panel]")) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (shouldDisarmAfterClick) setIsInspecting(false);
+      shouldDisarmAfterClick = false;
+    };
+    const cancelInspection = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      clearHover();
+      clearInspectorSelection();
+    };
+    const refreshHover = () => {
+      if (!hoverInspection) return;
+      hoverFrame ??= requestAnimationFrame(() => {
+        hoverFrame = null;
+        if (hoverInspection) {
+          showThemeInspectorHover(hoverInspection, getThemeRoleLabel(hoverInspection.role));
+        }
+      });
+    };
+    const clearHoverOnScroll = () => clearHover();
+
+    document.addEventListener("pointerover", handlePointerOver, true);
+    document.addEventListener("pointerout", handlePointerOut, true);
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    document.addEventListener("click", blockInspectedClick, true);
+    document.addEventListener("keydown", cancelInspection, true);
+    window.addEventListener("resize", refreshHover);
+    window.addEventListener("scroll", clearHoverOnScroll, true);
+    return () => {
+      document.removeEventListener("pointerover", handlePointerOver, true);
+      document.removeEventListener("pointerout", handlePointerOut, true);
+      document.removeEventListener("pointerdown", handlePointerDown, true);
+      document.removeEventListener("click", blockInspectedClick, true);
+      document.removeEventListener("keydown", cancelInspection, true);
+      window.removeEventListener("resize", refreshHover);
+      window.removeEventListener("scroll", clearHoverOnScroll, true);
+      clearHoverTimer();
+      if (hoverFrame !== null) cancelAnimationFrame(hoverFrame);
+      clearThemeInspectorHover();
+    };
+  }, [clearInspectorSelection, isInspecting, open, selectThemeRole]);
+
   const handleAdvancedChange = useCallback(
     (checked: boolean) => {
       setIsAdvanced(checked);
       if (checked) return;
+      if (selectedRole && !THEME_EDITOR_SIMPLE_ROLES.includes(selectedRole)) {
+        setSelectedRole(null);
+      }
 
       // Regenerate every appearance the theme will save, not just the visible
       // one, so the palettes shown after toggling match what gets saved.
@@ -345,7 +564,7 @@ export function ThemeEditorPanel({
         return next;
       });
     },
-    [activeAppearance, editingTheme],
+    [activeAppearance, editingTheme, selectedRole],
   );
 
   const handleSubmit = useCallback(() => {
@@ -597,7 +816,10 @@ export function ThemeEditorPanel({
         <ThemeColorField
           key={role}
           onChange={updateColor}
+          onSelect={selectThemeRole}
+          onToggleSelected={toggleThemeRole}
           role={role}
+          selected={selectedRole === role}
           value={colorsByAppearance[activeAppearance][role]}
         />
       ))}
@@ -628,8 +850,11 @@ export function ThemeEditorPanel({
           <ThemeColorField
             key={role}
             onChange={updateColor}
+            onSelect={selectThemeRole}
+            onToggleSelected={toggleThemeRole}
             role={role}
             label={role === "canvas" ? "Background" : "Accent"}
+            selected={selectedRole === role}
             value={colorsByAppearance[activeAppearance][role]}
           />
         ))}
@@ -714,10 +939,11 @@ export function ThemeEditorPanel({
     <div
       aria-label={isEditing ? "Edit theme" : "Create theme"}
       className={cn(
-        "dialog-glass fixed z-[55] flex max-h-[min(42rem,calc(100dvh-6rem))] w-[min(26rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-xl border text-popover-foreground",
+        "dialog-glass fixed z-[110] flex max-h-[min(42rem,calc(100dvh-6rem))] w-[min(26rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-xl border text-popover-foreground",
         position === null && "bottom-4 right-4",
         isMinimized && "max-h-none",
       )}
+      data-theme-editor-panel
       ref={panelRef}
       role="dialog"
       style={{
@@ -735,14 +961,45 @@ export function ThemeEditorPanel({
         onPointerMove={handleDragPointerMove}
         onPointerUp={endDrag}
       >
-        <div className="min-w-0 flex-1">
-          <h2 className="truncate text-sm font-medium">
+        <div className="flex min-w-0 flex-1 items-baseline gap-2">
+          <h2 className="shrink-0 truncate text-sm font-medium">
             {isEditing ? "Edit theme" : "Create theme"}
           </h2>
           {isMinimized ? null : (
-            <p className="truncate text-xs text-muted-foreground">Previewing on the app</p>
+            <p className="truncate text-xs text-muted-foreground">
+              {isInspecting
+                ? "Select an element · Esc to cancel"
+                : selectedRole
+                  ? `${getThemeRoleLabel(selectedRole)} · ${usageCount ?? 0} ${usageCount === 1 ? "use" : "uses"}`
+                  : "Select a color below"}
+            </p>
           )}
         </div>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                aria-label={isInspecting ? "Cancel inspecting app colors" : "Inspect app colors"}
+                aria-pressed={isInspecting}
+                size="xs"
+                variant={isInspecting ? "secondary" : "ghost"}
+                onClick={() => {
+                  if (isInspecting) {
+                    clearInspectorSelection();
+                    return;
+                  }
+                  setIsInspecting(true);
+                }}
+              >
+                <MousePointer2Icon />
+                {isInspecting ? "Cancel" : "Inspect"}
+              </Button>
+            }
+          />
+          <TooltipPopup data-theme-editor-panel="">
+            {isInspecting ? "Cancel and clear the selection" : "Pick a color from the app"}
+          </TooltipPopup>
+        </Tooltip>
         <Button
           aria-label={isMinimized ? "Expand the theme editor" : "Minimize the theme editor"}
           size="icon-xs"

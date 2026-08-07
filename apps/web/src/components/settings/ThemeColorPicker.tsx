@@ -1,6 +1,7 @@
 import type { KeyboardEvent, PointerEvent } from "react";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { isThemeColor, type ThemeColorRole } from "../../themePalette";
+import { cn } from "../../lib/utils";
 import { Input } from "../ui/input";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 export function getThemeRoleLabel(role: ThemeColorRole): string {
@@ -445,10 +446,12 @@ function ThemeColorPicker({
   label,
   value,
   onChange,
+  onInteract,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
+  onInteract?: () => void;
 }) {
   return (
     <Popover>
@@ -457,6 +460,8 @@ function ThemeColorPicker({
           <button
             aria-label={`Choose ${label} color`}
             className="relative flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-full border border-foreground/30 transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+            onFocus={onInteract}
+            onPointerDown={onInteract}
             title={`Choose ${label} color`}
             type="button"
           >
@@ -470,6 +475,7 @@ function ThemeColorPicker({
       <PopoverPopup
         align="end"
         className="overflow-hidden rounded-2xl border border-border/70 p-0 shadow-2xl [--viewport-inline-padding:0px] [&_[data-slot=popover-viewport]]:p-0"
+        data-theme-editor-panel=""
         side="bottom"
         sideOffset={10}
       >
@@ -483,11 +489,17 @@ export const ThemeColorField = memo(function ThemeColorField({
   role,
   value,
   onChange,
+  onSelect,
+  onToggleSelected,
+  selected = false,
   label: customLabel,
 }: {
   role: ThemeColorRole;
   value: string;
   onChange: (role: ThemeColorRole, value: string) => void;
+  onSelect?: (role: ThemeColorRole) => void;
+  onToggleSelected?: (role: ThemeColorRole) => void;
+  selected?: boolean;
   label?: string;
 }) {
   const label = customLabel ?? getThemeRoleLabel(role);
@@ -495,12 +507,28 @@ export const ThemeColorField = memo(function ThemeColorField({
   const swatchValue = isColorValue ? value : "#000000";
 
   return (
-    <div className="group flex min-h-11 min-w-0 items-center gap-2 py-1.5">
-      <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">{label}</span>
+    <div
+      className={cn(
+        "flex min-h-11 min-w-0 items-center gap-2 rounded-lg px-2 py-1.5 transition-[background-color,box-shadow]",
+        selected && "bg-accent/60 shadow-[inset_0_0_0_1px_var(--ring)]",
+      )}
+      data-theme-color-role={role}
+    >
+      <button
+        aria-label={`${selected ? "Hide" : "Show"} ${label} usage`}
+        aria-pressed={selected}
+        className="flex min-w-0 flex-1 cursor-pointer items-center rounded-md text-left text-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+        onClick={() => onToggleSelected?.(role)}
+        title={`${selected ? "Hide" : "Show"} where ${label} is used`}
+        type="button"
+      >
+        <span className="min-w-0 flex-1 truncate">{label}</span>
+      </button>
       <div className="ml-auto flex shrink-0 items-center gap-2">
         <ThemeColorPicker
           label={label}
           onChange={(nextValue) => onChange(role, nextValue)}
+          onInteract={() => onSelect?.(role)}
           value={swatchValue}
         />
         <Input
@@ -510,6 +538,8 @@ export const ThemeColorField = memo(function ThemeColorField({
           id={`${role}-hex`}
           nativeInput
           onChange={(event) => onChange(role, event.currentTarget.value)}
+          onFocus={() => onSelect?.(role)}
+          onPointerDown={() => onSelect?.(role)}
           size="sm"
           unstyled
           value={value}
