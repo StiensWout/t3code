@@ -3,6 +3,7 @@ import { Client } from "@xhayper/discord-rpc";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 
 declare const __T3CODE_BUILD_DISCORD_APPLICATION_ID__: string | undefined;
 
@@ -22,6 +23,25 @@ export interface DiscordRpcClient {
 }
 
 export type DiscordRpcClientFactory = (applicationId: string) => DiscordRpcClient;
+
+export class DiscordPresenceSessionError extends Schema.TaggedErrorClass<DiscordPresenceSessionError>()(
+  "DiscordPresenceSessionError",
+  {
+    operation: Schema.Literals(["setActivity"]),
+  },
+) {
+  override get message(): string {
+    return "Discord RPC connected without a user session while attempting to set activity.";
+  }
+}
+
+export class DesktopDiscordPresence extends Context.Service<
+  DesktopDiscordPresence,
+  {
+    readonly available: boolean;
+    readonly setActiveProjectCount: (count: number) => Effect.Effect<void>;
+  }
+>()("@t3tools/desktop/discord/DesktopDiscordPresence") {}
 
 export function formatDiscordPresence(activeProjectCount: number): string {
   return `Working in T3 Code on ${activeProjectCount} ${activeProjectCount === 1 ? "project" : "projects"}`;
@@ -99,7 +119,9 @@ class DiscordPresenceController {
     if (this.desiredCount === this.appliedCount) return;
 
     const user = this.client?.user;
-    if (!user) throw new Error("Discord RPC connected without a user session");
+    if (!user) {
+      throw new DiscordPresenceSessionError({ operation: "setActivity" });
+    }
     const count = this.desiredCount;
     await user.setActivity({ details: formatDiscordPresence(count) });
     this.appliedCount = count;
@@ -131,14 +153,6 @@ class DiscordPresenceController {
     this.retryTimer = null;
   }
 }
-
-export class DesktopDiscordPresence extends Context.Service<
-  DesktopDiscordPresence,
-  {
-    readonly available: boolean;
-    readonly setActiveProjectCount: (count: number) => Effect.Effect<void>;
-  }
->()("@t3tools/desktop/discord/DesktopDiscordPresence") {}
 
 export function make({
   applicationId,

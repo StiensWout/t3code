@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 
 import {
   DesktopDiscordPresence,
+  DiscordPresenceSessionError,
   formatDiscordPresence,
   make,
   type DiscordRpcClient,
@@ -52,6 +53,15 @@ function makeFakeClient() {
 }
 
 describe("DesktopDiscordPresence", () => {
+  it("models a missing Discord user session as structured context", () => {
+    const error = new DiscordPresenceSessionError({ operation: "setActivity" });
+    expect(error._tag).toBe("DiscordPresenceSessionError");
+    expect(error.operation).toBe("setActivity");
+    expect(error.message).toBe(
+      "Discord RPC connected without a user session while attempting to set activity.",
+    );
+  });
+
   it("formats singular and plural presence without project details", () => {
     expect(formatDiscordPresence(1)).toBe("Working in T3 Code on 1 project");
     expect(formatDiscordPresence(3)).toBe("Working in T3 Code on 3 projects");
