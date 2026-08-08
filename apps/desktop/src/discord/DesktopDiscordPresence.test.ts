@@ -2,20 +2,14 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
-import {
-  DesktopDiscordPresence,
-  DiscordPresenceSessionError,
-  formatDiscordPresence,
-  make,
-  type DiscordRpcClient,
-} from "./DesktopDiscordPresence.ts";
+import * as DesktopDiscordPresence from "./DesktopDiscordPresence.ts";
 
 function makeFakeClient() {
   const activities: string[] = [];
   let clearCount = 0;
   let destroyCount = 0;
   let connected = false;
-  const client: DiscordRpcClient = {
+  const client: DesktopDiscordPresence.DiscordRpcClient = {
     get isConnected() {
       return connected;
     },
@@ -54,7 +48,9 @@ function makeFakeClient() {
 
 describe("DesktopDiscordPresence", () => {
   it("models a missing Discord user session as structured context", () => {
-    const error = new DiscordPresenceSessionError({ operation: "setActivity" });
+    const error = new DesktopDiscordPresence.DiscordPresenceSessionError({
+      operation: "setActivity",
+    });
     expect(error._tag).toBe("DiscordPresenceSessionError");
     expect(error.operation).toBe("setActivity");
     expect(error.message).toBe(
@@ -63,19 +59,24 @@ describe("DesktopDiscordPresence", () => {
   });
 
   it("formats singular and plural presence without project details", () => {
-    expect(formatDiscordPresence(1)).toBe("Working in T3 Code on 1 project");
-    expect(formatDiscordPresence(3)).toBe("Working in T3 Code on 3 projects");
+    expect(DesktopDiscordPresence.formatDiscordPresence(1)).toBe("Working in T3 Code on 1 project");
+    expect(DesktopDiscordPresence.formatDiscordPresence(3)).toBe(
+      "Working in T3 Code on 3 projects",
+    );
   });
 
   it.effect("connects lazily, updates the count, and clears at zero", () => {
     const fake = makeFakeClient();
     const layer = Layer.effect(
-      DesktopDiscordPresence,
-      make({ applicationId: "public-app-id", createClient: () => fake.client }),
+      DesktopDiscordPresence.DesktopDiscordPresence,
+      DesktopDiscordPresence.make({
+        applicationId: "public-app-id",
+        createClient: () => fake.client,
+      }),
     );
 
     return Effect.gen(function* () {
-      const presence = yield* DesktopDiscordPresence;
+      const presence = yield* DesktopDiscordPresence.DesktopDiscordPresence;
       expect(presence.available).toBe(true);
       expect(fake.activities).toEqual([]);
 
@@ -95,8 +96,8 @@ describe("DesktopDiscordPresence", () => {
   it.effect("stays unavailable and does not connect without an application ID", () => {
     let createCount = 0;
     const layer = Layer.effect(
-      DesktopDiscordPresence,
-      make({
+      DesktopDiscordPresence.DesktopDiscordPresence,
+      DesktopDiscordPresence.make({
         applicationId: "",
         createClient: () => {
           createCount += 1;
@@ -106,7 +107,7 @@ describe("DesktopDiscordPresence", () => {
     );
 
     return Effect.gen(function* () {
-      const presence = yield* DesktopDiscordPresence;
+      const presence = yield* DesktopDiscordPresence.DesktopDiscordPresence;
       expect(presence.available).toBe(false);
       yield* presence.setActiveProjectCount(1);
       expect(createCount).toBe(0);
