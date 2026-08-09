@@ -67,6 +67,50 @@ describe("ClientSettings environment identification", () => {
   });
 });
 
+describe("ClientSettings desktop notifications", () => {
+  it("defaults to opt-in notifications with every attention event selected", () => {
+    expect(decodeClientSettings({}).desktopNotifications).toEqual({
+      enabled: false,
+      soundEnabled: true,
+      showContext: true,
+      events: {
+        approval: true,
+        input: true,
+        completion: true,
+        failure: true,
+      },
+    });
+  });
+
+  it("decodes user event and privacy choices", () => {
+    expect(
+      decodeClientSettingsPatch({
+        desktopNotifications: {
+          enabled: true,
+          soundEnabled: false,
+          showContext: false,
+          events: {
+            approval: true,
+            input: true,
+            completion: false,
+            failure: true,
+          },
+        },
+      }).desktopNotifications,
+    ).toEqual({
+      enabled: true,
+      soundEnabled: false,
+      showContext: false,
+      events: {
+        approval: true,
+        input: true,
+        completion: false,
+        failure: true,
+      },
+    });
+  });
+});
+
 describe("ClientSettings sidebar", () => {
   it("defaults to the current sidebar with automatic merge and inactivity settling", () => {
     const settings = decodeClientSettings({});

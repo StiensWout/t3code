@@ -129,6 +129,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/general",
   },
   {
+    id: "desktop-notifications",
+    title: "Desktop notifications",
+    to: "/settings/general",
+    desktopOnly: true,
+  },
+  {
     id: "new-threads",
     title: "New threads",
     to: "/settings/general",

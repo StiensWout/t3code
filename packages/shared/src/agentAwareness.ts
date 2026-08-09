@@ -1,4 +1,5 @@
 import type {
+  DesktopNotificationEvent,
   EnvironmentId,
   OrchestrationProjectShell,
   OrchestrationThreadShell,
@@ -25,6 +26,78 @@ export interface AgentAwarenessState {
   readonly modelTitle: string;
   readonly updatedAt: string;
   readonly deepLink: string;
+}
+
+export interface AgentNotificationContent {
+  readonly title: string;
+  readonly body: string;
+}
+
+const AGENT_NOTIFICATION_TITLE_BY_EVENT: Record<DesktopNotificationEvent, string> = {
+  approval: "Approval needed",
+  input: "Waiting for input",
+  completion: "Agent finished",
+  failure: "Agent failed",
+};
+
+const PRIVATE_AGENT_NOTIFICATION_BODY = "Open T3 Code to view details.";
+const MAX_AGENT_NOTIFICATION_BODY_CHARACTERS = 160;
+
+export function notificationEventForAwarenessTransition(
+  previous: AgentAwarenessState | null,
+  current: AgentAwarenessState | null,
+): DesktopNotificationEvent | null {
+  if (current === null || previous?.phase === current.phase) {
+    return null;
+  }
+
+  switch (current.phase) {
+    case "waiting_for_approval":
+      return "approval";
+    case "waiting_for_input":
+      return "input";
+    case "completed":
+      return "completion";
+    case "failed":
+      return "failure";
+    case "starting":
+    case "running":
+    case "stale":
+      return null;
+  }
+}
+
+/** Shared notification copy. Every desktop platform receives these exact title/body strings. */
+export function formatAgentNotificationContent(input: {
+  readonly event: DesktopNotificationEvent;
+  readonly projectTitle: string;
+  readonly threadTitle: string;
+  readonly showContext: boolean;
+}): AgentNotificationContent {
+  return {
+    title: AGENT_NOTIFICATION_TITLE_BY_EVENT[input.event],
+    body: input.showContext
+      ? truncateNotificationText(
+          `${input.threadTitle.trim()} · ${input.projectTitle.trim()}`,
+          MAX_AGENT_NOTIFICATION_BODY_CHARACTERS,
+        )
+      : PRIVATE_AGENT_NOTIFICATION_BODY,
+  };
+}
+
+export function formatAgentNotificationTestContent(): AgentNotificationContent {
+  return {
+    title: "Notifications are working",
+    body: "T3 Code will alert you when an agent needs attention.",
+  };
+}
+
+function truncateNotificationText(value: string, maximumCharacters: number): string {
+  const characters = Array.from(value);
+  if (characters.length <= maximumCharacters) {
+    return value;
+  }
+  return `${characters.slice(0, maximumCharacters - 1).join("")}…`;
 }
 
 export interface ProjectThreadAwarenessInput {
