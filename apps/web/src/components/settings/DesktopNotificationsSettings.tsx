@@ -1,6 +1,5 @@
 import type { DesktopNotificationEvent, DesktopNotificationSettings } from "@t3tools/contracts";
 import {
-  CheckIcon,
   CircleCheckBigIcon,
   CircleXIcon,
   MessageCircleQuestionIcon,
@@ -69,7 +68,7 @@ function OptionCard({
       aria-pressed={selected}
       onClick={() => onToggle(!selected)}
       className={cn(
-        "group flex cursor-pointer items-start gap-3 rounded-xl border p-3 text-left outline-none transition-[border-color,background-color,transform] duration-150 ease-out focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background active:scale-[0.98]",
+        "group flex cursor-pointer items-start gap-2 rounded-xl border p-3 text-left outline-none transition-[border-color,background-color,transform] duration-150 ease-out focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background active:scale-[0.98]",
         selected
           ? "border-primary bg-muted/40"
           : "border-border/60 bg-muted/15 hover:border-border",
@@ -82,14 +81,8 @@ function OptionCard({
         )}
       />
       <span className="min-w-0 flex-1 space-y-1">
-        <span className="flex items-center justify-between gap-2">
-          <span className="text-sm font-medium tracking-[-0.005em] text-foreground">{title}</span>
-          <CheckIcon
-            className={cn(
-              "size-3.5 shrink-0 text-primary transition-opacity duration-150",
-              selected ? "opacity-100" : "opacity-0",
-            )}
-          />
+        <span className="block text-sm font-medium tracking-[-0.005em] text-foreground">
+          {title}
         </span>
         <span className="block text-[13px] leading-[1.45] text-muted-foreground/80">
           {description}
