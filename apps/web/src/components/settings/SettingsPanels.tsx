@@ -469,6 +469,21 @@ export function useSettingsRestore(onRestored?: () => void) {
     DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection ?? null,
   );
   const isBackgroundActivityDirty = hasChangedBackgroundActivitySettings(settings);
+  const isDesktopNotificationsDirty =
+    settings.desktopNotifications.enabled !==
+      DEFAULT_UNIFIED_SETTINGS.desktopNotifications.enabled ||
+    settings.desktopNotifications.soundEnabled !==
+      DEFAULT_UNIFIED_SETTINGS.desktopNotifications.soundEnabled ||
+    settings.desktopNotifications.showContext !==
+      DEFAULT_UNIFIED_SETTINGS.desktopNotifications.showContext ||
+    settings.desktopNotifications.events.approval !==
+      DEFAULT_UNIFIED_SETTINGS.desktopNotifications.events.approval ||
+    settings.desktopNotifications.events.input !==
+      DEFAULT_UNIFIED_SETTINGS.desktopNotifications.events.input ||
+    settings.desktopNotifications.events.completion !==
+      DEFAULT_UNIFIED_SETTINGS.desktopNotifications.events.completion ||
+    settings.desktopNotifications.events.failure !==
+      DEFAULT_UNIFIED_SETTINGS.desktopNotifications.events.failure;
 
   const changedSettingLabels = useMemo(
     () => [
@@ -510,6 +525,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks
         ? ["Provider update checks"]
         : []),
+      ...(isDesktopNotificationsDirty ? ["Desktop notifications"] : []),
       ...(isBackgroundActivityDirty ? ["Background activity"] : []),
       ...(settings.defaultThreadEnvMode !== DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode
         ? ["New thread mode"]
@@ -535,6 +551,7 @@ export function useSettingsRestore(onRestored?: () => void) {
     [
       isTextGenerationModelDirty,
       isBackgroundActivityDirty,
+      isDesktopNotificationsDirty,
       settings.confirmQuit,
       settings.confirmThreadArchive,
       settings.confirmThreadDelete,
@@ -640,6 +657,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarAutoSettleOnMerge: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge,
       enableLegacyTokenStreaming: DEFAULT_UNIFIED_SETTINGS.enableLegacyTokenStreaming,
       enableProviderUpdateChecks: DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks,
+      desktopNotifications: DEFAULT_UNIFIED_SETTINGS.desktopNotifications,
       backgroundActivity: DEFAULT_UNIFIED_SETTINGS.backgroundActivity,
       backgroundActivityProfile: DEFAULT_UNIFIED_SETTINGS.backgroundActivityProfile,
       automaticGitFetchInterval: DEFAULT_UNIFIED_SETTINGS.automaticGitFetchInterval,
