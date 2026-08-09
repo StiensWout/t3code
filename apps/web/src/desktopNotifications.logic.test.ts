@@ -48,9 +48,15 @@ describe("reconcileAgentNotificationStates", () => {
   });
 
   it("notifies when a new thread is first observed in an attention phase", () => {
-    const result = reconcileAgentNotificationStates(new Map(), [
-      { key: "env-1:thread-1", target, state: state("waiting_for_approval") },
-    ]);
+    const authoritative = new Set([target.environmentId]);
+    const result = reconcileAgentNotificationStates(
+      new Map(),
+      [{ key: "env-1:thread-1", target, state: state("waiting_for_approval") }],
+      {
+        previouslyAuthoritativeEnvironmentIds: authoritative,
+        authoritativeEnvironmentIds: authoritative,
+      },
+    );
 
     expect(result.transitions).toEqual([
       { type: "show", event: "approval", state: state("waiting_for_approval") },
@@ -68,12 +74,44 @@ describe("reconcileAgentNotificationStates", () => {
 
   it("keeps missing threads in memory so reconnects do not replay old work", () => {
     const previous = new Map([["env-1:thread-1", state("completed")]]);
-    const disconnected = reconcileAgentNotificationStates(previous, []);
-    const reconnected = reconcileAgentNotificationStates(disconnected.next, [
-      { key: "env-1:thread-1", target, state: state("completed") },
-    ]);
+    const disconnected = reconcileAgentNotificationStates(previous, [], {
+      previouslyAuthoritativeEnvironmentIds: new Set([target.environmentId]),
+      authoritativeEnvironmentIds: new Set(),
+    });
+    const reconnected = reconcileAgentNotificationStates(
+      disconnected.next,
+      [{ key: "env-1:thread-1", target, state: state("completed") }],
+      {
+        previouslyAuthoritativeEnvironmentIds: new Set(),
+        authoritativeEnvironmentIds: new Set([target.environmentId]),
+      },
+    );
 
     expect(reconnected.transitions).toEqual([]);
+  });
+
+  it("baselines historical threads when an environment first reconnects", () => {
+    const result = reconcileAgentNotificationStates(
+      new Map(),
+      [{ key: "env-1:thread-1", target, state: state("failed") }],
+      {
+        previouslyAuthoritativeEnvironmentIds: new Set(),
+        authoritativeEnvironmentIds: new Set([target.environmentId]),
+      },
+    );
+
+    expect(result.transitions).toEqual([]);
+  });
+
+  it("dismisses a removed thread only while its environment is authoritative", () => {
+    const previous = new Map([["env-1:thread-1", state("waiting_for_input")]]);
+    const result = reconcileAgentNotificationStates(previous, [], {
+      previouslyAuthoritativeEnvironmentIds: new Set([target.environmentId]),
+      authoritativeEnvironmentIds: new Set([target.environmentId]),
+    });
+
+    expect(result.transitions).toEqual([{ type: "dismiss", target }]);
+    expect(result.next.has("env-1:thread-1")).toBe(false);
   });
 });
 

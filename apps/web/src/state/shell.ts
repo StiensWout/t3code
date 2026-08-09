@@ -8,6 +8,7 @@ import {
   createEnvironmentSnapshotAtom,
   createShellEnvironmentAtoms,
 } from "@t3tools/client-runtime/state/shell";
+import type { EnvironmentId } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 
@@ -21,6 +22,22 @@ export const environmentShellSummaryAtom = createEnvironmentShellSummaryAtom({
   catalogValueAtom: environmentCatalog.catalogValueAtom,
   shellStateValueAtom: environmentShell.stateValueAtom,
 });
+
+const EMPTY_AUTHORITATIVE_SHELL_ENVIRONMENT_IDS: ReadonlySet<EnvironmentId> = new Set();
+
+export const authoritativeShellEnvironmentIdsAtom = Atom.make((get) => {
+  const catalog = AsyncResult.value(get(environmentCatalog.catalogAtom));
+  if (Option.isNone(catalog)) {
+    return EMPTY_AUTHORITATIVE_SHELL_ENVIRONMENT_IDS;
+  }
+  const environmentIds = new Set<EnvironmentId>();
+  for (const environmentId of catalog.value.entries.keys()) {
+    if (get(environmentShell.stateValueAtom(environmentId)).status === "live") {
+      environmentIds.add(environmentId);
+    }
+  }
+  return environmentIds;
+}).pipe(Atom.withLabel("web-authoritative-shell-environment-ids"));
 
 export const allEnvironmentShellsBootstrappedAtom = Atom.make((get) => {
   const catalog = AsyncResult.value(get(environmentCatalog.catalogAtom));
