@@ -4,14 +4,14 @@ import {
   scopeProjectRef,
   scopeThreadRef,
 } from "@t3tools/client-runtime/environment";
-import { useNavigate, useParams } from "@tanstack/react-router";
+import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { projectThreadAwareness, type AgentAwarenessState } from "@t3tools/shared/agentAwareness";
 
 import {
   desktopNotificationEventEnabled,
-  isDesktopNotificationTargetVisible,
   reconcileAgentNotificationStates,
+  shouldSuppressDesktopNotification,
 } from "../../desktopNotifications.logic.ts";
 import { useClientSettings, useClientSettingsHydrated } from "../../hooks/useSettings.ts";
 import { isElectron } from "../../env.ts";
@@ -32,11 +32,6 @@ export function DesktopNotificationCoordinator() {
   const projects = useProjects();
   const threads = useThreadShells();
   const navigate = useNavigate();
-  const routeParams = useParams({ strict: false });
-  const activeRouteRef = useRef({
-    environmentId: routeParams.environmentId,
-    threadId: routeParams.threadId,
-  });
   const previousStatesRef = useRef<ReadonlyMap<string, AgentAwarenessState | null> | null>(null);
   const previousAuthoritativeEnvironmentIdsRef = useRef<ReadonlySet<string>>(new Set());
   const notificationOperationsRef = useRef(Promise.resolve());
@@ -46,13 +41,6 @@ export function DesktopNotificationCoordinator() {
       .then(operation)
       .catch(() => undefined);
   }, []);
-
-  useEffect(() => {
-    activeRouteRef.current = {
-      environmentId: routeParams.environmentId,
-      threadId: routeParams.threadId,
-    };
-  }, [routeParams.environmentId, routeParams.threadId]);
 
   const observed = useMemo(() => {
     const projectsByKey = new Map(
@@ -125,14 +113,7 @@ export function DesktopNotificationCoordinator() {
         if (!desktopNotificationEventEnabled(settings, transition.event)) {
           continue;
         }
-        const activeRoute = activeRouteRef.current;
-        const isVisibleThread = isDesktopNotificationTargetVisible({
-          windowFocused: document.hasFocus(),
-          activeEnvironmentId: activeRoute.environmentId,
-          activeThreadId: activeRoute.threadId,
-          target: transition.state,
-        });
-        if (isVisibleThread) {
+        if (shouldSuppressDesktopNotification(document.hasFocus())) {
           continue;
         }
         await bridge.show({

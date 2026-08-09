@@ -82,6 +82,7 @@ describe("DesktopNotifications", () => {
       }> = [];
       const platform: DesktopNotifications.DesktopNotificationPlatform = {
         isSupported: () => true,
+        isAppFocused: () => false,
         create: (options) => {
           const notification = new FakeNativeNotification();
           created.push({ options, notification });
@@ -110,12 +111,40 @@ describe("DesktopNotifications", () => {
     }),
   );
 
+  it.effect("suppresses agent notifications while the app is focused but still allows tests", () =>
+    Effect.gen(function* () {
+      const created: FakeNativeNotification[] = [];
+      const platform: DesktopNotifications.DesktopNotificationPlatform = {
+        isSupported: () => true,
+        isAppFocused: () => true,
+        create: () => {
+          const notification = new FakeNativeNotification();
+          created.push(notification);
+          return notification;
+        },
+      };
+      const window = makeWindowLayer(Effect.void);
+
+      yield* Effect.gen(function* () {
+        const notifications = yield* DesktopNotifications.DesktopNotifications;
+        expect(yield* notifications.show(input)).toBe("suppressed");
+        expect(created).toHaveLength(0);
+        expect(yield* notifications.showTest({ silent: true })).toBe("shown");
+        expect(created).toHaveLength(1);
+      }).pipe(
+        Effect.provide(DesktopNotifications.layerTest(platform).pipe(Layer.provide(window.layer))),
+        Effect.scoped,
+      );
+    }),
+  );
+
   it.effect("reveals the app and forwards the target when a notification is clicked", () =>
     Effect.gen(function* () {
       const revealed = yield* Deferred.make<void>();
       let notification: FakeNativeNotification | null = null;
       const platform: DesktopNotifications.DesktopNotificationPlatform = {
         isSupported: () => true,
+        isAppFocused: () => false,
         create: () => {
           notification = new FakeNativeNotification();
           return notification;

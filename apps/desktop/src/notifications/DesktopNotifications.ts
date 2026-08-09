@@ -43,6 +43,7 @@ export interface NativeNotificationOptions {
 
 export interface DesktopNotificationPlatform {
   readonly isSupported: () => boolean;
+  readonly isAppFocused: () => boolean;
   readonly create: (options: NativeNotificationOptions) => NativeNotification;
 }
 
@@ -167,8 +168,15 @@ export const make = Effect.gen(function* () {
   yield* Effect.addFinalizer(() => Effect.sync(closeAllNotifications));
 
   return DesktopNotifications.of({
-    show: (input) =>
-      showContent({
+    show: Effect.fn("desktop.notifications.show")(function* (input) {
+      const appFocused = yield* Effect.try({
+        try: platform.isAppFocused,
+        catch: () => false,
+      }).pipe(Effect.orElseSucceed(() => false));
+      if (appFocused) {
+        return "suppressed" as const;
+      }
+      return yield* showContent({
         key: notificationTargetKey(input),
         content: formatAgentNotificationContent(input),
         silent: input.silent,
@@ -176,7 +184,8 @@ export const make = Effect.gen(function* () {
           environmentId: input.environmentId,
           threadId: input.threadId,
         },
-      }),
+      });
+    }),
     dismiss: (target) => Effect.sync(() => closeNotification(notificationTargetKey(target))),
     dismissAll: Effect.sync(closeAllNotifications),
     showTest: (input) =>
@@ -193,6 +202,7 @@ const platformLayer = Layer.succeed(
   DesktopNotificationPlatformService,
   DesktopNotificationPlatformService.of({
     isSupported: () => Electron.Notification.isSupported(),
+    isAppFocused: () => Electron.BrowserWindow.getFocusedWindow() !== null,
     create: (options) =>
       new Electron.Notification(
         options as Electron.NotificationConstructorOptions,
