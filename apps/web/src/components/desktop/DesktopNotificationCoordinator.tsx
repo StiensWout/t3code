@@ -18,6 +18,7 @@ import { isElectron } from "../../env.ts";
 import {
   setActiveEnvironmentId,
   useAllEnvironmentShellsBootstrapped,
+  useAuthoritativeShellEnvironmentIds,
   useProjects,
   useThreadShells,
 } from "../../state/entities.ts";
@@ -27,6 +28,7 @@ export function DesktopNotificationCoordinator() {
   const settings = useClientSettings((current) => current.desktopNotifications);
   const settingsHydrated = useClientSettingsHydrated();
   const shellsBootstrapped = useAllEnvironmentShellsBootstrapped();
+  const authoritativeEnvironmentIds = useAuthoritativeShellEnvironmentIds();
   const projects = useProjects();
   const threads = useThreadShells();
   const navigate = useNavigate();
@@ -36,6 +38,7 @@ export function DesktopNotificationCoordinator() {
     threadId: routeParams.threadId,
   });
   const previousStatesRef = useRef<ReadonlyMap<string, AgentAwarenessState | null> | null>(null);
+  const previousAuthoritativeEnvironmentIdsRef = useRef<ReadonlySet<string>>(new Set());
   const notificationOperationsRef = useRef(Promise.resolve());
 
   const enqueueNotificationOperations = useCallback((operation: () => Promise<void>) => {
@@ -106,8 +109,12 @@ export function DesktopNotificationCoordinator() {
       return;
     }
 
-    const reconciliation = reconcileAgentNotificationStates(previousStatesRef.current, observed);
+    const reconciliation = reconcileAgentNotificationStates(previousStatesRef.current, observed, {
+      previouslyAuthoritativeEnvironmentIds: previousAuthoritativeEnvironmentIdsRef.current,
+      authoritativeEnvironmentIds,
+    });
     previousStatesRef.current = reconciliation.next;
+    previousAuthoritativeEnvironmentIdsRef.current = authoritativeEnvironmentIds;
 
     enqueueNotificationOperations(async () => {
       for (const transition of reconciliation.transitions) {
@@ -141,6 +148,7 @@ export function DesktopNotificationCoordinator() {
     });
   }, [
     bridge,
+    authoritativeEnvironmentIds,
     enqueueNotificationOperations,
     observed,
     settings,
