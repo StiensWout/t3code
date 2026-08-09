@@ -1,6 +1,17 @@
 import type { DesktopNotificationEvent, DesktopNotificationSettings } from "@t3tools/contracts";
+import {
+  CheckIcon,
+  CircleCheckBigIcon,
+  CircleXIcon,
+  MessageCircleQuestionIcon,
+  ShieldAlertIcon,
+  TagIcon,
+  Volume2Icon,
+  type LucideIcon,
+} from "lucide-react";
 
 import { useClientSettings, useUpdateClientSettings } from "../../hooks/useSettings.ts";
+import { cn } from "../../lib/utils.ts";
 import { Button } from "../ui/button.tsx";
 import { Switch } from "../ui/switch.tsx";
 import { toastManager } from "../ui/toast.tsx";
@@ -11,37 +22,88 @@ const EVENT_OPTIONS: ReadonlyArray<{
   readonly event: DesktopNotificationEvent;
   readonly title: string;
   readonly description: string;
+  readonly icon: LucideIcon;
 }> = [
   {
     event: "approval",
     title: "Approval needed",
     description: "An agent is blocked until you approve an action.",
+    icon: ShieldAlertIcon,
   },
   {
     event: "input",
     title: "Waiting for input",
     description: "An agent asks a question or needs more direction.",
+    icon: MessageCircleQuestionIcon,
   },
   {
     event: "completion",
     title: "Agent finished",
     description: "A turn completes while you are working elsewhere.",
+    icon: CircleCheckBigIcon,
   },
   {
     event: "failure",
     title: "Agent failed",
     description: "A provider or agent turn ends with an error.",
+    icon: CircleXIcon,
   },
 ];
 
-function useDesktopNotificationSettingsModel() {
+function OptionCard({
+  title,
+  description,
+  icon: Icon,
+  selected,
+  onToggle,
+}: {
+  readonly title: string;
+  readonly description: string;
+  readonly icon: LucideIcon;
+  readonly selected: boolean;
+  readonly onToggle: (selected: boolean) => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={selected}
+      onClick={() => onToggle(!selected)}
+      className={cn(
+        "group flex cursor-pointer items-start gap-3 rounded-xl border p-3 text-left outline-none transition-[border-color,background-color,transform] duration-150 ease-out focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background active:scale-[0.98]",
+        selected
+          ? "border-primary/40 bg-primary/6"
+          : "border-border/60 bg-muted/15 hover:border-border",
+      )}
+    >
+      <Icon
+        className={cn(
+          "mt-0.5 size-4 shrink-0 transition-colors duration-150",
+          selected ? "text-primary" : "text-muted-foreground",
+        )}
+      />
+      <span className="min-w-0 flex-1 space-y-1">
+        <span className="flex items-center justify-between gap-2">
+          <span className="text-sm font-medium tracking-[-0.005em] text-foreground">{title}</span>
+          <CheckIcon
+            className={cn(
+              "size-3.5 shrink-0 text-primary transition-opacity duration-150",
+              selected ? "opacity-100" : "opacity-0",
+            )}
+          />
+        </span>
+        <span className="block text-[13px] leading-[1.45] text-muted-foreground/80">
+          {description}
+        </span>
+      </span>
+    </button>
+  );
+}
+
+export function DesktopNotificationsSettings() {
   const settings = useClientSettings((current) => current.desktopNotifications);
   const updateClientSettings = useUpdateClientSettings();
   const update = (patch: Partial<DesktopNotificationSettings>) => {
     updateClientSettings({ desktopNotifications: { ...settings, ...patch } });
-  };
-  const updateEvent = (event: DesktopNotificationEvent, enabled: boolean) => {
-    update({ events: { ...settings.events, [event]: enabled } });
   };
   const sendTest = async () => {
     const notifications = window.desktopBridge?.notifications;
@@ -74,122 +136,69 @@ function useDesktopNotificationSettingsModel() {
     });
   };
 
-  return { settings, update, updateEvent, sendTest };
-}
-
-function MasterSwitch({
-  settings,
-  update,
-}: Pick<ReturnType<typeof useDesktopNotificationSettingsModel>, "settings" | "update">) {
-  return (
-    <Switch
-      checked={settings.enabled}
-      onCheckedChange={(checked) => update({ enabled: Boolean(checked) })}
-      aria-label="Desktop notifications"
-    />
-  );
-}
-
-function TestButton({
-  settings,
-  sendTest,
-}: Pick<ReturnType<typeof useDesktopNotificationSettingsModel>, "settings" | "sendTest">) {
-  return (
-    <Button
-      size="xs"
-      variant="outline"
-      disabled={!settings.enabled}
-      onClick={() => void sendTest()}
-    >
-      Send test
-    </Button>
-  );
-}
-
-function EventSwitch({
-  event,
-  settings,
-  updateEvent,
-}: Pick<ReturnType<typeof useDesktopNotificationSettingsModel>, "settings" | "updateEvent"> & {
-  readonly event: DesktopNotificationEvent;
-}) {
-  return (
-    <Switch
-      checked={settings.events[event]}
-      onCheckedChange={(checked) => updateEvent(event, Boolean(checked))}
-      aria-label={EVENT_OPTIONS.find((option) => option.event === event)?.title}
-    />
-  );
-}
-
-function PreferenceControls({
-  settings,
-  update,
-}: Pick<ReturnType<typeof useDesktopNotificationSettingsModel>, "settings" | "update">) {
-  return (
-    <div className="flex flex-wrap gap-2">
-      <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-border/70 bg-background/50 px-2.5 py-2 text-xs">
-        Sound
-        <Switch
-          checked={settings.soundEnabled}
-          onCheckedChange={(checked) => update({ soundEnabled: Boolean(checked) })}
-          aria-label="Notification sound"
-        />
-      </label>
-      <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-border/70 bg-background/50 px-2.5 py-2 text-xs">
-        Show names
-        <Switch
-          checked={settings.showContext}
-          onCheckedChange={(checked) => update({ showContext: Boolean(checked) })}
-          aria-label="Show project and thread names"
-        />
-      </label>
-    </div>
-  );
-}
-
-function NotificationSectionHeader({
-  model,
-}: {
-  readonly model: ReturnType<typeof useDesktopNotificationSettingsModel>;
-}) {
-  return <TestButton settings={model.settings} sendTest={model.sendTest} />;
-}
-
-export function DesktopNotificationsSettings() {
-  const model = useDesktopNotificationSettingsModel();
   return (
     <SettingsSection
       {...searchableSetting("desktop-notifications")}
       title="Desktop notifications"
-      headerAction={<NotificationSectionHeader model={model} />}
+      headerAction={
+        <Button size="xs" variant="outline" onClick={() => void sendTest()}>
+          Send test
+        </Button>
+      }
     >
       <SettingsRow
-        title="Notify me while T3 Code is in the background"
-        description="Uses native macOS, Windows, or Linux notifications when the desktop window is not focused."
-        control={<MasterSwitch settings={model.settings} update={model.update} />}
-      />
-      <div className="rounded-xl border border-border/60 bg-muted/15 py-1">
-        {EVENT_OPTIONS.map((option) => (
-          <SettingsRow
-            key={option.event}
-            title={option.title}
-            description={option.description}
-            control={
-              <EventSwitch
-                event={option.event}
-                settings={model.settings}
-                updateEvent={model.updateEvent}
-              />
-            }
+        title="Enable notifications"
+        description="Uses native macOS, Windows, or Linux notifications. Only shown while the desktop window is not focused."
+        control={
+          <Switch
+            checked={settings.enabled}
+            onCheckedChange={(checked) => update({ enabled: Boolean(checked) })}
+            aria-label="Desktop notifications"
           />
-        ))}
-      </div>
-      <SettingsRow
-        title="Presentation"
-        description="Every platform receives the same title and message text."
-        control={<PreferenceControls settings={model.settings} update={model.update} />}
+        }
       />
+      <div
+        inert={!settings.enabled}
+        className={cn(
+          "grid transition-[grid-template-rows,opacity] duration-200 ease-out",
+          settings.enabled ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
+        )}
+      >
+        <div className="overflow-hidden">
+          <div className="space-y-2 px-3 pt-1 pb-2 sm:px-4">
+            <div className="grid gap-2 sm:grid-cols-2">
+              {EVENT_OPTIONS.map((option) => (
+                <OptionCard
+                  key={option.event}
+                  title={option.title}
+                  description={option.description}
+                  icon={option.icon}
+                  selected={settings.events[option.event]}
+                  onToggle={(selected) =>
+                    update({ events: { ...settings.events, [option.event]: selected } })
+                  }
+                />
+              ))}
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <OptionCard
+                title="Play sound"
+                description="Plays the system notification sound."
+                icon={Volume2Icon}
+                selected={settings.soundEnabled}
+                onToggle={(selected) => update({ soundEnabled: selected })}
+              />
+              <OptionCard
+                title="Show names"
+                description="Includes project and thread names in the text."
+                icon={TagIcon}
+                selected={settings.showContext}
+                onToggle={(selected) => update({ showContext: selected })}
+              />
+            </div>
+          </div>
+        </div>
+      </div>
     </SettingsSection>
   );
 }
