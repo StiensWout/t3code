@@ -20,10 +20,13 @@ import { DESKTOP_NOTIFICATION_ACTIVATED_CHANNEL } from "../ipc/channels.ts";
 
 class DesktopNotificationShowError extends Schema.TaggedErrorClass<DesktopNotificationShowError>()(
   "DesktopNotificationShowError",
-  { cause: Schema.Defect() },
+  {
+    notificationKey: Schema.String,
+    cause: Schema.Defect(),
+  },
 ) {
   override get message(): string {
-    return "Could not show a native desktop notification.";
+    return `Could not show native desktop notification ${this.notificationKey}.`;
   }
 }
 
@@ -158,7 +161,7 @@ export const make = Effect.gen(function* () {
           notification.show();
           return "shown" as const;
         },
-        catch: (cause) => new DesktopNotificationShowError({ cause }),
+        catch: (cause) => new DesktopNotificationShowError({ notificationKey: input.key, cause }),
       }).pipe(
         Effect.tapError((error) => Effect.logWarning(error.message, error.cause)),
         Effect.orElseSucceed(() => "failed" as const),

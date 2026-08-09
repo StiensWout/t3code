@@ -104,17 +104,17 @@ export function DesktopNotificationCoordinator() {
     previousStatesRef.current = reconciliation.next;
     previousAuthoritativeEnvironmentIdsRef.current = authoritativeEnvironmentIds;
 
-    enqueueNotificationOperations(async () => {
-      for (const transition of reconciliation.transitions) {
+    for (const transition of reconciliation.transitions) {
+      enqueueNotificationOperations(async () => {
         if (transition.type === "dismiss") {
           await bridge.dismiss(transition.target);
-          continue;
+          return;
         }
         if (!desktopNotificationEventEnabled(settings, transition.event)) {
-          continue;
+          return;
         }
         if (shouldSuppressDesktopNotification(document.hasFocus())) {
-          continue;
+          return;
         }
         await bridge.show({
           environmentId: transition.state.environmentId,
@@ -125,8 +125,8 @@ export function DesktopNotificationCoordinator() {
           showContext: settings.showContext,
           silent: !settings.soundEnabled,
         });
-      }
-    });
+      });
+    }
   }, [
     bridge,
     authoritativeEnvironmentIds,
