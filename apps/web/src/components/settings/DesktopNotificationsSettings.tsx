@@ -1,5 +1,4 @@
 import type { DesktopNotificationEvent, DesktopNotificationSettings } from "@t3tools/contracts";
-import { EyeIcon, Volume2Icon } from "lucide-react";
 
 import { useClientSettings, useUpdateClientSettings } from "../../hooks/useSettings.ts";
 import { Button } from "../ui/button.tsx";
@@ -130,7 +129,6 @@ function PreferenceControls({
   return (
     <div className="flex flex-wrap gap-2">
       <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-border/70 bg-background/50 px-2.5 py-2 text-xs">
-        <Volume2Icon className="size-3.5 text-muted-foreground" />
         Sound
         <Switch
           checked={settings.soundEnabled}
@@ -139,7 +137,6 @@ function PreferenceControls({
         />
       </label>
       <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-border/70 bg-background/50 px-2.5 py-2 text-xs">
-        <EyeIcon className="size-3.5 text-muted-foreground" />
         Show names
         <Switch
           checked={settings.showContext}
