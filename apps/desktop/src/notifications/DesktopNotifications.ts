@@ -44,12 +44,6 @@ export interface NativeNotificationOptions {
   readonly timeoutType: "default";
 }
 
-export interface DesktopNotificationPlatform {
-  readonly isSupported: () => boolean;
-  readonly isAppFocused: () => boolean;
-  readonly create: (options: NativeNotificationOptions) => NativeNotification;
-}
-
 export class DesktopNotifications extends Context.Service<
   DesktopNotifications,
   {
@@ -64,9 +58,13 @@ export class DesktopNotifications extends Context.Service<
   }
 >()("@t3tools/desktop/notifications/DesktopNotifications") {}
 
-class DesktopNotificationPlatformService extends Context.Service<
+export class DesktopNotificationPlatformService extends Context.Service<
   DesktopNotificationPlatformService,
-  DesktopNotificationPlatform
+  {
+    readonly isSupported: () => boolean;
+    readonly isAppFocused: () => boolean;
+    readonly create: (options: NativeNotificationOptions) => NativeNotification;
+  }
 >()("@t3tools/desktop/notifications/DesktopNotifications/DesktopNotificationPlatformService") {}
 
 export function notificationTargetKey(target: DesktopNotificationTarget): string {
@@ -215,7 +213,7 @@ const platformLayer = Layer.succeed(
 
 export const layer = Layer.effect(DesktopNotifications, make).pipe(Layer.provide(platformLayer));
 
-export const layerTest = (platform: DesktopNotificationPlatform) =>
+export const layerTest = (platform: DesktopNotificationPlatformService["Service"]) =>
   Layer.effect(DesktopNotifications, make).pipe(
     Layer.provide(Layer.succeed(DesktopNotificationPlatformService, platform)),
   );

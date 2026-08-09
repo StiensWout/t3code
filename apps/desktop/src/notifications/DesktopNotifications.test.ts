@@ -80,7 +80,7 @@ describe("DesktopNotifications", () => {
         readonly options: DesktopNotifications.NativeNotificationOptions;
         readonly notification: FakeNativeNotification;
       }> = [];
-      const platform: DesktopNotifications.DesktopNotificationPlatform = {
+      const platform: DesktopNotifications.DesktopNotificationPlatformService["Service"] = {
         isSupported: () => true,
         isAppFocused: () => false,
         create: (options) => {
@@ -114,7 +114,7 @@ describe("DesktopNotifications", () => {
   it.effect("suppresses agent notifications while the app is focused but still allows tests", () =>
     Effect.gen(function* () {
       const created: FakeNativeNotification[] = [];
-      const platform: DesktopNotifications.DesktopNotificationPlatform = {
+      const platform: DesktopNotifications.DesktopNotificationPlatformService["Service"] = {
         isSupported: () => true,
         isAppFocused: () => true,
         create: () => {
@@ -142,7 +142,7 @@ describe("DesktopNotifications", () => {
     Effect.gen(function* () {
       const revealed = yield* Deferred.make<void>();
       let notification: FakeNativeNotification | null = null;
-      const platform: DesktopNotifications.DesktopNotificationPlatform = {
+      const platform: DesktopNotifications.DesktopNotificationPlatformService["Service"] = {
         isSupported: () => true,
         isAppFocused: () => false,
         create: () => {
