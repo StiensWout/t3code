@@ -40,8 +40,9 @@ export function reconcileAgentNotificationStates(
     const priorState = hadPrevious ? (previous?.get(entry.key) ?? null) : null;
     next.set(entry.key, entry.state);
 
-    // The first complete shell snapshot is a baseline, never a backlog to replay.
-    if (!hadPrevious) {
+    // The first complete shell snapshot is a baseline, never a backlog to replay. Once that
+    // baseline exists, a new key is a newly observed thread and may already need attention.
+    if (previous === null) {
       continue;
     }
 

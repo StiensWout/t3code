@@ -11,11 +11,21 @@ import {
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 
 import * as Electron from "electron";
 
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import { DESKTOP_NOTIFICATION_ACTIVATED_CHANNEL } from "../ipc/channels.ts";
+
+class DesktopNotificationShowError extends Schema.TaggedErrorClass<DesktopNotificationShowError>()(
+  "DesktopNotificationShowError",
+  { cause: Schema.Defect() },
+) {
+  override get message(): string {
+    return "Could not show a native desktop notification.";
+  }
+}
 
 export interface NativeNotification {
   readonly show: () => void;
@@ -49,6 +59,11 @@ export class DesktopNotifications extends Context.Service<
     }) => Effect.Effect<DesktopNotificationShowResult>;
   }
 >()("@t3tools/desktop/notifications/DesktopNotifications") {}
+
+class DesktopNotificationPlatformService extends Context.Service<
+  DesktopNotificationPlatformService,
+  DesktopNotificationPlatform
+>()("@t3tools/desktop/notifications/DesktopNotifications/DesktopNotificationPlatformService") {}
 
 export function notificationTargetKey(target: DesktopNotificationTarget): string {
   return JSON.stringify([target.environmentId, target.threadId]);
@@ -142,8 +157,11 @@ export const make = Effect.gen(function* () {
           notification.show();
           return "shown" as const;
         },
-        catch: () => "failed" as const,
-      }).pipe(Effect.orElseSucceed(() => "failed" as const));
+        catch: (cause) => new DesktopNotificationShowError({ cause }),
+      }).pipe(
+        Effect.tapError((error) => Effect.logWarning(error.message, error.cause)),
+        Effect.orElseSucceed(() => "failed" as const),
+      );
     }).pipe(Effect.withSpan("desktop.notifications.show"));
 
   yield* Effect.addFinalizer(() => Effect.sync(closeAllNotifications));
@@ -170,11 +188,6 @@ export const make = Effect.gen(function* () {
       }),
   });
 });
-
-class DesktopNotificationPlatformService extends Context.Service<
-  DesktopNotificationPlatformService,
-  DesktopNotificationPlatform
->()("@t3tools/desktop/notifications/DesktopNotifications/DesktopNotificationPlatformService") {}
 
 const platformLayer = Layer.succeed(
   DesktopNotificationPlatformService,
