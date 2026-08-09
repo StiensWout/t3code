@@ -71,7 +71,7 @@ function OptionCard({
       className={cn(
         "group flex cursor-pointer items-start gap-3 rounded-xl border p-3 text-left outline-none transition-[border-color,background-color,transform] duration-150 ease-out focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background active:scale-[0.98]",
         selected
-          ? "border-primary/40 bg-primary/6"
+          ? "border-primary bg-muted/40"
           : "border-border/60 bg-muted/15 hover:border-border",
       )}
     >
