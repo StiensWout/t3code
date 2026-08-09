@@ -168,8 +168,8 @@ export function DesktopNotificationsSettings() {
       headerAction={<NotificationSectionHeader model={model} />}
     >
       <SettingsRow
-        title="Notify me outside the active thread"
-        description="Uses native macOS, Windows, or Linux notifications. System placement and timing are respected."
+        title="Notify me while T3 Code is in the background"
+        description="Uses native macOS, Windows, or Linux notifications when the desktop window is not focused."
         control={<MasterSwitch settings={model.settings} update={model.update} />}
       />
       <div className="rounded-xl border border-border/60 bg-muted/15 py-1">

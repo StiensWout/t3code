@@ -102,15 +102,6 @@ export function desktopNotificationEventEnabled(
   return settings.enabled && settings.events[event];
 }
 
-export function isDesktopNotificationTargetVisible(input: {
-  readonly windowFocused: boolean;
-  readonly activeEnvironmentId: string | undefined;
-  readonly activeThreadId: string | undefined;
-  readonly target: DesktopNotificationTarget;
-}): boolean {
-  return (
-    input.windowFocused &&
-    input.activeEnvironmentId === input.target.environmentId &&
-    input.activeThreadId === input.target.threadId
-  );
+export function shouldSuppressDesktopNotification(windowFocused: boolean): boolean {
+  return windowFocused;
 }

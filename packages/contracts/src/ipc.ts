@@ -194,6 +194,7 @@ export type DesktopNotificationShowInput = typeof DesktopNotificationShowInputSc
 
 export const DesktopNotificationShowResultSchema = Schema.Literals([
   "shown",
+  "suppressed",
   "unsupported",
   "failed",
 ]);

@@ -3,8 +3,8 @@ import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import type { AgentAwarenessPhase, AgentAwarenessState } from "@t3tools/shared/agentAwareness";
 
 import {
-  isDesktopNotificationTargetVisible,
   reconcileAgentNotificationStates,
+  shouldSuppressDesktopNotification,
 } from "./desktopNotifications.logic.ts";
 
 function state(phase: AgentAwarenessPhase): AgentAwarenessState {
@@ -115,31 +115,9 @@ describe("reconcileAgentNotificationStates", () => {
   });
 });
 
-describe("isDesktopNotificationTargetVisible", () => {
-  it("suppresses only the focused route for the exact environment and thread", () => {
-    expect(
-      isDesktopNotificationTargetVisible({
-        windowFocused: true,
-        activeEnvironmentId: target.environmentId,
-        activeThreadId: target.threadId,
-        target,
-      }),
-    ).toBe(true);
-    expect(
-      isDesktopNotificationTargetVisible({
-        windowFocused: false,
-        activeEnvironmentId: target.environmentId,
-        activeThreadId: target.threadId,
-        target,
-      }),
-    ).toBe(false);
-    expect(
-      isDesktopNotificationTargetVisible({
-        windowFocused: true,
-        activeEnvironmentId: "env-2",
-        activeThreadId: target.threadId,
-        target,
-      }),
-    ).toBe(false);
+describe("shouldSuppressDesktopNotification", () => {
+  it("suppresses notifications whenever the desktop window is focused", () => {
+    expect(shouldSuppressDesktopNotification(true)).toBe(true);
+    expect(shouldSuppressDesktopNotification(false)).toBe(false);
   });
 });
