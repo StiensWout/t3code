@@ -47,6 +47,16 @@ describe("reconcileAgentNotificationStates", () => {
     ]);
   });
 
+  it("notifies when a new thread is first observed in an attention phase", () => {
+    const result = reconcileAgentNotificationStates(new Map(), [
+      { key: "env-1:thread-1", target, state: state("waiting_for_approval") },
+    ]);
+
+    expect(result.transitions).toEqual([
+      { type: "show", event: "approval", state: state("waiting_for_approval") },
+    ]);
+  });
+
   it("dismisses an attention notification when the agent resumes", () => {
     const result = reconcileAgentNotificationStates(
       new Map([["env-1:thread-1", state("waiting_for_input")]]),

@@ -7,15 +7,9 @@ import * as Layer from "effect/Layer";
 import type * as Electron from "electron";
 
 import * as DesktopWindow from "../window/DesktopWindow.ts";
-import {
-  DesktopNotifications,
-  layerTest,
-  type DesktopNotificationPlatform,
-  type NativeNotification,
-  type NativeNotificationOptions,
-} from "./DesktopNotifications.ts";
+import * as DesktopNotifications from "./DesktopNotifications.ts";
 
-class FakeNativeNotification implements NativeNotification {
+class FakeNativeNotification implements DesktopNotifications.NativeNotification {
   readonly listeners = new Map<"click" | "close", () => void>();
   shown = false;
   closed = false;
@@ -83,10 +77,10 @@ describe("DesktopNotifications", () => {
   it.effect("passes shared copy to the native adapter and replaces a thread notification", () =>
     Effect.gen(function* () {
       const created: Array<{
-        readonly options: NativeNotificationOptions;
+        readonly options: DesktopNotifications.NativeNotificationOptions;
         readonly notification: FakeNativeNotification;
       }> = [];
-      const platform: DesktopNotificationPlatform = {
+      const platform: DesktopNotifications.DesktopNotificationPlatform = {
         isSupported: () => true,
         create: (options) => {
           const notification = new FakeNativeNotification();
@@ -97,10 +91,13 @@ describe("DesktopNotifications", () => {
       const window = makeWindowLayer(Effect.void);
 
       yield* Effect.gen(function* () {
-        const notifications = yield* DesktopNotifications;
+        const notifications = yield* DesktopNotifications.DesktopNotifications;
         expect(yield* notifications.show(input)).toBe("shown");
         expect(yield* notifications.show({ ...input, event: "failure" })).toBe("shown");
-      }).pipe(Effect.provide(layerTest(platform).pipe(Layer.provide(window.layer))), Effect.scoped);
+      }).pipe(
+        Effect.provide(DesktopNotifications.layerTest(platform).pipe(Layer.provide(window.layer))),
+        Effect.scoped,
+      );
 
       expect(created[0]?.options).toEqual({
         title: "Approval needed",
@@ -117,7 +114,7 @@ describe("DesktopNotifications", () => {
     Effect.gen(function* () {
       const revealed = yield* Deferred.make<void>();
       let notification: FakeNativeNotification | null = null;
-      const platform: DesktopNotificationPlatform = {
+      const platform: DesktopNotifications.DesktopNotificationPlatform = {
         isSupported: () => true,
         create: () => {
           notification = new FakeNativeNotification();
@@ -127,11 +124,14 @@ describe("DesktopNotifications", () => {
       const window = makeWindowLayer(Deferred.succeed(revealed, undefined));
 
       yield* Effect.gen(function* () {
-        const notifications = yield* DesktopNotifications;
+        const notifications = yield* DesktopNotifications.DesktopNotifications;
         yield* notifications.show(input);
         notification?.listeners.get("click")?.();
         yield* Deferred.await(revealed);
-      }).pipe(Effect.provide(layerTest(platform).pipe(Layer.provide(window.layer))), Effect.scoped);
+      }).pipe(
+        Effect.provide(DesktopNotifications.layerTest(platform).pipe(Layer.provide(window.layer))),
+        Effect.scoped,
+      );
 
       expect(window.sent[0]?.payload).toEqual({
         environmentId: input.environmentId,
