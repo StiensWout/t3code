@@ -31,6 +31,10 @@ export function DesktopNotificationCoordinator() {
   const threads = useThreadShells();
   const navigate = useNavigate();
   const routeParams = useParams({ strict: false });
+  const activeRouteRef = useRef({
+    environmentId: routeParams.environmentId,
+    threadId: routeParams.threadId,
+  });
   const previousStatesRef = useRef<ReadonlyMap<string, AgentAwarenessState | null> | null>(null);
   const notificationOperationsRef = useRef(Promise.resolve());
 
@@ -39,6 +43,13 @@ export function DesktopNotificationCoordinator() {
       .then(operation)
       .catch(() => undefined);
   }, []);
+
+  useEffect(() => {
+    activeRouteRef.current = {
+      environmentId: routeParams.environmentId,
+      threadId: routeParams.threadId,
+    };
+  }, [routeParams.environmentId, routeParams.threadId]);
 
   const observed = useMemo(() => {
     const projectsByKey = new Map(
@@ -107,10 +118,11 @@ export function DesktopNotificationCoordinator() {
         if (!desktopNotificationEventEnabled(settings, transition.event)) {
           continue;
         }
+        const activeRoute = activeRouteRef.current;
         const isVisibleThread = isDesktopNotificationTargetVisible({
           windowFocused: document.hasFocus(),
-          activeEnvironmentId: routeParams.environmentId,
-          activeThreadId: routeParams.threadId,
+          activeEnvironmentId: activeRoute.environmentId,
+          activeThreadId: activeRoute.threadId,
           target: transition.state,
         });
         if (isVisibleThread) {
@@ -131,8 +143,6 @@ export function DesktopNotificationCoordinator() {
     bridge,
     enqueueNotificationOperations,
     observed,
-    routeParams.environmentId,
-    routeParams.threadId,
     settings,
     settingsHydrated,
     shellsBootstrapped,
