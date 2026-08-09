@@ -1,4 +1,4 @@
-import { describe, expect, it } from "@effect/vitest";
+import { describe, expect, it } from "vite-plus/test";
 
 import type {
   EnvironmentId,
@@ -9,7 +9,13 @@ import type {
 } from "@t3tools/contracts";
 import { ProviderInstanceId } from "@t3tools/contracts";
 
-import { projectThreadAwareness } from "./agentAwareness.ts";
+import {
+  formatAgentNotificationContent,
+  notificationEventForAwarenessTransition,
+  projectThreadAwareness,
+  type AgentAwarenessPhase,
+  type AgentAwarenessState,
+} from "./agentAwareness.ts";
 
 const NOW = "2026-05-22T12:00:00.000Z";
 
@@ -175,6 +181,76 @@ describe("projectThreadAwareness", () => {
       phase: "failed",
       headline: "Agent failed",
       detail: "Provider process exited.",
+    });
+  });
+});
+
+function awarenessState(phase: AgentAwarenessPhase): AgentAwarenessState {
+  return {
+    environmentId: "env-1" as EnvironmentId,
+    threadId: "thread-1" as ThreadId,
+    projectTitle: "t3code",
+    threadTitle: "Fix failing CI",
+    phase,
+    headline: "Test",
+    modelTitle: "gpt-5.4",
+    updatedAt: NOW,
+    deepLink: "/threads/env-1/thread-1",
+  };
+}
+
+describe("desktop notification projection", () => {
+  it.each([
+    ["waiting_for_approval", "approval"],
+    ["waiting_for_input", "input"],
+    ["completed", "completion"],
+    ["failed", "failure"],
+  ] as const)("maps a phase edge to %s notifications", (phase, event) => {
+    expect(
+      notificationEventForAwarenessTransition(awarenessState("running"), awarenessState(phase)),
+    ).toBe(event);
+  });
+
+  it("does not notify for repeated phases or background progress", () => {
+    expect(
+      notificationEventForAwarenessTransition(
+        awarenessState("waiting_for_input"),
+        awarenessState("waiting_for_input"),
+      ),
+    ).toBeNull();
+    expect(
+      notificationEventForAwarenessTransition(
+        awarenessState("starting"),
+        awarenessState("running"),
+      ),
+    ).toBeNull();
+  });
+
+  it("uses the same concise content for every platform adapter", () => {
+    expect(
+      formatAgentNotificationContent({
+        event: "approval",
+        projectTitle: "t3code",
+        threadTitle: "Fix failing CI",
+        showContext: true,
+      }),
+    ).toEqual({
+      title: "Approval needed",
+      body: "Fix failing CI · t3code",
+    });
+  });
+
+  it("can hide project and thread names", () => {
+    expect(
+      formatAgentNotificationContent({
+        event: "failure",
+        projectTitle: "Secret project",
+        threadTitle: "Sensitive task",
+        showContext: false,
+      }),
+    ).toEqual({
+      title: "Agent failed",
+      body: "Open T3 Code to view details.",
     });
   });
 });

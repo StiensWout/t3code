@@ -12,6 +12,7 @@ export interface SettingsSearchItem {
   readonly title: string;
   readonly to: SettingsPath;
   readonly targetId?: string;
+  readonly desktopOnly?: boolean;
 }
 
 /**
@@ -117,6 +118,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "provider-update-checks",
     title: "Provider update checks",
     to: "/settings/general",
+  },
+  {
+    id: "desktop-notifications",
+    title: "Desktop notifications",
+    to: "/settings/general",
+    desktopOnly: true,
   },
   {
     id: "new-threads",
