@@ -873,6 +873,7 @@ export function ResourceTelemetryDiagnostics() {
         try {
           confirmed = await ensureLocalApi().dialogs.confirm(
             `Send SIGKILL to process ${process.identity.pid}? This cannot be handled by the process.`,
+            { variant: "destructive" },
           );
         } catch (error) {
           clearSignaling();

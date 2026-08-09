@@ -61,6 +61,7 @@ export function ConfirmDialogHost() {
   useEffect(() => registerConfirmDialogHost(), []);
 
   const copy = resolveConfirmDialogCopy(state.status === "idle" ? "" : state.message);
+  const confirmVariant = state.status === "idle" ? "default" : state.variant;
   const onCancel = () => respondToConfirmDialog(false);
   const onConfirm = () => respondToConfirmDialog(true);
 
@@ -85,7 +86,9 @@ export function ConfirmDialogHost() {
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
-          <Button onClick={onConfirm}>Confirm</Button>
+          <Button variant={confirmVariant} onClick={onConfirm}>
+            Confirm
+          </Button>
         </AlertDialogFooter>
       </AlertDialogPopup>
     </AlertDialog>

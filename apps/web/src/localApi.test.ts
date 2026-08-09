@@ -1,5 +1,6 @@
 import {
   DEFAULT_CLIENT_SETTINGS,
+  type ConfirmDialogOptions,
   type ContextMenuItem,
   type DesktopBridge,
 } from "@t3tools/contracts";
@@ -13,7 +14,8 @@ const showContextMenuFallbackMock =
     ) => Promise<T | null>
   >();
 
-const requestConfirmDialogMock = vi.fn<(message: string) => Promise<boolean> | undefined>();
+const requestConfirmDialogMock =
+  vi.fn<(message: string, options?: ConfirmDialogOptions) => Promise<boolean> | undefined>();
 
 vi.mock("./contextMenuFallback", () => ({
   showContextMenuFallback: showContextMenuFallbackMock,
@@ -86,9 +88,12 @@ describe("LocalApi", () => {
   it("uses the themed confirmation host when it is available", async () => {
     requestConfirmDialogMock.mockResolvedValue(true);
     const { createLocalApi } = await import("./localApi");
+    const options = { variant: "destructive" } as const;
 
-    await expect(createLocalApi().dialogs.confirm("Delete this thread?")).resolves.toBe(true);
-    expect(requestConfirmDialogMock).toHaveBeenCalledWith("Delete this thread?");
+    await expect(createLocalApi().dialogs.confirm("Delete this thread?", options)).resolves.toBe(
+      true,
+    );
+    expect(requestConfirmDialogMock).toHaveBeenCalledWith("Delete this thread?", options);
   });
 
   it("fails closed in a browser when no themed host is available", async () => {

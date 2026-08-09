@@ -914,6 +914,7 @@ export function DiagnosticsSettingsPanel() {
         try {
           confirmed = await ensureLocalApi().dialogs.confirm(
             `Send SIGKILL to process ${pid}? This cannot be handled by the process.`,
+            { variant: "destructive" },
           );
         } catch (error) {
           clearSignaling();

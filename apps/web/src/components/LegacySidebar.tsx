@@ -1499,6 +1499,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
                             : []),
                           "This removes only this project entry.",
                         ].join("\n"),
+                    { variant: "destructive" },
                   );
                   if (!confirmed) {
                     return;
@@ -1547,7 +1548,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         ...(member.environmentLabel ? [`Environment: ${member.environmentLabel}`] : []),
         "This removes only this project entry.",
       ].join("\n");
-      const confirmed = await api.dialogs.confirm(message);
+      const confirmed = await api.dialogs.confirm(message, { variant: "destructive" });
       if (!confirmed) {
         return;
       }
@@ -1830,6 +1831,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             `Delete ${count} thread${count === 1 ? "" : "s"}?`,
             "This permanently clears conversation history for these threads.",
           ].join("\n"),
+          { variant: "destructive" },
         );
         if (!confirmed) return;
       }
@@ -2180,6 +2182,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             `Delete thread "${thread.title}"?`,
             "This permanently clears conversation history for this thread.",
           ].join("\n"),
+          { variant: "destructive" },
         );
         if (!confirmed) {
           return;
