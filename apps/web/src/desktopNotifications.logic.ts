@@ -53,7 +53,7 @@ export function reconcileAgentNotificationStates(
     // applies when one environment first becomes authoritative after being disconnected.
     const environmentWasAuthoritative =
       context?.previouslyAuthoritativeEnvironmentIds.has(entry.target.environmentId) ?? true;
-    if (previous === null || (!hadPrevious && !environmentWasAuthoritative)) {
+    if (previous === null || !environmentWasAuthoritative) {
       continue;
     }
 
@@ -73,11 +73,14 @@ export function reconcileAgentNotificationStates(
 
   if (previous !== null && context !== undefined) {
     for (const [key, priorState] of previous) {
-      if (
-        observedKeys.has(key) ||
-        priorState === null ||
-        !context.authoritativeEnvironmentIds.has(priorState.environmentId)
-      ) {
+      if (observedKeys.has(key)) {
+        continue;
+      }
+      if (priorState === null) {
+        next.delete(key);
+        continue;
+      }
+      if (!context.authoritativeEnvironmentIds.has(priorState.environmentId)) {
         continue;
       }
       if (notificationEventForAwarenessTransition(null, priorState) !== null) {

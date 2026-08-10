@@ -15,9 +15,9 @@ Choose which events can notify you:
 - **Agent finished** when a turn completes
 - **Agent failed** when a provider or turn ends with an error
 
-Starting and routine working updates do not create notifications. T3 Code suppresses notifications
-while a connected T3 client is focused. Opening a notification focuses T3 Code and takes you to the
-relevant environment and thread.
+Starting and routine working updates do not create notifications. The desktop app stays silent while
+its window is focused. The web app stays silent while its tab or another connected T3 client is
+focused. Opening a notification focuses T3 Code and takes you to the relevant environment and thread.
 
 The desktop app takes priority for an environment whenever it is connected, even while its window
 is in the background. Browsers connected to that same environment stay silent, preventing a native
