@@ -1,9 +1,18 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import {
+  AuthSessionId,
+  type ClientActivityLease,
+  type ClientKind,
+  type EnvironmentId,
+  RpcClientId,
+  type ThreadId,
+} from "@t3tools/contracts";
 import type { AgentAwarenessPhase, AgentAwarenessState } from "@t3tools/shared/agentAwareness";
+import * as DateTime from "effect/DateTime";
 
 import {
   reconcileAgentNotificationStates,
+  shouldSuppressBrowserNotification,
   shouldSuppressDesktopNotification,
 } from "./desktopNotifications.logic.ts";
 
@@ -119,5 +128,69 @@ describe("shouldSuppressDesktopNotification", () => {
   it("suppresses notifications whenever the desktop window is focused", () => {
     expect(shouldSuppressDesktopNotification(true)).toBe(true);
     expect(shouldSuppressDesktopNotification(false)).toBe(false);
+  });
+});
+
+function lease(clientKind: ClientKind, focused = false): ClientActivityLease {
+  const now = DateTime.makeUnsafe("2026-08-10T08:00:00.000Z");
+  return {
+    sessionId: AuthSessionId.make(`session-${clientKind}`),
+    rpcClientId: RpcClientId.make(1),
+    clientId: `client-${clientKind}`,
+    clientKind,
+    visible: focused,
+    focused,
+    recentlyInteracted: focused,
+    appState: focused ? "active" : "background",
+    scopes: [],
+    updatedAt: now,
+    expiresAt: DateTime.add(now, { minutes: 1 }),
+  };
+}
+
+describe("shouldSuppressBrowserNotification", () => {
+  it("fails closed until same-environment presence is ready", () => {
+    expect(
+      shouldSuppressBrowserNotification({
+        windowFocused: false,
+        policy: null,
+      }),
+    ).toBe(true);
+  });
+
+  it("suppresses while this browser window is focused", () => {
+    expect(
+      shouldSuppressBrowserNotification({
+        windowFocused: true,
+        policy: { leases: [] },
+      }),
+    ).toBe(true);
+  });
+
+  it("gives any connected desktop renderer priority even in the background", () => {
+    expect(
+      shouldSuppressBrowserNotification({
+        windowFocused: false,
+        policy: { leases: [lease("desktop-renderer")] },
+      }),
+    ).toBe(true);
+  });
+
+  it("suppresses when another T3 client is focused", () => {
+    expect(
+      shouldSuppressBrowserNotification({
+        windowFocused: false,
+        policy: { leases: [lease("mobile", true)] },
+      }),
+    ).toBe(true);
+  });
+
+  it("allows an opted-in background browser when no desktop or focused client is present", () => {
+    expect(
+      shouldSuppressBrowserNotification({
+        windowFocused: false,
+        policy: { leases: [lease("web")] },
+      }),
+    ).toBe(false);
   });
 });

@@ -1,14 +1,13 @@
 import type { DesktopNotificationEvent, DesktopNotificationSettings } from "@t3tools/contracts";
-import {
-  CircleCheckBigIcon,
-  CircleXIcon,
-  MessageCircleQuestionIcon,
-  ShieldAlertIcon,
-  TagIcon,
-  Volume2Icon,
-  type LucideIcon,
-} from "lucide-react";
+import { type ReactNode, useCallback, useEffect, useState } from "react";
 
+import {
+  getBrowserNotificationPermission,
+  requestBrowserNotificationPermission,
+  showBrowserNotificationTest,
+  type BrowserNotificationPermission,
+} from "../../browserNotifications.ts";
+import { isElectron } from "../../env.ts";
 import { useClientSettings, useUpdateClientSettings } from "../../hooks/useSettings.ts";
 import { cn } from "../../lib/utils.ts";
 import { Button } from "../ui/button.tsx";
@@ -21,101 +20,121 @@ const EVENT_OPTIONS: ReadonlyArray<{
   readonly event: DesktopNotificationEvent;
   readonly title: string;
   readonly description: string;
-  readonly icon: LucideIcon;
 }> = [
   {
     event: "approval",
     title: "Approval needed",
-    description: "An agent is blocked until you approve an action.",
-    icon: ShieldAlertIcon,
+    description: "An agent needs your approval.",
   },
   {
     event: "input",
     title: "Waiting for input",
-    description: "An agent asks a question or needs more direction.",
-    icon: MessageCircleQuestionIcon,
+    description: "An agent needs your input.",
   },
   {
     event: "completion",
     title: "Agent finished",
-    description: "A turn completes while you are working elsewhere.",
-    icon: CircleCheckBigIcon,
+    description: "An agent finishes a turn.",
   },
   {
     event: "failure",
     title: "Agent failed",
-    description: "A provider or agent turn ends with an error.",
-    icon: CircleXIcon,
+    description: "An agent stops with an error.",
   },
 ];
 
-function OptionCard({
-  title,
-  description,
-  icon: Icon,
-  selected,
-  onToggle,
-}: {
-  readonly title: string;
-  readonly description: string;
-  readonly icon: LucideIcon;
-  readonly selected: boolean;
-  readonly onToggle: (selected: boolean) => void;
-}) {
-  return (
-    <button
-      type="button"
-      aria-pressed={selected}
-      onClick={() => onToggle(!selected)}
-      className={cn(
-        "group flex cursor-pointer items-start gap-2 rounded-xl border p-3 text-left outline-none transition-[border-color,background-color,transform] duration-150 ease-out focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background active:scale-[0.98]",
-        selected
-          ? "border-primary bg-muted/40"
-          : "border-border/60 bg-muted/15 hover:border-border",
-      )}
-    >
-      <Icon
-        className={cn(
-          "mt-0.5 size-4 shrink-0 transition-colors duration-150",
-          selected ? "text-primary" : "text-muted-foreground",
-        )}
-      />
-      <span className="min-w-0 flex-1 space-y-1">
-        <span className="block text-sm font-medium tracking-[-0.005em] text-foreground">
-          {title}
-        </span>
-        <span className="block text-[13px] leading-[1.45] text-muted-foreground/80">
-          {description}
-        </span>
-      </span>
-    </button>
+function useBrowserNotificationPermission() {
+  const [permission, setPermission] = useState<BrowserNotificationPermission>(() =>
+    isElectron ? "granted" : getBrowserNotificationPermission(),
   );
+  const refresh = useCallback(() => {
+    setPermission(isElectron ? "granted" : getBrowserNotificationPermission());
+  }, []);
+
+  useEffect(() => {
+    if (isElectron) return;
+
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    let permissionStatus: PermissionStatus | undefined;
+    let disposed = false;
+    if (navigator.permissions !== undefined) {
+      void navigator.permissions
+        .query({ name: "notifications" })
+        .then((status) => {
+          if (disposed) return;
+          permissionStatus = status;
+          status.addEventListener("change", refresh);
+        })
+        .catch(() => undefined);
+    }
+
+    return () => {
+      disposed = true;
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+      permissionStatus?.removeEventListener("change", refresh);
+    };
+  }, [refresh]);
+
+  return { permission, refresh };
 }
 
-export function DesktopNotificationsSettings() {
+function useDesktopNotificationSettingsModel() {
   const settings = useClientSettings((current) => current.desktopNotifications);
   const updateClientSettings = useUpdateClientSettings();
+  const browserPermission = useBrowserNotificationPermission();
   const update = (patch: Partial<DesktopNotificationSettings>) => {
     updateClientSettings({ desktopNotifications: { ...settings, ...patch } });
   };
-  const sendTest = async () => {
-    const notifications = window.desktopBridge?.notifications;
-    if (!notifications) {
-      toastManager.add({
-        type: "warning",
-        title: "Desktop app required",
-        description: "Native notification tests are available in the desktop app.",
-      });
+  const updateEvent = (event: DesktopNotificationEvent, enabled: boolean) => {
+    update({ events: { ...settings.events, [event]: enabled } });
+  };
+  const setEnabled = async (enabled: boolean) => {
+    if (!enabled || isElectron) {
+      update({ enabled });
       return;
     }
-    const result = await notifications
-      .showTest({ silent: !settings.soundEnabled })
-      .catch(() => "failed" as const);
+
+    const permission = await requestBrowserNotificationPermission();
+    browserPermission.refresh();
+    if (permission === "granted") {
+      update({ enabled: true });
+      return;
+    }
+    toastManager.add({
+      type: "warning",
+      title: permission === "unsupported" ? "Notifications unavailable" : "Permission required",
+      description:
+        permission === "denied"
+          ? "Allow notifications in your browser settings."
+          : permission === "unsupported"
+            ? "This browser does not support notifications."
+            : "Allow notifications, then try again.",
+    });
+  };
+  const sendTest = async () => {
+    const notifications = window.desktopBridge?.notifications;
+    let result;
+    if (notifications) {
+      result = await notifications
+        .showTest({ silent: !settings.soundEnabled })
+        .catch(() => "failed" as const);
+    } else {
+      const permission = await requestBrowserNotificationPermission();
+      browserPermission.refresh();
+      result =
+        permission === "granted"
+          ? showBrowserNotificationTest({ silent: !settings.soundEnabled })
+          : permission === "unsupported"
+            ? "unsupported"
+            : "suppressed";
+    }
     if (result === "shown") {
       toastManager.add({
         type: "success",
         title: "Test sent",
-        description: "Check your system notification center.",
+        description: "Check Notification Center.",
       });
       return;
     }
@@ -124,74 +143,145 @@ export function DesktopNotificationsSettings() {
       title: "Notification unavailable",
       description:
         result === "unsupported"
-          ? "Native notifications are not supported in this desktop session."
-          : "The operating system could not display the notification.",
+          ? "Notifications are not supported here."
+          : result === "suppressed"
+            ? "Allow notifications, then try again."
+            : "The notification could not be shown.",
     });
   };
+
+  const masterDescription = isElectron
+    ? "Notify me when T3 Code is in the background."
+    : browserPermission.permission === "denied"
+      ? "Blocked in your browser settings."
+      : browserPermission.permission === "unsupported"
+        ? "Not supported by this browser."
+        : browserPermission.permission === "default"
+          ? "Allow notifications when T3 Code is in the background."
+          : "Notify me when T3 Code is in the background.";
+
+  return {
+    settings,
+    update,
+    updateEvent,
+    setEnabled,
+    sendTest,
+    masterDescription,
+    supported: isElectron || browserPermission.permission !== "unsupported",
+  };
+}
+
+type NotificationSettingsModel = ReturnType<typeof useDesktopNotificationSettingsModel>;
+
+function MasterRow({
+  model,
+  title = "Enable notifications",
+  description,
+}: {
+  readonly model: NotificationSettingsModel;
+  readonly title?: string;
+  readonly description?: string;
+}) {
+  return (
+    <SettingsRow
+      title={title}
+      description={description ?? model.masterDescription}
+      control={
+        <Switch
+          checked={model.settings.enabled}
+          disabled={!model.supported && !model.settings.enabled}
+          onCheckedChange={(checked) => void model.setEnabled(Boolean(checked))}
+          aria-label="Notifications"
+        />
+      }
+    />
+  );
+}
+
+function EnabledOptions({
+  enabled,
+  children,
+}: {
+  readonly enabled: boolean;
+  readonly children: ReactNode;
+}) {
+  return (
+    <div
+      inert={!enabled}
+      className={cn(
+        "grid transition-[grid-template-rows,opacity] duration-200 ease-out",
+        enabled ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
+      )}
+    >
+      <div className="overflow-hidden">{children}</div>
+    </div>
+  );
+}
+
+function SoftGroupedPanel({ model }: { readonly model: NotificationSettingsModel }) {
+  return (
+    <div className="mx-3 rounded-2xl bg-muted/25 p-1 sm:mx-4">
+      <div className="rounded-xl bg-background/80">
+        <MasterRow model={model} />
+        <EnabledOptions enabled={model.settings.enabled}>
+          <div className="border-t border-border/50 px-3 pt-3 pb-2 sm:px-4">
+            <p className="mb-1.5 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+              Notify me when
+            </p>
+            {EVENT_OPTIONS.map((option) => (
+              <label
+                key={option.event}
+                className="flex cursor-pointer items-center justify-between gap-4 rounded-lg px-2 py-2 hover:bg-muted/35"
+              >
+                <span>
+                  <span className="block text-sm font-medium">{option.title}</span>
+                  <span className="block text-xs text-muted-foreground">{option.description}</span>
+                </span>
+                <Switch
+                  checked={model.settings.events[option.event]}
+                  onCheckedChange={(checked) => model.updateEvent(option.event, Boolean(checked))}
+                  aria-label={option.title}
+                />
+              </label>
+            ))}
+            <div className="mt-2 flex flex-wrap gap-x-6 gap-y-2 border-t border-border/50 px-2 pt-3 pb-1">
+              <label className="flex cursor-pointer items-center gap-2 text-sm">
+                <Switch
+                  checked={model.settings.soundEnabled}
+                  onCheckedChange={(checked) => model.update({ soundEnabled: Boolean(checked) })}
+                  aria-label="Notification sound"
+                />
+                Play sound
+              </label>
+              <label className="flex cursor-pointer items-center gap-2 text-sm">
+                <Switch
+                  checked={model.settings.showContext}
+                  onCheckedChange={(checked) => model.update({ showContext: Boolean(checked) })}
+                  aria-label="Show thread names"
+                />
+                Show thread names
+              </label>
+            </div>
+          </div>
+        </EnabledOptions>
+      </div>
+    </div>
+  );
+}
+
+export function DesktopNotificationsSettings() {
+  const model = useDesktopNotificationSettingsModel();
 
   return (
     <SettingsSection
       {...searchableSetting("desktop-notifications")}
-      title="Desktop notifications"
       headerAction={
-        <Button size="xs" variant="outline" onClick={() => void sendTest()}>
+        <Button size="xs" variant="outline" onClick={() => void model.sendTest()}>
           Send test
         </Button>
       }
     >
-      <SettingsRow
-        title="Enable notifications"
-        description="Uses native macOS, Windows, or Linux notifications. Only shown while the desktop window is not focused."
-        control={
-          <Switch
-            checked={settings.enabled}
-            onCheckedChange={(checked) => update({ enabled: Boolean(checked) })}
-            aria-label="Desktop notifications"
-          />
-        }
-      />
-      <div
-        inert={!settings.enabled}
-        className={cn(
-          "grid transition-[grid-template-rows,opacity] duration-200 ease-out",
-          settings.enabled ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
-        )}
-      >
-        <div className="overflow-hidden">
-          <div className="space-y-2 px-3 pt-1 pb-2 sm:px-4">
-            <div className="grid gap-2 sm:grid-cols-2">
-              {EVENT_OPTIONS.map((option) => (
-                <OptionCard
-                  key={option.event}
-                  title={option.title}
-                  description={option.description}
-                  icon={option.icon}
-                  selected={settings.events[option.event]}
-                  onToggle={(selected) =>
-                    update({ events: { ...settings.events, [option.event]: selected } })
-                  }
-                />
-              ))}
-            </div>
-            <div className="grid gap-2 sm:grid-cols-2">
-              <OptionCard
-                title="Play sound"
-                description="Plays the system notification sound."
-                icon={Volume2Icon}
-                selected={settings.soundEnabled}
-                onToggle={(selected) => update({ soundEnabled: selected })}
-              />
-              <OptionCard
-                title="Show names"
-                description="Includes project and thread names in the text."
-                icon={TagIcon}
-                selected={settings.showContext}
-                onToggle={(selected) => update({ showContext: selected })}
-              />
-            </div>
-          </div>
-        </div>
-      </div>
+      <SoftGroupedPanel model={model} />
     </SettingsSection>
   );
 }
