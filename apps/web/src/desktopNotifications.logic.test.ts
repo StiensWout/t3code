@@ -99,6 +99,20 @@ describe("reconcileAgentNotificationStates", () => {
     expect(reconnected.transitions).toEqual([]);
   });
 
+  it("baselines state changes that happened while an environment was disconnected", () => {
+    const reconnected = reconcileAgentNotificationStates(
+      new Map([["env-1:thread-1", state("running")]]),
+      [{ key: "env-1:thread-1", target, state: state("completed") }],
+      {
+        previouslyAuthoritativeEnvironmentIds: new Set(),
+        authoritativeEnvironmentIds: new Set([target.environmentId]),
+      },
+    );
+
+    expect(reconnected.transitions).toEqual([]);
+    expect(reconnected.next.get("env-1:thread-1")?.phase).toBe("completed");
+  });
+
   it("baselines historical threads when an environment first reconnects", () => {
     const result = reconcileAgentNotificationStates(
       new Map(),
@@ -120,6 +134,17 @@ describe("reconcileAgentNotificationStates", () => {
     });
 
     expect(result.transitions).toEqual([{ type: "dismiss", target }]);
+    expect(result.next.has("env-1:thread-1")).toBe(false);
+  });
+
+  it("forgets removed inactive threads", () => {
+    const previous = new Map<string, AgentAwarenessState | null>([["env-1:thread-1", null]]);
+    const result = reconcileAgentNotificationStates(previous, [], {
+      previouslyAuthoritativeEnvironmentIds: new Set([target.environmentId]),
+      authoritativeEnvironmentIds: new Set([target.environmentId]),
+    });
+
+    expect(result.transitions).toEqual([]);
     expect(result.next.has("env-1:thread-1")).toBe(false);
   });
 });

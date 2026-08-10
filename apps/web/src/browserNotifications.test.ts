@@ -59,9 +59,35 @@ describe("browser notification delivery", () => {
       options: {
         body: "Fix browser notifications · t3code",
         silent: true,
-        tag: "t3code:env-1:thread-1",
+        tag: '["env-1","thread-1"]',
       },
     });
+  });
+
+  it("uses unambiguous tags when target ids contain separators", () => {
+    FakeNotification.created = [];
+
+    showBrowserAgentNotification(
+      {
+        ...input,
+        environmentId: EnvironmentId.make("a:b"),
+        threadId: ThreadId.make("c"),
+      },
+      { api: FakeNotification },
+    );
+    showBrowserAgentNotification(
+      {
+        ...input,
+        environmentId: EnvironmentId.make("a"),
+        threadId: ThreadId.make("b:c"),
+      },
+      { api: FakeNotification },
+    );
+
+    expect(FakeNotification.created.map((notification) => notification.options?.tag)).toEqual([
+      '["a:b","c"]',
+      '["a","b:c"]',
+    ]);
   });
 
   it("suppresses delivery until browser permission is granted", () => {

@@ -141,7 +141,7 @@ export async function requestBrowserNotificationPermission(
 }
 
 function notificationTag(target: DesktopNotificationTarget): string {
-  return `t3code:${target.environmentId}:${target.threadId}`;
+  return JSON.stringify([target.environmentId, target.threadId]);
 }
 
 function showBrowserNotification(input: {

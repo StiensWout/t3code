@@ -155,7 +155,7 @@ export function DesktopNotificationCoordinator() {
     if (bridge) {
       enqueueNotificationOperations(() => bridge.dismissAll());
     } else if (!isElectron) {
-      dismissAllBrowserNotifications();
+      enqueueNotificationOperations(async () => dismissAllBrowserNotifications());
     }
   }, [bridge, enqueueNotificationOperations, settings.enabled, settingsHydrated]);
 

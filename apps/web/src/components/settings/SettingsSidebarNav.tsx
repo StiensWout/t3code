@@ -145,6 +145,8 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
       }
       const targetId = item.targetId ?? item.id;
       if (pathname === item.to) {
+        // Target hashes are transient and cleared after navigation. Scroll directly on the current
+        // page so selecting a result cannot become a no-op while the route stays unchanged.
         scrollToSettingsTarget(targetId);
         return;
       }
