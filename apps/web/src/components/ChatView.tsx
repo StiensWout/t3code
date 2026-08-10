@@ -2241,11 +2241,16 @@ function ChatViewContent(props: ChatViewProps) {
   const isWorking = phase === "running" || isSendBusy || isConnecting || isRevertingCheckpoint;
   const pinnedActiveTurnPlan = useMemo(() => {
     const activeTurnId = activeLatestTurn?.turnId ?? null;
-    if (!isWorking || activeTurnId === null || activePlan?.turnId !== activeTurnId) {
+    if (
+      phase !== "running" ||
+      activeLatestTurn?.state !== "running" ||
+      activeTurnId === null ||
+      activePlan?.turnId !== activeTurnId
+    ) {
       return null;
     }
     return turnPlans.find((turnPlan) => turnPlan.turnId === activeTurnId) ?? null;
-  }, [activeLatestTurn?.turnId, activePlan, isWorking, turnPlans]);
+  }, [activeLatestTurn?.state, activeLatestTurn?.turnId, activePlan, phase, turnPlans]);
   const turnPlansForTimeline = useMemo(
     () => excludePinnedTurnPlan(turnPlans, pinnedActiveTurnPlan?.turnId ?? null),
     [pinnedActiveTurnPlan?.turnId, turnPlans],
