@@ -127,6 +127,23 @@ describe("reconcileAgentNotificationStates", () => {
     expect(reconnected.next.get("env-1:thread-1")?.phase).toBe("running");
   });
 
+  it("replaces a live attention notification when its type changed while disconnected", () => {
+    const currentState = state("waiting_for_input");
+    const reconnected = reconcileAgentNotificationStates(
+      new Map([["env-1:thread-1", state("waiting_for_approval")]]),
+      [{ key: "env-1:thread-1", target, state: currentState }],
+      {
+        previouslyAuthoritativeEnvironmentIds: new Set(),
+        authoritativeEnvironmentIds: new Set([target.environmentId]),
+      },
+    );
+
+    expect(reconnected.transitions).toEqual([
+      { type: "dismiss", target },
+      { type: "show", event: "input", state: currentState },
+    ]);
+  });
+
   it("baselines historical threads when an environment first reconnects", () => {
     const result = reconcileAgentNotificationStates(
       new Map(),

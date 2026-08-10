@@ -53,12 +53,19 @@ export function reconcileAgentNotificationStates(
     // applies when one environment first becomes authoritative after being disconnected.
     const environmentWasAuthoritative =
       context?.previouslyAuthoritativeEnvironmentIds.has(entry.target.environmentId) ?? true;
-    if (
-      priorState !== null &&
-      priorState.phase !== entry.state?.phase &&
-      notificationEventForAwarenessTransition(null, priorState) !== null
-    ) {
+    const priorEvent = notificationEventForAwarenessTransition(null, priorState);
+    const phaseChanged = priorState !== null && priorState.phase !== entry.state?.phase;
+    if (phaseChanged && priorEvent !== null) {
       transitions.push({ type: "dismiss", target: entry.target });
+
+      // Reconnects still baseline new work, but an alert that was already live must continue to
+      // represent a current approval or input request when the attention type changed offline.
+      if (!environmentWasAuthoritative && entry.state !== null) {
+        const currentEvent = notificationEventForAwarenessTransition(null, entry.state);
+        if (currentEvent === "approval" || currentEvent === "input") {
+          transitions.push({ type: "show", event: currentEvent, state: entry.state });
+        }
+      }
     }
 
     if (previous === null || !environmentWasAuthoritative) {
