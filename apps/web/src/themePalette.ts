@@ -157,10 +157,7 @@ function isThemeAppearance(value: unknown): value is ThemeAppearance {
 }
 
 export function isThemeColor(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    /^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(value)
-  );
+  return typeof value === "string" && toCanonicalThemeColor(value) !== null;
 }
 
 function isThemeId(value: unknown): value is string {
@@ -180,8 +177,9 @@ function parseStoredThemeColors(value: unknown, appearance: ThemeAppearance): Th
   // Tolerate unknown roles and malformed values so themes saved by other
   // builds (for example one that adds a new role) keep their remaining colors.
   for (const [role, color] of Object.entries(value)) {
-    if (THEME_COLOR_ROLE_SET.has(role) && isThemeColor(color)) {
-      colors[role as ThemeColorRole] = color;
+    const normalized = toCanonicalThemeColor(color);
+    if (THEME_COLOR_ROLE_SET.has(role) && normalized) {
+      colors[role as ThemeColorRole] = normalized;
     }
   }
   return colors as ThemeColors;
@@ -240,6 +238,20 @@ function readCustomThemesFromStorage(): ReadonlyArray<ThemeDefinition> {
       const theme = parseStoredTheme(value);
       if (theme && !themes.some((existing) => existing.id === theme.id)) {
         themes.push(theme);
+      }
+    }
+
+    // Temporary compatibility migration: keep the runtime canonical while old
+    // libraries remain readable, then rewrite only legacy color leaves in the
+    // original payload. Preserving unknown roles and metadata keeps the stored
+    // format forward-compatible with builds that know more than this one.
+    const migrated = migrateStoredThemeLibrary(parsed);
+    if (migrated.changed) {
+      try {
+        window.localStorage.setItem(CUSTOM_THEMES_STORAGE_KEY, JSON.stringify(migrated.value));
+      } catch {
+        // A read-only or full storage area must not make an otherwise valid
+        // theme disappear. The migration will retry on a later load.
       }
     }
     return themes;
@@ -470,7 +482,7 @@ const T3_CHAT_DARK_COLORS: ThemeColors = {
  * stock tokens (index.css) so a draft seeded from the default look paints the
  * pixels the user is already seeing. Alpha-bearing tokens are flattened over
  * their real backdrops (canvas, or the sidebar for its rows) because theme
- * colors must be opaque hex.
+ * colors are stored as opaque OKLCH tokens.
  */
 const T3_CODE_LIGHT_THEME_COLORS: ThemeColors = {
   canvas: "#fcfcfc",
@@ -599,7 +611,10 @@ const T3_CODE_DARK_THEME_COLORS: ThemeColors = {
  * files.
  */
 export function getStandardThemeColors(appearance: ThemeAppearance): ThemeColors {
-  return appearance === "dark" ? T3_CODE_DARK_THEME_COLORS : T3_CODE_LIGHT_THEME_COLORS;
+  if (appearance === "dark") {
+    return (standardDarkThemeColors ??= canonicalizeThemeColors(T3_CODE_DARK_THEME_COLORS));
+  }
+  return (standardLightThemeColors ??= canonicalizeThemeColors(T3_CODE_LIGHT_THEME_COLORS));
 }
 
 type ThemeRgbColor = {
@@ -614,32 +629,120 @@ type ThemeHslColor = {
   l: number;
 };
 
+type ThemeOklch = { L: number; C: number; h: number };
+type ParsedThemeColor = { color: ThemeOklch; alpha: number };
+type ParsedLegacyHexThemeColor = { rgb: ThemeRgbColor; alpha: number };
+
+let standardLightThemeColors: ThemeColors | undefined;
+let standardDarkThemeColors: ThemeColors | undefined;
+
 const THEME_LIGHT_FOREGROUND: ThemeRgbColor = { r: 255, g: 250, b: 255 };
 const THEME_DARK_FOREGROUND: ThemeRgbColor = { r: 36, g: 21, b: 35 };
 const THEME_WHITE_FOREGROUND: ThemeRgbColor = { r: 255, g: 255, b: 255 };
 const THEME_BLACK_FOREGROUND: ThemeRgbColor = { r: 0, g: 0, b: 0 };
 
-function parseThemeRgbColor(value: string, fallback: ThemeRgbColor): ThemeRgbColor {
-  const match = value.trim().match(/^#([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i);
-  if (!match) return fallback;
+const THEME_COLOR_NUMBER_SOURCE = String.raw`[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?`;
+const THEME_OKLCH_RE = new RegExp(
+  String.raw`^oklch\(\s*(${THEME_COLOR_NUMBER_SOURCE})(%)?\s+(${THEME_COLOR_NUMBER_SOURCE})(%)?\s+(${THEME_COLOR_NUMBER_SOURCE})(?:deg)?(?:\s*\/\s*(${THEME_COLOR_NUMBER_SOURCE})(%)?)?\s*\)$`,
+  "i",
+);
 
-  const raw = match[1];
-  if (!raw) return fallback;
-  const hex =
+function parseLegacyHexThemeColor(value: unknown): ParsedLegacyHexThemeColor | null {
+  if (typeof value !== "string") return null;
+  const match = value.trim().match(/^#([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i);
+  if (!match?.[1]) return null;
+
+  const raw = match[1].toLowerCase();
+  const expanded =
     raw.length <= 4
       ? raw
-          .slice(0, 3)
           .split("")
           .map((part) => part.repeat(2))
           .join("")
-      : raw.slice(0, 6);
-  if (hex.length !== 6) return fallback;
-
+      : raw;
   return {
-    r: Number.parseInt(hex.slice(0, 2), 16),
-    g: Number.parseInt(hex.slice(2, 4), 16),
-    b: Number.parseInt(hex.slice(4, 6), 16),
+    rgb: {
+      r: Number.parseInt(expanded.slice(0, 2), 16),
+      g: Number.parseInt(expanded.slice(2, 4), 16),
+      b: Number.parseInt(expanded.slice(4, 6), 16),
+    },
+    alpha: expanded.length === 8 ? Number.parseInt(expanded.slice(6, 8), 16) / 255 : 1,
   };
+}
+
+function parseOklchThemeColor(value: unknown): ParsedThemeColor | null {
+  if (typeof value !== "string") return null;
+  const match = THEME_OKLCH_RE.exec(value.trim());
+  if (!match) return null;
+
+  const lightness = Number.parseFloat(match[1]!);
+  const chroma = Number.parseFloat(match[3]!);
+  const hue = Number.parseFloat(match[5]!);
+  const alphaValue = match[6] === undefined ? 1 : Number.parseFloat(match[6]);
+  const L = match[2] ? lightness / 100 : lightness;
+  // CSS maps 100% chroma to 0.4 in OKLCH.
+  const C = match[4] ? chroma * 0.004 : chroma;
+  const alpha = match[7] ? alphaValue / 100 : alphaValue;
+  if (
+    ![L, C, hue, alpha].every(Number.isFinite) ||
+    L < 0 ||
+    L > 1 ||
+    C < 0 ||
+    alpha < 0 ||
+    alpha > 1
+  ) {
+    return null;
+  }
+  return { color: { L, C, h: hue }, alpha };
+}
+
+function formatThemeColorNumber(value: number, precision: number): string {
+  const rounded = Math.abs(value) < 10 ** -precision / 2 ? 0 : value;
+  return rounded.toFixed(precision).replace(/(?:\.0+|(?:(\.[0-9]*?)0+))$/, "$1");
+}
+
+function formatOklchThemeColor(color: ThemeOklch, alpha = 1): string {
+  const normalizedHue = color.C < 0.0000005 ? 0 : ((color.h % 360) + 360) % 360;
+  const body = `${formatThemeColorNumber(color.L, 6)} ${formatThemeColorNumber(color.C, 6)} ${formatThemeColorNumber(normalizedHue, 3)}`;
+  return alpha < 1 ? `oklch(${body} / ${formatThemeColorNumber(alpha, 4)})` : `oklch(${body})`;
+}
+
+/**
+ * Canonicalize a theme color at the persistence boundary. The hex branch is a
+ * temporary migration shim for libraries and files created by older builds.
+ */
+export function toCanonicalThemeColor(value: unknown): string | null {
+  const oklch = parseOklchThemeColor(value);
+  if (oklch) return formatOklchThemeColor(oklch.color, oklch.alpha);
+
+  const legacy = parseLegacyHexThemeColor(value);
+  return legacy ? formatOklchThemeColor(themeRgbToOklch(legacy.rgb), legacy.alpha) : null;
+}
+
+/** Convert a runtime theme color for hex-only editor and import adapters. */
+export function themeColorToHex(value: string): string | null {
+  const legacy = parseLegacyHexThemeColor(value);
+  const parsed = legacy
+    ? { rgb: legacy.rgb, alpha: legacy.alpha }
+    : (() => {
+        const oklch = parseOklchThemeColor(value);
+        return oklch ? { rgb: themeOklchToRgb(oklch.color), alpha: oklch.alpha } : null;
+      })();
+  if (!parsed) return null;
+
+  const opaque = themeRgbToHexColor(parsed.rgb);
+  if (parsed.alpha >= 1) return opaque;
+  const alpha = Math.round(parsed.alpha * 255)
+    .toString(16)
+    .padStart(2, "0");
+  return `${opaque}${alpha}`;
+}
+
+function parseThemeRgbColor(value: string, fallback: ThemeRgbColor): ThemeRgbColor {
+  const legacy = parseLegacyHexThemeColor(value);
+  if (legacy) return legacy.rgb;
+  const oklch = parseOklchThemeColor(value);
+  return oklch ? themeOklchToRgb(oklch.color) : fallback;
 }
 
 function themeRgbToHexColor(color: ThemeRgbColor): string {
@@ -650,6 +753,88 @@ function themeRgbToHexColor(color: ThemeRgbColor): string {
         .padStart(2, "0"),
     )
     .join("")}`;
+}
+
+function themeRgbToThemeColor(color: ThemeRgbColor): string {
+  return formatOklchThemeColor(themeRgbToOklch(color));
+}
+
+function canonicalizeThemeColors(colors: ThemeColors): ThemeColors {
+  return Object.fromEntries(
+    THEME_COLOR_ROLES.map((role) => [role, toCanonicalThemeColor(colors[role]) ?? colors[role]]),
+  ) as Record<ThemeColorRole, string>;
+}
+
+function canonicalizeThemeDefinition(theme: ThemeDefinition): ThemeDefinition {
+  return {
+    ...theme,
+    colors: canonicalizeThemeColors(theme.colors),
+    ...(theme.variants
+      ? {
+          variants: Object.fromEntries(
+            Object.entries(theme.variants).map(([appearance, colors]) => [
+              appearance,
+              canonicalizeThemeColors(colors),
+            ]),
+          ) as ThemeVariants,
+        }
+      : {}),
+  };
+}
+
+function migrateStoredThemeColorRecord(value: unknown): { value: unknown; changed: boolean } {
+  if (!isRecord(value)) return { value, changed: false };
+  let next: Record<string, unknown> = value;
+  let changed = false;
+  for (const [role, color] of Object.entries(value)) {
+    if (!THEME_COLOR_ROLE_SET.has(role) || !parseLegacyHexThemeColor(color)) continue;
+    const canonical = toCanonicalThemeColor(color);
+    if (!canonical) continue;
+    if (!changed) next = { ...value };
+    next[role] = canonical;
+    changed = true;
+  }
+  return { value: next, changed };
+}
+
+function migrateStoredTheme(value: unknown): { value: unknown; changed: boolean } {
+  if (!isRecord(value)) return { value, changed: false };
+  const colors = migrateStoredThemeColorRecord(value.colors);
+  let variantsValue = value.variants;
+  let variantsChanged = false;
+  if (isRecord(value.variants)) {
+    let nextVariants: Record<string, unknown> = value.variants;
+    for (const [appearance, variantColors] of Object.entries(value.variants)) {
+      const migrated = migrateStoredThemeColorRecord(variantColors);
+      if (!migrated.changed) continue;
+      if (!variantsChanged) nextVariants = { ...value.variants };
+      nextVariants[appearance] = migrated.value;
+      variantsChanged = true;
+    }
+    variantsValue = nextVariants;
+  }
+  if (!colors.changed && !variantsChanged) return { value, changed: false };
+  return {
+    value: {
+      ...value,
+      colors: colors.value,
+      ...(value.variants === undefined ? {} : { variants: variantsValue }),
+    },
+    changed: true,
+  };
+}
+
+function migrateStoredThemeLibrary(values: ReadonlyArray<unknown>): {
+  value: ReadonlyArray<unknown>;
+  changed: boolean;
+} {
+  let changed = false;
+  const value = values.map((theme) => {
+    const migrated = migrateStoredTheme(theme);
+    changed ||= migrated.changed;
+    return migrated.value;
+  });
+  return { value, changed };
 }
 
 function themeRgbToHsl(color: ThemeRgbColor): ThemeHslColor {
@@ -717,10 +902,6 @@ function themeRelativeLuminance(color: ThemeRgbColor): number {
 
 // ---------------------------------------------------------------------------
 // Vivid palette engine: perceptual (OKLCH) derivation for user-created themes.
-// Built-in themes keep the legacy derivation so their shipped palettes and the
-// boot splash copies stay byte-identical.
-
-type ThemeOklch = { L: number; C: number; h: number };
 
 function srgbChannelToLinear(channel: number): number {
   const c = channel / 255;
@@ -759,29 +940,32 @@ function oklchToRgbUnclamped({ L, C, h }: ThemeOklch): { r: number; g: number; b
   };
 }
 
-/** Convert to sRGB, walking chroma toward grey until the color is in gamut. */
-function themeOklchToRgb(color: ThemeOklch): ThemeRgbColor {
+/** Walk chroma toward grey until the color is representable in sRGB. */
+function mapThemeOklchToSrgbGamut(color: ThemeOklch): ThemeOklch {
   let { C } = color;
   for (let step = 0; step < 12; step += 1) {
     const linear = oklchToRgbUnclamped({ ...color, C });
     const inGamut = [linear.r, linear.g, linear.b].every(
       (channel) => channel >= -0.0001 && channel <= 1.0001,
     );
-    if (inGamut) {
-      return {
-        r: linearChannelToSrgb(linear.r),
-        g: linearChannelToSrgb(linear.g),
-        b: linearChannelToSrgb(linear.b),
-      };
-    }
+    if (inGamut) return { ...color, C };
     C *= 0.82;
   }
-  const linear = oklchToRgbUnclamped({ ...color, C: 0 });
+  return { ...color, C: 0 };
+}
+
+/** Convert to sRGB after applying the palette engine's gamut mapping. */
+function themeOklchToRgb(color: ThemeOklch): ThemeRgbColor {
+  const linear = oklchToRgbUnclamped(mapThemeOklchToSrgbGamut(color));
   return {
     r: linearChannelToSrgb(linear.r),
     g: linearChannelToSrgb(linear.g),
     b: linearChannelToSrgb(linear.b),
   };
+}
+
+function themeOklchToThemeColor(color: ThemeOklch): string {
+  return formatOklchThemeColor(mapThemeOklchToSrgbGamut(color));
 }
 
 /** Binary-search the lightness that reaches the contrast target against a background. */
@@ -856,26 +1040,24 @@ function standardStatusColors(canvas: ThemeRgbColor): {
   // tinted one they can fall just short, so lightness is nudged until the
   // pair clears 4.5 while the hue stays standard.
   const readableOn = (foreground: string, surface: ThemeRgbColor) =>
-    themeRgbToHexColor(
-      themeOklchToRgb(
-        solveOklchLightness(
-          themeRgbToOklch(parseThemeRgbColor(foreground, canvas)),
-          surface,
-          // A hair above 4.5: the solve happens in OKLCH and the result is
-          // quantized to 8-bit hex, which can shave the last hundredth off.
-          4.6,
-          appearance === "dark" ? "lighter" : "darker",
-        ),
+    themeOklchToThemeColor(
+      solveOklchLightness(
+        themeRgbToOklch(parseThemeRgbColor(foreground, canvas)),
+        surface,
+        // Leave a little headroom for browser color conversion at render time.
+        4.6,
+        appearance === "dark" ? "lighter" : "darker",
       ),
     );
   const errorSurface = surfaceOf(standard.error);
   const warningSurface = surfaceOf(standard.warning);
   return {
-    ...standard,
+    error: toCanonicalThemeColor(standard.error)!,
     errorForeground: readableOn(standard.errorForeground, errorSurface),
-    errorSurface: themeRgbToHexColor(errorSurface),
+    errorSurface: themeRgbToThemeColor(errorSurface),
+    warning: toCanonicalThemeColor(standard.warning)!,
     warningForeground: readableOn(standard.warningForeground, warningSurface),
-    warningSurface: themeRgbToHexColor(warningSurface),
+    warningSurface: themeRgbToThemeColor(warningSurface),
   };
 }
 
@@ -912,7 +1094,7 @@ export function createVividThemeColors(
     C: chroma,
     h: hue,
   });
-  const hex = (color: ThemeOklch) => themeRgbToHexColor(themeOklchToRgb(color));
+  const themeColor = (color: ThemeOklch) => themeOklchToThemeColor(color);
 
   // Text carries a whisper of the accent hue instead of falling back to a
   // fixed foreground, and is solved to WCAG AAA against the canvas.
@@ -956,8 +1138,8 @@ export function createVividThemeColors(
   const updateSurface = surfaceAt(dark ? 0.14 : 0.09, Math.min(0.12, accent.C * 0.55));
 
   const foregroundOn = (surfaceRgb: ThemeRgbColor): string =>
-    themeRgbToHexColor(
-      themeOklchToRgb(solveOklchLightness(textBase, surfaceRgb, 4.6, dark ? "lighter" : "darker")),
+    themeOklchToThemeColor(
+      solveOklchLightness(textBase, surfaceRgb, 4.6, dark ? "lighter" : "darker"),
     );
   const mutedForeground = foregroundOn(mutedRgb);
   const placeholder = foregroundOn(surfaceRaisedRgb);
@@ -967,58 +1149,58 @@ export function createVividThemeColors(
   return {
     ...defaults,
     ...standardStatusColors(canvasRgb),
-    canvas: themeRgbToHexColor(canvasRgb),
+    canvas: themeRgbToThemeColor(canvasRgb),
     // The top bar shares the canvas so the main panel reads as one surface.
-    chrome: themeRgbToHexColor(canvasRgb),
-    toolbar: themeRgbToHexColor(canvasRgb),
-    toolbarForeground: themeRgbToHexColor(textRgb),
-    toolbarBorder: hex(surfaceAt(dark ? 0.14 : 0.1, Math.min(0.08, accent.C * 0.4))),
-    toolbarControl: hex(surfaceAt(dark ? 0.09 : 0.05, tintC * 1.3)),
-    toolbarControlForeground: themeRgbToHexColor(textRgb),
-    toolbarControlHover: hex(surfaceAt(dark ? 0.14 : 0.09, tintC * 1.6)),
-    surface: hex(surface),
-    surfaceRaised: hex(surfaceRaised),
-    surfaceOverlay: hex(surfaceOverlay),
-    text: themeRgbToHexColor(textRgb),
-    textMuted: themeRgbToHexColor(textMutedRgb),
-    border: hex(border),
-    input: hex(input),
-    focus: themeRgbToHexColor(accentRgb),
-    accent: themeRgbToHexColor(accentRgb),
-    accentForeground: themeRgbToHexColor(accentForeground),
-    secondary: hex(secondary),
+    chrome: themeRgbToThemeColor(canvasRgb),
+    toolbar: themeRgbToThemeColor(canvasRgb),
+    toolbarForeground: themeRgbToThemeColor(textRgb),
+    toolbarBorder: themeColor(surfaceAt(dark ? 0.14 : 0.1, Math.min(0.08, accent.C * 0.4))),
+    toolbarControl: themeColor(surfaceAt(dark ? 0.09 : 0.05, tintC * 1.3)),
+    toolbarControlForeground: themeRgbToThemeColor(textRgb),
+    toolbarControlHover: themeColor(surfaceAt(dark ? 0.14 : 0.09, tintC * 1.6)),
+    surface: themeColor(surface),
+    surfaceRaised: themeColor(surfaceRaised),
+    surfaceOverlay: themeColor(surfaceOverlay),
+    text: themeRgbToThemeColor(textRgb),
+    textMuted: themeRgbToThemeColor(textMutedRgb),
+    border: themeColor(border),
+    input: themeColor(input),
+    focus: themeRgbToThemeColor(accentRgb),
+    accent: themeRgbToThemeColor(accentRgb),
+    accentForeground: themeRgbToThemeColor(accentForeground),
+    secondary: themeColor(secondary),
     secondaryForeground: foregroundOn(secondaryRgb),
-    muted: hex(muted),
+    muted: themeColor(muted),
     mutedForeground,
     placeholder,
-    secondaryLabel: themeRgbToHexColor(textMutedRgb),
-    iconMuted: themeRgbToHexColor(textMutedRgb),
-    update: themeRgbToHexColor(accentRgb),
+    secondaryLabel: themeRgbToThemeColor(textMutedRgb),
+    iconMuted: themeRgbToThemeColor(textMutedRgb),
+    update: themeRgbToThemeColor(accentRgb),
     updateForeground: foregroundOn(themeOklchToRgb(updateSurface)),
-    updateSurface: hex(updateSurface),
-    accentSurface: hex(accentSurface),
+    updateSurface: themeColor(updateSurface),
+    accentSurface: themeColor(accentSurface),
     accentSurfaceForeground: foregroundOn(accentSurfaceRgb),
-    messageSurface: hex(messageSurface),
+    messageSurface: themeColor(messageSurface),
     messageForeground: foregroundOn(messageSurfaceRgb),
-    messageAction: themeRgbToHexColor(actionRgb),
-    messageActionForeground: themeRgbToHexColor(actionForeground),
-    messageActionHover: hex(actionHover),
-    codeBackground: hex(codeBackground),
-    codeForeground: themeRgbToHexColor(textRgb),
-    sidebar: hex(sidebar),
+    messageAction: themeRgbToThemeColor(actionRgb),
+    messageActionForeground: themeRgbToThemeColor(actionForeground),
+    messageActionHover: themeColor(actionHover),
+    codeBackground: themeColor(codeBackground),
+    codeForeground: themeRgbToThemeColor(textRgb),
+    sidebar: themeColor(sidebar),
     sidebarForeground: foregroundOn(sidebarRgb),
-    sidebarMutedForeground: themeRgbToHexColor(standardMutedThemeText(sidebarRgb, textRgb)),
-    sidebarControlSurface: hex(surfaceAt(dark ? 0.1 : 0.07, tintC * 1.5)),
-    sidebarRowHover: hex(surfaceAt(dark ? 0.08 : 0.06, Math.min(0.08, accent.C * 0.45))),
-    sidebarRowActive: hex(surfaceAt(dark ? 0.12 : 0.09, Math.min(0.1, accent.C * 0.55))),
-    sidebarRowSelected: hex(surfaceAt(dark ? 0.14 : 0.1, Math.min(0.11, accent.C * 0.6))),
-    sidebarBorder: hex(surfaceAt(dark ? 0.17 : 0.12, Math.min(0.08, accent.C * 0.4))),
-    terminalBackground: themeRgbToHexColor(canvasRgb),
-    terminalForeground: themeRgbToHexColor(textRgb),
-    terminalCursor: themeRgbToHexColor(accentRgb),
-    terminalSelection: hex(surfaceAt(dark ? 0.18 : 0.12, Math.min(0.12, accent.C * 0.55))),
-    terminalScrollbar: hex(surfaceAt(dark ? 0.22 : 0.16, tintC)),
-    terminalScrollbarHover: hex(surfaceAt(dark ? 0.3 : 0.22, tintC)),
+    sidebarMutedForeground: themeRgbToThemeColor(standardMutedThemeText(sidebarRgb, textRgb)),
+    sidebarControlSurface: themeColor(surfaceAt(dark ? 0.1 : 0.07, tintC * 1.5)),
+    sidebarRowHover: themeColor(surfaceAt(dark ? 0.08 : 0.06, Math.min(0.08, accent.C * 0.45))),
+    sidebarRowActive: themeColor(surfaceAt(dark ? 0.12 : 0.09, Math.min(0.1, accent.C * 0.55))),
+    sidebarRowSelected: themeColor(surfaceAt(dark ? 0.14 : 0.1, Math.min(0.11, accent.C * 0.6))),
+    sidebarBorder: themeColor(surfaceAt(dark ? 0.17 : 0.12, Math.min(0.08, accent.C * 0.4))),
+    terminalBackground: themeRgbToThemeColor(canvasRgb),
+    terminalForeground: themeRgbToThemeColor(textRgb),
+    terminalCursor: themeRgbToThemeColor(accentRgb),
+    terminalSelection: themeColor(surfaceAt(dark ? 0.18 : 0.12, Math.min(0.12, accent.C * 0.55))),
+    terminalScrollbar: themeColor(surfaceAt(dark ? 0.22 : 0.16, tintC)),
+    terminalScrollbarHover: themeColor(surfaceAt(dark ? 0.3 : 0.22, tintC)),
   };
 }
 
@@ -1127,8 +1309,7 @@ function managedThemeAccent(
     const color = themeHslToRgb({ h: hsl.h, s: saturation, l: lightness });
     return { color, lightness, contrast: themeContrastRatio(color, background) };
   });
-  // Leave a little room for rounding when the generated RGB values become a
-  // six-digit hex token.
+  // Leave a little room for browser color conversion at render time.
   const readableCandidates = candidates.filter((candidate) => candidate.contrast >= 4.7);
   const pool = readableCandidates.length > 0 ? readableCandidates : candidates;
 
@@ -1210,80 +1391,80 @@ export function createManagedThemeColors(
   return {
     ...defaults,
     ...standardStatusColors(canvas),
-    update: themeRgbToHexColor(accent),
-    updateForeground: themeRgbToHexColor(updateForeground),
-    updateSurface: themeRgbToHexColor(updateSurface),
-    canvas: themeRgbToHexColor(canvas),
-    chrome: themeRgbToHexColor(chrome),
-    toolbar: themeRgbToHexColor(chrome),
-    toolbarForeground: themeRgbToHexColor(text),
-    toolbarBorder: themeRgbToHexColor(toolbarBorder),
-    toolbarControl: themeRgbToHexColor(toolbarControl),
-    toolbarControlForeground: themeRgbToHexColor(text),
-    toolbarControlHover: themeRgbToHexColor(accentSurface),
-    surface: themeRgbToHexColor(canvas),
-    surfaceRaised: themeRgbToHexColor(surfaceRaised),
-    surfaceOverlay: themeRgbToHexColor(surfaceOverlay),
-    text: themeRgbToHexColor(text),
-    textMuted: themeRgbToHexColor(textMuted),
+    update: themeRgbToThemeColor(accent),
+    updateForeground: themeRgbToThemeColor(updateForeground),
+    updateSurface: themeRgbToThemeColor(updateSurface),
+    canvas: themeRgbToThemeColor(canvas),
+    chrome: themeRgbToThemeColor(chrome),
+    toolbar: themeRgbToThemeColor(chrome),
+    toolbarForeground: themeRgbToThemeColor(text),
+    toolbarBorder: themeRgbToThemeColor(toolbarBorder),
+    toolbarControl: themeRgbToThemeColor(toolbarControl),
+    toolbarControlForeground: themeRgbToThemeColor(text),
+    toolbarControlHover: themeRgbToThemeColor(accentSurface),
+    surface: themeRgbToThemeColor(canvas),
+    surfaceRaised: themeRgbToThemeColor(surfaceRaised),
+    surfaceOverlay: themeRgbToThemeColor(surfaceOverlay),
+    text: themeRgbToThemeColor(text),
+    textMuted: themeRgbToThemeColor(textMuted),
     // Borders blend through the accent before lightening so control chrome
     // carries the theme hue like the hand-tuned palettes (#5c345b, #e0d3e1)
     // instead of flattening to grey.
-    border: themeRgbToHexColor(
+    border: themeRgbToThemeColor(
       mixThemeRgbColors(
         mixThemeRgbColors(canvas, accent, appearance === "dark" ? 0.22 : 0.1),
         text,
         0.1,
       ),
     ),
-    input: themeRgbToHexColor(
+    input: themeRgbToThemeColor(
       mixThemeRgbColors(
         mixThemeRgbColors(canvas, accent, appearance === "dark" ? 0.3 : 0.14),
         text,
         appearance === "dark" ? 0.14 : 0.13,
       ),
     ),
-    focus: themeRgbToHexColor(accent),
-    accent: themeRgbToHexColor(accent),
-    accentForeground: themeRgbToHexColor(accentForeground),
-    secondary: themeRgbToHexColor(secondary),
-    secondaryForeground: themeRgbToHexColor(readableThemeForeground(secondary)),
-    muted: themeRgbToHexColor(muted),
-    mutedForeground: themeRgbToHexColor(mutedForeground),
-    placeholder: themeRgbToHexColor(placeholder),
-    secondaryLabel: themeRgbToHexColor(textMuted),
-    iconMuted: themeRgbToHexColor(textMuted),
-    accentSurface: themeRgbToHexColor(accentSurface),
-    accentSurfaceForeground: themeRgbToHexColor(readableThemeForeground(accentSurface)),
-    messageSurface: themeRgbToHexColor(messageSurface),
-    messageForeground: themeRgbToHexColor(readableThemeForeground(messageSurface)),
-    messageAction: themeRgbToHexColor(accent),
-    messageActionForeground: themeRgbToHexColor(accentForeground),
-    messageActionHover: themeRgbToHexColor(messageActionHover),
-    codeBackground: themeRgbToHexColor(codeBackground),
-    codeForeground: themeRgbToHexColor(readableThemeForeground(codeBackground)),
-    sidebar: themeRgbToHexColor(sidebar),
-    sidebarForeground: themeRgbToHexColor(readableThemeForeground(sidebar)),
-    sidebarMutedForeground: themeRgbToHexColor(standardMutedThemeText(sidebar, text)),
-    sidebarControlSurface: themeRgbToHexColor(
+    focus: themeRgbToThemeColor(accent),
+    accent: themeRgbToThemeColor(accent),
+    accentForeground: themeRgbToThemeColor(accentForeground),
+    secondary: themeRgbToThemeColor(secondary),
+    secondaryForeground: themeRgbToThemeColor(readableThemeForeground(secondary)),
+    muted: themeRgbToThemeColor(muted),
+    mutedForeground: themeRgbToThemeColor(mutedForeground),
+    placeholder: themeRgbToThemeColor(placeholder),
+    secondaryLabel: themeRgbToThemeColor(textMuted),
+    iconMuted: themeRgbToThemeColor(textMuted),
+    accentSurface: themeRgbToThemeColor(accentSurface),
+    accentSurfaceForeground: themeRgbToThemeColor(readableThemeForeground(accentSurface)),
+    messageSurface: themeRgbToThemeColor(messageSurface),
+    messageForeground: themeRgbToThemeColor(readableThemeForeground(messageSurface)),
+    messageAction: themeRgbToThemeColor(accent),
+    messageActionForeground: themeRgbToThemeColor(accentForeground),
+    messageActionHover: themeRgbToThemeColor(messageActionHover),
+    codeBackground: themeRgbToThemeColor(codeBackground),
+    codeForeground: themeRgbToThemeColor(readableThemeForeground(codeBackground)),
+    sidebar: themeRgbToThemeColor(sidebar),
+    sidebarForeground: themeRgbToThemeColor(readableThemeForeground(sidebar)),
+    sidebarMutedForeground: themeRgbToThemeColor(standardMutedThemeText(sidebar, text)),
+    sidebarControlSurface: themeRgbToThemeColor(
       mixThemeRgbColors(sidebar, text, appearance === "dark" ? 0.16 : 0.08),
     ),
-    sidebarRowHover: themeRgbToHexColor(mixThemeRgbColors(sidebar, accent, 0.12)),
-    sidebarRowActive: themeRgbToHexColor(mixThemeRgbColors(sidebar, accent, 0.2)),
-    sidebarRowSelected: themeRgbToHexColor(mixThemeRgbColors(sidebar, accent, 0.24)),
-    sidebarBorder: themeRgbToHexColor(
+    sidebarRowHover: themeRgbToThemeColor(mixThemeRgbColors(sidebar, accent, 0.12)),
+    sidebarRowActive: themeRgbToThemeColor(mixThemeRgbColors(sidebar, accent, 0.2)),
+    sidebarRowSelected: themeRgbToThemeColor(mixThemeRgbColors(sidebar, accent, 0.24)),
+    sidebarBorder: themeRgbToThemeColor(
       mixThemeRgbColors(sidebar, text, appearance === "dark" ? 0.35 : 0.12),
     ),
-    terminalBackground: themeRgbToHexColor(terminalBackground),
-    terminalForeground: themeRgbToHexColor(readableThemeForeground(terminalBackground)),
-    terminalCursor: themeRgbToHexColor(accent),
-    terminalSelection: themeRgbToHexColor(
+    terminalBackground: themeRgbToThemeColor(terminalBackground),
+    terminalForeground: themeRgbToThemeColor(readableThemeForeground(terminalBackground)),
+    terminalCursor: themeRgbToThemeColor(accent),
+    terminalSelection: themeRgbToThemeColor(
       mixThemeRgbColors(canvas, accent, appearance === "dark" ? 0.35 : 0.18),
     ),
-    terminalScrollbar: themeRgbToHexColor(
+    terminalScrollbar: themeRgbToThemeColor(
       mixThemeRgbColors(canvas, text, appearance === "dark" ? 0.42 : 0.22),
     ),
-    terminalScrollbarHover: themeRgbToHexColor(
+    terminalScrollbarHover: themeRgbToThemeColor(
       mixThemeRgbColors(canvas, text, appearance === "dark" ? 0.55 : 0.32),
     ),
   };
@@ -1293,16 +1474,16 @@ export const T3_CHAT_THEME: ThemeDefinition = {
   id: T3_CHAT_THEME_ID,
   label: T3_CHAT_THEME_LABEL,
   appearance: "light",
-  colors: T3_CHAT_LIGHT_COLORS,
+  colors: canonicalizeThemeColors(T3_CHAT_LIGHT_COLORS),
   variants: {
-    dark: T3_CHAT_DARK_COLORS,
+    dark: canonicalizeThemeColors(T3_CHAT_DARK_COLORS),
   },
   sidebarArtwork: true,
 };
 
 /** Theme-file defaults follow the flagship palette for the requested mode. */
 export function getDefaultThemeColors(appearance: ThemeAppearance): ThemeColors {
-  return appearance === "dark" ? T3_CHAT_DARK_COLORS : T3_CHAT_LIGHT_COLORS;
+  return appearance === "dark" ? T3_CHAT_THEME.variants!.dark! : T3_CHAT_THEME.colors;
 }
 
 /**
@@ -1320,9 +1501,9 @@ function themeActionColors(
       ? THEME_BLACK_FOREGROUND
       : THEME_WHITE_FOREGROUND;
   return {
-    messageAction: action,
-    messageActionForeground: themeRgbToHexColor(foreground),
-    messageActionHover: themeRgbToHexColor(mixThemeRgbColors(rgb, towardOpposite, 0.12)),
+    messageAction: toCanonicalThemeColor(action) ?? themeRgbToThemeColor(rgb),
+    messageActionForeground: themeRgbToThemeColor(foreground),
+    messageActionHover: themeRgbToThemeColor(mixThemeRgbColors(rgb, towardOpposite, 0.12)),
   };
 }
 
@@ -1483,8 +1664,9 @@ export function installCustomTheme(theme: ThemeDefinition): ThemeDefinition {
   ) {
     throw new Error(`A theme named "${theme.label}" is already installed.`);
   }
-  saveCustomThemes([...getCustomThemes(), theme]);
-  return theme;
+  const canonicalTheme = canonicalizeThemeDefinition(theme);
+  saveCustomThemes([...getCustomThemes(), canonicalTheme]);
+  return canonicalTheme;
 }
 
 export function updateCustomTheme(theme: ThemeDefinition): ThemeDefinition {
@@ -1498,10 +1680,11 @@ export function updateCustomTheme(theme: ThemeDefinition): ThemeDefinition {
     throw new Error(`The theme "${theme.label}" is not installed.`);
   }
 
+  const canonicalTheme = canonicalizeThemeDefinition(theme);
   const nextThemes = [...themes];
-  nextThemes[themeIndex] = theme;
+  nextThemes[themeIndex] = canonicalTheme;
   saveCustomThemes(nextThemes);
-  return theme;
+  return canonicalTheme;
 }
 
 export function removeCustomTheme(themeId: string): void {
@@ -1518,10 +1701,13 @@ function parseThemeColorOverrides(value: unknown): ThemeColorOverrides {
     if (!THEME_COLOR_ROLE_SET.has(role)) {
       throw new Error(`"${role}" is not a supported theme color role.`);
     }
-    if (!isThemeColor(color)) {
-      throw new Error(`The color for "${role}" must be a hex color such as #8b5cf6.`);
+    const normalized = toCanonicalThemeColor(color);
+    if (!normalized) {
+      throw new Error(
+        `The color for "${role}" must be an OKLCH color such as oklch(0.62 0.2 280).`,
+      );
     }
-    overrides[role as ThemeColorRole] = color;
+    overrides[role as ThemeColorRole] = normalized;
   }
   if (Object.keys(overrides).length === 0) {
     throw new Error("Add at least one color role to the theme file.");
@@ -1586,14 +1772,15 @@ export function parseThemeFile(value: unknown): ThemeDefinition {
 }
 
 export function serializeThemeFile(theme: ThemeDefinition): string {
+  const canonicalTheme = canonicalizeThemeDefinition(theme);
   const file: ThemeFile = {
     version: THEME_FILE_VERSION,
-    id: theme.id,
-    name: theme.label,
-    appearance: theme.appearance,
-    colors: theme.colors,
-    ...(theme.variants ? { variants: theme.variants } : {}),
-    ...(theme.managed ? { managed: true } : {}),
+    id: canonicalTheme.id,
+    name: canonicalTheme.label,
+    appearance: canonicalTheme.appearance,
+    colors: canonicalTheme.colors,
+    ...(canonicalTheme.variants ? { variants: canonicalTheme.variants } : {}),
+    ...(canonicalTheme.managed ? { managed: true } : {}),
   };
   return `${JSON.stringify(file, null, 2)}\n`;
 }

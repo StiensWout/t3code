@@ -31,12 +31,35 @@ import {
   createManagedThemeColors,
   createVividThemeColors,
   getDefaultThemeColors,
+  themeColorToHex,
+  toCanonicalThemeColor,
   THEME_FILE_VERSION,
 } from "./themePalette";
 
+function asHex(value: string): string {
+  const hex = themeColorToHex(value);
+  if (!hex) throw new Error(`Expected a theme color, received ${value}`);
+  return hex.slice(0, 7);
+}
+
+function canonical(value: string): string {
+  const color = toCanonicalThemeColor(value);
+  if (!color) throw new Error(`Expected a theme color, received ${value}`);
+  return color;
+}
+
+function expectThemeColors(
+  colors: Readonly<Record<string, string>>,
+  expected: Readonly<Record<string, string>>,
+): void {
+  for (const [role, value] of Object.entries(expected)) {
+    expect(asHex(colors[role]!)).toBe(value);
+  }
+}
+
 function contrastRatio(first: string, second: string): number {
   const toRgb = (value: string) => {
-    const hex = value.slice(1);
+    const hex = asHex(value).slice(1);
     return [0, 1, 2].map(
       (channel) => Number.parseInt(hex.slice(channel * 2, channel * 2 + 2), 16) / 255,
     );
@@ -56,8 +79,8 @@ describe("theme files", () => {
     const dark = createManagedThemeColors("dark", "#ffffff", "#ffff00");
     const darkDefaults = getDefaultThemeColors("dark");
 
-    expect(light.canvas).not.toBe("#111827");
-    expect(dark.canvas).not.toBe("#ffffff");
+    expect(asHex(light.canvas)).not.toBe("#111827");
+    expect(asHex(dark.canvas)).not.toBe("#ffffff");
     expect(contrastRatio(light.accent, light.canvas)).toBeGreaterThanOrEqual(4.5);
     expect(contrastRatio(dark.accent, dark.canvas)).toBeGreaterThanOrEqual(4.5);
     expect(contrastRatio(light.textMuted, light.canvas)).toBeGreaterThanOrEqual(4.5);
@@ -73,7 +96,7 @@ describe("theme files", () => {
     // Status colors fall back to T3 Code's standard red and amber rather than
     // the flagship palette's, so no generated theme inherits a brand tint.
     const channels = (value: string) =>
-      [1, 3, 5].map((index) => Number.parseInt(value.slice(index, index + 2), 16)) as [
+      [1, 3, 5].map((index) => Number.parseInt(asHex(value).slice(index, index + 2), 16)) as [
         number,
         number,
         number,
@@ -92,7 +115,7 @@ describe("theme files", () => {
       expect(warnRed).toBeGreaterThan(warnBlue);
       expect(warnGreen).toBeGreaterThan(warnBlue);
     }
-    expect(dark.error).not.toBe(darkDefaults.error);
+    expect(asHex(dark.error)).not.toBe(asHex(darkDefaults.error));
   });
 
   it("derives readable, distinctive vivid palettes from exact seeds", () => {
@@ -108,8 +131,10 @@ describe("theme files", () => {
     for (const [appearance, canvas, accent] of seeds) {
       const colors = createVividThemeColors(appearance, canvas, accent);
       // Exact seeds are honored.
-      expect(colors.canvas).toBe(canvas);
-      expect(colors.accent).toBe(accent);
+      expect(colors.canvas).toMatch(/^oklch\(/);
+      expect(colors.accent).toMatch(/^oklch\(/);
+      expect(asHex(colors.canvas)).toBe(canvas);
+      expect(asHex(colors.accent)).toBe(accent);
       // Readability is solved per surface.
       expect(contrastRatio(colors.text, colors.canvas)).toBeGreaterThanOrEqual(7);
       expect(contrastRatio(colors.textMuted, colors.canvas)).toBeGreaterThanOrEqual(4.5);
@@ -131,7 +156,7 @@ describe("theme files", () => {
       // The companion action is a distinct voice, not the accent again.
       expect(colors.messageAction).not.toBe(colors.accent);
       // Update family follows the theme, not the default palette.
-      expect(colors.update).toBe(accent);
+      expect(asHex(colors.update)).toBe(accent);
     }
   });
 
@@ -170,11 +195,27 @@ describe("theme files", () => {
       label: "Ocean dusk",
       appearance: "dark",
       colors: {
-        canvas: "#07152f",
-        accent: "#67c2ff",
-        placeholder: "#968d9f",
+        canvas: canonical("#07152f"),
+        accent: canonical("#67c2ff"),
+        placeholder: canonical("#968d9f"),
       },
     });
+  });
+
+  it("canonicalizes OKLCH syntax and legacy hex without dropping alpha", () => {
+    const theme = parseThemeFile({
+      version: THEME_FILE_VERSION,
+      name: "Translucent",
+      appearance: "light",
+      colors: {
+        canvas: "oklch(62% 0.2 280deg / 50%)",
+        accent: "#abcd",
+      },
+    });
+
+    expect(theme.colors.canvas).toBe("oklch(0.62 0.2 280 / 0.5)");
+    expect(theme.colors.accent).toBe(canonical("#abcd"));
+    expect(themeColorToHex(theme.colors.accent)).toBe("#aabbccdd");
   });
 
   it("rejects unknown roles and invalid color values", () => {
@@ -194,7 +235,7 @@ describe("theme files", () => {
         appearance: "light",
         colors: { accent: "var(--danger)" },
       }),
-    ).toThrow('The color for "accent" must be a hex color');
+    ).toThrow('The color for "accent" must be an OKLCH color');
   });
 
   it("serializes a theme back into the importable file shape", () => {
@@ -257,8 +298,8 @@ describe("theme files", () => {
 
     expect(getThemeModes(theme)).toEqual(["light", "dark"]);
     expect(getThemeColorsForMode(theme, "dark")).toMatchObject({
-      canvas: "#101827",
-      text: "#eef5ff",
+      canvas: canonical("#101827"),
+      text: canonical("#eef5ff"),
     });
     expect(getThemeModes(T3_CHAT_THEME)).toEqual(["light", "dark"]);
     expect(resolveThemeAppearance(T3_CHAT_THEME.id, true, true)).toBe("dark");
@@ -266,13 +307,13 @@ describe("theme files", () => {
     expect(resolveThemeAppearance(T3_CHAT_THEME.id, false, false, "dark")).toBe("dark");
     expect(resolveDesktopTheme(T3_CHAT_THEME.id, false, "dark")).toBe("dark");
     expect(JSON.parse(serializeThemeFile(theme)).variants.dark).toMatchObject({
-      canvas: "#101827",
-      text: "#eef5ff",
+      canvas: canonical("#101827"),
+      text: canonical("#eef5ff"),
     });
   });
 
   it("keeps the T3 Chat palette faithful and readable", () => {
-    expect(T3_CHAT_THEME.colors).toMatchObject({
+    expectThemeColors(T3_CHAT_THEME.colors, {
       canvas: "#fdf7fd",
       chrome: "#fdf7fd",
       toolbarBorder: "#efbdeb",
@@ -287,7 +328,7 @@ describe("theme files", () => {
       accentSurface: "#f3e6f5",
       sidebar: "#f2e1f4",
     });
-    expect(T3_CHAT_THEME.variants?.dark).toMatchObject({
+    expectThemeColors(T3_CHAT_THEME.variants!.dark!, {
       canvas: "#1f1a24",
       chrome: "#1f1a24",
       surface: "#29232d",
@@ -321,8 +362,8 @@ describe("theme files", () => {
       expect(getThemeModes(theme)).toEqual(["light", "dark"]);
       expect(theme.sidebarArtwork).toBe(true);
       expect(themeAllowsSidebarArtwork(theme.id)).toBe(true);
-      expect(theme.colors.accent).toMatch(/^#[0-9a-f]{6}$/i);
-      expect(theme.variants?.dark?.accent).toMatch(/^#[0-9a-f]{6}$/i);
+      expect(theme.colors.accent).toMatch(/^oklch\(/);
+      expect(theme.variants?.dark?.accent).toMatch(/^oklch\(/);
 
       for (const mode of ["light", "dark"] as const) {
         const colors = getThemeColorsForMode(theme, mode);
@@ -380,7 +421,9 @@ describe("theme files", () => {
     });
 
     expect(getThemeModes(theme)).toEqual(["dark"]);
-    expect(getThemeColorsForMode(theme, "dark")).toMatchObject({ canvas: "#111827" });
+    expect(getThemeColorsForMode(theme, "dark")).toMatchObject({
+      canvas: canonical("#111827"),
+    });
     expect(getThemeColorsForMode(theme, "light")).toBeNull();
   });
 
@@ -531,22 +574,23 @@ describe("stored theme preferences", () => {
   });
 
   it("keeps stored themes with unknown roles and drops invalid entries", () => {
+    let storedThemes = JSON.stringify([
+      {
+        id: "aurora",
+        label: "Aurora",
+        appearance: "light",
+        colors: { canvas: "#f8fbff", futureRole: "#123456", accent: "not-a-color" },
+        variants: { light: { canvas: "#101827" } },
+      },
+      { id: "light", label: "Reserved", appearance: "light", colors: {} },
+      { id: "aurora", label: "Duplicate", appearance: "dark", colors: {} },
+    ]);
     vi.stubGlobal("window", {
       localStorage: {
-        getItem: (key: string) =>
-          key === CUSTOM_THEMES_STORAGE_KEY
-            ? JSON.stringify([
-                {
-                  id: "aurora",
-                  label: "Aurora",
-                  appearance: "light",
-                  colors: { canvas: "#f8fbff", futureRole: "#123456", accent: "not-a-color" },
-                  variants: { light: { canvas: "#101827" } },
-                },
-                { id: "light", label: "Reserved", appearance: "light", colors: {} },
-                { id: "aurora", label: "Duplicate", appearance: "dark", colors: {} },
-              ])
-            : null,
+        getItem: (key: string) => (key === CUSTOM_THEMES_STORAGE_KEY ? storedThemes : null),
+        setItem: (key: string, value: string) => {
+          if (key === CUSTOM_THEMES_STORAGE_KEY) storedThemes = value;
+        },
       },
     });
     invalidateCustomThemes();
@@ -555,11 +599,20 @@ describe("stored theme preferences", () => {
     expect(themes).toHaveLength(1);
     expect(themes[0]).toMatchObject({
       id: "aurora",
-      colors: { canvas: "#f8fbff", accent: getDefaultThemeColors("light").accent },
+      colors: { canvas: canonical("#f8fbff"), accent: getDefaultThemeColors("light").accent },
     });
     // The variant shadowing the base appearance is dropped so the theme
     // round-trips through parseThemeFile on export.
     expect(getThemeModes(themes[0]!)).toEqual(["light"]);
+    const migrated = JSON.parse(storedThemes);
+    expect(migrated[0].colors).toEqual({
+      canvas: canonical("#f8fbff"),
+      // Unknown roles are left byte-identical for forward compatibility.
+      futureRole: "#123456",
+      accent: "not-a-color",
+    });
+    expect(migrated[0].variants.light.canvas).toBe(canonical("#101827"));
+    expect(migrated[1].id).toBe("light");
 
     vi.unstubAllGlobals();
     invalidateCustomThemes();

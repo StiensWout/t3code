@@ -410,9 +410,9 @@ describe("index.html boot script", () => {
     });
 
     expect(boot.themeId).toBe("partial");
-    expect(boot.bootVariables["--boot-background"]).toBe("#1f1a24");
+    expect(boot.bootVariables["--boot-background"]).toBe(getDefaultThemeColors("dark").canvas);
     expect(boot.bootVariables["--boot-foreground"]).toBe("#fffaff");
-    expect(boot.bootVariables["--boot-accent"]).toBe("#a3004c");
+    expect(boot.bootVariables["--boot-accent"]).toBe(getDefaultThemeColors("dark").accent);
     expect(boot.backgroundColor).toBe(DEFAULT_DARK_CHROME);
     expect(boot.metaContent).toBe(DEFAULT_DARK_CHROME);
   });
