@@ -1,0 +1,155 @@
+# FORK-ONLY workflow for StiensWout/t3code test builds. Never upstream this
+# file: it exists to produce installable Windows builds (plus updater
+# metadata) as GitHub releases on the fork, so in-app updates can be tested
+# end to end. Mirrors the Windows path of release.yml on GitHub-hosted
+# runners, with the public relay/Clerk config inlined (these values ship
+# inside every public artifact; nothing here is secret).
+name: Fork Desktop Test Build (Windows)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (for example 0.9.1)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  T3CODE_CLERK_PUBLISHABLE_KEY: pk_live_Y2xlcmsudDMuY29kZXMk
+  T3CODE_CLERK_JWT_TEMPLATE: t3-relay
+  T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: hzxSgY2cH10sDU2r
+  T3CODE_RELAY_URL: https://relay.t3.codes
+  T3CODE_DESKTOP_UPDATE_REPOSITORY: StiensWout/t3code
+
+jobs:
+  build_wsl_node_pty:
+    name: Build WSL node-pty (linux-x64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: |
+            args:
+              - --filter=t3...
+
+      - name: Build node-pty linux-x64 prebuild
+        shell: bash
+        run: |
+          set -euo pipefail
+          pty_pkg="$(node -e "console.log(require.resolve('node-pty/package.json', { paths: ['$GITHUB_WORKSPACE/apps/server'] }))")"
+          pty_dir="$(dirname "$pty_pkg")"
+          ( cd "$pty_dir" && npx --yes node-gyp rebuild )
+          mkdir -p wsl-prebuild
+          cp "$pty_dir/build/Release/pty.node" wsl-prebuild/pty.node
+          file wsl-prebuild/pty.node
+
+      - name: Upload node-pty linux-x64 prebuild
+        uses: actions/upload-artifact@v7
+        with:
+          name: wsl-node-pty-x64
+          path: wsl-prebuild/pty.node
+          if-no-files-found: error
+
+  build_windows:
+    name: Build Windows x64 + publish fork release
+    needs: [build_wsl_node_pty]
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: |
+            args:
+              - --filter=@t3tools/desktop...
+              - --filter=t3...
+              - --filter=@t3tools/scripts...
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Align package versions to release version
+        run: node scripts/update-release-package-versions.ts "${{ inputs.version }}"
+
+      - name: Download WSL node-pty prebuild
+        uses: actions/download-artifact@v7
+        with:
+          name: wsl-node-pty-x64
+          path: wsl-prebuild
+
+      - name: Install Spectre-mitigated MSVC libs
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $installPath = & $vswhere -products * -latest -property installationPath
+          $setupExe = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\setup.exe"
+          $proc = Start-Process -FilePath $setupExe `
+            -ArgumentList "modify", "--installPath", "`"$installPath`"", "--add", `
+            "Microsoft.VisualStudio.Component.VC.Tools.x86.x64.Spectre", "--quiet", "--norestart" `
+            -Wait -PassThru -NoNewWindow
+          if ($proc.ExitCode -ne 0 -and $proc.ExitCode -ne 3010) {
+            throw "VS modify failed with exit code $($proc.ExitCode)"
+          }
+
+      - name: Build desktop artifact (unsigned)
+        shell: bash
+        run: |
+          vp run dist:desktop:artifact \
+            --platform win \
+            --target nsis \
+            --arch x64 \
+            --build-version "${{ inputs.version }}" \
+            --wsl-prebuild "$GITHUB_WORKSPACE/wsl-prebuild/pty.node" \
+            --verbose
+
+      - name: Collect release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-publish
+          shopt -s nullglob
+          for pattern in "release/*.exe" "release/*.blockmap" "release/*.yml"; do
+            for file in $pattern; do
+              cp "$file" release-publish/
+            done
+          done
+          ls -la release-publish/
+
+      - name: Create fork GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "v${{ inputs.version }}" release-publish/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "T3 Code ${{ inputs.version }} (fork test build)" \
+            --notes "Unsigned Windows test build for install/update/WSL verification. Not for general use." \
+            --latest
