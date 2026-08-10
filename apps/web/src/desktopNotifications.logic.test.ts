@@ -113,6 +113,20 @@ describe("reconcileAgentNotificationStates", () => {
     expect(reconnected.next.get("env-1:thread-1")?.phase).toBe("completed");
   });
 
+  it("dismisses stale attention notifications when an environment reconnects", () => {
+    const reconnected = reconcileAgentNotificationStates(
+      new Map([["env-1:thread-1", state("waiting_for_input")]]),
+      [{ key: "env-1:thread-1", target, state: state("running") }],
+      {
+        previouslyAuthoritativeEnvironmentIds: new Set(),
+        authoritativeEnvironmentIds: new Set([target.environmentId]),
+      },
+    );
+
+    expect(reconnected.transitions).toEqual([{ type: "dismiss", target }]);
+    expect(reconnected.next.get("env-1:thread-1")?.phase).toBe("running");
+  });
+
   it("baselines historical threads when an environment first reconnects", () => {
     const result = reconcileAgentNotificationStates(
       new Map(),
