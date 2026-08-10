@@ -42,7 +42,9 @@ import {
   resolvePackageManagerUserAgent,
   stageLinuxIconSize,
   STAGE_INSTALL_ARGS,
-  WINDOWS_ASAR_UNPACK,
+  WINDOWS_SERVER_ASAR_IGNORE_GLOBS,
+  WINDOWS_SERVER_ASAR_RESOURCE,
+  WINDOWS_SERVER_ASAR_UNPACK_GLOB,
 } from "./build-desktop-artifact.ts";
 import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
 import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
@@ -228,22 +230,40 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         libc: ["glibc"],
       },
     });
-    // Windows artifacts also bundle the same-architecture WSL (Linux, glibc) backend, so the
-    // staged install must fetch its native optional deps (e.g. ffi-rs) too.
+    // The Windows app stage only serves the desktop main process; the server
+    // sidecar stage is the one that needs Linux natives (below).
     assert.deepStrictEqual(createStageWorkspaceConfig({ platform: "win", arch: "x64" }), {
       supportedArchitectures: {
-        os: ["win32", "linux"],
+        os: ["win32"],
         cpu: ["x64"],
-        libc: ["glibc"],
       },
     });
-    assert.deepStrictEqual(createStageWorkspaceConfig({ platform: "win", arch: "arm64" }), {
-      supportedArchitectures: {
-        os: ["win32", "linux"],
-        cpu: ["arm64"],
-        libc: ["glibc"],
+    // The server sidecar stage bundles the same-architecture WSL (Linux,
+    // glibc) backend, so its install must fetch Linux native optional deps
+    // (e.g. ffi-rs) too — and must be hoisted so the tree survives asar
+    // packing and runtime extraction without symlinks.
+    assert.deepStrictEqual(
+      createStageWorkspaceConfig({ platform: "win", arch: "x64", linuxServerBackend: true }),
+      {
+        supportedArchitectures: {
+          os: ["win32", "linux"],
+          cpu: ["x64"],
+          libc: ["glibc"],
+        },
+        nodeLinker: "hoisted",
       },
-    });
+    );
+    assert.deepStrictEqual(
+      createStageWorkspaceConfig({ platform: "win", arch: "arm64", linuxServerBackend: true }),
+      {
+        supportedArchitectures: {
+          os: ["win32", "linux"],
+          cpu: ["arm64"],
+          libc: ["glibc"],
+        },
+        nodeLinker: "hoisted",
+      },
+    );
     assert.deepStrictEqual(createStageWorkspaceConfig({ platform: "mac", arch: "universal" }), {
       supportedArchitectures: {
         os: ["darwin"],
@@ -326,6 +346,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         false,
         undefined,
         undefined,
+        undefined,
       );
       const linux = yield* createBuildConfig(
         "linux",
@@ -333,6 +354,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         "1.2.3",
         false,
         false,
+        undefined,
         undefined,
         undefined,
       );
@@ -344,11 +366,42 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         false,
         undefined,
         undefined,
+        {
+          asarPath: "/stage/server.asar",
+          unpackedDirPath: "/stage/server.asar.unpacked",
+        },
       );
 
+      // All platforms keep app.asar fully packed; Windows ships the server
+      // tree as the hand-packed server.asar sidecar in extraResources instead
+      // of unpacking thousands of loose files at install time.
       assert.notProperty(mac, "asarUnpack");
       assert.notProperty(linux, "asarUnpack");
-      assert.deepStrictEqual(win.asarUnpack, WINDOWS_ASAR_UNPACK);
+      assert.notProperty(win, "asarUnpack");
+      assert.deepStrictEqual(win.extraResources, [
+        {
+          from: "apps/desktop/prod-resources/resource-monitor",
+          to: "resource-monitor",
+        },
+        { from: "/stage/server.asar", to: WINDOWS_SERVER_ASAR_RESOURCE },
+        {
+          from: "/stage/server.asar.unpacked",
+          to: `${WINDOWS_SERVER_ASAR_RESOURCE}.unpacked`,
+        },
+      ]);
+      // Native binaries and helper executables cannot load from inside an
+      // asar; everything else stays packed. The Claude SDK platform packages
+      // and .bin shims never ship.
+      assert.equal(
+        WINDOWS_SERVER_ASAR_UNPACK_GLOB,
+        "{**/*.node,**/*.dll,**/*.exe,**/*.so,**/*.so.*,**/*.dylib}",
+      );
+      assert.deepStrictEqual(WINDOWS_SERVER_ASAR_IGNORE_GLOBS, [
+        "**/node_modules/@anthropic-ai/claude-agent-sdk-*",
+        "**/node_modules/@anthropic-ai/claude-agent-sdk-*/**",
+        "**/node_modules/.bin",
+        "**/node_modules/.bin/**",
+      ]);
       // Linux must register the renderer schemes so the generated .desktop
       // entry advertises MimeType=x-scheme-handler/t3code; for OAuth deep links.
       assert.deepStrictEqual((linux.linux as Record<string, unknown>).protocols, [
@@ -518,10 +571,19 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
   it.effect("adds passkey entitlements and both renderer protocols to signed macOS builds", () =>
     Effect.gen(function* () {
-      const config = yield* createBuildConfig("mac", "dmg", "1.2.3", true, false, undefined, {
-        entitlementsPath: "/tmp/entitlements.mac.plist",
-        provisioningProfilePath: "/tmp/t3code.provisionprofile",
-      });
+      const config = yield* createBuildConfig(
+        "mac",
+        "dmg",
+        "1.2.3",
+        true,
+        false,
+        undefined,
+        {
+          entitlementsPath: "/tmp/entitlements.mac.plist",
+          provisioningProfilePath: "/tmp/t3code.provisionprofile",
+        },
+        undefined,
+      );
 
       const mac = config.mac as Record<string, unknown>;
       assert.equal(config.appId, "com.t3tools.t3code");
@@ -541,6 +603,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         "1.2.3",
         false,
         false,
+        undefined,
         undefined,
         undefined,
       );

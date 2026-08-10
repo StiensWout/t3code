@@ -2,6 +2,8 @@
 
 import * as NodeModule from "node:module";
 
+import { createPackageWithOptions } from "@electron/asar";
+
 import { fromYaml } from "@t3tools/shared/schemaYaml";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { clerkFrontendApiHostnameFromPublishableKey } from "@t3tools/shared/relayAuth";
@@ -61,6 +63,7 @@ const StageWorkspaceConfig = Schema.Struct({
   allowBuilds: Schema.optional(Schema.Record(Schema.String, Schema.Boolean)),
   patchedDependencies: Schema.optional(Schema.Record(Schema.String, Schema.String)),
   overrides: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+  nodeLinker: Schema.optional(Schema.Literals(["hoisted"])),
 });
 type StageWorkspaceConfig = typeof StageWorkspaceConfig.Type;
 
@@ -436,6 +439,18 @@ export class WslNodePtyPrebuildMissingError extends Schema.TaggedErrorClass<WslN
   }
 }
 
+export class WindowsServerSidecarPackError extends Schema.TaggedErrorClass<WindowsServerSidecarPackError>()(
+  "WindowsServerSidecarPackError",
+  {
+    asarPath: Schema.String,
+    cause: Schema.optionalKey(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    return `Failed to pack the Windows server sidecar at ${this.asarPath}.`;
+  }
+}
+
 export class WslNodePtyManifestReadError extends Schema.TaggedErrorClass<WslNodePtyManifestReadError>()(
   "WslNodePtyManifestReadError",
   {
@@ -633,13 +648,29 @@ export const DESKTOP_FILE_EXCLUSIONS = [
   // are dead weight. The trailing dash keeps the SDK's own JS package.
   "!**/node_modules/@anthropic-ai/claude-agent-sdk-*/**/*",
 ] as const;
-// The WSL backend launches the server with plain `wsl.exe -- node`, which
-// cannot read inside an asar archive — and the server bundle externalizes its
-// runtime deps, so the whole node_modules tree must be unpacked, not just the
-// bundle (otherwise ERR_MODULE_NOT_FOUND: "Cannot find package 'effect'").
-// The Windows primary backend reads the same files through the asar redirect,
-// so nothing is duplicated.
-export const WINDOWS_ASAR_UNPACK = ["apps/server/dist/**", "**/node_modules/**"] as const;
+// Windows ships the server tree (bundle + node_modules) as a separate
+// resources/server.asar sidecar instead of loose files: the NSIS installer
+// then extracts a handful of large archives instead of thousands of small
+// files, which dominates install (and update) time. The Windows primary runs
+// the server from inside server.asar via the asar-aware ELECTRON_RUN_AS_NODE
+// runtime; the WSL backend cannot read asar archives, so enabling WSL lazily
+// extracts the sidecar to a version-keyed directory (see DesktopWslServerTree).
+export const WINDOWS_SERVER_ASAR_RESOURCE = "server.asar";
+// dlopen/spawn need real files, so native modules, shared libraries, and
+// helper executables live in the server.asar.unpacked sibling (the standard
+// asar redirect convention). Everything else stays packed.
+export const WINDOWS_SERVER_ASAR_UNPACK_GLOB =
+  "{**/*.node,**/*.dll,**/*.exe,**/*.so,**/*.so.*,**/*.dylib}";
+// Mirrors DESKTOP_FILE_EXCLUSIONS for the hand-packed sidecar: the Claude SDK
+// platform packages are dead weight (see above), and node_modules/.bin shims
+// are never spawned at runtime (and are symlinks on POSIX build hosts, which
+// the asar extraction path deliberately does not support).
+export const WINDOWS_SERVER_ASAR_IGNORE_GLOBS = [
+  "**/node_modules/@anthropic-ai/claude-agent-sdk-*",
+  "**/node_modules/@anthropic-ai/claude-agent-sdk-*/**",
+  "**/node_modules/.bin",
+  "**/node_modules/.bin/**",
+] as const;
 export const DESKTOP_EXTRA_RESOURCES = [
   {
     from: "apps/desktop/prod-resources/resource-monitor",
@@ -957,14 +988,20 @@ export function createStageWorkspaceConfig(input: {
   readonly allowBuilds?: Record<string, boolean>;
   readonly patchedDependencies?: Record<string, string>;
   readonly overrides?: Record<string, string>;
+  // The Windows server sidecar stage runs both the Windows primary and the
+  // WSL Linux backend from one dependency tree, so it needs win32 + linux
+  // natives (e.g. @yuuang/ffi-rs-linux-x64-gnu) — and a hoisted (physical,
+  // symlink-free) node_modules: the tree gets packed into server.asar and
+  // later extracted for WSL, and neither step can rely on pnpm's
+  // symlink/junction layout surviving the trip.
+  readonly linuxServerBackend?: boolean;
 }): StageWorkspaceConfig {
-  const { platform, arch, allowBuilds, patchedDependencies, overrides } = input;
+  const { platform, arch, allowBuilds, patchedDependencies, overrides, linuxServerBackend } = input;
   const hostOs = platform === "mac" ? "darwin" : platform === "win" ? "win32" : "linux";
   const hostCpu = arch === "universal" ? ["arm64", "x64"] : [arch];
-  // Linux AppImages and Windows WSL backends both execute a Linux/glibc Node
-  // process that loads Linux-native optional deps at runtime (e.g.
-  // @yuuang/ffi-rs-linux-x64-gnu). Keep libc explicit so pnpm includes those
-  // optional packages in the staged production install.
+  // Linux AppImages execute a Linux/glibc Node process that loads
+  // Linux-native optional deps at runtime. Keep libc explicit so pnpm
+  // includes those optional packages in the staged production install.
   const supportedArchitectures =
     platform === "linux"
       ? {
@@ -972,7 +1009,7 @@ export function createStageWorkspaceConfig(input: {
           cpu: hostCpu,
           libc: ["glibc"],
         }
-      : platform === "win"
+      : linuxServerBackend
         ? {
             os: Array.from(new Set([hostOs, "linux"])),
             cpu: hostCpu,
@@ -990,6 +1027,7 @@ export function createStageWorkspaceConfig(input: {
       ? { patchedDependencies }
       : {}),
     ...(overrides && Object.keys(overrides).length > 0 ? { overrides } : {}),
+    ...(linuxServerBackend ? { nodeLinker: "hoisted" as const } : {}),
   };
 }
 
@@ -1534,6 +1572,12 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
         readonly provisioningProfilePath: string;
       }
     | undefined,
+  windowsServerSidecar:
+    | {
+        readonly asarPath: string;
+        readonly unpackedDirPath: string;
+      }
+    | undefined,
 ) {
   const buildConfig: Record<string, unknown> = {
     appId: DESKTOP_APP_ID,
@@ -1544,11 +1588,25 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     directories: {
       buildResources: "apps/desktop/resources",
     },
-    // Only the Windows WSL backend needs files outside the asar (see
-    // WINDOWS_ASAR_UNPACK); macOS and Linux stay packed — smart unpack
-    // extracts native libraries, which fff-node finds in app.asar.unpacked.
-    ...(platform === "win" ? { asarUnpack: [...WINDOWS_ASAR_UNPACK] } : {}),
-    extraResources: DESKTOP_EXTRA_RESOURCES,
+    // All platforms keep app.asar fully packed; electron-builder's default
+    // smart unpack extracts native libraries, which loaders find in
+    // app.asar.unpacked. Windows additionally ships the server tree as the
+    // hand-packed server.asar sidecar (see WINDOWS_SERVER_ASAR_RESOURCE).
+    extraResources: [
+      ...DESKTOP_EXTRA_RESOURCES,
+      ...(windowsServerSidecar
+        ? [
+            {
+              from: windowsServerSidecar.asarPath,
+              to: WINDOWS_SERVER_ASAR_RESOURCE,
+            },
+            {
+              from: windowsServerSidecar.unpackedDirPath,
+              to: `${WINDOWS_SERVER_ASAR_RESOURCE}.unpacked`,
+            },
+          ]
+        : []),
+    ],
   };
   const updateChannel = resolveDesktopUpdateChannel(version);
   const publishConfig = yield* resolveGitHubPublishConfig(updateChannel);
@@ -1716,6 +1774,117 @@ const stageWslNodePtyPrebuild = Effect.fn("stageWslNodePtyPrebuild")(function* (
   );
 });
 
+// Stage and pack the Windows server sidecar: a self-contained server tree
+// (bundle + hoisted production node_modules with win32 AND linux natives)
+// packed into server.asar next to the app stage. The Windows primary runs the
+// server from inside the archive via the asar-aware ELECTRON_RUN_AS_NODE
+// runtime; enabling the WSL backend extracts it to a real directory at
+// runtime. Shipping one packed archive instead of thousands of loose files is
+// what makes the NSIS install/update fast.
+export const stageWindowsServerSidecar = Effect.fn("stageWindowsServerSidecar")(function* (input: {
+  readonly stageRoot: string;
+  readonly repoRoot: string;
+  readonly serverDistDir: string;
+  readonly arch: typeof BuildArch.Type;
+  readonly appVersion: string;
+  readonly serverDependencies: Record<string, string>;
+  readonly fffNodeVersion: string;
+  readonly allowBuilds: Record<string, boolean>;
+  readonly patchedDependencies: Record<string, string>;
+  readonly overrides: Record<string, string>;
+  readonly wslPrebuildPath: string | undefined;
+  readonly asarPath: string;
+  readonly verbose: boolean;
+}) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+
+  const serverStageDir = path.join(input.stageRoot, "server");
+  yield* fs.makeDirectory(path.join(serverStageDir, "apps/server"), { recursive: true });
+  yield* fs.copy(input.serverDistDir, path.join(serverStageDir, "apps/server/dist"));
+
+  const sidecarDependencies = {
+    ...input.serverDependencies,
+    // The sidecar serves two processes: the Windows primary loads win32
+    // natives, and the WSL backend loads the matching Linux natives (fff via
+    // ffi-rs) from the extracted copy of this same tree.
+    ...resolveFffNativeDependencies("win", input.arch, input.fffNodeVersion),
+    ...resolveFffNativeDependencies("linux", input.arch, input.fffNodeVersion),
+  };
+  const sidecarPatchedDependencies = createStagePatchedDependencies(
+    input.patchedDependencies,
+    sidecarDependencies,
+  );
+  const sidecarPackageJson = {
+    name: "t3code-server",
+    version: input.appVersion,
+    private: true,
+    packageManager: rootPackageJson.packageManager,
+    dependencies: sidecarDependencies,
+  };
+  const sidecarPackageJsonString = yield* encodeJsonString(sidecarPackageJson);
+  yield* fs.writeFileString(
+    path.join(serverStageDir, "package.json"),
+    `${sidecarPackageJsonString}\n`,
+  );
+  const sidecarWorkspaceConfig = createStageWorkspaceConfig({
+    platform: "win",
+    arch: input.arch,
+    allowBuilds: input.allowBuilds,
+    patchedDependencies: sidecarPatchedDependencies,
+    overrides: input.overrides,
+    linuxServerBackend: true,
+  });
+  const sidecarWorkspaceConfigString = yield* encodeStageWorkspaceConfig(sidecarWorkspaceConfig);
+  yield* fs.writeFileString(
+    path.join(serverStageDir, "pnpm-workspace.yaml"),
+    sidecarWorkspaceConfigString,
+  );
+  if (Object.keys(sidecarPatchedDependencies).length > 0) {
+    yield* fs.copy(path.join(input.repoRoot, "patches"), path.join(serverStageDir, "patches"));
+  }
+
+  yield* Effect.log("[desktop-artifact] Installing server sidecar production dependencies...");
+  const installCommand = yield* resolveSpawnCommand("vp", [...STAGE_INSTALL_ARGS]);
+  yield* runCommand(
+    ChildProcess.make(installCommand.command, installCommand.args, {
+      cwd: serverStageDir,
+      shell: installCommand.shell,
+    }),
+    { label: "vp install --prod (server sidecar)", verbose: input.verbose },
+  );
+
+  yield* stageWslNodePtyPrebuild({
+    stageAppDir: serverStageDir,
+    arch: input.arch,
+    prebuildPath: input.wslPrebuildPath,
+  });
+
+  yield* Effect.log("[desktop-artifact] Packing server.asar...");
+  yield* Effect.tryPromise({
+    try: () =>
+      createPackageWithOptions(serverStageDir, input.asarPath, {
+        dot: true,
+        unpack: WINDOWS_SERVER_ASAR_UNPACK_GLOB,
+        globOptions: { ignore: [...WINDOWS_SERVER_ASAR_IGNORE_GLOBS] },
+      }),
+    catch: (cause) => new WindowsServerSidecarPackError({ asarPath: input.asarPath, cause }),
+  });
+  const unpackedDirPath = `${input.asarPath}.unpacked`;
+  // The unpacked sibling must exist for the extraResources copy; a server tree
+  // without a single native binary would mean node-pty is missing entirely.
+  if (!(yield* fs.exists(unpackedDirPath))) {
+    return yield* new WindowsServerSidecarPackError({
+      asarPath: input.asarPath,
+      cause: new Error(`expected native binaries at ${unpackedDirPath}, but none were unpacked`),
+    });
+  }
+  const packedStat = yield* fs.stat(input.asarPath);
+  yield* Effect.log(
+    `[desktop-artifact] Packed server.asar (${String(packedStat.size)} bytes) + unpacked natives.`,
+  );
+});
+
 const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   options: ResolvedBuildOptions,
 ) {
@@ -1831,12 +2000,18 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   yield* validateBundledClientAssets(path.dirname(bundledClientEntry));
 
   yield* fs.makeDirectory(path.join(stageAppDir, "apps/desktop"), { recursive: true });
-  yield* fs.makeDirectory(path.join(stageAppDir, "apps/server"), { recursive: true });
+  if (options.platform !== "win") {
+    yield* fs.makeDirectory(path.join(stageAppDir, "apps/server"), { recursive: true });
+  }
 
   yield* Effect.log("[desktop-artifact] Staging release app...");
   yield* fs.copy(distDirs.desktopDist, path.join(stageAppDir, "apps/desktop/dist-electron"));
   yield* fs.copy(distDirs.desktopResources, stageResourcesDir);
-  yield* fs.copy(distDirs.serverDist, path.join(stageAppDir, "apps/server/dist"));
+  // On Windows the server tree ships in the server.asar sidecar instead of
+  // app.asar (see stageWindowsServerSidecar), so the app stage omits it.
+  if (options.platform !== "win") {
+    yield* fs.copy(distDirs.serverDist, path.join(stageAppDir, "apps/server/dist"));
+  }
   yield* stageResourceMonitor({
     repoRoot,
     stageResourcesDir,
@@ -1887,30 +2062,34 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     yield* fs.writeFileString(macEntitlementsPath, renderMacPasskeyEntitlements(macPasskeySigning));
   }
 
-  const stageDependencies = {
-    ...resolvedServerDependencies,
-    ...resolvedDesktopRuntimeDependencies,
-    ...resolveFffNativeDependencies(
-      options.platform,
-      options.arch,
-      serverPackageJson.dependencies["@ff-labs/fff-node"],
-    ),
-    // Windows artifacts also bundle the same-architecture WSL Linux backend, which loads the
-    // fff native binary through ffi-rs. The platform fff binary above is the
-    // host's (win32), so promote the matching Linux fff binaries too; without
-    // them file-finding in WSL fails to load its Linux native package.
-    ...(options.platform === "win"
-      ? resolveFffNativeDependencies(
-          "linux",
-          options.arch,
-          serverPackageJson.dependencies["@ff-labs/fff-node"],
-        )
-      : {}),
-  };
+  // Windows splits dependencies per process: app.asar carries only the
+  // desktop main-process runtime deps, while the server bundle's deps live in
+  // the server.asar sidecar (see stageWindowsServerSidecar). macOS and Linux
+  // keep the single merged tree — their primary resolves everything from
+  // app.asar and there is no second consumer.
+  const stageDependencies =
+    options.platform === "win"
+      ? { ...resolvedDesktopRuntimeDependencies }
+      : {
+          ...resolvedServerDependencies,
+          ...resolvedDesktopRuntimeDependencies,
+          ...resolveFffNativeDependencies(
+            options.platform,
+            options.arch,
+            serverPackageJson.dependencies["@ff-labs/fff-node"],
+          ),
+        };
   const stagePatchedDependencies = createStagePatchedDependencies(
     workspacePatchedDependencies,
     stageDependencies,
   );
+  const windowsServerSidecarPaths =
+    options.platform === "win"
+      ? {
+          asarPath: path.join(stageRoot, WINDOWS_SERVER_ASAR_RESOURCE),
+          unpackedDirPath: path.join(stageRoot, `${WINDOWS_SERVER_ASAR_RESOURCE}.unpacked`),
+        }
+      : undefined;
   const stagePackageJson: StagePackageJson = {
     name: "t3code",
     version: appVersion,
@@ -1934,6 +2113,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
             provisioningProfilePath: macPasskeySigning.provisioningProfilePath,
           }
         : undefined,
+      windowsServerSidecarPaths,
     ),
     dependencies: stageDependencies,
     devDependencies: {
@@ -1971,13 +2151,24 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   );
   yield* stageClerkPasskeyNativeBinaries(stageAppDir, options.platform, options.arch);
 
-  // WSL is Windows-only, so only the Windows artifact carries the Linux backend
-  // binary; other platforms ignore the prebuild input.
-  if (options.platform === "win") {
-    yield* stageWslNodePtyPrebuild({
-      stageAppDir,
+  // WSL is Windows-only, so only the Windows artifact carries the server
+  // sidecar (which embeds the Linux node-pty prebuild); other platforms
+  // ignore the prebuild input.
+  if (options.platform === "win" && windowsServerSidecarPaths) {
+    yield* stageWindowsServerSidecar({
+      stageRoot,
+      repoRoot,
+      serverDistDir: distDirs.serverDist,
       arch: options.arch,
-      prebuildPath: options.wslPrebuild,
+      appVersion,
+      serverDependencies: resolvedServerDependencies,
+      fffNodeVersion: serverPackageJson.dependencies["@ff-labs/fff-node"],
+      allowBuilds: workspaceAllowBuilds,
+      patchedDependencies: workspacePatchedDependencies,
+      overrides: resolvedOverrides,
+      wslPrebuildPath: options.wslPrebuild,
+      asarPath: windowsServerSidecarPaths.asarPath,
+      verbose: options.verbose,
     });
   }
 
