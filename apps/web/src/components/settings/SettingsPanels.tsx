@@ -530,7 +530,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks
         ? ["Provider update checks"]
         : []),
-      ...(isDesktopNotificationsDirty ? ["Desktop notifications"] : []),
+      ...(isDesktopNotificationsDirty ? ["Notifications"] : []),
       ...(isBackgroundActivityDirty ? ["Background activity"] : []),
       ...(settings.defaultThreadEnvMode !== DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode
         ? ["New thread mode"]
@@ -2250,7 +2250,7 @@ export function GeneralSettingsPanel() {
         />
       </SettingsSection>
 
-      {isElectron ? <DesktopNotificationsSettings /> : null}
+      <DesktopNotificationsSettings />
 
       <SettingsSection title="About">
         {isElectron || HOSTED_APP_CHANNEL ? (

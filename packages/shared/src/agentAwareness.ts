@@ -67,7 +67,7 @@ export function notificationEventForAwarenessTransition(
   }
 }
 
-/** Shared notification copy. Every desktop platform receives these exact title/body strings. */
+/** Shared notification copy. Native and browser notifications receive these exact strings. */
 export function formatAgentNotificationContent(input: {
   readonly event: DesktopNotificationEvent;
   readonly projectTitle: string;

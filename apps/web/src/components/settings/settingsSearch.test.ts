@@ -85,4 +85,14 @@ describe("searchSettings", () => {
       targetId: "appearance",
     });
   });
+
+  it("exposes notifications in web settings search", () => {
+    expect(searchSettings("notifications")).toEqual([
+      {
+        id: "desktop-notifications",
+        title: "Notifications",
+        to: "/settings/general",
+      },
+    ]);
+  });
 });

@@ -1,4 +1,5 @@
 import type {
+  BackgroundPolicySnapshot,
   DesktopNotificationEvent,
   DesktopNotificationSettings,
   DesktopNotificationTarget,
@@ -104,4 +105,16 @@ export function desktopNotificationEventEnabled(
 
 export function shouldSuppressDesktopNotification(windowFocused: boolean): boolean {
   return windowFocused;
+}
+
+export function shouldSuppressBrowserNotification(input: {
+  readonly windowFocused: boolean;
+  readonly policy: Pick<BackgroundPolicySnapshot, "leases"> | null;
+}): boolean {
+  if (input.windowFocused || input.policy === null) {
+    return true;
+  }
+  return input.policy.leases.some(
+    (lease) => lease.clientKind === "desktop-renderer" || lease.focused,
+  );
 }
