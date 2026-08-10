@@ -243,8 +243,8 @@ import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
 import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
-import { MessagesTimeline } from "./chat/MessagesTimeline";
-import { resolveTimelineIsAtEnd } from "./chat/MessagesTimeline.logic";
+import { MessagesTimeline, TurnPlanTimelineRow } from "./chat/MessagesTimeline";
+import { excludePinnedTurnPlan, resolveTimelineIsAtEnd } from "./chat/MessagesTimeline.logic";
 import { ChatHeader } from "./chat/ChatHeader";
 import { PanelLayoutControls, RightPanelMaximizeControl } from "./chat/PanelLayoutControls";
 import { type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
@@ -2239,6 +2239,17 @@ function ChatViewContent(props: ChatViewProps) {
     threadError,
   });
   const isWorking = phase === "running" || isSendBusy || isConnecting || isRevertingCheckpoint;
+  const pinnedActiveTurnPlan = useMemo(() => {
+    const activeTurnId = activeLatestTurn?.turnId ?? null;
+    if (!isWorking || activeTurnId === null || activePlan?.turnId !== activeTurnId) {
+      return null;
+    }
+    return turnPlans.find((turnPlan) => turnPlan.turnId === activeTurnId) ?? null;
+  }, [activeLatestTurn?.turnId, activePlan, isWorking, turnPlans]);
+  const turnPlansForTimeline = useMemo(
+    () => excludePinnedTurnPlan(turnPlans, pinnedActiveTurnPlan?.turnId ?? null),
+    [pinnedActiveTurnPlan?.turnId, turnPlans],
+  );
   const activeWorkStartedAt = deriveActiveWorkStartedAt(
     activeLatestTurn,
     activeThread?.session ?? null,
@@ -2490,9 +2501,9 @@ function ChatViewContent(props: ChatViewProps) {
         timelineMessages,
         activeThread?.proposedPlans ?? [],
         workLogEntries,
-        turnPlans,
+        turnPlansForTimeline,
       ),
-    [activeThread?.proposedPlans, timelineMessages, turnPlans, workLogEntries],
+    [activeThread?.proposedPlans, timelineMessages, turnPlansForTimeline, workLogEntries],
   );
   const [dockedDraftHeroThreadKey, setDockedDraftHeroThreadKey] = useState<string | null>(null);
   const draftHeroDockRequested =
@@ -6184,6 +6195,11 @@ function ChatViewContent(props: ChatViewProps) {
                   )}
                   {threadSyncPhase && !activeEnvironmentUnavailable ? (
                     <ThreadSyncStatusPill phase={threadSyncPhase} />
+                  ) : null}
+                  {pinnedActiveTurnPlan ? (
+                    <div data-active-plan-bar="true" className="mx-auto mb-1.5 w-full max-w-3xl">
+                      <TurnPlanTimelineRow turnPlan={pinnedActiveTurnPlan} />
+                    </div>
                   ) : null}
                   <div
                     className="relative"

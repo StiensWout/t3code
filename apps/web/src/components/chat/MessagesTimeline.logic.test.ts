@@ -1,11 +1,45 @@
+import { TurnId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import {
   computeStableMessagesTimelineRows,
   computeMessageDurationStart,
   deriveMessagesTimelineRows,
+  excludePinnedTurnPlan,
   normalizeCompactToolLabel,
   resolveAssistantMessageCopyState,
 } from "./MessagesTimeline.logic";
+
+describe("excludePinnedTurnPlan", () => {
+  it("removes only the currently pinned turn plan", () => {
+    const turnPlans = [
+      {
+        id: "turn-plan:turn-1",
+        createdAt: "2026-01-01T00:00:00Z",
+        turnId: TurnId.make("turn-1"),
+        plan: {
+          createdAt: "2026-01-01T00:00:00Z",
+          turnId: TurnId.make("turn-1"),
+          steps: [{ step: "Inspect", status: "inProgress" as const }],
+        },
+      },
+      {
+        id: "turn-plan:turn-2",
+        createdAt: "2026-01-01T00:01:00Z",
+        turnId: TurnId.make("turn-2"),
+        plan: {
+          createdAt: "2026-01-01T00:01:00Z",
+          turnId: TurnId.make("turn-2"),
+          steps: [{ step: "Ship", status: "pending" as const }],
+        },
+      },
+    ];
+
+    expect(excludePinnedTurnPlan(turnPlans, TurnId.make("turn-1")).map((plan) => plan.id)).toEqual([
+      "turn-plan:turn-2",
+    ]);
+    expect(excludePinnedTurnPlan(turnPlans, null)).toHaveLength(2);
+  });
+});
 
 describe("computeMessageDurationStart", () => {
   it("returns message createdAt when there is no preceding user message", () => {

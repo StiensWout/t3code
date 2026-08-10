@@ -210,6 +210,20 @@ export type MessagesTimelineRow =
     }
   | { kind: "working"; id: string; createdAt: string | null };
 
+/**
+ * The active turn's plan is rendered in the composer overlay while it runs.
+ * Keep completed and historical turn plans in the chronological timeline.
+ */
+export function excludePinnedTurnPlan(
+  turnPlans: ReadonlyArray<TurnPlanEntry>,
+  pinnedTurnId: TurnId | null,
+): TurnPlanEntry[] {
+  if (pinnedTurnId === null) {
+    return [...turnPlans];
+  }
+  return turnPlans.filter((turnPlan) => turnPlan.turnId !== pinnedTurnId);
+}
+
 export interface StableMessagesTimelineRowsState {
   byId: Map<string, MessagesTimelineRow>;
   result: MessagesTimelineRow[];

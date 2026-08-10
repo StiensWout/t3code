@@ -37,6 +37,7 @@ import {
   workEntryIndicatesToolNeutralStatus,
   workEntryIndicatesToolSuccess,
   workLogEntryIsToolLike,
+  type TurnPlanEntry,
 } from "../../session-logic";
 import { type TurnDiffSummary } from "../../types";
 import {
@@ -952,7 +953,7 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
         <AssistantTimelineRow row={row} />
       ) : null}
       {row.kind === "proposed-plan" ? <ProposedPlanTimelineRow row={row} /> : null}
-      {row.kind === "turn-plan" ? <TurnPlanTimelineRow row={row} /> : null}
+      {row.kind === "turn-plan" ? <TurnPlanTimelineRow turnPlan={row.turnPlan} /> : null}
       {row.kind === "working" ? <WorkingTimelineRow row={row} /> : null}
     </div>
   );
@@ -1188,13 +1189,13 @@ function ProposedPlanTimelineRow({
  * Collapsed by default — a segment bar plus the in-progress step label —
  * and expands in place to the full step list. Replaces the old plan sidebar.
  */
-const TurnPlanTimelineRow = memo(function TurnPlanTimelineRow({
-  row,
+export const TurnPlanTimelineRow = memo(function TurnPlanTimelineRow({
+  turnPlan,
 }: {
-  row: Extract<TimelineRow, { kind: "turn-plan" }>;
+  turnPlan: TurnPlanEntry;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const { steps } = row.turnPlan.plan;
+  const { steps } = turnPlan.plan;
   const completedCount = steps.filter((step) => step.status === "completed").length;
   const allDone = completedCount === steps.length;
   // Label priority: the in-progress step, else the next pending step (plan
