@@ -144,6 +144,19 @@ describe("reconcileAgentNotificationStates", () => {
     ]);
   });
 
+  it("does not surface offline attention after a terminal notification", () => {
+    const reconnected = reconcileAgentNotificationStates(
+      new Map([["env-1:thread-1", state("completed")]]),
+      [{ key: "env-1:thread-1", target, state: state("waiting_for_input") }],
+      {
+        previouslyAuthoritativeEnvironmentIds: new Set(),
+        authoritativeEnvironmentIds: new Set([target.environmentId]),
+      },
+    );
+
+    expect(reconnected.transitions).toEqual([{ type: "dismiss", target }]);
+  });
+
   it("baselines historical threads when an environment first reconnects", () => {
     const result = reconcileAgentNotificationStates(
       new Map(),

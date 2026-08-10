@@ -60,7 +60,8 @@ export function reconcileAgentNotificationStates(
 
       // Reconnects still baseline new work, but an alert that was already live must continue to
       // represent a current approval or input request when the attention type changed offline.
-      if (!environmentWasAuthoritative && entry.state !== null) {
+      const priorWasAttention = priorEvent === "approval" || priorEvent === "input";
+      if (!environmentWasAuthoritative && priorWasAttention && entry.state !== null) {
         const currentEvent = notificationEventForAwarenessTransition(null, entry.state);
         if (currentEvent === "approval" || currentEvent === "input") {
           transitions.push({ type: "show", event: currentEvent, state: entry.state });
