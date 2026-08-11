@@ -2,10 +2,10 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as FileSystem from "effect/FileSystem";
-import * as Path from "effect/Path";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/unstable/process";
@@ -26,6 +26,7 @@ import {
   LinuxIconResizeError,
   MacPasskeySigningConfigurationResolutionError,
   MissingMacPasskeyProvisioningProfileError,
+  packWindowsServerAsar,
   renderMacPasskeyEntitlements,
   resolveClerkPasskeyNativeArtifacts,
   resolveMacPasskeySigningConfiguration,
@@ -47,6 +48,13 @@ import {
   WINDOWS_ASAR_UNPACK,
   ancestorNodeModulesPaths,
   copyDirectoryPreservingSymlinks,
+  validateWindowsPackagedPayload,
+  WindowsPackagedPayloadValidationError,
+  WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT,
+  WINDOWS_SERVER_ASAR_IGNORE_GLOBS,
+  WINDOWS_SERVER_EXTRA_RESOURCES,
+  WINDOWS_SERVER_ASAR_RESOURCE,
+  WINDOWS_SERVER_ASAR_UNPACK_GLOB,
 } from "./build-desktop-artifact.ts";
 import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
 import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
@@ -87,6 +95,45 @@ function iconResizeSpawnerLayer(
     }),
   );
 }
+
+const makeWindowsPayloadFixture = Effect.fn("test.makeWindowsPayloadFixture")(function* (input: {
+  readonly copyUnpackedNatives: boolean;
+}) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const tempDir = yield* fs.makeTempDirectoryScoped({
+    prefix: "t3-windows-payload-test-",
+  });
+  const sourceDir = path.join(tempDir, "server-source");
+  const serverEntryPath = path.join(sourceDir, "apps/server/dist/bin.mjs");
+  const nativePath = path.join(sourceDir, "node_modules/native/addon.node");
+  yield* fs.makeDirectory(path.dirname(serverEntryPath), { recursive: true });
+  yield* fs.makeDirectory(path.dirname(nativePath), { recursive: true });
+  yield* fs.writeFileString(serverEntryPath, "console.log('server');\n");
+  yield* fs.writeFileString(nativePath, "native-binary");
+
+  const generatedAsarPath = path.join(tempDir, WINDOWS_SERVER_ASAR_RESOURCE);
+  yield* packWindowsServerAsar({ sourceDir, asarPath: generatedAsarPath });
+
+  const stageDistDir = path.join(tempDir, "dist");
+  const packagedAppDir = path.join(stageDistDir, "win-unpacked");
+  const resourcesDir = path.join(packagedAppDir, "resources");
+  yield* fs.makeDirectory(path.join(resourcesDir, "resource-monitor"), { recursive: true });
+  yield* fs.copyFile(generatedAsarPath, path.join(resourcesDir, WINDOWS_SERVER_ASAR_RESOURCE));
+  if (input.copyUnpackedNatives) {
+    yield* fs.copy(
+      `${generatedAsarPath}.unpacked`,
+      path.join(resourcesDir, `${WINDOWS_SERVER_ASAR_RESOURCE}.unpacked`),
+    );
+  }
+  yield* fs.writeFileString(
+    path.join(resourcesDir, "resource-monitor/t3-resource-monitor.exe"),
+    "monitor",
+  );
+  yield* fs.writeFileString(path.join(packagedAppDir, "T3 Code.exe"), "electron");
+
+  return { stageDistDir, packagedAppDir, sourceDir, generatedAsarPath } as const;
+});
 
 it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
   it("resolves the dedicated nightly updater channel from nightly versions", () => {
@@ -232,22 +279,40 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         libc: ["glibc"],
       },
     });
-    // Windows artifacts also bundle the same-architecture WSL (Linux, glibc) backend, so the
-    // staged install must fetch its native optional deps (e.g. ffi-rs) too.
+    // The Windows app stage only serves the desktop main process; the server
+    // sidecar stage is the one that needs Linux natives (below).
     assert.deepStrictEqual(createStageWorkspaceConfig({ platform: "win", arch: "x64" }), {
       supportedArchitectures: {
-        os: ["win32", "linux"],
+        os: ["win32"],
         cpu: ["x64"],
-        libc: ["glibc"],
       },
     });
-    assert.deepStrictEqual(createStageWorkspaceConfig({ platform: "win", arch: "arm64" }), {
-      supportedArchitectures: {
-        os: ["win32", "linux"],
-        cpu: ["arm64"],
-        libc: ["glibc"],
+    // The server sidecar stage bundles the same-architecture WSL (Linux,
+    // glibc) backend, so its install must fetch Linux native optional deps
+    // (e.g. ffi-rs) too — and must be hoisted so the tree survives asar
+    // packing and runtime extraction without symlinks.
+    assert.deepStrictEqual(
+      createStageWorkspaceConfig({ platform: "win", arch: "x64", linuxServerBackend: true }),
+      {
+        supportedArchitectures: {
+          os: ["win32", "linux"],
+          cpu: ["x64"],
+          libc: ["glibc"],
+        },
+        nodeLinker: "hoisted",
       },
-    });
+    );
+    assert.deepStrictEqual(
+      createStageWorkspaceConfig({ platform: "win", arch: "arm64", linuxServerBackend: true }),
+      {
+        supportedArchitectures: {
+          os: ["win32", "linux"],
+          cpu: ["arm64"],
+          libc: ["glibc"],
+        },
+        nodeLinker: "hoisted",
+      },
+    );
     assert.deepStrictEqual(createStageWorkspaceConfig({ platform: "mac", arch: "universal" }), {
       supportedArchitectures: {
         os: ["darwin"],
@@ -317,6 +382,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.deepStrictEqual(DESKTOP_ELECTRON_LANGUAGES, ["en-US"]);
     assert.deepStrictEqual(DESKTOP_FILE_EXCLUSIONS, [
       "!**/node_modules/@anthropic-ai/claude-agent-sdk-*/**/*",
+      "!apps/desktop/prod-resources/server.asar",
+      "!apps/desktop/prod-resources/server.asar.unpacked/**/*",
     ]);
   });
 
@@ -350,9 +417,33 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         undefined,
       );
 
+      // All platforms keep app.asar fully packed; Windows ships the server
+      // tree as the hand-packed server.asar sidecar in extraResources instead
+      // of unpacking thousands of loose files at install time.
       assert.notProperty(mac, "asarUnpack");
       assert.notProperty(linux, "asarUnpack");
-      assert.deepStrictEqual(win.asarUnpack, WINDOWS_ASAR_UNPACK);
+      assert.notProperty(win, "asarUnpack");
+      assert.deepStrictEqual(win.extraResources, [
+        {
+          from: "apps/desktop/prod-resources/resource-monitor",
+          to: "resource-monitor",
+        },
+        ...WINDOWS_SERVER_EXTRA_RESOURCES,
+      ]);
+      assert.deepStrictEqual(win.nsis, { differentialPackage: true });
+      // Native binaries and helper executables cannot load from inside an
+      // asar; everything else stays packed. The Claude SDK platform packages
+      // and .bin shims never ship.
+      assert.equal(
+        WINDOWS_SERVER_ASAR_UNPACK_GLOB,
+        "{**/*.node,**/*.dll,**/*.exe,**/*.so,**/*.so.*,**/*.dylib}",
+      );
+      assert.deepStrictEqual(WINDOWS_SERVER_ASAR_IGNORE_GLOBS, [
+        "**/node_modules/@anthropic-ai/claude-agent-sdk-*",
+        "**/node_modules/@anthropic-ai/claude-agent-sdk-*/**",
+        "**/node_modules/.bin",
+        "**/node_modules/.bin/**",
+      ]);
       // Linux must register the renderer schemes so the generated .desktop
       // entry advertises MimeType=x-scheme-handler/t3code; for OAuth deep links.
       assert.deepStrictEqual((linux.linux as Record<string, unknown>).protocols, [
@@ -363,6 +454,67 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         assert.deepStrictEqual(config.files, DESKTOP_FILE_EXCLUSIONS);
       }
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
+  );
+
+  it.effect("validates every ASAR-unpacked native in the packaged Windows payload", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const fixture = yield* makeWindowsPayloadFixture({ copyUnpackedNatives: true });
+        const result = yield* validateWindowsPackagedPayload({
+          stageDistDir: fixture.stageDistDir,
+        });
+
+        const secondAsarPath = path.join(path.dirname(fixture.generatedAsarPath), "second.asar");
+        yield* packWindowsServerAsar({
+          sourceDir: fixture.sourceDir,
+          asarPath: secondAsarPath,
+        });
+        const [firstAsar, secondAsar] = yield* Effect.all([
+          fs.readFile(fixture.generatedAsarPath),
+          fs.readFile(secondAsarPath),
+        ]);
+
+        assert.equal(result.packagedAppDir, fixture.packagedAppDir);
+        assert.deepStrictEqual(result.unpackedFiles, ["node_modules/native/addon.node"]);
+        assert.isBelow(result.fileCount, WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT);
+        assert.deepStrictEqual(secondAsar, firstAsar);
+      }),
+    ),
+  );
+
+  it.effect("rejects a packaged sidecar whose ASAR-unpacked native is missing", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fixture = yield* makeWindowsPayloadFixture({ copyUnpackedNatives: false });
+        const error = yield* validateWindowsPackagedPayload({
+          stageDistDir: fixture.stageDistDir,
+        }).pipe(Effect.flip);
+
+        assert.instanceOf(error, WindowsPackagedPayloadValidationError);
+        assert.equal(error.reason, "unpacked-native-missing");
+        assert.deepStrictEqual(error.missingFiles, [
+          "server.asar.unpacked/node_modules/native/addon.node",
+        ]);
+      }),
+    ),
+  );
+
+  it.effect("rejects a Windows payload that regresses above the file-count budget", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fixture = yield* makeWindowsPayloadFixture({ copyUnpackedNatives: true });
+        const error = yield* validateWindowsPackagedPayload({
+          stageDistDir: fixture.stageDistDir,
+          fileLimit: 2,
+        }).pipe(Effect.flip);
+
+        assert.instanceOf(error, WindowsPackagedPayloadValidationError);
+        assert.equal(error.reason, "file-limit-exceeded");
+        assert.isAbove(error.fileCount ?? 0, 2);
+      }),
+    ),
   );
 
   it.effect("preserves both Linux icon resize failures with structural context", () => {
