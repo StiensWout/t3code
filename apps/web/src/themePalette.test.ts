@@ -550,6 +550,151 @@ describe("theme files", () => {
     vi.unstubAllGlobals();
     invalidateCustomThemes();
   });
+
+  it("writes from the cached raw snapshot without risking a destructive reread", () => {
+    const legacyTheme = {
+      id: "legacy",
+      label: "Legacy",
+      appearance: "dark",
+      colors: { accent: "#5b6cff" },
+      futureMetadata: true,
+    };
+    let storedThemes = JSON.stringify([legacyTheme]);
+    let readCount = 0;
+    const setItem = vi.fn((_key: string, value: string) => {
+      storedThemes = value;
+    });
+    vi.stubGlobal("window", {
+      localStorage: {
+        getItem: () => {
+          readCount += 1;
+          if (readCount > 1) throw new Error("transient read failure");
+          return storedThemes;
+        },
+        setItem,
+      },
+    });
+
+    invalidateCustomThemes();
+    expect(getCustomThemes()).toHaveLength(1);
+    installCustomTheme(
+      parseThemeFile({
+        version: THEME_FILE_VERSION,
+        id: "aurora",
+        name: "Aurora",
+        appearance: "light",
+        colors: { accent: "hsl(263 70% 58%)" },
+      }),
+    );
+
+    expect(readCount).toBe(1);
+    expect(setItem).toHaveBeenCalledOnce();
+    expect(JSON.parse(storedThemes)[0]).toEqual(legacyTheme);
+
+    vi.unstubAllGlobals();
+    invalidateCustomThemes();
+  });
+
+  it("refuses to overwrite a theme library that could not be read", () => {
+    const setItem = vi.fn();
+    vi.stubGlobal("window", {
+      localStorage: {
+        getItem: () => {
+          throw new Error("storage unavailable");
+        },
+        setItem,
+      },
+    });
+
+    invalidateCustomThemes();
+    expect(getCustomThemes()).toEqual([]);
+    expect(() =>
+      installCustomTheme(
+        parseThemeFile({
+          version: THEME_FILE_VERSION,
+          id: "aurora",
+          name: "Aurora",
+          appearance: "light",
+          colors: { accent: "#5b6cff" },
+        }),
+      ),
+    ).toThrow(`Failed to write the theme library to ${CUSTOM_THEMES_STORAGE_KEY}.`);
+    expect(setItem).not.toHaveBeenCalled();
+
+    vi.unstubAllGlobals();
+    invalidateCustomThemes();
+  });
+
+  it("rejects malformed stored entries that reuse an installed theme id", () => {
+    const storedThemes = JSON.stringify([{ id: "aurora", malformed: true }]);
+    const setItem = vi.fn();
+    vi.stubGlobal("window", {
+      localStorage: {
+        getItem: () => storedThemes,
+        setItem,
+      },
+    });
+
+    invalidateCustomThemes();
+    expect(() =>
+      installCustomTheme(
+        parseThemeFile({
+          version: THEME_FILE_VERSION,
+          id: "aurora",
+          name: "Aurora",
+          appearance: "light",
+          colors: { accent: "#5b6cff" },
+        }),
+      ),
+    ).toThrow('A theme named "Aurora" is already installed.');
+    expect(setItem).not.toHaveBeenCalled();
+
+    vi.unstubAllGlobals();
+    invalidateCustomThemes();
+  });
+
+  it("collapses duplicate raw entries when their theme is explicitly updated", () => {
+    const stored = new Map<string, string>();
+    const theme = {
+      id: "aurora",
+      label: "Aurora",
+      appearance: "light",
+      colors: { accent: "#5b6cff" },
+    };
+    const untouchedTheme = { id: "future", malformed: true, metadata: { version: 2 } };
+    stored.set(
+      CUSTOM_THEMES_STORAGE_KEY,
+      JSON.stringify([theme, { id: "aurora", malformed: true }, untouchedTheme]),
+    );
+    vi.stubGlobal("window", {
+      localStorage: {
+        getItem: (key: string) => stored.get(key) ?? null,
+        setItem: (key: string, value: string) => stored.set(key, value),
+      },
+    });
+
+    invalidateCustomThemes();
+    const installedTheme = getCustomThemes()[0]!;
+    updateCustomTheme({
+      ...installedTheme,
+      label: "Aurora Night",
+      colors: { ...installedTheme.colors, accent: "hsl(263 70% 58%)" },
+    });
+
+    const updatedLibrary = JSON.parse(stored.get(CUSTOM_THEMES_STORAGE_KEY) ?? "[]");
+    expect(updatedLibrary.filter((entry: { id?: string }) => entry.id === "aurora")).toHaveLength(
+      1,
+    );
+    expect(updatedLibrary[0]).toMatchObject({
+      id: "aurora",
+      label: "Aurora Night",
+      colors: { accent: canonical("hsl(263 70% 58%)") },
+    });
+    expect(updatedLibrary[1]).toEqual(untouchedTheme);
+
+    vi.unstubAllGlobals();
+    invalidateCustomThemes();
+  });
 });
 
 describe("stored theme preferences", () => {
