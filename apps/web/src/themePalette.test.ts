@@ -15,6 +15,7 @@ import {
   canonicalThemePreference,
   parseThemeFile,
   parseThemeHalves,
+  removeCustomTheme,
   resolveDesktopTheme,
   resolveThemeAppearance,
   serializeThemeFile,
@@ -219,6 +220,7 @@ describe("theme files", () => {
         terminalCursor: "color(display-p3 0.8 0.2 0.3)",
         terminalSelection: "rebeccapurple",
         terminalScrollbar: "transparent",
+        terminalScrollbarHover: "rgb(10 20 30 / none)",
       },
     });
 
@@ -228,6 +230,7 @@ describe("theme files", () => {
     expect(themeColorToHex(theme.colors.focus)).toBe("#0a141e80");
     expect(themeColorToHex(theme.colors.terminalSelection)).toBe("#663399");
     expect(theme.colors.terminalScrollbar).toBe("oklch(0 0 0 / 0)");
+    expect(themeColorToHex(theme.colors.terminalScrollbarHover)).toBe("#0a141e00");
     for (const role of [
       "error",
       "warning",
@@ -260,7 +263,7 @@ describe("theme files", () => {
     ).toThrow('The color for "accent" must be a literal CSS color');
   });
 
-  it("serializes the current theme representation without migrating it", () => {
+  it("canonicalizes the explicitly exported theme", () => {
     const serialized = serializeThemeFile({
       ...T3_CHAT_THEME,
       colors: { ...T3_CHAT_THEME.colors, accent: "hsl(263 70% 58%)" },
@@ -270,7 +273,7 @@ describe("theme files", () => {
       id: T3_CHAT_THEME.id,
       name: T3_CHAT_THEME.label,
       appearance: "light",
-      colors: { accent: "hsl(263 70% 58%)" },
+      colors: { accent: canonical("hsl(263 70% 58%)") },
     });
   });
 
@@ -488,8 +491,16 @@ describe("theme files", () => {
     vi.unstubAllGlobals();
   });
 
-  it("preserves explicit writes and decodes them on the next read", () => {
+  it("canonicalizes explicit writes without migrating untouched themes", () => {
     const stored = new Map<string, string>();
+    const untouchedTheme = {
+      id: "legacy",
+      label: "Legacy",
+      appearance: "dark",
+      colors: { accent: "#5b6cff", futureRole: "hsl(10 20% 30%)" },
+      futureMetadata: { version: 2 },
+    };
+    stored.set(CUSTOM_THEMES_STORAGE_KEY, JSON.stringify([untouchedTheme]));
     vi.stubGlobal("window", {
       localStorage: {
         getItem: (key: string) => stored.get(key) ?? null,
@@ -520,15 +531,21 @@ describe("theme files", () => {
       colors: { accent: canonical("hsl(263 70% 58%)") },
     });
     expect(updatedTheme).not.toHaveProperty("sidebarArtwork");
-    const storedTheme = JSON.parse(stored.get(CUSTOM_THEMES_STORAGE_KEY) ?? "[]")[0];
-    expect(storedTheme).toMatchObject({
+    const storedThemes = JSON.parse(stored.get(CUSTOM_THEMES_STORAGE_KEY) ?? "[]");
+    expect(storedThemes[0]).toEqual(untouchedTheme);
+    expect(storedThemes[1]).toMatchObject({
       id: "aurora",
       label: "Aurora Night",
       colors: { accent: canonical("hsl(263 70% 58%)") },
     });
-    expect(storedTheme).not.toHaveProperty("sidebarArtwork");
+    expect(storedThemes[1]).not.toHaveProperty("sidebarArtwork");
     invalidateCustomThemes();
-    expect(getCustomThemes()).toEqual([updatedTheme]);
+    expect(getCustomThemes().find((theme) => theme.id === "aurora")).toMatchObject({
+      id: "aurora",
+      colors: { accent: canonical("hsl(263 70% 58%)") },
+    });
+    removeCustomTheme("aurora");
+    expect(JSON.parse(stored.get(CUSTOM_THEMES_STORAGE_KEY) ?? "[]")).toEqual([untouchedTheme]);
 
     vi.unstubAllGlobals();
     invalidateCustomThemes();

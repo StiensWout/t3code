@@ -226,27 +226,28 @@ function parseStoredTheme(value: unknown): ThemeDefinition | null {
   };
 }
 
-function readCustomThemesFromStorage(): ReadonlyArray<ThemeDefinition> {
+function readStoredThemeLibrary(): ReadonlyArray<unknown> {
   if (typeof window === "undefined") return [];
 
   try {
     const raw = window.localStorage.getItem(CUSTOM_THEMES_STORAGE_KEY);
     if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-
-    const themes: ThemeDefinition[] = [];
-    for (const value of parsed) {
-      const theme = parseStoredTheme(value);
-      if (theme && !themes.some((existing) => existing.id === theme.id)) {
-        themes.push(theme);
-      }
-    }
-
-    return themes;
+    return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
   }
+}
+
+function readCustomThemesFromStorage(): ReadonlyArray<ThemeDefinition> {
+  const themes: ThemeDefinition[] = [];
+  for (const value of readStoredThemeLibrary()) {
+    const theme = parseStoredTheme(value);
+    if (theme && !themes.some((existing) => existing.id === theme.id)) {
+      themes.push(theme);
+    }
+  }
+  return themes;
 }
 
 function notifyCustomThemeListeners() {
@@ -633,16 +634,22 @@ const convertToOklch = converter("oklch");
 
 function parseThemeColor(value: unknown): ParsedThemeColor | null {
   if (typeof value !== "string") return null;
-  const parsed = parse(value.trim());
+  const input = value.trim();
+  const parsed = parse(input);
   if (!parsed) return null;
   const color = convertToOklch(parsed);
-  const alpha = color.alpha ?? 1;
-  if (![color.l, color.c, color.h ?? 0, alpha].every(Number.isFinite)) return null;
+  const lightness = color.l ?? 0;
+  const chroma = color.c ?? 0;
+  const hue = color.h ?? 0;
+  // CSS missing components behave as zero outside interpolation. Culori omits
+  // a `none` alpha from its parsed object, so distinguish it from omitted alpha.
+  const alpha = /\/\s*none\s*\)$/i.test(input) ? 0 : (color.alpha ?? 1);
+  if (![lightness, chroma, hue, alpha].every(Number.isFinite)) return null;
   return {
     color: {
-      L: Math.min(1, Math.max(0, color.l)),
-      C: Math.max(0, color.c),
-      h: color.h ?? 0,
+      L: Math.min(1, Math.max(0, lightness)),
+      C: Math.max(0, chroma),
+      h: hue,
     },
     alpha: Math.min(1, Math.max(0, alpha)),
   };
@@ -661,8 +668,7 @@ function formatOklchThemeColor(color: ThemeOklch, alpha = 1): string {
 
 /**
  * Decode a literal CSS color into the runtime's canonical OKLCH form. Stored
- * values use this path in memory without mutating localStorage. Persistence
- * writes the theme representation it receives; there is no migration pass.
+ * values use this path in memory without mutating localStorage.
  */
 export function toCanonicalThemeColor(value: unknown): string | null {
   const parsed = parseThemeColor(value);
@@ -704,8 +710,33 @@ function themeRgbToThemeColor(color: ThemeRgbColor): string {
 
 function decodeThemeColors(colors: ThemeColors): ThemeColors {
   return Object.fromEntries(
-    THEME_COLOR_ROLES.map((role) => [role, toCanonicalThemeColor(colors[role]) ?? colors[role]]),
+    THEME_COLOR_ROLES.map((role) => {
+      const color = toCanonicalThemeColor(colors[role]);
+      if (!color) {
+        throw new Error(
+          `The color for "${role}" must be a literal CSS color such as oklch(0.62 0.2 280).`,
+        );
+      }
+      return [role, color];
+    }),
   ) as Record<ThemeColorRole, string>;
+}
+
+function canonicalizeThemeDefinition(theme: ThemeDefinition): ThemeDefinition {
+  return {
+    ...theme,
+    colors: decodeThemeColors(theme.colors),
+    ...(theme.variants
+      ? {
+          variants: Object.fromEntries(
+            Object.entries(theme.variants).map(([appearance, colors]) => [
+              appearance,
+              decodeThemeColors(colors),
+            ]),
+          ) as ThemeVariants,
+        }
+      : {}),
+  };
 }
 
 function themeRgbToHsl(color: ThemeRgbColor): ThemeHslColor {
@@ -1513,10 +1544,13 @@ export class ThemeLibraryStorageError extends Schema.TaggedErrorClass<ThemeLibra
 
 export const isThemeLibraryStorageError = Schema.is(ThemeLibraryStorageError);
 
-function saveCustomThemes(themes: ReadonlyArray<ThemeDefinition>): void {
+function saveCustomThemes(
+  storedThemes: ReadonlyArray<unknown>,
+  themes: ReadonlyArray<ThemeDefinition>,
+): void {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(CUSTOM_THEMES_STORAGE_KEY, JSON.stringify(themes));
+    window.localStorage.setItem(CUSTOM_THEMES_STORAGE_KEY, JSON.stringify(storedThemes));
     customThemesSnapshot = themes;
   } catch (cause) {
     throw new ThemeLibraryStorageError({ storageKey: CUSTOM_THEMES_STORAGE_KEY, cause });
@@ -1535,8 +1569,10 @@ export function installCustomTheme(theme: ThemeDefinition): ThemeDefinition {
   ) {
     throw new Error(`A theme named "${theme.label}" is already installed.`);
   }
-  saveCustomThemes([...getCustomThemes(), theme]);
-  return theme;
+  const canonicalTheme = canonicalizeThemeDefinition(theme);
+  const themes = [...getCustomThemes(), canonicalTheme];
+  saveCustomThemes([...readStoredThemeLibrary(), canonicalTheme], themes);
+  return canonicalTheme;
 }
 
 export function updateCustomTheme(theme: ThemeDefinition): ThemeDefinition {
@@ -1550,16 +1586,31 @@ export function updateCustomTheme(theme: ThemeDefinition): ThemeDefinition {
     throw new Error(`The theme "${theme.label}" is not installed.`);
   }
 
+  const canonicalTheme = canonicalizeThemeDefinition(theme);
   const nextThemes = [...themes];
-  nextThemes[themeIndex] = theme;
-  saveCustomThemes(nextThemes);
-  return theme;
+  nextThemes[themeIndex] = canonicalTheme;
+
+  let replaced = false;
+  const nextStoredThemes = readStoredThemeLibrary().map((storedTheme) => {
+    if (replaced || !isRecord(storedTheme) || storedTheme.id !== theme.id) return storedTheme;
+    replaced = true;
+    return canonicalTheme;
+  });
+  saveCustomThemes(replaced ? nextStoredThemes : nextThemes, nextThemes);
+  return canonicalTheme;
 }
 
 export function removeCustomTheme(themeId: string): void {
   const nextThemes = getCustomThemes().filter((theme) => theme.id !== themeId);
   if (nextThemes.length === getCustomThemes().length) return;
-  saveCustomThemes(nextThemes);
+  const storedThemes = readStoredThemeLibrary();
+  const nextStoredThemes = storedThemes.filter(
+    (storedTheme) => !isRecord(storedTheme) || storedTheme.id !== themeId,
+  );
+  saveCustomThemes(
+    nextStoredThemes.length === storedThemes.length ? nextThemes : nextStoredThemes,
+    nextThemes,
+  );
 }
 
 function parseThemeColorOverrides(value: unknown): ThemeColorOverrides {
