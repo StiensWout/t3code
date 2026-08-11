@@ -35,10 +35,10 @@
         // app colors before React mounts.
         const DEFAULT_THEME_PALETTES = {
           light: {
-            background: "oklch(0.982446 0.010114 325.654)",
+            background: "oklch(0.982446 0.010114 325.653)",
             foreground: "oklch(0.325698 0.116116 325.037)",
             accent: "oklch(0.591646 0.217985 0.584)",
-            chrome: "oklch(0.982446 0.010114 325.654)",
+            chrome: "oklch(0.982446 0.010114 325.653)",
           },
           dark: {
             background: "oklch(0.22813 0.020366 307.469)",
@@ -52,10 +52,10 @@
         const BUILT_IN_THEME_PALETTES = {
           "t3-chat": {
             light: {
-              background: "oklch(0.982446 0.010114 325.654)",
+              background: "oklch(0.982446 0.010114 325.653)",
               foreground: "oklch(0.325698 0.116116 325.037)",
               accent: "oklch(0.591646 0.217985 0.584)",
-              chrome: "oklch(0.982446 0.010114 325.654)",
+              chrome: "oklch(0.982446 0.010114 325.653)",
             },
             dark: {
               background: "oklch(0.22813 0.020366 307.469)",
@@ -152,14 +152,23 @@
           }
         };
 
-        // Keep the removable legacy-hex branch in sync with the runtime
-        // migration. New theme libraries persist canonical OKLCH values.
-        const isThemeColor = (value) =>
-          typeof value === "string" &&
-          (/^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(value) ||
-            /^oklch\(\s*[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?%?\s+[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?%?\s+[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?(?:deg)?(?:\s*\/\s*[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?%?)?\s*\)$/i.test(
-              value,
-            ));
+        // The runtime decodes the same literal CSS formats into OKLCH. Keep
+        // contextual colors out: they cannot be resolved from stored data.
+        const isThemeColor = (value) => {
+          if (typeof value !== "string" || typeof CSS === "undefined") return false;
+          const color = value.trim();
+          if (
+            /^(?:currentcolor|inherit|initial|revert|revert-layer|unset)$/i.test(color) ||
+            /\bfrom\b|(?:var|env|attr|calc|min|max|clamp)\(/i.test(color)
+          ) {
+            return false;
+          }
+          const isLiteralColor =
+            /^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(color) ||
+            /^[a-z]+$/i.test(color) ||
+            /^(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\(/i.test(color);
+          return isLiteralColor && CSS.supports("color", color);
+        };
         const isRecord = (value) =>
           typeof value === "object" && value !== null && !Array.isArray(value);
         const isThemeId = (value) =>

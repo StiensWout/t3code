@@ -202,7 +202,7 @@ describe("theme files", () => {
     });
   });
 
-  it("canonicalizes OKLCH syntax and legacy hex without dropping alpha", () => {
+  it("decodes literal CSS color formats into OKLCH without dropping alpha", () => {
     const theme = parseThemeFile({
       version: THEME_FILE_VERSION,
       name: "Translucent",
@@ -210,12 +210,34 @@ describe("theme files", () => {
       colors: {
         canvas: "oklch(62% 0.2 280deg / 50%)",
         accent: "#abcd",
+        focus: "rgb(10 20 30 / 50%)",
+        error: "hsl(350 80% 50%)",
+        warning: "hwb(45 10% 20%)",
+        update: "lab(60% 40 30)",
+        messageAction: "lch(60% 50 120)",
+        sidebar: "oklab(0.6 0.1 -0.1)",
+        terminalCursor: "color(display-p3 0.8 0.2 0.3)",
+        terminalSelection: "rebeccapurple",
+        terminalScrollbar: "transparent",
       },
     });
 
     expect(theme.colors.canvas).toBe("oklch(0.62 0.2 280 / 0.5)");
     expect(theme.colors.accent).toBe(canonical("#abcd"));
     expect(themeColorToHex(theme.colors.accent)).toBe("#aabbccdd");
+    expect(themeColorToHex(theme.colors.focus)).toBe("#0a141e80");
+    expect(themeColorToHex(theme.colors.terminalSelection)).toBe("#663399");
+    expect(theme.colors.terminalScrollbar).toBe("oklch(0 0 0 / 0)");
+    for (const role of [
+      "error",
+      "warning",
+      "update",
+      "messageAction",
+      "sidebar",
+      "terminalCursor",
+    ] as const) {
+      expect(theme.colors[role]).toMatch(/^oklch\(/);
+    }
   });
 
   it("rejects unknown roles and invalid color values", () => {
@@ -235,7 +257,7 @@ describe("theme files", () => {
         appearance: "light",
         colors: { accent: "var(--danger)" },
       }),
-    ).toThrow('The color for "accent" must be an OKLCH color');
+    ).toThrow('The color for "accent" must be a literal CSS color');
   });
 
   it("serializes a theme back into the importable file shape", () => {
@@ -485,7 +507,7 @@ describe("theme files", () => {
     const updatedTheme = updateCustomTheme({
       ...createdTheme,
       label: "Aurora Night",
-      colors: { ...createdTheme.colors, accent: "#7c3aed" },
+      colors: { ...createdTheme.colors, accent: "hsl(263 70% 58%)" },
     });
 
     expect(updatedTheme).toMatchObject({
@@ -498,6 +520,7 @@ describe("theme files", () => {
     expect(JSON.parse(stored.get(CUSTOM_THEMES_STORAGE_KEY) ?? "[]")[0]).toMatchObject({
       id: "aurora",
       label: "Aurora Night",
+      colors: { accent: canonical("hsl(263 70% 58%)") },
     });
     expect(JSON.parse(stored.get(CUSTOM_THEMES_STORAGE_KEY) ?? "[]")[0]).not.toHaveProperty(
       "sidebarArtwork",
@@ -573,24 +596,23 @@ describe("stored theme preferences", () => {
     expect(isKnownThemePreference("missing-theme")).toBe(false);
   });
 
-  it("keeps stored themes with unknown roles and drops invalid entries", () => {
-    let storedThemes = JSON.stringify([
+  it("decodes stored colors in memory without writing during reads", () => {
+    const storedThemes = JSON.stringify([
       {
         id: "aurora",
         label: "Aurora",
         appearance: "light",
         colors: { canvas: "#f8fbff", futureRole: "#123456", accent: "not-a-color" },
-        variants: { light: { canvas: "#101827" } },
+        variants: { dark: { canvas: "rgb(16 24 39)" } },
       },
       { id: "light", label: "Reserved", appearance: "light", colors: {} },
       { id: "aurora", label: "Duplicate", appearance: "dark", colors: {} },
     ]);
+    const setItem = vi.fn();
     vi.stubGlobal("window", {
       localStorage: {
         getItem: (key: string) => (key === CUSTOM_THEMES_STORAGE_KEY ? storedThemes : null),
-        setItem: (key: string, value: string) => {
-          if (key === CUSTOM_THEMES_STORAGE_KEY) storedThemes = value;
-        },
+        setItem,
       },
     });
     invalidateCustomThemes();
@@ -601,18 +623,14 @@ describe("stored theme preferences", () => {
       id: "aurora",
       colors: { canvas: canonical("#f8fbff"), accent: getDefaultThemeColors("light").accent },
     });
-    // The variant shadowing the base appearance is dropped so the theme
-    // round-trips through parseThemeFile on export.
-    expect(getThemeModes(themes[0]!)).toEqual(["light"]);
-    const migrated = JSON.parse(storedThemes);
-    expect(migrated[0].colors).toEqual({
-      canvas: canonical("#f8fbff"),
-      // Unknown roles are left byte-identical for forward compatibility.
+    expect(getThemeModes(themes[0]!)).toEqual(["light", "dark"]);
+    expect(getThemeColorsForMode(themes[0]!, "dark")?.canvas).toBe(canonical("rgb(16 24 39)"));
+    expect(setItem).not.toHaveBeenCalled();
+    expect(JSON.parse(storedThemes)[0].colors).toEqual({
+      canvas: "#f8fbff",
       futureRole: "#123456",
       accent: "not-a-color",
     });
-    expect(migrated[0].variants.light.canvas).toBe(canonical("#101827"));
-    expect(migrated[1].id).toBe("light");
 
     vi.unstubAllGlobals();
     invalidateCustomThemes();

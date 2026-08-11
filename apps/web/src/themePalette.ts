@@ -1,4 +1,6 @@
 import * as Schema from "effect/Schema";
+import "culori/css";
+import { converter, parse } from "culori/fn";
 
 export const T3_CHAT_THEME_ID = "t3-chat" as const;
 export const T3_CHAT_THEME_LABEL = "T3 Chat";
@@ -241,19 +243,6 @@ function readCustomThemesFromStorage(): ReadonlyArray<ThemeDefinition> {
       }
     }
 
-    // Temporary compatibility migration: keep the runtime canonical while old
-    // libraries remain readable, then rewrite only legacy color leaves in the
-    // original payload. Preserving unknown roles and metadata keeps the stored
-    // format forward-compatible with builds that know more than this one.
-    const migrated = migrateStoredThemeLibrary(parsed);
-    if (migrated.changed) {
-      try {
-        window.localStorage.setItem(CUSTOM_THEMES_STORAGE_KEY, JSON.stringify(migrated.value));
-      } catch {
-        // A read-only or full storage area must not make an otherwise valid
-        // theme disappear. The migration will retry on a later load.
-      }
-    }
     return themes;
   } catch {
     return [];
@@ -631,7 +620,6 @@ type ThemeHslColor = {
 
 type ThemeOklch = { L: number; C: number; h: number };
 type ParsedThemeColor = { color: ThemeOklch; alpha: number };
-type ParsedLegacyHexThemeColor = { rgb: ThemeRgbColor; alpha: number };
 
 let standardLightThemeColors: ThemeColors | undefined;
 let standardDarkThemeColors: ThemeColors | undefined;
@@ -641,59 +629,23 @@ const THEME_DARK_FOREGROUND: ThemeRgbColor = { r: 36, g: 21, b: 35 };
 const THEME_WHITE_FOREGROUND: ThemeRgbColor = { r: 255, g: 255, b: 255 };
 const THEME_BLACK_FOREGROUND: ThemeRgbColor = { r: 0, g: 0, b: 0 };
 
-const THEME_COLOR_NUMBER_SOURCE = String.raw`[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?`;
-const THEME_OKLCH_RE = new RegExp(
-  String.raw`^oklch\(\s*(${THEME_COLOR_NUMBER_SOURCE})(%)?\s+(${THEME_COLOR_NUMBER_SOURCE})(%)?\s+(${THEME_COLOR_NUMBER_SOURCE})(?:deg)?(?:\s*\/\s*(${THEME_COLOR_NUMBER_SOURCE})(%)?)?\s*\)$`,
-  "i",
-);
+const convertToOklch = converter("oklch");
 
-function parseLegacyHexThemeColor(value: unknown): ParsedLegacyHexThemeColor | null {
+function parseThemeColor(value: unknown): ParsedThemeColor | null {
   if (typeof value !== "string") return null;
-  const match = value.trim().match(/^#([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i);
-  if (!match?.[1]) return null;
-
-  const raw = match[1].toLowerCase();
-  const expanded =
-    raw.length <= 4
-      ? raw
-          .split("")
-          .map((part) => part.repeat(2))
-          .join("")
-      : raw;
+  const parsed = parse(value.trim());
+  if (!parsed) return null;
+  const color = convertToOklch(parsed);
+  const alpha = color.alpha ?? 1;
+  if (![color.l, color.c, color.h ?? 0, alpha].every(Number.isFinite)) return null;
   return {
-    rgb: {
-      r: Number.parseInt(expanded.slice(0, 2), 16),
-      g: Number.parseInt(expanded.slice(2, 4), 16),
-      b: Number.parseInt(expanded.slice(4, 6), 16),
+    color: {
+      L: Math.min(1, Math.max(0, color.l)),
+      C: Math.max(0, color.c),
+      h: color.h ?? 0,
     },
-    alpha: expanded.length === 8 ? Number.parseInt(expanded.slice(6, 8), 16) / 255 : 1,
+    alpha: Math.min(1, Math.max(0, alpha)),
   };
-}
-
-function parseOklchThemeColor(value: unknown): ParsedThemeColor | null {
-  if (typeof value !== "string") return null;
-  const match = THEME_OKLCH_RE.exec(value.trim());
-  if (!match) return null;
-
-  const lightness = Number.parseFloat(match[1]!);
-  const chroma = Number.parseFloat(match[3]!);
-  const hue = Number.parseFloat(match[5]!);
-  const alphaValue = match[6] === undefined ? 1 : Number.parseFloat(match[6]);
-  const L = match[2] ? lightness / 100 : lightness;
-  // CSS maps 100% chroma to 0.4 in OKLCH.
-  const C = match[4] ? chroma * 0.004 : chroma;
-  const alpha = match[7] ? alphaValue / 100 : alphaValue;
-  if (
-    ![L, C, hue, alpha].every(Number.isFinite) ||
-    L < 0 ||
-    L > 1 ||
-    C < 0 ||
-    alpha < 0 ||
-    alpha > 1
-  ) {
-    return null;
-  }
-  return { color: { L, C, h: hue }, alpha };
 }
 
 function formatThemeColorNumber(value: number, precision: number): string {
@@ -708,26 +660,19 @@ function formatOklchThemeColor(color: ThemeOklch, alpha = 1): string {
 }
 
 /**
- * Canonicalize a theme color at the persistence boundary. The hex branch is a
- * temporary migration shim for libraries and files created by older builds.
+ * Decode a literal CSS color into the runtime's canonical OKLCH form. Stored
+ * legacy values use this path in memory without mutating localStorage; explicit
+ * install, update, and export operations persist the canonical result.
  */
 export function toCanonicalThemeColor(value: unknown): string | null {
-  const oklch = parseOklchThemeColor(value);
-  if (oklch) return formatOklchThemeColor(oklch.color, oklch.alpha);
-
-  const legacy = parseLegacyHexThemeColor(value);
-  return legacy ? formatOklchThemeColor(themeRgbToOklch(legacy.rgb), legacy.alpha) : null;
+  const parsed = parseThemeColor(value);
+  return parsed ? formatOklchThemeColor(parsed.color, parsed.alpha) : null;
 }
 
 /** Convert a runtime theme color for hex-only editor and import adapters. */
 export function themeColorToHex(value: string): string | null {
-  const legacy = parseLegacyHexThemeColor(value);
-  const parsed = legacy
-    ? { rgb: legacy.rgb, alpha: legacy.alpha }
-    : (() => {
-        const oklch = parseOklchThemeColor(value);
-        return oklch ? { rgb: themeOklchToRgb(oklch.color), alpha: oklch.alpha } : null;
-      })();
+  const color = parseThemeColor(value);
+  const parsed = color ? { rgb: themeOklchToRgb(color.color), alpha: color.alpha } : null;
   if (!parsed) return null;
 
   const opaque = themeRgbToHexColor(parsed.rgb);
@@ -739,10 +684,8 @@ export function themeColorToHex(value: string): string | null {
 }
 
 function parseThemeRgbColor(value: string, fallback: ThemeRgbColor): ThemeRgbColor {
-  const legacy = parseLegacyHexThemeColor(value);
-  if (legacy) return legacy.rgb;
-  const oklch = parseOklchThemeColor(value);
-  return oklch ? themeOklchToRgb(oklch.color) : fallback;
+  const parsed = parseThemeColor(value);
+  return parsed ? themeOklchToRgb(parsed.color) : fallback;
 }
 
 function themeRgbToHexColor(color: ThemeRgbColor): string {
@@ -780,61 +723,6 @@ function canonicalizeThemeDefinition(theme: ThemeDefinition): ThemeDefinition {
         }
       : {}),
   };
-}
-
-function migrateStoredThemeColorRecord(value: unknown): { value: unknown; changed: boolean } {
-  if (!isRecord(value)) return { value, changed: false };
-  let next: Record<string, unknown> = value;
-  let changed = false;
-  for (const [role, color] of Object.entries(value)) {
-    if (!THEME_COLOR_ROLE_SET.has(role) || !parseLegacyHexThemeColor(color)) continue;
-    const canonical = toCanonicalThemeColor(color);
-    if (!canonical) continue;
-    if (!changed) next = { ...value };
-    next[role] = canonical;
-    changed = true;
-  }
-  return { value: next, changed };
-}
-
-function migrateStoredTheme(value: unknown): { value: unknown; changed: boolean } {
-  if (!isRecord(value)) return { value, changed: false };
-  const colors = migrateStoredThemeColorRecord(value.colors);
-  let variantsValue = value.variants;
-  let variantsChanged = false;
-  if (isRecord(value.variants)) {
-    let nextVariants: Record<string, unknown> = value.variants;
-    for (const [appearance, variantColors] of Object.entries(value.variants)) {
-      const migrated = migrateStoredThemeColorRecord(variantColors);
-      if (!migrated.changed) continue;
-      if (!variantsChanged) nextVariants = { ...value.variants };
-      nextVariants[appearance] = migrated.value;
-      variantsChanged = true;
-    }
-    variantsValue = nextVariants;
-  }
-  if (!colors.changed && !variantsChanged) return { value, changed: false };
-  return {
-    value: {
-      ...value,
-      colors: colors.value,
-      ...(value.variants === undefined ? {} : { variants: variantsValue }),
-    },
-    changed: true,
-  };
-}
-
-function migrateStoredThemeLibrary(values: ReadonlyArray<unknown>): {
-  value: ReadonlyArray<unknown>;
-  changed: boolean;
-} {
-  let changed = false;
-  const value = values.map((theme) => {
-    const migrated = migrateStoredTheme(theme);
-    changed ||= migrated.changed;
-    return migrated.value;
-  });
-  return { value, changed };
 }
 
 function themeRgbToHsl(color: ThemeRgbColor): ThemeHslColor {
@@ -1704,7 +1592,7 @@ function parseThemeColorOverrides(value: unknown): ThemeColorOverrides {
     const normalized = toCanonicalThemeColor(color);
     if (!normalized) {
       throw new Error(
-        `The color for "${role}" must be an OKLCH color such as oklch(0.62 0.2 280).`,
+        `The color for "${role}" must be a literal CSS color such as oklch(0.62 0.2 280).`,
       );
     }
     overrides[role as ThemeColorRole] = normalized;

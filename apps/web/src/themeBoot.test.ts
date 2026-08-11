@@ -15,6 +15,7 @@ import {
   OCEAN_THEME,
   THEME_APPEARANCE_MODE_STORAGE_KEY,
   THEME_FOLLOW_SYSTEM_STORAGE_KEY,
+  toCanonicalThemeColor,
 } from "./themePalette";
 
 const THEME_STORAGE_KEY = "t3code:theme";
@@ -83,7 +84,12 @@ function runBootScript(options: {
     matchMedia: () => ({ matches: options.prefersDark }),
   };
 
-  new Function("window", "document", bootScript)(fakeWindow, fakeDocument);
+  const fakeCss = {
+    supports: (property: string, value: string) =>
+      property === "color" && toCanonicalThemeColor(value) !== null,
+  };
+
+  new Function("window", "document", "CSS", bootScript)(fakeWindow, fakeDocument, fakeCss);
 
   return {
     isDark: classes.has("dark"),
@@ -302,6 +308,34 @@ describe("index.html boot script", () => {
     expect(boot.bootVariables["--boot-accent"]).toBe(colors.accent);
     expect(boot.backgroundColor).toBe(colors.chrome);
     expect(boot.metaContent).toBe(colors.chrome);
+  });
+
+  it("accepts legacy CSS color formats before the runtime mounts", () => {
+    const colors = {
+      canvas: "rgb(248 251 255)",
+      chrome: "hsl(210 100% 99%)",
+      text: "rebeccapurple",
+      accent: "color(display-p3 0.36 0.42 1)",
+    };
+    const boot = runBootScript({
+      storage: {
+        [THEME_STORAGE_KEY]: "legacy-css",
+        [CUSTOM_THEMES_STORAGE_KEY]: JSON.stringify([
+          {
+            id: "legacy-css",
+            label: "Legacy CSS",
+            appearance: "light",
+            colors,
+          },
+        ]),
+      },
+      prefersDark: false,
+    });
+
+    expect(boot.bootVariables["--boot-background"]).toBe(colors.canvas);
+    expect(boot.bootVariables["--boot-foreground"]).toBe(colors.text);
+    expect(boot.bootVariables["--boot-accent"]).toBe(colors.accent);
+    expect(boot.backgroundColor).toBe(colors.chrome);
   });
 
   // Asserting against the real palette definitions (not literals) turns the
