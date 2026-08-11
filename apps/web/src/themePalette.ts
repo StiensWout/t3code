@@ -601,9 +601,9 @@ const T3_CODE_DARK_THEME_COLORS: ThemeColors = {
  */
 export function getStandardThemeColors(appearance: ThemeAppearance): ThemeColors {
   if (appearance === "dark") {
-    return (standardDarkThemeColors ??= canonicalizeThemeColors(T3_CODE_DARK_THEME_COLORS));
+    return (standardDarkThemeColors ??= decodeThemeColors(T3_CODE_DARK_THEME_COLORS));
   }
-  return (standardLightThemeColors ??= canonicalizeThemeColors(T3_CODE_LIGHT_THEME_COLORS));
+  return (standardLightThemeColors ??= decodeThemeColors(T3_CODE_LIGHT_THEME_COLORS));
 }
 
 type ThemeRgbColor = {
@@ -661,8 +661,8 @@ function formatOklchThemeColor(color: ThemeOklch, alpha = 1): string {
 
 /**
  * Decode a literal CSS color into the runtime's canonical OKLCH form. Stored
- * legacy values use this path in memory without mutating localStorage; explicit
- * install, update, and export operations persist the canonical result.
+ * values use this path in memory without mutating localStorage. Persistence
+ * writes the theme representation it receives; there is no migration pass.
  */
 export function toCanonicalThemeColor(value: unknown): string | null {
   const parsed = parseThemeColor(value);
@@ -702,27 +702,10 @@ function themeRgbToThemeColor(color: ThemeRgbColor): string {
   return formatOklchThemeColor(themeRgbToOklch(color));
 }
 
-function canonicalizeThemeColors(colors: ThemeColors): ThemeColors {
+function decodeThemeColors(colors: ThemeColors): ThemeColors {
   return Object.fromEntries(
     THEME_COLOR_ROLES.map((role) => [role, toCanonicalThemeColor(colors[role]) ?? colors[role]]),
   ) as Record<ThemeColorRole, string>;
-}
-
-function canonicalizeThemeDefinition(theme: ThemeDefinition): ThemeDefinition {
-  return {
-    ...theme,
-    colors: canonicalizeThemeColors(theme.colors),
-    ...(theme.variants
-      ? {
-          variants: Object.fromEntries(
-            Object.entries(theme.variants).map(([appearance, colors]) => [
-              appearance,
-              canonicalizeThemeColors(colors),
-            ]),
-          ) as ThemeVariants,
-        }
-      : {}),
-  };
 }
 
 function themeRgbToHsl(color: ThemeRgbColor): ThemeHslColor {
@@ -1362,9 +1345,9 @@ export const T3_CHAT_THEME: ThemeDefinition = {
   id: T3_CHAT_THEME_ID,
   label: T3_CHAT_THEME_LABEL,
   appearance: "light",
-  colors: canonicalizeThemeColors(T3_CHAT_LIGHT_COLORS),
+  colors: decodeThemeColors(T3_CHAT_LIGHT_COLORS),
   variants: {
-    dark: canonicalizeThemeColors(T3_CHAT_DARK_COLORS),
+    dark: decodeThemeColors(T3_CHAT_DARK_COLORS),
   },
   sidebarArtwork: true,
 };
@@ -1552,9 +1535,8 @@ export function installCustomTheme(theme: ThemeDefinition): ThemeDefinition {
   ) {
     throw new Error(`A theme named "${theme.label}" is already installed.`);
   }
-  const canonicalTheme = canonicalizeThemeDefinition(theme);
-  saveCustomThemes([...getCustomThemes(), canonicalTheme]);
-  return canonicalTheme;
+  saveCustomThemes([...getCustomThemes(), theme]);
+  return theme;
 }
 
 export function updateCustomTheme(theme: ThemeDefinition): ThemeDefinition {
@@ -1568,11 +1550,10 @@ export function updateCustomTheme(theme: ThemeDefinition): ThemeDefinition {
     throw new Error(`The theme "${theme.label}" is not installed.`);
   }
 
-  const canonicalTheme = canonicalizeThemeDefinition(theme);
   const nextThemes = [...themes];
-  nextThemes[themeIndex] = canonicalTheme;
+  nextThemes[themeIndex] = theme;
   saveCustomThemes(nextThemes);
-  return canonicalTheme;
+  return theme;
 }
 
 export function removeCustomTheme(themeId: string): void {

@@ -260,13 +260,17 @@ describe("theme files", () => {
     ).toThrow('The color for "accent" must be a literal CSS color');
   });
 
-  it("serializes a theme back into the importable file shape", () => {
-    const serialized = serializeThemeFile(T3_CHAT_THEME);
+  it("serializes the current theme representation without migrating it", () => {
+    const serialized = serializeThemeFile({
+      ...T3_CHAT_THEME,
+      colors: { ...T3_CHAT_THEME.colors, accent: "hsl(263 70% 58%)" },
+    });
     expect(JSON.parse(serialized)).toMatchObject({
       version: THEME_FILE_VERSION,
       id: T3_CHAT_THEME.id,
       name: T3_CHAT_THEME.label,
       appearance: "light",
+      colors: { accent: "hsl(263 70% 58%)" },
     });
   });
 
@@ -484,7 +488,7 @@ describe("theme files", () => {
     vi.unstubAllGlobals();
   });
 
-  it("updates a personal theme without changing its id", () => {
+  it("preserves explicit writes and decodes them on the next read", () => {
     const stored = new Map<string, string>();
     vi.stubGlobal("window", {
       localStorage: {
@@ -513,18 +517,18 @@ describe("theme files", () => {
     expect(updatedTheme).toMatchObject({
       id: "aurora",
       label: "Aurora Night",
+      colors: { accent: canonical("hsl(263 70% 58%)") },
     });
     expect(updatedTheme).not.toHaveProperty("sidebarArtwork");
-    invalidateCustomThemes();
-    expect(getCustomThemes()).toEqual([updatedTheme]);
-    expect(JSON.parse(stored.get(CUSTOM_THEMES_STORAGE_KEY) ?? "[]")[0]).toMatchObject({
+    const storedTheme = JSON.parse(stored.get(CUSTOM_THEMES_STORAGE_KEY) ?? "[]")[0];
+    expect(storedTheme).toMatchObject({
       id: "aurora",
       label: "Aurora Night",
       colors: { accent: canonical("hsl(263 70% 58%)") },
     });
-    expect(JSON.parse(stored.get(CUSTOM_THEMES_STORAGE_KEY) ?? "[]")[0]).not.toHaveProperty(
-      "sidebarArtwork",
-    );
+    expect(storedTheme).not.toHaveProperty("sidebarArtwork");
+    invalidateCustomThemes();
+    expect(getCustomThemes()).toEqual([updatedTheme]);
 
     vi.unstubAllGlobals();
     invalidateCustomThemes();
