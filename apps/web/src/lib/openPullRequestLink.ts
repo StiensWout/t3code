@@ -187,20 +187,31 @@ export function useOpenChangeRequestLink(
   return useCallback(
     (event, targetUrl, targetThreadRef) => {
       const resolvedThreadRef = targetThreadRef ?? threadRef;
-      const environmentId = resolvedThreadRef?.environmentId ?? primaryEnvironmentId;
-      if (
-        environmentId === null ||
-        serverConfigs.get(environmentId)?.environment.capabilities.pullRequests !== true
-      ) {
-        return false;
-      }
+      const parsed = parseChangeRequestUrl(targetUrl);
+      if (parsed === null) return false;
       // Beside a thread the panel reads on that thread's environment, so a project from another
       // one could not be read there whatever its remote says: two environments can hold the same
       // repository, and handing the panel the wrong one's id opens a surface that never loads.
-      const projects = allProjects.filter((project) => project.environmentId === environmentId);
-      const parsed = parseChangeRequestUrl(targetUrl);
-      const project = parsed === null ? undefined : findProjectForChangeRequest(projects, parsed);
-      if (parsed === null || project === undefined) return false;
+      const projects = resolvedThreadRef
+        ? allProjects.filter((project) => project.environmentId === resolvedThreadRef.environmentId)
+        : allProjects
+            .filter(
+              (project) =>
+                serverConfigs.get(project.environmentId)?.environment.capabilities.pullRequests ===
+                true,
+            )
+            .toSorted(
+              (left, right) =>
+                Number(right.environmentId === primaryEnvironmentId) -
+                Number(left.environmentId === primaryEnvironmentId),
+            );
+      const project = findProjectForChangeRequest(projects, parsed);
+      if (
+        project === undefined ||
+        serverConfigs.get(project.environmentId)?.environment.capabilities.pullRequests !== true
+      ) {
+        return false;
+      }
       event.preventDefault();
       event.stopPropagation();
       if (resolvedThreadRef) {
@@ -220,8 +231,10 @@ export function useOpenChangeRequestLink(
           // Every state, so the pull request being opened is also in the list behind it whether
           // it is open, merged or closed.
           state: "all",
+          environmentId: project.environmentId,
           repository: parsed.repository,
           number: parsed.number,
+          selectedEnvironmentId: project.environmentId,
           selectedProjectId: project.id,
         },
       });

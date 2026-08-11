@@ -8,6 +8,7 @@ import {
   mergePullRequestDiffStats,
   narrowPullRequestsToFilters,
   partitionPullRequestsWithPriority,
+  pullRequestEntryKey,
   readPullRequestListSnapshot,
   writePullRequestListSnapshot,
   rankPullRequestMatches,
@@ -101,6 +102,35 @@ describe("pull request involvement filtering", () => {
     expect(
       filterPullRequestsByInvolvement(mixed, VIEWERS, "authored").map((item) => item.number),
     ).toEqual([1]);
+  });
+
+  it("keeps viewers separate when two servers use the same host", () => {
+    const mixed = [
+      {
+        ...entry({ number: 1, author: { login: "Bilal", name: null, avatarUrl: null } }),
+        environmentId: "local",
+        viewerLogin: "Bilal",
+      },
+      {
+        ...entry({ number: 2, author: { login: "Bilal", name: null, avatarUrl: null } }),
+        environmentId: "remote",
+        viewerLogin: "Octocat",
+      },
+    ];
+
+    expect(
+      filterPullRequestsByInvolvement(mixed, VIEWERS, "authored").map((item) => item.number),
+    ).toEqual([1]);
+  });
+});
+
+describe("pull request identity across servers", () => {
+  it("keeps otherwise identical rows distinct", () => {
+    const row = entry({ number: 1 });
+
+    expect(pullRequestEntryKey({ ...row, environmentId: "local" })).not.toBe(
+      pullRequestEntryKey({ ...row, environmentId: "remote" }),
+    );
   });
 });
 
@@ -298,6 +328,13 @@ describe("line counts that arrive after the rows", () => {
   it("leaves a row whose counts have not arrived as it is", () => {
     const row = entry({ number: 9, additions: 0, deletions: 0 });
     expect(withDiffStat(row, stats)).toBe(row);
+  });
+
+  it("does not apply another server's count to the same project and number", () => {
+    const row = { ...entry({ number: 7, additions: 0, deletions: 0 }), environmentId: "remote" };
+    const scopedStats = new Map([["local:project-1 7", { additions: 42, deletions: 3 }]]);
+
+    expect(withDiffStat(row, scopedStats)).toBe(row);
   });
 });
 

@@ -419,6 +419,25 @@ describe("rightPanelStore", () => {
     expect(state.activeSurfaceId).toBe(pullRequestSurfaceId(first));
   });
 
+  it("keeps the same pull request on two servers as separate tabs", () => {
+    const local = {
+      environmentId: "local",
+      projectId: "project-a",
+      repository: "pingdotgg/t3code",
+      number: 4909,
+    };
+    const remote = { ...local, environmentId: "remote" };
+
+    useRightPanelStore.getState().openPullRequest(refA, local);
+    useRightPanelStore.getState().openPullRequest(refA, remote);
+
+    const state = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA);
+    expect(state.surfaces.map((surface) => surface.id)).toEqual([
+      pullRequestSurfaceId(local),
+      pullRequestSurfaceId(remote),
+    ]);
+  });
+
   it("tracks one surface per terminal session", () => {
     useRightPanelStore.getState().openTerminal(refA, "term-1");
     useRightPanelStore.getState().openTerminal(refA, "term-2");

@@ -52,6 +52,8 @@ export type RightPanelSurface =
        */
       id: `pull-request:${string}`;
       kind: "pull-request";
+      /** Needed by the all-server pull-request list; thread panels inherit this from their ref. */
+      environmentId?: string;
       projectId: string;
       repository: string;
       number: number;
@@ -86,7 +88,7 @@ interface RightPanelStoreState {
   openFile: (ref: ScopedThreadRef, relativePath: string, line?: number) => void;
   openPullRequest: (
     ref: ScopedThreadRef,
-    target: { projectId: string; repository: string; number: number },
+    target: { environmentId?: string; projectId: string; repository: string; number: number },
   ) => void;
   openTerminal: (ref: ScopedThreadRef, terminalId: string) => void;
   splitTerminal: (
@@ -161,14 +163,16 @@ const terminalSurface = (terminalId: string): RightPanelSurface => ({
 export type PullRequestSurface = Extract<RightPanelSurface, { kind: "pull-request" }>;
 
 export function pullRequestSurfaceId(target: {
+  environmentId?: string;
   projectId: string;
   repository: string;
   number: number;
 }): PullRequestSurface["id"] {
-  return `pull-request:${encodeURIComponent(target.projectId)}:${encodeURIComponent(target.repository)}:${target.number}`;
+  return `pull-request:${target.environmentId ? `${encodeURIComponent(target.environmentId)}:` : ""}${encodeURIComponent(target.projectId)}:${encodeURIComponent(target.repository)}:${target.number}`;
 }
 
 export function pullRequestSurface(target: {
+  environmentId?: string;
   projectId: string;
   repository: string;
   number: number;
@@ -176,6 +180,7 @@ export function pullRequestSurface(target: {
   return {
     id: pullRequestSurfaceId(target),
     kind: "pull-request",
+    ...(target.environmentId === undefined ? {} : { environmentId: target.environmentId }),
     projectId: target.projectId,
     repository: target.repository,
     number: target.number,

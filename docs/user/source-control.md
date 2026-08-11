@@ -38,6 +38,7 @@ T3 Code works with the platforms your team already uses:
 **Stay on top of open reviews**
 
 - See if your current branch already has an open PR/MR
+- Browse reviews across all connected T3 Code servers, or narrow the list to one server and project
 - Open several reviews from the **Pull requests** page as tabs in the right panel
 - While working in a thread, open linked reviews in the same compact right-panel tabs without
   leaving the conversation

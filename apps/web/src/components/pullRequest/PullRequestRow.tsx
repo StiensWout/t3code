@@ -14,25 +14,28 @@ import {
   PullRequestStateGlyph,
 } from "./pullRequestPresentation";
 
-function PullRequestRowImpl({
+function PullRequestRowImpl<Entry extends PullRequestListEntry>({
   entry,
   selected,
   showProjectTitle,
   showProvider,
+  environmentLabel,
   matchedElsewhere,
   onSelect,
 }: {
-  entry: PullRequestListEntry;
+  entry: Entry;
   selected: boolean;
   showProjectTitle: boolean;
   /** Only when the list spans more than one host, where the repository alone is ambiguous. */
   showProvider: boolean;
+  /** Names the owning server when the list spans more than one environment. */
+  environmentLabel?: string;
   /**
    * A search found this, but in something the row does not show — a description, a comment, a
    * commit message. Saying so is the difference between a result and an apparently random row.
    */
   matchedElsewhere?: boolean;
-  onSelect: (entry: PullRequestListEntry) => void;
+  onSelect: (entry: Entry) => void;
 }) {
   const { Icon, providerName } = getSourceControlPresentationForKind(entry.provider);
   return (
@@ -70,6 +73,7 @@ function PullRequestRowImpl({
             #{entry.number}
           </span>
           {showProjectTitle ? <span className="truncate">{entry.repository}</span> : null}
+          {environmentLabel ? <span className="max-w-32 truncate">{environmentLabel}</span> : null}
           <PullRequestActorLabel actor={entry.author} className="max-w-40 shrink-0" />
           <span className="truncate" title={`${entry.headBranch} to ${entry.baseBranch}`}>
             {entry.headBranch}
@@ -94,4 +98,4 @@ function PullRequestRowImpl({
  * row whose entry, selection and match state are unchanged has nothing new to say. Effective
  * because the route hands it a stable `onSelect`.
  */
-export const PullRequestRow = memo(PullRequestRowImpl);
+export const PullRequestRow = memo(PullRequestRowImpl) as typeof PullRequestRowImpl;

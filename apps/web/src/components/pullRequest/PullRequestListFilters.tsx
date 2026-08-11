@@ -5,7 +5,15 @@ import type {
   PullRequestListState,
   SourceControlProviderKind,
 } from "@t3tools/contracts";
-import { FolderGit2Icon, LayersIcon, ListFilterIcon, LoaderIcon, SearchIcon } from "lucide-react";
+import {
+  FolderGit2Icon,
+  LayersIcon,
+  ListFilterIcon,
+  LoaderIcon,
+  MonitorIcon,
+  SearchIcon,
+  ServerIcon,
+} from "lucide-react";
 import type { ElementType } from "react";
 
 import { cn } from "~/lib/utils";
@@ -98,9 +106,117 @@ export function PullRequestSearchInput({
  * default, so a narrowed list is never a mystery. Same menu chrome as the detail panel's
  * actions, which also owns its own spacing.
  */
-const ALL_PROJECTS_VALUE = "all";
 /** MenuRadioGroup wants a string, so "every host" wears the one value no host can be. */
 const ALL_HOSTS_VALUE = "";
+const ALL_ENVIRONMENTS_VALUE = "all-environments";
+const ALL_PROJECTS_VALUE = "all-projects";
+
+interface PullRequestProjectOption {
+  readonly id: ProjectId;
+  readonly title: string;
+  readonly workspaceRoot: string;
+}
+
+export interface PullRequestProjectEnvironmentOption {
+  readonly id: EnvironmentId;
+  readonly label: string;
+  readonly isPrimary: boolean;
+  readonly projects: ReadonlyArray<PullRequestProjectOption>;
+}
+
+export function pullRequestProjectScopeValue(
+  environmentId: EnvironmentId,
+  projectId?: ProjectId,
+): string {
+  return JSON.stringify([environmentId, projectId ?? null]);
+}
+
+function EnvironmentIcon({ isPrimary }: { isPrimary: boolean }) {
+  const Icon = isPrimary ? MonitorIcon : ServerIcon;
+  return <Icon aria-hidden className="size-3.5 shrink-0" />;
+}
+
+function AllProjectsLabel({ label = "All projects" }: { label?: string }) {
+  return (
+    <span className="flex min-w-0 items-center gap-2">
+      <LayersIcon aria-hidden className="size-3.5 shrink-0" />
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+    </span>
+  );
+}
+
+function ProjectLabel({
+  environment,
+  project,
+  unavailable,
+  showEnvironment,
+}: {
+  environment: PullRequestProjectEnvironmentOption;
+  project: PullRequestProjectOption;
+  unavailable?: string;
+  showEnvironment?: boolean;
+}) {
+  return (
+    <span className="flex min-w-0 flex-1 items-center gap-2">
+      <ProjectFavicon
+        environmentId={environment.id}
+        cwd={project.workspaceRoot}
+        fallbackIcon={FolderGit2Icon}
+        className="size-3.5 shrink-0"
+      />
+      <span className="min-w-0 flex-1 truncate">{project.title}</span>
+      {showEnvironment ? (
+        <span className="max-w-28 shrink-0 truncate text-xs text-muted-foreground">
+          {environment.label}
+        </span>
+      ) : null}
+      {unavailable === undefined ? null : (
+        <span className="shrink-0 rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 py-px text-[10px] font-medium text-amber-600 dark:text-amber-400/90">
+          Unavailable
+        </span>
+      )}
+    </span>
+  );
+}
+
+function sortedProjects(
+  environment: PullRequestProjectEnvironmentOption,
+  unavailable: ReadonlyMap<string, string>,
+) {
+  return environment.projects.toSorted(
+    (left, right) =>
+      Number(unavailable.has(pullRequestProjectScopeValue(environment.id, left.id))) -
+      Number(unavailable.has(pullRequestProjectScopeValue(environment.id, right.id))),
+  );
+}
+
+function ProjectScopeItem({
+  environment,
+  project,
+  unavailable,
+  showEnvironment,
+}: {
+  environment: PullRequestProjectEnvironmentOption;
+  project: PullRequestProjectOption;
+  unavailable: ReadonlyMap<string, string>;
+  showEnvironment?: boolean;
+}) {
+  const reason = unavailable.get(pullRequestProjectScopeValue(environment.id, project.id));
+  return (
+    <MenuRadioItem
+      value={pullRequestProjectScopeValue(environment.id, project.id)}
+      disabled={reason !== undefined}
+      title={reason}
+    >
+      <ProjectLabel
+        environment={environment}
+        project={project}
+        {...(reason === undefined ? {} : { unavailable: reason })}
+        {...(showEnvironment === undefined ? {} : { showEnvironment })}
+      />
+    </MenuRadioItem>
+  );
+}
 
 function PullRequestFilterRadioGroup<Value extends string>({
   label,
@@ -151,10 +267,10 @@ export function PullRequestFiltersMenu({
   hostOptions,
   onHost,
   environmentId,
-  projects,
+  environments,
   projectId,
   unavailable,
-  onProject,
+  onProjectScope,
 }: {
   state: PullRequestListState;
   stateOptions: ReadonlyArray<PullRequestFilterOption<PullRequestListState>>;
@@ -169,24 +285,46 @@ export function PullRequestFiltersMenu({
    */
   hostOptions: ReadonlyArray<PullRequestFilterOption<string>>;
   onHost: (host: string | undefined) => void;
-  /** Where the projects' own favicons are read from; null before the environment is known. */
+  /** The environment whose projects and pull requests are currently in scope. */
   environmentId: EnvironmentId | null;
-  projects: ReadonlyArray<{
-    readonly id: ProjectId;
-    readonly title: string;
-    readonly workspaceRoot: string;
-  }>;
+  environments: ReadonlyArray<PullRequestProjectEnvironmentOption>;
   projectId: ProjectId | undefined;
   /**
    * Projects whose repository could not be read this time round. They are named here, where
    * the reader is already choosing between projects, rather than as a count above the list
    * that says something is missing without saying which.
    */
-  unavailable: ReadonlyMap<ProjectId, string>;
-  onProject: (projectId: ProjectId | undefined) => void;
+  unavailable: ReadonlyMap<string, string>;
+  onProjectScope: (environmentId: EnvironmentId | null, projectId: ProjectId | undefined) => void;
 }) {
+  const selectedEnvironment =
+    environments.find((environment) => environment.id === environmentId) ?? null;
+  const selectedScopeValue =
+    selectedEnvironment === null || projectId === undefined
+      ? ALL_PROJECTS_VALUE
+      : pullRequestProjectScopeValue(selectedEnvironment.id, projectId);
+  const selectScopeValue = (next: string) => {
+    if (next === selectedScopeValue) return;
+    if (next === ALL_PROJECTS_VALUE) {
+      onProjectScope(environmentId, undefined);
+      return;
+    }
+    for (const environment of environments) {
+      const project = environment.projects.find(
+        (candidate) => next === pullRequestProjectScopeValue(environment.id, candidate.id),
+      );
+      if (project !== undefined) {
+        onProjectScope(environment.id, project.id);
+        return;
+      }
+    }
+  };
   const filtered =
-    state !== "open" || involvement !== "all" || host !== undefined || projectId !== undefined;
+    state !== "open" ||
+    involvement !== "all" ||
+    host !== undefined ||
+    environmentId !== null ||
+    projectId !== undefined;
   return (
     <Menu>
       <MenuTrigger
@@ -232,55 +370,44 @@ export function PullRequestFiltersMenu({
         ) : null}
         <MenuSeparator />
         <MenuRadioGroup
-          value={projectId ?? ALL_PROJECTS_VALUE}
-          onValueChange={(next) => {
-            const nextProjectId = next === ALL_PROJECTS_VALUE ? undefined : (next as ProjectId);
-            if (nextProjectId !== projectId) onProject(nextProjectId);
-          }}
-        >
-          <MenuGroupLabel>Project</MenuGroupLabel>
-          <MenuRadioItem value={ALL_PROJECTS_VALUE}>
-            <span className="flex min-w-0 items-center gap-2">
-              <LayersIcon aria-hidden className="size-3.5" />
-              All projects
-            </span>
-          </MenuRadioItem>
-          {/* The ones that can be chosen first: a list that opens with three disabled rows reads
-              as a broken menu rather than as a workspace with three unreadable repositories. */}
-          {projects
-            .toSorted(
-              (left, right) => Number(unavailable.has(left.id)) - Number(unavailable.has(right.id)),
+          value={environmentId ?? ALL_ENVIRONMENTS_VALUE}
+          onValueChange={(next) =>
+            onProjectScope(
+              next === ALL_ENVIRONMENTS_VALUE ? null : (next as EnvironmentId),
+              undefined,
             )
-            .map((project) => {
-              const reason = unavailable.get(project.id);
-              return (
-                <MenuRadioItem
-                  key={project.id}
-                  value={project.id}
-                  disabled={reason !== undefined}
-                  title={reason}
-                >
-                  <span className="flex min-w-0 flex-1 items-center gap-2">
-                    {environmentId === null ? (
-                      <FolderGit2Icon aria-hidden className="size-3.5 shrink-0" />
-                    ) : (
-                      <ProjectFavicon
-                        environmentId={environmentId}
-                        cwd={project.workspaceRoot}
-                        fallbackIcon={FolderGit2Icon}
-                        className="size-3.5 shrink-0"
-                      />
-                    )}
-                    <span className="min-w-0 flex-1 truncate">{project.title}</span>
-                    {reason === undefined ? null : (
-                      <span className="shrink-0 rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 py-px text-[10px] font-medium text-amber-600 dark:text-amber-400/90">
-                        Unavailable
-                      </span>
-                    )}
-                  </span>
-                </MenuRadioItem>
-              );
-            })}
+          }
+        >
+          <MenuGroupLabel>Server</MenuGroupLabel>
+          <MenuRadioItem value={ALL_ENVIRONMENTS_VALUE} closeOnClick={false}>
+            <AllProjectsLabel label="All servers" />
+          </MenuRadioItem>
+          {environments.map((environment) => (
+            <MenuRadioItem key={environment.id} value={environment.id} closeOnClick={false}>
+              <span className="flex min-w-0 items-center gap-2">
+                <EnvironmentIcon isPrimary={environment.isPrimary} />
+                <span className="min-w-0 flex-1 truncate">{environment.label}</span>
+              </span>
+            </MenuRadioItem>
+          ))}
+        </MenuRadioGroup>
+        <MenuRadioGroup value={selectedScopeValue} onValueChange={selectScopeValue}>
+          <MenuGroupLabel className="pt-2">Project</MenuGroupLabel>
+          <MenuRadioItem value={ALL_PROJECTS_VALUE}>
+            <AllProjectsLabel />
+          </MenuRadioItem>
+          {(selectedEnvironment === null ? environments : [selectedEnvironment]).flatMap(
+            (environment) =>
+              sortedProjects(environment, unavailable).map((project) => (
+                <ProjectScopeItem
+                  key={pullRequestProjectScopeValue(environment.id, project.id)}
+                  environment={environment}
+                  project={project}
+                  unavailable={unavailable}
+                  showEnvironment={selectedEnvironment === null}
+                />
+              )),
+          )}
         </MenuRadioGroup>
       </MenuPopup>
     </Menu>
