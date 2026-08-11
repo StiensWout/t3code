@@ -154,11 +154,14 @@
 
         // The runtime decodes the same literal CSS formats into OKLCH. Keep
         // contextual colors out: they cannot be resolved from stored data.
+        const SYSTEM_COLOR_KEYWORD =
+          /^(?:accentcolor(?:text)?|active(?:border|caption|text)|appworkspace|background|button(?:border|face|highlight|shadow|text)|canvas(?:text)?|captiontext|field(?:text)?|graytext|highlight(?:text)?|inactive(?:border|caption(?:text)?)|info(?:background|text)|linktext|mark(?:text)?|menu(?:text)?|scrollbar|selecteditem(?:text)?|threed(?:darkshadow|face|highlight|lightshadow|shadow)|visitedtext|window(?:frame|text)?)$/i;
         const isThemeColor = (value) => {
           if (typeof value !== "string" || typeof CSS === "undefined") return false;
           const color = value.trim();
           if (
             /^(?:currentcolor|inherit|initial|revert|revert-layer|unset)$/i.test(color) ||
+            SYSTEM_COLOR_KEYWORD.test(color) ||
             /\bfrom\b|(?:var|env|attr|calc|min|max|clamp)\(/i.test(color)
           ) {
             return false;
