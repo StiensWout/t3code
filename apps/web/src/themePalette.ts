@@ -137,7 +137,8 @@ type CustomThemeLibrarySnapshot =
       storedThemes: ReadonlyArray<unknown>;
       themes: ReadonlyArray<ThemeDefinition>;
     }>
-  | Readonly<{ status: "unavailable"; cause: unknown }>;
+  | Readonly<{ status: "unavailable"; reason: "malformed" }>
+  | Readonly<{ status: "unavailable"; reason: "storage-unavailable"; cause: unknown }>;
 
 let customThemeLibrarySnapshot: CustomThemeLibrarySnapshot | null = null;
 const themePreviewListeners = new Set<() => void>();
@@ -239,29 +240,31 @@ function readCustomThemeLibrarySnapshot(): CustomThemeLibrarySnapshot {
     return { status: "ready", storedThemes: [], themes: [] };
   }
 
+  let raw: string | null;
   try {
-    const raw = window.localStorage.getItem(CUSTOM_THEMES_STORAGE_KEY);
-    if (!raw) return { status: "ready", storedThemes: [], themes: [] };
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) {
-      return {
-        status: "unavailable",
-        cause: new Error("The stored theme library is not an array."),
-      };
-    }
-
-    const themes: ThemeDefinition[] = [];
-    for (const value of parsed) {
-      const theme = parseStoredTheme(value);
-      if (theme && !themes.some((existing) => existing.id === theme.id)) {
-        themes.push(theme);
-      }
-    }
-
-    return { status: "ready", storedThemes: parsed, themes };
+    raw = window.localStorage.getItem(CUSTOM_THEMES_STORAGE_KEY);
   } catch (cause) {
-    return { status: "unavailable", cause };
+    return { status: "unavailable", reason: "storage-unavailable", cause };
   }
+  if (!raw) return { status: "ready", storedThemes: [], themes: [] };
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { status: "unavailable", reason: "malformed" };
+  }
+  if (!Array.isArray(parsed)) return { status: "unavailable", reason: "malformed" };
+
+  const themes: ThemeDefinition[] = [];
+  for (const value of parsed) {
+    const theme = parseStoredTheme(value);
+    if (theme && !themes.some((existing) => existing.id === theme.id)) {
+      themes.push(theme);
+    }
+  }
+
+  return { status: "ready", storedThemes: parsed, themes };
 }
 
 function getCustomThemeLibrarySnapshot(): CustomThemeLibrarySnapshot {
@@ -861,18 +864,25 @@ function oklchToRgbUnclamped({ L, C, h }: ThemeOklch): { r: number; g: number; b
   };
 }
 
-/** Walk chroma toward grey until the color is representable in sRGB. */
+/** Find the greatest chroma along the same lightness and hue that fits in sRGB. */
 function mapThemeOklchToSrgbGamut(color: ThemeOklch): ThemeOklch {
-  let { C } = color;
-  for (let step = 0; step < 12; step += 1) {
+  const isInGamut = (C: number) => {
     const linear = oklchToRgbUnclamped({ ...color, C });
-    const inGamut = [linear.r, linear.g, linear.b].every(
+    return [linear.r, linear.g, linear.b].every(
       (channel) => channel >= -0.0001 && channel <= 1.0001,
     );
-    if (inGamut) return { ...color, C };
-    C *= 0.82;
+  };
+  if (isInGamut(color.C)) return color;
+
+  let low = 0;
+  let high = color.C;
+  const steps = Math.max(1, Math.ceil(Math.log2(Math.max(color.C, 0.000001) / 0.000001)));
+  for (let step = 0; step < steps; step += 1) {
+    const mid = (low + high) / 2;
+    if (isInGamut(mid)) low = mid;
+    else high = mid;
   }
-  return { ...color, C: 0 };
+  return { ...color, C: low };
 }
 
 /** Convert to sRGB after applying the palette engine's gamut mapping. */
@@ -1554,10 +1564,16 @@ export function themeIdFromName(name: string): string {
 
 export class ThemeLibraryStorageError extends Schema.TaggedErrorClass<ThemeLibraryStorageError>()(
   "ThemeLibraryStorageError",
-  { storageKey: Schema.String, cause: Schema.Defect() },
+  {
+    storageKey: Schema.String,
+    operation: Schema.Literals(["read", "write"]),
+    reason: Schema.Literals(["malformed", "storage-unavailable"]),
+    cause: Schema.optional(Schema.Defect()),
+  },
 ) {
   override get message(): string {
-    return `Failed to write the theme library to ${this.storageKey}.`;
+    const direction = this.operation === "read" ? "from" : "to";
+    return `Failed to ${this.operation} the theme library ${direction} ${this.storageKey}.`;
   }
 }
 
@@ -1572,7 +1588,12 @@ function saveCustomThemes(
     window.localStorage.setItem(CUSTOM_THEMES_STORAGE_KEY, JSON.stringify(storedThemes));
     customThemeLibrarySnapshot = { status: "ready", storedThemes, themes };
   } catch (cause) {
-    throw new ThemeLibraryStorageError({ storageKey: CUSTOM_THEMES_STORAGE_KEY, cause });
+    throw new ThemeLibraryStorageError({
+      storageKey: CUSTOM_THEMES_STORAGE_KEY,
+      operation: "write",
+      reason: "storage-unavailable",
+      cause,
+    });
   }
   notifyCustomThemeListeners();
 }
@@ -1582,7 +1603,9 @@ function getWritableCustomThemeLibrary(): Extract<CustomThemeLibrarySnapshot, { 
   if (snapshot.status === "unavailable") {
     throw new ThemeLibraryStorageError({
       storageKey: CUSTOM_THEMES_STORAGE_KEY,
-      cause: snapshot.cause,
+      operation: "read",
+      reason: snapshot.reason,
+      ...("cause" in snapshot ? { cause: snapshot.cause } : {}),
     });
   }
   return snapshot;

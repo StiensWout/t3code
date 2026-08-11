@@ -618,7 +618,7 @@ describe("theme files", () => {
           colors: { accent: "#5b6cff" },
         }),
       ),
-    ).toThrow(`Failed to write the theme library to ${CUSTOM_THEMES_STORAGE_KEY}.`);
+    ).toThrow(`Failed to read the theme library from ${CUSTOM_THEMES_STORAGE_KEY}.`);
     expect(setItem).not.toHaveBeenCalled();
 
     vi.unstubAllGlobals();
