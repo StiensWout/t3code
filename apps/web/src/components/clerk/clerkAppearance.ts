@@ -5,8 +5,11 @@ import type { ClerkProviderProps } from "@clerk/react";
  * portaled sign-in and profile surfaces without remounting Clerk. */
 export const clerkAppearance = {
   variables: {
-    colorPrimary: "var(--primary)",
-    colorPrimaryForeground: "var(--primary-foreground)",
+    // Clerk reuses its primary color for filled buttons and bare links. The
+    // app's update foreground is the palette's action hue cast for readable
+    // text, while the card surface provides the inverse filled-control pair.
+    colorPrimary: "var(--update-foreground)",
+    colorPrimaryForeground: "var(--card)",
     colorDanger: "var(--error)",
     colorSuccess: "var(--success)",
     colorWarning: "var(--warning)",
@@ -14,10 +17,9 @@ export const clerkAppearance = {
     colorForeground: "var(--foreground)",
     colorMuted: "var(--muted)",
     colorMutedForeground: "var(--muted-foreground)",
-    colorBackground: "var(--popover)",
+    colorBackground: "var(--card)",
     colorInputForeground: "var(--foreground)",
-    colorInput: "var(--background)",
+    colorInput: "var(--secondary)",
     colorRing: "var(--ring)",
-    colorBorder: "var(--border)",
   },
 } satisfies NonNullable<ClerkProviderProps["appearance"]>;
