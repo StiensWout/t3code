@@ -37,7 +37,6 @@ import {
   readThreadShell,
   readProject,
   setActiveEnvironmentId,
-  useAllEnvironmentShellsBootstrapped,
   useAuthoritativeShellEnvironmentIds,
   useConnectedShellEnvironmentIds,
   useProjects,
@@ -103,7 +102,6 @@ export function DesktopNotificationCoordinator() {
   const bridge = isElectron ? window.desktopBridge?.notifications : undefined;
   const settings = useClientSettings((current) => current.desktopNotifications);
   const settingsHydrated = useClientSettingsHydrated();
-  const shellsBootstrapped = useAllEnvironmentShellsBootstrapped();
   const authoritativeEnvironmentIds = useAuthoritativeShellEnvironmentIds();
   const connectedEnvironmentIds = useConnectedShellEnvironmentIds();
   const projects = useProjects();
@@ -238,7 +236,7 @@ export function DesktopNotificationCoordinator() {
   }, [bridge, enqueueNotificationOperations, settings.enabled, settingsHydrated]);
 
   useEffect(() => {
-    if ((isElectron && !bridge) || !settingsHydrated || !shellsBootstrapped) {
+    if ((isElectron && !bridge) || !settingsHydrated) {
       return;
     }
     const reconciliation = reconcileAgentNotificationStates(previousStatesRef.current, observed, {
@@ -247,6 +245,10 @@ export function DesktopNotificationCoordinator() {
     });
     previousStatesRef.current = reconciliation.next;
     previousAuthoritativeEnvironmentIdsRef.current = authoritativeEnvironmentIds;
+    if (!settings.enabled) {
+      pendingBrowserTransitionsRef.current.clear();
+      return;
+    }
 
     const transitions: AgentNotificationTransition[] = [];
     for (const transition of reconciliation.transitions) {
@@ -455,7 +457,6 @@ export function DesktopNotificationCoordinator() {
     observed,
     settings,
     settingsHydrated,
-    shellsBootstrapped,
   ]);
 
   if (isElectron) {
