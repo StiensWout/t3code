@@ -47,7 +47,12 @@ export const authoritativeShellEnvironmentIdsAtom = Atom.make((get) => {
   }
   const environmentIds = new Set<EnvironmentId>();
   for (const environmentId of catalog.value.entries.keys()) {
-    if (get(environmentShell.stateValueAtom(environmentId)).status === "live") {
+    const connection = Option.getOrElse(
+      AsyncResult.value(get(environmentCatalog.stateAtom(environmentId))),
+      () => AVAILABLE_CONNECTION_STATE,
+    );
+    // A live connection remains authoritative while its shell catches up after reconnect or wake.
+    if (connectionProjectionPhase(connection) !== "disconnected") {
       environmentIds.add(environmentId);
     }
   }

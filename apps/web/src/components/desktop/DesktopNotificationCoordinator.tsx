@@ -7,12 +7,13 @@ import {
 import type { BackgroundPolicySnapshot, EnvironmentId } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { useNavigate } from "@tanstack/react-router";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import { projectThreadAwareness, type AgentAwarenessState } from "@t3tools/shared/agentAwareness";
 import * as Option from "effect/Option";
 import { AsyncResult } from "effect/unstable/reactivity";
 
 import {
+  type AgentNotificationTransition,
   desktopNotificationEventEnabled,
   reconcileAgentNotificationStates,
   shouldSuppressBrowserNotification,
@@ -34,6 +35,7 @@ import {
 import { isElectron } from "../../env.ts";
 import {
   readThreadShell,
+  readProject,
   setActiveEnvironmentId,
   useAllEnvironmentShellsBootstrapped,
   useAuthoritativeShellEnvironmentIds,
@@ -112,8 +114,17 @@ export function DesktopNotificationCoordinator() {
     reportDefect: false,
   });
   const backgroundPoliciesRef = useRef(new Map<EnvironmentId, BackgroundPolicySnapshot>());
+  const [backgroundPolicyGeneration, markBackgroundPoliciesChanged] = useReducer(
+    (generation: number) => generation + 1,
+    0,
+  );
   const previousStatesRef = useRef<ReadonlyMap<string, AgentAwarenessState | null> | null>(null);
   const previousAuthoritativeEnvironmentIdsRef = useRef<ReadonlySet<string>>(new Set());
+  // Reconciliation consumes an edge once. Keep it here until the browser's same-environment
+  // presence policy is ready, otherwise the first alert after load or reconnect can be lost.
+  const pendingBrowserTransitionsRef = useRef(
+    new Map<string, Extract<AgentNotificationTransition, { readonly type: "show" }>>(),
+  );
   const notificationOperationsRef = useRef(Promise.resolve());
   const lifecycleGenerationRef = useRef(0);
 
@@ -144,10 +155,16 @@ export function DesktopNotificationCoordinator() {
   const updateBackgroundPolicy = useCallback(
     (environmentId: EnvironmentId, policy: BackgroundPolicySnapshot | null) => {
       if (policy === null) {
-        backgroundPoliciesRef.current.delete(environmentId);
+        if (!backgroundPoliciesRef.current.delete(environmentId)) {
+          return;
+        }
       } else {
+        if (backgroundPoliciesRef.current.get(environmentId) === policy) {
+          return;
+        }
         backgroundPoliciesRef.current.set(environmentId, policy);
       }
+      markBackgroundPoliciesChanged();
     },
     [],
   );
@@ -210,6 +227,7 @@ export function DesktopNotificationCoordinator() {
     if (!settingsHydrated || settings.enabled) {
       return;
     }
+    pendingBrowserTransitionsRef.current.clear();
     if (bridge) {
       enqueueNotificationOperations(() => bridge.dismissAll());
     } else if (!isElectron) {
@@ -221,7 +239,6 @@ export function DesktopNotificationCoordinator() {
     if ((isElectron && !bridge) || !settingsHydrated || !shellsBootstrapped) {
       return;
     }
-
     const reconciliation = reconcileAgentNotificationStates(previousStatesRef.current, observed, {
       previouslyAuthoritativeEnvironmentIds: previousAuthoritativeEnvironmentIdsRef.current,
       authoritativeEnvironmentIds,
@@ -229,7 +246,38 @@ export function DesktopNotificationCoordinator() {
     previousStatesRef.current = reconciliation.next;
     previousAuthoritativeEnvironmentIdsRef.current = authoritativeEnvironmentIds;
 
+    const transitions: AgentNotificationTransition[] = [];
     for (const transition of reconciliation.transitions) {
+      const transitionKey = scopedThreadKey(
+        transition.type === "dismiss"
+          ? transition.target
+          : scopeThreadRef(transition.state.environmentId, transition.state.threadId),
+      );
+      if (transition.type === "dismiss") {
+        pendingBrowserTransitionsRef.current.delete(transitionKey);
+        transitions.push(transition);
+      } else if (!bridge && !backgroundPoliciesRef.current.has(transition.state.environmentId)) {
+        pendingBrowserTransitionsRef.current.set(transitionKey, transition);
+      } else {
+        pendingBrowserTransitionsRef.current.delete(transitionKey);
+        transitions.push(transition);
+      }
+    }
+    if (!bridge) {
+      for (const [transitionKey, transition] of pendingBrowserTransitionsRef.current) {
+        if (!authoritativeEnvironmentIds.has(transition.state.environmentId)) {
+          pendingBrowserTransitionsRef.current.delete(transitionKey);
+          continue;
+        }
+        if (!backgroundPoliciesRef.current.has(transition.state.environmentId)) {
+          continue;
+        }
+        pendingBrowserTransitionsRef.current.delete(transitionKey);
+        transitions.push(transition);
+      }
+    }
+
+    for (const transition of transitions) {
       const lifecycleGeneration = lifecycleGenerationRef.current;
       enqueueNotificationOperations(async () => {
         if (transition.type === "dismiss") {
@@ -255,6 +303,15 @@ export function DesktopNotificationCoordinator() {
           if (getBrowserNotificationPermission() !== "granted") {
             return;
           }
+          if (!backgroundPoliciesRef.current.has(transition.state.environmentId)) {
+            pendingBrowserTransitionsRef.current.set(
+              scopedThreadKey(
+                scopeThreadRef(transition.state.environmentId, transition.state.threadId),
+              ),
+              transition,
+            );
+            return;
+          }
           if (
             shouldSuppressBrowserNotification({
               windowFocused: document.hasFocus(),
@@ -266,6 +323,27 @@ export function DesktopNotificationCoordinator() {
         }
 
         const target = scopeThreadRef(transition.state.environmentId, transition.state.threadId);
+        const transitionIsCurrent = () => {
+          const currentThread = readThreadShell(target);
+          if (currentThread === null) {
+            return false;
+          }
+          const currentProject = readProject(
+            scopeProjectRef(currentThread.environmentId, currentThread.projectId),
+          );
+          if (currentProject === null) {
+            return false;
+          }
+          // Metadata can update while a completion preview loads. The semantic phase, rather
+          // than the shell timestamp, decides whether this notification is still current.
+          return (
+            projectThreadAwareness({
+              environmentId: currentThread.environmentId,
+              project: currentProject,
+              thread: currentThread,
+            })?.phase === transition.state.phase
+          );
+        };
         let completionPreview: string | null = null;
         if (transition.event === "completion" && queuedSettings.showContext) {
           const context = completionContexts.get(scopedThreadKey(target));
@@ -290,10 +368,7 @@ export function DesktopNotificationCoordinator() {
           }
         }
 
-        if (
-          lifecycleGenerationRef.current !== lifecycleGeneration ||
-          readThreadShell(target)?.updatedAt !== transition.state.updatedAt
-        ) {
+        if (lifecycleGenerationRef.current !== lifecycleGeneration || !transitionIsCurrent()) {
           return;
         }
 
@@ -333,13 +408,19 @@ export function DesktopNotificationCoordinator() {
           }),
           () => {
             const deliverySettings = getClientSettings().desktopNotifications;
+            const policy =
+              backgroundPoliciesRef.current.get(transition.state.environmentId) ?? null;
+            if (policy === null) {
+              pendingBrowserTransitionsRef.current.set(scopedThreadKey(target), transition);
+              return "suppressed";
+            }
             if (
               lifecycleGenerationRef.current !== lifecycleGeneration ||
-              readThreadShell(target)?.updatedAt !== transition.state.updatedAt ||
+              !transitionIsCurrent() ||
               !desktopNotificationEventEnabled(deliverySettings, transition.event) ||
               shouldSuppressBrowserNotification({
                 windowFocused: document.hasFocus(),
-                policy: backgroundPoliciesRef.current.get(transition.state.environmentId) ?? null,
+                policy,
               })
             ) {
               return "suppressed";
@@ -363,6 +444,7 @@ export function DesktopNotificationCoordinator() {
     bridge,
     activateTarget,
     authoritativeEnvironmentIds,
+    backgroundPolicyGeneration,
     completionContexts,
     enqueueNotificationOperations,
     loadCompletionSnapshot,

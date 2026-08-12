@@ -85,10 +85,17 @@ function useDesktopNotificationSettingsModel() {
   const updateClientSettings = useUpdateClientSettings();
   const browserPermission = useBrowserNotificationPermission();
   const update = (patch: Partial<DesktopNotificationSettings>) => {
-    updateClientSettings({ desktopNotifications: { ...settings, ...patch } });
+    updateClientSettings((current) => ({
+      desktopNotifications: { ...current.desktopNotifications, ...patch },
+    }));
   };
   const updateEvent = (event: DesktopNotificationEvent, enabled: boolean) => {
-    update({ events: { ...settings.events, [event]: enabled } });
+    updateClientSettings((current) => ({
+      desktopNotifications: {
+        ...current.desktopNotifications,
+        events: { ...current.desktopNotifications.events, [event]: enabled },
+      },
+    }));
   };
   const setEnabled = async (enabled: boolean) => {
     if (!enabled || isElectron) {
