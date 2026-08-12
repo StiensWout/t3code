@@ -47,7 +47,6 @@ import { SettingsAuthRouteScreen } from "./features/settings/SettingsAuthRouteSc
 import { SettingsEnvironmentsRouteScreen } from "./features/settings/SettingsEnvironmentsRouteScreen";
 import { SettingsLegalRouteScreen } from "./features/settings/SettingsLegalRouteScreen";
 import { SettingsProjectGroupingRouteScreen } from "./features/settings/SettingsProjectGroupingRouteScreen";
-import { SettingsT3ConnectRouteScreen } from "./features/settings/SettingsT3ConnectRouteScreen";
 import { UsageRouteScreen } from "./features/usage/UsageRouteScreen";
 import { SettingsRouteScreen } from "./features/settings/SettingsRouteScreen";
 import { ShowcaseCaptureCoordinator } from "./features/showcase/ShowcaseCaptureCoordinator";
@@ -154,13 +153,6 @@ const SettingsContentStack = createNativeStackNavigator({
       linking: "environments",
       options: {
         title: "Environments",
-      },
-    }),
-    SettingsT3Connect: createNativeStackScreen({
-      screen: SettingsT3ConnectRouteScreen,
-      linking: "t3-connect",
-      options: {
-        title: "T3 Connect",
       },
     }),
     SettingsEnvironmentNew: createNativeStackScreen({

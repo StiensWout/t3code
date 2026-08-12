@@ -437,18 +437,6 @@ function ConfiguredSettingsRouteScreen() {
     navigation.navigate("SettingsSheet", { screen: "SettingsAuth" });
   }, [isLoaded, navigation]);
 
-  const openT3ConnectAccount = useCallback(() => {
-    if (!isLoaded) return;
-    if (!isSignedIn) {
-      navigation.navigate("SettingsSheet", { screen: "SettingsAuth" });
-      return;
-    }
-    navigation.navigate("SettingsSheet", {
-      screen: "SettingsContent",
-      params: { screen: "SettingsT3Connect" },
-    });
-  }, [isLoaded, isSignedIn, navigation]);
-
   return (
     <View collapsable={false} className="flex-1 bg-sheet">
       <ScrollView
@@ -467,12 +455,6 @@ function ConfiguredSettingsRouteScreen() {
               label="T3 Account"
               value={accountLabel}
               onPress={openAccount}
-            />
-            <SettingsRow
-              icon="server.rack"
-              label="T3 Connect"
-              value={isSignedIn ? "View" : "Sign in"}
-              onPress={openT3ConnectAccount}
             />
           </SettingsSection>
           <Text className="px-2 text-sm text-foreground-muted">

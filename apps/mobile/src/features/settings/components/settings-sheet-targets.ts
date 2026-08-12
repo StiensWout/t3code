@@ -1,6 +1,5 @@
 export type SettingsSheetTarget =
   | "SettingsEnvironments"
-  | "SettingsT3Connect"
   | "SettingsArchive"
   | "SettingsAppearance"
   | "SettingsProjectGrouping"
