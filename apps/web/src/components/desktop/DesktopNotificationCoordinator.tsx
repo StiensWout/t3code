@@ -232,15 +232,15 @@ export function DesktopNotificationCoordinator() {
     for (const transition of reconciliation.transitions) {
       const lifecycleGeneration = lifecycleGenerationRef.current;
       enqueueNotificationOperations(async () => {
-        if (lifecycleGenerationRef.current !== lifecycleGeneration) {
-          return;
-        }
         if (transition.type === "dismiss") {
           if (bridge) {
             await bridge.dismiss(transition.target);
           } else {
             dismissBrowserNotification(transition.target);
           }
+          return;
+        }
+        if (lifecycleGenerationRef.current !== lifecycleGeneration) {
           return;
         }
         const queuedSettings = getClientSettings().desktopNotifications;
