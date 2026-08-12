@@ -232,9 +232,9 @@ function RightPanelEmptyState(props: {
       setQuery("");
       return;
     }
-    // Shortcut letters only fire on an empty query; once the user is
-    // filtering, every key belongs to the input.
-    if (query.length > 0 || event.metaKey || event.ctrlKey || event.altKey) return;
+    // Shortcut letters only fire while the effective query is empty; once
+    // the user is filtering, every key belongs to the input.
+    if (normalizedQuery.length > 0 || event.metaKey || event.ctrlKey || event.altKey) return;
     const action = availableActions.find(
       (candidate) => candidate.shortcut.toLowerCase() === event.key.toLowerCase(),
     );
