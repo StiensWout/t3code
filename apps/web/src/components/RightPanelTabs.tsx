@@ -1,8 +1,6 @@
 import type { ContextMenuItem, PreviewSessionSnapshot, PullRequestState } from "@t3tools/contracts";
 import { getTerminalLabel } from "@t3tools/shared/terminalLabels";
 import {
-  ArrowDown,
-  ArrowUp,
   Bot,
   FileDiff,
   Files,
@@ -28,16 +26,7 @@ import type { RightPanelSurface } from "~/rightPanelStore";
 import { cn } from "~/lib/utils";
 import { readLocalApi } from "~/localApi";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
-import {
-  Command,
-  CommandCollection,
-  CommandGroup,
-  CommandGroupLabel,
-  CommandInput,
-  CommandItem,
-  CommandList,
-} from "~/components/ui/command";
-import { Kbd, KbdGroup } from "~/components/ui/kbd";
+import { Kbd } from "~/components/ui/kbd";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "~/components/ui/menu";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { faviconUrlForOrigin } from "~/lib/favicon";
@@ -101,6 +90,16 @@ const SURFACE_DISABLED_REASONS = {
   agents: "Agents are only available from a thread.",
 } as const;
 
+/** One-line unavailability hints for the empty-state cards. */
+const SURFACE_UNAVAILABLE_HINTS = {
+  browser: "Only available in the desktop app.",
+  terminal: "Available when a project is open.",
+  files: "Available when a project is open.",
+  diff: "Available for Git repositories.",
+  pullRequest: "No pull request on this branch yet.",
+  agents: "Available from a thread.",
+} as const;
+
 type TabContextMenuAction = "copy-path" | "close" | "close-others" | "close-to-right" | "close-all";
 
 function DisabledReasonTooltip(props: { reason: string; trigger: ReactElement }) {
@@ -132,10 +131,11 @@ function SurfaceMenuItem(props: {
 }
 
 /**
- * Launcher shown when the right panel has no surfaces. Keyboard-first: the
- * filter input autofocuses, arrows and Enter open the highlighted surface,
- * and with an empty query a surface's shortcut letter opens it directly.
- * Unavailable surfaces stay listed with their reason inline.
+ * Card launcher shown when the right panel has no surfaces. Keyboard-first
+ * without palette chrome: a surface's letter opens it directly from anywhere
+ * outside a typing context, and arrows plus Enter work while the launcher is
+ * focused. The highlight only appears on hover or arrow use. Unavailable
+ * surfaces stay visible with a one-line reason.
  */
 function RightPanelEmptyState(props: {
   onAddBrowser: () => void;
@@ -152,7 +152,8 @@ function RightPanelEmptyState(props: {
   agentsAvailable: boolean;
   liveAgentCount: number;
 }) {
-  const [query, setQuery] = useState("");
+  // -1 means no highlight: it only appears on hover or arrow use.
+  const [highlight, setHighlight] = useState(-1);
 
   const actions = [
     {
@@ -161,7 +162,7 @@ function RightPanelEmptyState(props: {
       icon: Globe2,
       shortcut: "B",
       available: props.browserAvailable,
-      disabledReason: SURFACE_DISABLED_REASONS.browser,
+      disabledReason: SURFACE_UNAVAILABLE_HINTS.browser,
       onClick: props.onAddBrowser,
       badgeCount: 0,
     },
@@ -171,7 +172,7 @@ function RightPanelEmptyState(props: {
       icon: TerminalSquare,
       shortcut: "T",
       available: props.terminalAvailable,
-      disabledReason: SURFACE_DISABLED_REASONS.terminal,
+      disabledReason: SURFACE_UNAVAILABLE_HINTS.terminal,
       onClick: props.onAddTerminal,
       badgeCount: 0,
     },
@@ -181,7 +182,7 @@ function RightPanelEmptyState(props: {
       icon: Files,
       shortcut: "F",
       available: props.filesAvailable,
-      disabledReason: SURFACE_DISABLED_REASONS.files,
+      disabledReason: SURFACE_UNAVAILABLE_HINTS.files,
       onClick: props.onAddFiles,
       badgeCount: 0,
     },
@@ -191,27 +192,27 @@ function RightPanelEmptyState(props: {
       icon: FileDiff,
       shortcut: "D",
       available: props.diffAvailable,
-      disabledReason: SURFACE_DISABLED_REASONS.diff,
+      disabledReason: SURFACE_UNAVAILABLE_HINTS.diff,
       onClick: props.onAddDiff,
       badgeCount: 0,
     },
     {
       label: "Pull request",
-      description: "Open the pull request for this thread's branch.",
+      description: "Open this branch's pull request.",
       icon: GitPullRequest,
       shortcut: "P",
       available: props.pullRequestAvailable,
-      disabledReason: SURFACE_DISABLED_REASONS.pullRequest,
+      disabledReason: SURFACE_UNAVAILABLE_HINTS.pullRequest,
       onClick: props.onAddPullRequest,
       badgeCount: 0,
     },
     {
       label: "Agents",
-      description: "Watch subagents and workflows run.",
+      description: "Follow subagents and workflows.",
       icon: Bot,
       shortcut: "A",
       available: props.agentsAvailable,
-      disabledReason: SURFACE_DISABLED_REASONS.agents,
+      disabledReason: SURFACE_UNAVAILABLE_HINTS.agents,
       onClick: props.onAddAgents,
       badgeCount: props.liveAgentCount,
     },
@@ -219,35 +220,78 @@ function RightPanelEmptyState(props: {
 
   type SurfaceAction = (typeof actions)[number];
 
-  const normalizedQuery = query.trim().toLowerCase();
-  const matchesQuery = (action: SurfaceAction) =>
-    action.label.toLowerCase().includes(normalizedQuery);
-  const availableActions = actions.filter((action) => action.available && matchesQuery(action));
-  const unavailableActions = actions.filter((action) => !action.available && matchesQuery(action));
+  const availableActions = actions.filter((action) => action.available);
+  const highlightIndex =
+    availableActions.length === 0 ? -1 : Math.min(highlight, availableActions.length - 1);
 
-  const handleInputKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
-    if (event.key === "Escape" && query.length > 0) {
+  // Letter shortcuts work while the launcher is visible, not only while it
+  // is focused; focus moves around too easily (stray clicks) to carry them.
+  // Capture phase so app-level key handlers cannot swallow the event first;
+  // typing contexts and already-handled events are left alone.
+  const shortcutActionsRef = useRef(availableActions);
+  useEffect(() => {
+    shortcutActionsRef.current = availableActions;
+  });
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
+      const target = event.target;
+      if (target instanceof HTMLElement) {
+        if (target.closest("input, textarea, select")) return;
+        // An empty contenteditable (the chat composer at rest) does not
+        // count as typing; letters only become text once a draft exists.
+        const editable = target.isContentEditable ? target : target.closest("[contenteditable]");
+        if (editable && (editable.textContent ?? "").trim().length > 0) return;
+      }
+      const action = shortcutActionsRef.current.find(
+        (candidate) => candidate.shortcut.toLowerCase() === event.key.toLowerCase(),
+      );
+      if (!action) return;
       event.preventDefault();
       event.stopPropagation();
-      setQuery("");
+      action.onClick();
+    };
+    window.addEventListener("keydown", handler, true);
+    return () => window.removeEventListener("keydown", handler, true);
+  }, []);
+
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
+    if (availableActions.length === 0) return;
+    if (event.key === "ArrowDown" || event.key === "ArrowRight") {
+      event.preventDefault();
+      setHighlight((highlightIndex + 1) % availableActions.length);
       return;
     }
-    // Shortcut letters only fire while the effective query is empty; once
-    // the user is filtering, every key belongs to the input.
-    if (normalizedQuery.length > 0 || event.metaKey || event.ctrlKey || event.altKey) return;
-    const action = availableActions.find(
-      (candidate) => candidate.shortcut.toLowerCase() === event.key.toLowerCase(),
-    );
-    if (!action) return;
-    event.preventDefault();
-    action.onClick();
+    if (event.key === "ArrowUp" || event.key === "ArrowLeft") {
+      event.preventDefault();
+      setHighlight(
+        highlightIndex === -1
+          ? availableActions.length - 1
+          : (highlightIndex - 1 + availableActions.length) % availableActions.length,
+      );
+      return;
+    }
+    if (event.key === "Enter") {
+      const action = availableActions[highlightIndex];
+      if (!action) return;
+      event.preventDefault();
+      action.onClick();
+    }
   };
 
-  const actionIcon = (action: SurfaceAction) => {
+  const focusOnMount = (node: HTMLDivElement | null) => {
+    node?.focus();
+  };
+
+  const isHighlighted = (action: SurfaceAction) =>
+    highlightIndex !== -1 && availableActions[highlightIndex] === action;
+
+  const actionIcon = (action: SurfaceAction, iconClassName = "size-4") => {
     const Icon = action.icon;
     return (
       <span className="relative inline-flex shrink-0">
-        <Icon className="size-4 text-muted-foreground" />
+        <Icon className={iconClassName} />
         {action.badgeCount > 0 ? (
           <span
             aria-hidden
@@ -260,85 +304,79 @@ function RightPanelEmptyState(props: {
     );
   };
 
+  const cardShellClass =
+    "rounded-lg border border-border/80 bg-card dark:border-transparent dark:shadow-none dark:inset-ring-1 dark:inset-ring-white/5";
+  const highlightedCardClass = "bg-accent/60 dark:inset-ring-white/20";
+
   return (
-    <div className="flex min-h-0 flex-1 justify-center overflow-y-auto p-4">
-      <div className="mt-6 h-fit w-full max-w-xl overflow-hidden rounded-lg border border-border/80 bg-card sm:mt-16 dark:border-transparent dark:shadow-none dark:inset-ring-1 dark:inset-ring-white/5">
-        <Command aria-label="Open a surface" mode="none" value={query} onValueChange={setQuery}>
-          <CommandInput
-            placeholder="Open a surface"
-            wrapperClassName="border-b border-border/60"
-            onKeyDown={handleInputKeyDown}
-          />
-          <CommandList>
-            {availableActions.length === 0 && unavailableActions.length === 0 ? (
-              <div className="py-8 text-center text-muted-foreground text-sm">
-                No matching surfaces.
+    <div
+      ref={focusOnMount}
+      tabIndex={0}
+      onKeyDown={handleKeyDown}
+      aria-label="Open a surface"
+      data-surface-launcher-keys={availableActions.map((action) => action.shortcut).join("")}
+      className={cn(
+        "flex min-h-0 flex-1 items-center justify-center overflow-y-auto px-6 pt-6 outline-none",
+        // The panel topbar sits above this container; matching bottom padding
+        // keeps the cards centered against the full panel, not the leftover.
+        "pb-[calc(var(--workspace-topbar-height)+--spacing(6))]",
+      )}
+    >
+      <div className="relative w-full max-w-lg">
+        <div className="absolute inset-x-0 bottom-full mb-5 text-center">
+          <h3 className="font-medium text-foreground text-sm">Open a surface</h3>
+          <p className="mt-1 text-muted-foreground text-xs">
+            Choose what to show in the right panel.
+          </p>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          {actions.map((action) =>
+            action.available ? (
+              <button
+                key={action.label}
+                type="button"
+                onClick={action.onClick}
+                onMouseEnter={() => setHighlight(availableActions.indexOf(action))}
+                onMouseLeave={() =>
+                  setHighlight((current) =>
+                    current === availableActions.indexOf(action) ? -1 : current,
+                  )
+                }
+                className={cn(
+                  "relative flex w-full cursor-pointer flex-col items-start p-4 text-left transition hover:border-border hover:bg-accent/60",
+                  cardShellClass,
+                  isHighlighted(action) && highlightedCardClass,
+                )}
+              >
+                <Kbd className="absolute top-3 right-3">{action.shortcut}</Kbd>
+                <span className="flex items-center gap-2 pe-8">
+                  {actionIcon(action)}
+                  <span className="font-medium text-sm">{action.label}</span>
+                </span>
+                <span className="mt-1.5 text-muted-foreground text-xs leading-relaxed">
+                  {action.description}
+                </span>
+              </button>
+            ) : (
+              <div
+                key={action.label}
+                className={cn(
+                  "relative flex w-full flex-col items-start p-4 opacity-40",
+                  cardShellClass,
+                )}
+              >
+                <Kbd className="absolute top-3 right-3">{action.shortcut}</Kbd>
+                <span className="flex items-center gap-2 pe-8">
+                  {actionIcon(action)}
+                  <span className="font-medium text-sm">{action.label}</span>
+                </span>
+                <span className="mt-1.5 text-muted-foreground text-xs leading-relaxed">
+                  {action.disabledReason}
+                </span>
               </div>
-            ) : null}
-            {availableActions.length > 0 ? (
-              <CommandGroup items={availableActions}>
-                <CommandCollection>
-                  {(action: SurfaceAction) => (
-                    <CommandItem
-                      key={action.label}
-                      value={action.label}
-                      className="cursor-pointer gap-3"
-                      onMouseDown={(event) => {
-                        event.preventDefault();
-                      }}
-                      onClick={action.onClick}
-                    >
-                      {actionIcon(action)}
-                      <span className="flex min-w-0 flex-1 flex-col">
-                        <span className="truncate text-foreground text-sm">{action.label}</span>
-                        <span className="truncate text-muted-foreground/70 text-xs">
-                          {action.description}
-                        </span>
-                      </span>
-                      <Kbd>{action.shortcut}</Kbd>
-                    </CommandItem>
-                  )}
-                </CommandCollection>
-              </CommandGroup>
-            ) : null}
-            {unavailableActions.length > 0 ? (
-              <CommandGroup items={unavailableActions}>
-                <CommandGroupLabel>Unavailable</CommandGroupLabel>
-                <CommandCollection>
-                  {(action: SurfaceAction) => (
-                    <div
-                      key={action.label}
-                      className="flex select-none items-start gap-3 rounded-sm px-2 py-1.5 opacity-64"
-                    >
-                      <span className="mt-0.5">{actionIcon(action)}</span>
-                      <span className="flex min-w-0 flex-1 flex-col">
-                        <span className="text-foreground text-sm">{action.label}</span>
-                        <span className="text-muted-foreground/70 text-xs">
-                          {action.disabledReason}
-                        </span>
-                      </span>
-                    </div>
-                  )}
-                </CommandCollection>
-              </CommandGroup>
-            ) : null}
-          </CommandList>
-          <div className="flex items-center gap-3 border-t border-border/60 px-3 py-2 text-muted-foreground text-xs">
-            <KbdGroup className="items-center gap-1.5">
-              <Kbd>
-                <ArrowUp />
-              </Kbd>
-              <Kbd>
-                <ArrowDown />
-              </Kbd>
-              <span>Navigate</span>
-            </KbdGroup>
-            <KbdGroup className="items-center gap-1.5">
-              <Kbd>Enter</Kbd>
-              <span>Open</span>
-            </KbdGroup>
-          </div>
-        </Command>
+            ),
+          )}
+        </div>
       </div>
     </div>
   );
