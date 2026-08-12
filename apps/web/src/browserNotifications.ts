@@ -93,30 +93,53 @@ export function browserNotificationDeliveryKey(
   return JSON.stringify([input.environmentId, input.threadId, input.event, input.updatedAt]);
 }
 
-export async function claimBrowserNotificationDelivery(
+export async function deliverBrowserNotificationOnce(
   key: string,
+  deliver: () => DesktopNotificationShowResult,
   dependencies: DeliveryClaimDependencies | null = deliveryClaimDependencies(),
-): Promise<boolean> {
+): Promise<DesktopNotificationShowResult> {
   if (dependencies === null) {
-    return false;
+    return "unsupported";
   }
 
   return dependencies.withLock(async () => {
     const now = dependencies.now();
     const records = trimDeliveryRecords(readDeliveryRecords(dependencies.storage), now);
     if (records[key] !== undefined) {
-      return false;
+      return "suppressed";
     }
+
+    // The Web Lock keeps this reservation private until delivery either succeeds or rolls back.
     records[key] = now;
     try {
       dependencies.storage.setItem(
         DELIVERY_STORAGE_KEY,
         JSON.stringify(trimDeliveryRecords(records, now)),
       );
-      return true;
     } catch {
-      return false;
+      return "failed";
     }
+
+    let result: DesktopNotificationShowResult;
+    try {
+      result = deliver();
+    } catch {
+      result = "failed";
+    }
+    if (result === "shown") {
+      return result;
+    }
+
+    delete records[key];
+    try {
+      dependencies.storage.setItem(
+        DELIVERY_STORAGE_KEY,
+        JSON.stringify(trimDeliveryRecords(records, now)),
+      );
+    } catch {
+      // The reservation expires with the normal delivery TTL if rollback storage fails.
+    }
+    return result;
   });
 }
 

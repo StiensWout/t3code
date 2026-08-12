@@ -20,7 +20,7 @@ import {
 } from "../../desktopNotifications.logic.ts";
 import {
   browserNotificationDeliveryKey,
-  claimBrowserNotificationDelivery,
+  deliverBrowserNotificationOnce,
   dismissAllBrowserNotifications,
   dismissBrowserNotification,
   getBrowserNotificationPermission,
@@ -111,6 +111,14 @@ export function DesktopNotificationCoordinator() {
   const previousStatesRef = useRef<ReadonlyMap<string, AgentAwarenessState | null> | null>(null);
   const previousAuthoritativeEnvironmentIdsRef = useRef<ReadonlySet<string>>(new Set());
   const notificationOperationsRef = useRef(Promise.resolve());
+  const lifecycleGenerationRef = useRef(0);
+
+  useEffect(() => {
+    lifecycleGenerationRef.current += 1;
+    return () => {
+      lifecycleGenerationRef.current += 1;
+    };
+  }, []);
 
   const enqueueNotificationOperations = useCallback((operation: () => Promise<void>) => {
     notificationOperationsRef.current = notificationOperationsRef.current
@@ -218,7 +226,11 @@ export function DesktopNotificationCoordinator() {
     previousAuthoritativeEnvironmentIdsRef.current = authoritativeEnvironmentIds;
 
     for (const transition of reconciliation.transitions) {
+      const lifecycleGeneration = lifecycleGenerationRef.current;
       enqueueNotificationOperations(async () => {
+        if (lifecycleGenerationRef.current !== lifecycleGeneration) {
+          return;
+        }
         if (transition.type === "dismiss") {
           if (bridge) {
             await bridge.dismiss(transition.target);
@@ -246,22 +258,11 @@ export function DesktopNotificationCoordinator() {
           ) {
             return;
           }
-          const claimed = await claimBrowserNotificationDelivery(
-            browserNotificationDeliveryKey({
-              environmentId: transition.state.environmentId,
-              threadId: transition.state.threadId,
-              event: transition.event,
-              updatedAt: transition.state.updatedAt,
-            }),
-          );
-          if (!claimed) {
-            return;
-          }
         }
 
+        const target = scopeThreadRef(transition.state.environmentId, transition.state.threadId);
         let completionPreview: string | null = null;
         if (transition.event === "completion" && settings.showContext) {
-          const target = scopeThreadRef(transition.state.environmentId, transition.state.threadId);
           const context = completionContexts.get(scopedThreadKey(target));
           if (context?.supportsPagination) {
             const result = await settleWithin(
@@ -281,12 +282,15 @@ export function DesktopNotificationCoordinator() {
                 turnId: context.turnId,
               });
             }
-
-            // Do not surface a finished turn after the thread has already moved on.
-            if (readThreadShell(target)?.updatedAt !== transition.state.updatedAt) {
-              return;
-            }
           }
+        }
+
+        if (
+          lifecycleGenerationRef.current !== lifecycleGeneration ||
+          (transition.event === "completion" &&
+            readThreadShell(target)?.updatedAt !== transition.state.updatedAt)
+        ) {
+          return;
         }
 
         const input = {
@@ -308,15 +312,28 @@ export function DesktopNotificationCoordinator() {
           return;
         }
 
-        if (
-          shouldSuppressBrowserNotification({
-            windowFocused: document.hasFocus(),
-            policy: backgroundPoliciesRef.current.get(transition.state.environmentId) ?? null,
-          })
-        ) {
-          return;
-        }
-        showBrowserAgentNotification(input, { onActivated: activateTarget });
+        await deliverBrowserNotificationOnce(
+          browserNotificationDeliveryKey({
+            environmentId: transition.state.environmentId,
+            threadId: transition.state.threadId,
+            event: transition.event,
+            updatedAt: transition.state.updatedAt,
+          }),
+          () => {
+            if (
+              lifecycleGenerationRef.current !== lifecycleGeneration ||
+              (transition.event === "completion" &&
+                readThreadShell(target)?.updatedAt !== transition.state.updatedAt) ||
+              shouldSuppressBrowserNotification({
+                windowFocused: document.hasFocus(),
+                policy: backgroundPoliciesRef.current.get(transition.state.environmentId) ?? null,
+              })
+            ) {
+              return "suppressed";
+            }
+            return showBrowserAgentNotification(input, { onActivated: activateTarget });
+          },
+        );
       });
     }
   }, [

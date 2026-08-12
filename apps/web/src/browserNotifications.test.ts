@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
   browserNotificationDeliveryKey,
-  claimBrowserNotificationDelivery,
+  deliverBrowserNotificationOnce,
   getBrowserNotificationPermission,
   showBrowserAgentNotification,
 } from "./browserNotifications.ts";
@@ -123,7 +123,7 @@ describe("browser notification delivery", () => {
     expect(getBrowserNotificationPermission(PermissionDefaultNotification)).toBe("default");
   });
 
-  it("claims one delivery per browser profile", async () => {
+  it("delivers once per browser profile", async () => {
     const values = new Map<string, string>();
     const storage = {
       getItem: (key: string) => values.get(key) ?? null,
@@ -148,13 +148,34 @@ describe("browser notification delivery", () => {
 
     await expect(
       Promise.all([
-        claimBrowserNotificationDelivery(key, dependencies),
-        claimBrowserNotificationDelivery(key, dependencies),
+        deliverBrowserNotificationOnce(key, () => "shown", dependencies),
+        deliverBrowserNotificationOnce(key, () => "shown", dependencies),
       ]),
-    ).resolves.toEqual([true, false]);
+    ).resolves.toEqual(["shown", "suppressed"]);
   });
 
   it("fails closed when profile storage is unavailable", async () => {
-    await expect(claimBrowserNotificationDelivery("event", null)).resolves.toBe(false);
+    await expect(deliverBrowserNotificationOnce("event", () => "shown", null)).resolves.toBe(
+      "unsupported",
+    );
+  });
+
+  it("releases a delivery reservation when showing fails", async () => {
+    const values = new Map<string, string>();
+    const dependencies = {
+      storage: {
+        getItem: (key: string) => values.get(key) ?? null,
+        setItem: (key: string, value: string) => values.set(key, value),
+      },
+      now: () => 1_000,
+      withLock: async <A>(effect: () => Promise<A>) => effect(),
+    };
+
+    await expect(
+      deliverBrowserNotificationOnce("event", () => "failed", dependencies),
+    ).resolves.toBe("failed");
+    await expect(
+      deliverBrowserNotificationOnce("event", () => "shown", dependencies),
+    ).resolves.toBe("shown");
   });
 });
