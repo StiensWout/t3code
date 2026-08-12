@@ -92,7 +92,9 @@ const SURFACE_DISABLED_REASONS = {
 
 /** Overlays that must win over the launcher's letter shortcuts. */
 const LAUNCHER_SHORTCUT_BLOCKING_LAYERS = [
-  '[data-slot="dialog"]',
+  '[data-slot="dialog-popup"]',
+  '[data-slot="alert-dialog-popup"]',
+  '[data-slot="command-dialog-popup"]',
   '[data-slot="menu-popup"]',
   '[data-slot="select-popup"]',
   '[data-slot="popover-popup"]',
