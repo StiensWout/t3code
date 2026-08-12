@@ -42,8 +42,12 @@ export function SettingsT3ConnectRouteScreen() {
   const navigation = useNavigation();
 
   useLayoutEffect(() => {
-    if (!hasCloudPublicConfig()) {
-      navigation.dispatch(StackActions.replace("SettingsContent"));
+    if (hasCloudPublicConfig()) return;
+
+    if (navigation.canGoBack()) {
+      navigation.goBack();
+    } else {
+      navigation.dispatch(StackActions.replace("Settings"));
     }
   }, [navigation]);
 
