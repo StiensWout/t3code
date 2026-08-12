@@ -749,7 +749,8 @@ export const DESKTOP_FILE_EXCLUSIONS = [
   // Windows stages the server sidecar below prod-resources so electron-builder
   // can copy it using project-relative extraResources matchers. Keep those
   // staging inputs out of app.asar; they are emitted once at resources/.
-  "!apps/desktop/prod-resources/windows-server{,/**/*}",
+  "!apps/desktop/prod-resources/windows-server",
+  "!apps/desktop/prod-resources/windows-server/**/*",
 ] as const;
 // Windows ships the server tree (bundle + node_modules) as a separate
 // resources/server.asar sidecar instead of loose files: the NSIS installer
