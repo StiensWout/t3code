@@ -323,7 +323,7 @@ function RightPanelEmptyState(props: {
               </CommandGroup>
             ) : null}
           </CommandList>
-          <div className="flex flex-wrap items-center gap-3 border-t border-border/60 px-3 py-2 text-muted-foreground text-xs">
+          <div className="flex items-center gap-3 border-t border-border/60 px-3 py-2 text-muted-foreground text-xs">
             <KbdGroup className="items-center gap-1.5">
               <Kbd>
                 <ArrowUp />
@@ -337,7 +337,6 @@ function RightPanelEmptyState(props: {
               <Kbd>Enter</Kbd>
               <span>Open</span>
             </KbdGroup>
-            <span>Letter opens directly</span>
           </div>
         </Command>
       </div>
