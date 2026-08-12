@@ -90,6 +90,16 @@ const SURFACE_DISABLED_REASONS = {
   agents: "Agents are only available from a thread.",
 } as const;
 
+/** Overlays that must win over the launcher's letter shortcuts. */
+const LAUNCHER_SHORTCUT_BLOCKING_LAYERS = [
+  '[data-slot="dialog"]',
+  '[data-slot="menu-popup"]',
+  '[data-slot="select-popup"]',
+  '[data-slot="popover-popup"]',
+  '[data-slot="combobox-popup"]',
+  '[data-slot="autocomplete-popup"]',
+].join(",");
+
 /** One-line unavailability hints for the empty-state cards. */
 const SURFACE_UNAVAILABLE_HINTS = {
   browser: "Only available in the desktop app.",
@@ -234,7 +244,9 @@ function RightPanelEmptyState(props: {
   });
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
+      if (event.defaultPrevented || event.isComposing) return;
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      if (document.querySelector(LAUNCHER_SHORTCUT_BLOCKING_LAYERS)) return;
       const target = event.target;
       if (target instanceof HTMLElement) {
         if (target.closest("input, textarea, select")) return;
@@ -273,6 +285,9 @@ function RightPanelEmptyState(props: {
       return;
     }
     if (event.key === "Enter") {
+      // A focused card button owns its own activation; only open from the
+      // highlight when the container itself has focus.
+      if (event.target instanceof HTMLElement && event.target.closest("button")) return;
       const action = availableActions[highlightIndex];
       if (!action) return;
       event.preventDefault();
@@ -280,9 +295,11 @@ function RightPanelEmptyState(props: {
     }
   };
 
-  const focusOnMount = (node: HTMLDivElement | null) => {
+  // Stable identity so React only runs this callback ref on mount/unmount;
+  // an inline arrow would re-attach and re-focus on every render.
+  const focusOnMount = useCallback((node: HTMLDivElement | null) => {
     node?.focus();
-  };
+  }, []);
 
   const isHighlighted = (action: SurfaceAction) =>
     highlightIndex !== -1 && availableActions[highlightIndex] === action;
