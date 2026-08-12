@@ -26,7 +26,11 @@ import {
   getBrowserNotificationPermission,
   showBrowserAgentNotification,
 } from "../../browserNotifications.ts";
-import { useClientSettings, useClientSettingsHydrated } from "../../hooks/useSettings.ts";
+import {
+  getClientSettings,
+  useClientSettings,
+  useClientSettingsHydrated,
+} from "../../hooks/useSettings.ts";
 import { isElectron } from "../../env.ts";
 import {
   readThreadShell,
@@ -239,7 +243,8 @@ export function DesktopNotificationCoordinator() {
           }
           return;
         }
-        if (!desktopNotificationEventEnabled(settings, transition.event)) {
+        const queuedSettings = getClientSettings().desktopNotifications;
+        if (!desktopNotificationEventEnabled(queuedSettings, transition.event)) {
           return;
         }
         if (bridge) {
@@ -262,7 +267,7 @@ export function DesktopNotificationCoordinator() {
 
         const target = scopeThreadRef(transition.state.environmentId, transition.state.threadId);
         let completionPreview: string | null = null;
-        if (transition.event === "completion" && settings.showContext) {
+        if (transition.event === "completion" && queuedSettings.showContext) {
           const context = completionContexts.get(scopedThreadKey(target));
           if (context?.supportsPagination) {
             const result = await settleWithin(
@@ -293,22 +298,30 @@ export function DesktopNotificationCoordinator() {
           return;
         }
 
-        const input = {
+        const inputBase = {
           environmentId: transition.state.environmentId,
           threadId: transition.state.threadId,
           event: transition.event,
           projectTitle: transition.state.projectTitle,
           threadTitle: transition.state.threadTitle,
-          ...(completionPreview === null ? {} : { completionPreview }),
-          showContext: settings.showContext,
-          silent: !settings.soundEnabled,
         };
 
         if (bridge) {
-          if (shouldSuppressDesktopNotification(document.hasFocus())) {
+          const deliverySettings = getClientSettings().desktopNotifications;
+          if (
+            !desktopNotificationEventEnabled(deliverySettings, transition.event) ||
+            shouldSuppressDesktopNotification(document.hasFocus())
+          ) {
             return;
           }
-          await bridge.show(input);
+          await bridge.show({
+            ...inputBase,
+            ...(deliverySettings.showContext && completionPreview !== null
+              ? { completionPreview }
+              : {}),
+            showContext: deliverySettings.showContext,
+            silent: !deliverySettings.soundEnabled,
+          });
           return;
         }
 
@@ -320,10 +333,12 @@ export function DesktopNotificationCoordinator() {
             updatedAt: transition.state.updatedAt,
           }),
           () => {
+            const deliverySettings = getClientSettings().desktopNotifications;
             if (
               lifecycleGenerationRef.current !== lifecycleGeneration ||
               (transition.event === "completion" &&
                 readThreadShell(target)?.updatedAt !== transition.state.updatedAt) ||
+              !desktopNotificationEventEnabled(deliverySettings, transition.event) ||
               shouldSuppressBrowserNotification({
                 windowFocused: document.hasFocus(),
                 policy: backgroundPoliciesRef.current.get(transition.state.environmentId) ?? null,
@@ -331,7 +346,17 @@ export function DesktopNotificationCoordinator() {
             ) {
               return "suppressed";
             }
-            return showBrowserAgentNotification(input, { onActivated: activateTarget });
+            return showBrowserAgentNotification(
+              {
+                ...inputBase,
+                ...(deliverySettings.showContext && completionPreview !== null
+                  ? { completionPreview }
+                  : {}),
+                showContext: deliverySettings.showContext,
+                silent: !deliverySettings.soundEnabled,
+              },
+              { onActivated: activateTarget },
+            );
           },
         );
       });
