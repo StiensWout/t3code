@@ -225,6 +225,34 @@ describe("projectThreadAwareness", () => {
     expect(sessionUpdate?.notificationVersion).toBe(first?.notificationVersion);
   });
 
+  it("uses a stable fallback when legacy state has no turn or prompt identity", () => {
+    const session = {
+      threadId: "thread-1" as ThreadId,
+      status: "ready" as const,
+      providerName: "Codex",
+      runtimeMode: "full-access" as const,
+      activeTurnId: null,
+      lastError: null,
+      updatedAt: NOW,
+    };
+    const first = projectThreadAwareness({
+      environmentId: "env-1" as EnvironmentId,
+      project,
+      thread: thread({ session }),
+    });
+    const metadataUpdate = projectThreadAwareness({
+      environmentId: "env-1" as EnvironmentId,
+      project,
+      thread: thread({
+        session: { ...session, updatedAt: "2026-05-22T12:01:00.000Z" },
+        updatedAt: "2026-05-22T12:01:00.000Z",
+      }),
+    });
+
+    expect(first?.notificationVersion).toBe("legacy");
+    expect(metadataUpdate?.notificationVersion).toBe(first?.notificationVersion);
+  });
+
   it("projects failures with the session error detail", () => {
     const state = projectThreadAwareness({
       environmentId: "env-1" as EnvironmentId,

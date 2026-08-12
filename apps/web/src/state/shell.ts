@@ -1,12 +1,14 @@
 import {
   AVAILABLE_CONNECTION_STATE,
   connectionProjectionPhase,
+  type ConnectionProjectionPhase,
 } from "@t3tools/client-runtime/connection";
 import {
   createEnvironmentShellAtoms,
   createEnvironmentShellSummaryAtom,
   createEnvironmentSnapshotAtom,
   createShellEnvironmentAtoms,
+  type EnvironmentShellStatus,
 } from "@t3tools/client-runtime/state/shell";
 import type { EnvironmentId } from "@t3tools/contracts";
 import * as Option from "effect/Option";
@@ -40,17 +42,49 @@ function environmentIdSetsEqual(
   return true;
 }
 
+let authoritativeConnectionGenerations = new Map<EnvironmentId, number>();
+
+export function shellEnvironmentRetainsAuthority(input: {
+  readonly shellStatus: EnvironmentShellStatus;
+  readonly connectionPhase: ConnectionProjectionPhase;
+  readonly connectionGeneration: number;
+  readonly authoritativeGeneration: number | null;
+}): boolean {
+  return (
+    input.connectionPhase !== "disconnected" &&
+    (input.shellStatus === "live" || input.authoritativeGeneration === input.connectionGeneration)
+  );
+}
+
 export const authoritativeShellEnvironmentIdsAtom = Atom.make((get) => {
   const catalog = AsyncResult.value(get(environmentCatalog.catalogAtom));
   if (Option.isNone(catalog)) {
+    authoritativeConnectionGenerations = new Map();
     return EMPTY_SHELL_ENVIRONMENT_IDS;
   }
   const environmentIds = new Set<EnvironmentId>();
+  const nextAuthoritativeConnectionGenerations = new Map<EnvironmentId, number>();
   for (const environmentId of catalog.value.entries.keys()) {
-    if (get(environmentShell.stateValueAtom(environmentId)).status === "live") {
+    const shell = get(environmentShell.stateValueAtom(environmentId));
+    const connection = Option.getOrElse(
+      AsyncResult.value(get(environmentCatalog.stateAtom(environmentId))),
+      () => AVAILABLE_CONNECTION_STATE,
+    );
+    // A same-generation foreground resubscription is still authoritative while its shell catches
+    // up. A real reconnect has a new generation and must reach live before offline work is trusted.
+    if (
+      shellEnvironmentRetainsAuthority({
+        shellStatus: shell.status,
+        connectionPhase: connectionProjectionPhase(connection),
+        connectionGeneration: connection.generation,
+        authoritativeGeneration: authoritativeConnectionGenerations.get(environmentId) ?? null,
+      })
+    ) {
       environmentIds.add(environmentId);
+      nextAuthoritativeConnectionGenerations.set(environmentId, connection.generation);
     }
   }
+  authoritativeConnectionGenerations = nextAuthoritativeConnectionGenerations;
   return environmentIds;
 }).pipe(
   Atom.withEquality(environmentIdSetsEqual),

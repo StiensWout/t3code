@@ -188,9 +188,7 @@ export function projectThreadAwareness(
         ? `turn:${thread.session.activeTurnId}`
         : thread.latestUserMessageAt !== null
           ? `prompt:${thread.latestUserMessageAt}`
-          : thread.session !== null
-            ? `session:${thread.session.updatedAt}`
-            : `thread:${thread.updatedAt}`;
+          : "legacy";
   return {
     environmentId,
     threadId: thread.id,
