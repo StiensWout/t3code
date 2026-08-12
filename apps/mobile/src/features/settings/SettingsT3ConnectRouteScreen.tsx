@@ -5,6 +5,7 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId } from "@t3tools/contracts";
 import type { RelayClientEnvironmentRecord } from "@t3tools/contracts/relay";
+import { useAuth } from "@clerk/clerk-expo";
 import { useNavigation } from "@react-navigation/native";
 import { useRef, useState } from "react";
 import { Alert, Platform, Pressable, RefreshControl, ScrollView, View } from "react-native";
@@ -37,6 +38,7 @@ function endpointLabel(environment: RelayClientEnvironmentRecord): string {
 }
 
 export function SettingsT3ConnectRouteScreen() {
+  const { isLoaded: isAuthLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const environmentsState = useManagedRelayEnvironments();
@@ -48,8 +50,8 @@ export function SettingsT3ConnectRouteScreen() {
     useState<EnvironmentId | null>(null);
   const [removedEnvironments, setRemovedEnvironments] = useState<{
     readonly accountId: string | null;
-    readonly ids: ReadonlySet<EnvironmentId>;
-  }>({ accountId: null, ids: new Set() });
+    readonly linkedAtById: ReadonlyMap<EnvironmentId, string>;
+  }>({ accountId: null, linkedAtById: new Map() });
 
   const deregister = async (environment: RelayClientEnvironmentRecord) => {
     const accountId = environmentsState.accountId;
@@ -65,12 +67,11 @@ export function SettingsT3ConnectRouteScreen() {
     setDeregisteringEnvironmentId(null);
 
     if (result._tag === "Success") {
-      setRemovedEnvironments((current) => ({
-        accountId,
-        ids: new Set(current.accountId === accountId ? current.ids : []).add(
-          environment.environmentId,
-        ),
-      }));
+      setRemovedEnvironments((current) => {
+        const linkedAtById = new Map(current.accountId === accountId ? current.linkedAtById : []);
+        linkedAtById.set(environment.environmentId, environment.linkedAt);
+        return { accountId, linkedAtById };
+      });
       environmentsState.refresh();
       Alert.alert(
         "Server deregistered",
@@ -125,13 +126,16 @@ export function SettingsT3ConnectRouteScreen() {
     });
   };
 
-  const removedEnvironmentIds =
+  const removedEnvironmentLinkedAt =
     removedEnvironments.accountId === environmentsState.accountId
-      ? removedEnvironments.ids
-      : new Set<EnvironmentId>();
+      ? removedEnvironments.linkedAtById
+      : new Map<EnvironmentId, string>();
   const environments = (environmentsState.data ?? []).filter(
-    (environment) => !removedEnvironmentIds.has(environment.environmentId),
+    (environment) =>
+      removedEnvironmentLinkedAt.get(environment.environmentId) !== environment.linkedAt,
   );
+  const isSignedOut = isAuthLoaded && !isSignedIn;
+  const isAccountLoading = !isSignedOut && environmentsState.accountId === null;
   const isInitialLoad =
     environmentsState.accountId !== null &&
     environmentsState.data === null &&
@@ -174,11 +178,13 @@ export function SettingsT3ConnectRouteScreen() {
             </Text>
             <Text className="mt-1 text-sm text-foreground-muted">{environmentsState.error}</Text>
           </View>
-        ) : environmentsState.accountId === null ? (
+        ) : null}
+
+        {isSignedOut ? (
           <Text className="border-y border-border py-6 text-sm text-foreground-muted">
             Sign in to T3 Connect to manage account environments.
           </Text>
-        ) : isInitialLoad ? (
+        ) : isAccountLoading || isInitialLoad ? (
           <Text className="border-y border-border py-6 text-sm text-foreground-muted">
             Loading environments…
           </Text>
@@ -215,7 +221,7 @@ export function SettingsT3ConnectRouteScreen() {
               </View>
             ))}
           </View>
-        ) : (
+        ) : environmentsState.error ? null : (
           <Text className="border-y border-border py-6 text-sm text-foreground-muted">
             No environments are registered to this T3 Connect account.
           </Text>

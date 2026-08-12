@@ -98,8 +98,8 @@ export function T3ConnectUserProfilePage() {
   const mutationPendingRef = useRef(false);
   const [removedEnvironments, setRemovedEnvironments] = useState<{
     readonly accountId: string | null;
-    readonly ids: ReadonlySet<EnvironmentId>;
-  }>({ accountId: null, ids: new Set() });
+    readonly linkedAtById: ReadonlyMap<EnvironmentId, string>;
+  }>({ accountId: null, linkedAtById: new Map() });
 
   const handleDeregister = async (environment: RelayClientEnvironmentRecord) => {
     const accountId = environmentsState.accountId;
@@ -115,12 +115,11 @@ export function T3ConnectUserProfilePage() {
     setDeregisteringEnvironmentId(null);
 
     if (result._tag === "Success") {
-      setRemovedEnvironments((current) => ({
-        accountId,
-        ids: new Set(current.accountId === accountId ? current.ids : []).add(
-          environment.environmentId,
-        ),
-      }));
+      setRemovedEnvironments((current) => {
+        const linkedAtById = new Map(current.accountId === accountId ? current.linkedAtById : []);
+        linkedAtById.set(environment.environmentId, environment.linkedAt);
+        return { accountId, linkedAtById };
+      });
       environmentsState.refresh();
       toastManager.add({
         type: "success",
@@ -155,12 +154,13 @@ export function T3ConnectUserProfilePage() {
     });
   };
 
-  const removedEnvironmentIds =
+  const removedEnvironmentLinkedAt =
     removedEnvironments.accountId === environmentsState.accountId
-      ? removedEnvironments.ids
-      : new Set<EnvironmentId>();
+      ? removedEnvironments.linkedAtById
+      : new Map<EnvironmentId, string>();
   const environments = (environmentsState.data ?? []).filter(
-    (environment) => !removedEnvironmentIds.has(environment.environmentId),
+    (environment) =>
+      removedEnvironmentLinkedAt.get(environment.environmentId) !== environment.linkedAt,
   );
   const isInitialLoad =
     !environmentsState.accountId || (environmentsState.data === null && !environmentsState.error);
