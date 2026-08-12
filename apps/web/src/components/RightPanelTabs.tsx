@@ -1,6 +1,8 @@
 import type { ContextMenuItem, PreviewSessionSnapshot, PullRequestState } from "@t3tools/contracts";
 import { getTerminalLabel } from "@t3tools/shared/terminalLabels";
 import {
+  ArrowDown,
+  ArrowUp,
   Bot,
   FileDiff,
   Files,
@@ -11,6 +13,7 @@ import {
   X,
 } from "lucide-react";
 import {
+  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactElement,
   type ReactNode,
@@ -25,6 +28,16 @@ import type { RightPanelSurface } from "~/rightPanelStore";
 import { cn } from "~/lib/utils";
 import { readLocalApi } from "~/localApi";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
+import {
+  Command,
+  CommandCollection,
+  CommandGroup,
+  CommandGroupLabel,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "~/components/ui/command";
+import { Kbd, KbdGroup } from "~/components/ui/kbd";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "~/components/ui/menu";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { faviconUrlForOrigin } from "~/lib/favicon";
@@ -118,6 +131,12 @@ function SurfaceMenuItem(props: {
   return <DisabledReasonTooltip reason={props.disabledReason} trigger={item} />;
 }
 
+/**
+ * Launcher shown when the right panel has no surfaces. Keyboard-first: the
+ * filter input autofocuses, arrows and Enter open the highlighted surface,
+ * and with an empty query a surface's shortcut letter opens it directly.
+ * Unavailable surfaces stay listed with their reason inline.
+ */
 function RightPanelEmptyState(props: {
   onAddBrowser: () => void;
   onAddTerminal: () => void;
@@ -133,11 +152,14 @@ function RightPanelEmptyState(props: {
   agentsAvailable: boolean;
   liveAgentCount: number;
 }) {
+  const [query, setQuery] = useState("");
+
   const actions = [
     {
       label: "Browser",
       description: "Open a local app or URL.",
       icon: Globe2,
+      shortcut: "B",
       available: props.browserAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.browser,
       onClick: props.onAddBrowser,
@@ -147,6 +169,7 @@ function RightPanelEmptyState(props: {
       label: "Terminal",
       description: "Start a shell in this workspace.",
       icon: TerminalSquare,
+      shortcut: "T",
       available: props.terminalAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.terminal,
       onClick: props.onAddTerminal,
@@ -156,6 +179,7 @@ function RightPanelEmptyState(props: {
       label: "Files",
       description: "Browse and read workspace files.",
       icon: Files,
+      shortcut: "F",
       available: props.filesAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.files,
       onClick: props.onAddFiles,
@@ -165,6 +189,7 @@ function RightPanelEmptyState(props: {
       label: "Diff",
       description: "Review changes in this thread.",
       icon: FileDiff,
+      shortcut: "D",
       available: props.diffAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.diff,
       onClick: props.onAddDiff,
@@ -174,6 +199,7 @@ function RightPanelEmptyState(props: {
       label: "Pull request",
       description: "Open the pull request for this thread's branch.",
       icon: GitPullRequest,
+      shortcut: "P",
       available: props.pullRequestAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.pullRequest,
       onClick: props.onAddPullRequest,
@@ -183,6 +209,7 @@ function RightPanelEmptyState(props: {
       label: "Agents",
       description: "Watch subagents and workflows run.",
       icon: Bot,
+      shortcut: "A",
       available: props.agentsAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.agents,
       onClick: props.onAddAgents,
@@ -190,67 +217,129 @@ function RightPanelEmptyState(props: {
     },
   ] as const;
 
+  type SurfaceAction = (typeof actions)[number];
+
+  const normalizedQuery = query.trim().toLowerCase();
+  const matchesQuery = (action: SurfaceAction) =>
+    action.label.toLowerCase().includes(normalizedQuery);
+  const availableActions = actions.filter((action) => action.available && matchesQuery(action));
+  const unavailableActions = actions.filter((action) => !action.available && matchesQuery(action));
+
+  const handleInputKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Escape" && query.length > 0) {
+      event.preventDefault();
+      event.stopPropagation();
+      setQuery("");
+      return;
+    }
+    // Shortcut letters only fire on an empty query; once the user is
+    // filtering, every key belongs to the input.
+    if (query.length > 0 || event.metaKey || event.ctrlKey || event.altKey) return;
+    const action = availableActions.find(
+      (candidate) => candidate.shortcut.toLowerCase() === event.key.toLowerCase(),
+    );
+    if (!action) return;
+    event.preventDefault();
+    action.onClick();
+  };
+
+  const actionIcon = (action: SurfaceAction) => {
+    const Icon = action.icon;
+    return (
+      <span className="relative inline-flex shrink-0">
+        <Icon className="size-4 text-muted-foreground" />
+        {action.badgeCount > 0 ? (
+          <span
+            aria-hidden
+            className="absolute -top-1.5 -right-2 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-info px-1 text-[9px] font-semibold tabular-nums text-white"
+          >
+            {action.badgeCount}
+          </span>
+        ) : null}
+      </span>
+    );
+  };
+
   return (
-    <div className="flex min-h-0 flex-1 items-center justify-center p-6">
-      <div className="w-full max-w-xl">
-        <div className="mb-5 text-center">
-          <h3 className="text-sm font-medium text-foreground">Open a surface</h3>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Choose what to show in the right panel.
-          </p>
-        </div>
-        <div className="grid grid-cols-2 gap-2">
-          {actions.map((action) => {
-            const Icon = action.icon;
-            const content = (
-              <>
-                <span className="relative mb-3 inline-flex">
-                  <Icon className="size-5" />
-                  {action.badgeCount > 0 ? (
-                    <span
-                      aria-hidden
-                      className="absolute -top-1.5 -right-2 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-info px-1 text-[9px] font-semibold tabular-nums text-white"
+    <div className="flex min-h-0 flex-1 justify-center overflow-y-auto p-4">
+      <div className="mt-6 h-fit w-full max-w-xl overflow-hidden rounded-lg border border-border/80 bg-card sm:mt-16 dark:border-transparent dark:shadow-none dark:inset-ring-1 dark:inset-ring-white/5">
+        <Command aria-label="Open a surface" mode="none" value={query} onValueChange={setQuery}>
+          <CommandInput
+            placeholder="Open a surface"
+            wrapperClassName="border-b border-border/60"
+            onKeyDown={handleInputKeyDown}
+          />
+          <CommandList>
+            {availableActions.length === 0 && unavailableActions.length === 0 ? (
+              <div className="py-8 text-center text-muted-foreground text-sm">
+                No matching surfaces.
+              </div>
+            ) : null}
+            {availableActions.length > 0 ? (
+              <CommandGroup items={availableActions}>
+                <CommandCollection>
+                  {(action: SurfaceAction) => (
+                    <CommandItem
+                      key={action.label}
+                      value={action.label}
+                      className="cursor-pointer gap-3"
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+                      }}
+                      onClick={action.onClick}
                     >
-                      {action.badgeCount}
-                    </span>
-                  ) : null}
-                </span>
-                <span className="text-sm font-medium">{action.label}</span>
-                <span className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                  {action.description}
-                </span>
-              </>
-            );
-            if (action.available) {
-              return (
-                <button
-                  key={action.label}
-                  type="button"
-                  onClick={action.onClick}
-                  className="cursor-pointer flex min-h-28 w-full flex-col items-start rounded-lg border border-border/80 bg-card p-4 text-left transition hover:border-border hover:bg-accent/60 dark:border-transparent dark:shadow-none dark:inset-ring-1 dark:inset-ring-white/5"
-                >
-                  {content}
-                </button>
-              );
-            }
-            const disabledCard = (
-              <button
-                type="button"
-                className="flex min-h-28 w-full cursor-not-allowed flex-col items-start rounded-lg border border-border/80 bg-card p-4 text-left opacity-40 dark:border-transparent dark:shadow-none dark:inset-ring-1 dark:inset-ring-white/5"
-                aria-disabled="true"
-              >
-                {content}
-              </button>
-            );
-            return (
-              <DisabledReasonTooltip
-                key={action.label}
-                reason={action.disabledReason}
-                trigger={disabledCard}
-              />
-            );
-          })}
-        </div>
+                      {actionIcon(action)}
+                      <span className="flex min-w-0 flex-1 flex-col">
+                        <span className="truncate text-foreground text-sm">{action.label}</span>
+                        <span className="truncate text-muted-foreground/70 text-xs">
+                          {action.description}
+                        </span>
+                      </span>
+                      <Kbd>{action.shortcut}</Kbd>
+                    </CommandItem>
+                  )}
+                </CommandCollection>
+              </CommandGroup>
+            ) : null}
+            {unavailableActions.length > 0 ? (
+              <CommandGroup items={unavailableActions}>
+                <CommandGroupLabel>Unavailable</CommandGroupLabel>
+                <CommandCollection>
+                  {(action: SurfaceAction) => (
+                    <div
+                      key={action.label}
+                      className="flex select-none items-start gap-3 rounded-sm px-2 py-1.5 opacity-64"
+                    >
+                      <span className="mt-0.5">{actionIcon(action)}</span>
+                      <span className="flex min-w-0 flex-1 flex-col">
+                        <span className="text-foreground text-sm">{action.label}</span>
+                        <span className="text-muted-foreground/70 text-xs">
+                          {action.disabledReason}
+                        </span>
+                      </span>
+                    </div>
+                  )}
+                </CommandCollection>
+              </CommandGroup>
+            ) : null}
+          </CommandList>
+          <div className="flex flex-wrap items-center gap-3 border-t border-border/60 px-3 py-2 text-muted-foreground text-xs">
+            <KbdGroup className="items-center gap-1.5">
+              <Kbd>
+                <ArrowUp />
+              </Kbd>
+              <Kbd>
+                <ArrowDown />
+              </Kbd>
+              <span>Navigate</span>
+            </KbdGroup>
+            <KbdGroup className="items-center gap-1.5">
+              <Kbd>Enter</Kbd>
+              <span>Open</span>
+            </KbdGroup>
+            <span>Letter opens directly</span>
+          </div>
+        </Command>
       </div>
     </div>
   );
