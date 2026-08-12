@@ -292,8 +292,7 @@ export function DesktopNotificationCoordinator() {
 
         if (
           lifecycleGenerationRef.current !== lifecycleGeneration ||
-          (transition.event === "completion" &&
-            readThreadShell(target)?.updatedAt !== transition.state.updatedAt)
+          readThreadShell(target)?.updatedAt !== transition.state.updatedAt
         ) {
           return;
         }
@@ -336,8 +335,7 @@ export function DesktopNotificationCoordinator() {
             const deliverySettings = getClientSettings().desktopNotifications;
             if (
               lifecycleGenerationRef.current !== lifecycleGeneration ||
-              (transition.event === "completion" &&
-                readThreadShell(target)?.updatedAt !== transition.state.updatedAt) ||
+              readThreadShell(target)?.updatedAt !== transition.state.updatedAt ||
               !desktopNotificationEventEnabled(deliverySettings, transition.event) ||
               shouldSuppressBrowserNotification({
                 windowFocused: document.hasFocus(),
