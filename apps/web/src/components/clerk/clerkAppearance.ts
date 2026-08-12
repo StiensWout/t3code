@@ -10,18 +10,25 @@ export const clerkAppearance = {
     // text, while the card surface provides the inverse filled-control pair.
     colorPrimary: "var(--update-foreground)",
     colorPrimaryForeground: "var(--card)",
-    // Clerk also renders status colors as inline text, so use the readable
-    // foreground roles instead of the deeper fills used for icons and tinting.
-    colorDanger: "var(--error-foreground)",
-    colorSuccess: "var(--success-foreground)",
-    colorWarning: "var(--warning-foreground)",
+    colorDanger: "var(--error)",
+    colorSuccess: "var(--success)",
+    colorWarning: "var(--warning)",
     colorNeutral: "var(--foreground)",
     colorForeground: "var(--foreground)",
-    colorMuted: "var(--muted)",
+    // The stock dark theme's muted token is translucent. Clerk uses this as
+    // the footer's background, so derive an opaque muted surface from the card.
+    colorMuted: "color-mix(in srgb, var(--card) 98%, var(--foreground))",
     colorMutedForeground: "var(--muted-foreground)",
     colorBackground: "var(--card)",
     colorInputForeground: "var(--foreground)",
     colorInput: "var(--secondary)",
     colorRing: "var(--ring)",
+  },
+  elements: {
+    formFieldErrorText: { color: "var(--error-foreground)" },
+    formFieldWarningText: { color: "var(--warning-foreground)" },
+    formFieldSuccessText: { color: "var(--success-foreground)" },
+    otpCodeFieldErrorText: { color: "var(--error-foreground)" },
+    otpCodeFieldSuccessText: { color: "var(--success-foreground)" },
   },
 } satisfies NonNullable<ClerkProviderProps["appearance"]>;
