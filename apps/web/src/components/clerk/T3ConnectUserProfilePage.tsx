@@ -13,19 +13,15 @@ import {
   useManagedRelayEnvironments,
 } from "../../cloud/managedRelayState";
 import { useAtomCommand } from "../../state/use-atom-command";
-import {
-  AlertDialog,
-  AlertDialogClose,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogPopup,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "../ui/alert-dialog";
 import { Button } from "../ui/button";
+import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
 import { toastManager } from "../ui/toast";
+import {
+  ClerkUserProfilePage,
+  ClerkUserProfileRefreshButton,
+  ClerkUserProfileRow,
+} from "./ClerkUserProfilePage";
 
 const linkedAtFormatter = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
 
@@ -42,50 +38,82 @@ function endpointLabel(environment: RelayClientEnvironmentRecord): string {
     : "Activity publishing only";
 }
 
-function T3ConnectEnvironmentRow(props: {
+export function T3ConnectEnvironmentRow(props: {
   readonly environment: RelayClientEnvironmentRecord;
+  readonly confirmationOpen: boolean;
   readonly mutationPending: boolean;
+  readonly onConfirmationChange: (open: boolean) => void;
   readonly onDeregister: (environment: RelayClientEnvironmentRecord) => void;
-  readonly portalContainer: React.RefObject<HTMLDivElement | null>;
 }) {
   const { environment } = props;
   return (
-    <li className="flex items-center gap-4 border-t py-4 first:border-t-0">
-      <div className="min-w-0 flex-1">
-        <h3 className="truncate text-sm font-medium text-foreground">{environment.label}</h3>
-        <p className="mt-1 text-xs text-muted-foreground">
-          {linkedAtLabel(environment.linkedAt)} · {endpointLabel(environment)}
-        </p>
-      </div>
-      <AlertDialog>
-        <AlertDialogTrigger
-          render={
-            <Button size="sm" variant="destructive-outline" disabled={props.mutationPending}>
-              Deregister
-            </Button>
-          }
-        />
-        <AlertDialogPopup portalContainer={props.portalContainer}>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Deregister “{environment.label}”?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This revokes this server’s T3 Connect access, removes any managed tunnel, and frees a
-              host space. Local connections on your devices are not changed.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogClose render={<Button variant="outline">Cancel</Button>} />
-            <AlertDialogClose
-              render={
-                <Button variant="destructive" onClick={() => props.onDeregister(environment)}>
-                  Deregister server
+    <ClerkUserProfileRow icon={<ServerIcon className="size-4" />}>
+      <Collapsible open={props.confirmationOpen} onOpenChange={props.onConfirmationChange}>
+        <div className="flex items-start gap-4">
+          <div className="min-w-0 flex-1">
+            <h3 className="truncate text-[0.8125rem] leading-[1.125rem] font-medium text-foreground">
+              {environment.label}
+            </h3>
+            <p className="mt-1 text-xs leading-[1.125rem] text-muted-foreground">
+              {linkedAtLabel(environment.linkedAt)} · {endpointLabel(environment)}
+            </p>
+          </div>
+          <CollapsibleTrigger
+            render={
+              <Button
+                size="sm"
+                variant="destructive-outline"
+                className="text-[0.8125rem]"
+                disabled={props.mutationPending}
+              >
+                Deregister
+              </Button>
+            }
+          />
+        </div>
+
+        <CollapsiblePanel>
+          <div className="pt-3">
+            <div
+              className="rounded-lg border border-input bg-muted/32 px-5 py-4 shadow-xs/5"
+              role="group"
+              aria-label={`Confirm deregistration of ${environment.label}`}
+            >
+              <h4 className="text-[0.8125rem] leading-[1.125rem] font-semibold text-foreground">
+                Deregister server
+              </h4>
+              <p className="mt-1 text-[0.8125rem] leading-[1.125rem] text-muted-foreground">
+                “{environment.label}” will be removed from this account.
+              </p>
+              <p className="mt-4 max-w-xl text-[0.8125rem] leading-[1.125rem] text-muted-foreground">
+                T3 Connect access will be revoked, any managed tunnel will be removed, and a host
+                space will become available. Local connections on your devices are not changed.
+              </p>
+              <div className="mt-4 flex justify-end gap-2">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="text-[0.8125rem]"
+                  disabled={props.mutationPending}
+                  onClick={() => props.onConfirmationChange(false)}
+                >
+                  Cancel
                 </Button>
-              }
-            />
-          </AlertDialogFooter>
-        </AlertDialogPopup>
-      </AlertDialog>
-    </li>
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  className="text-[0.8125rem]"
+                  disabled={props.mutationPending}
+                  onClick={() => props.onDeregister(environment)}
+                >
+                  {props.mutationPending ? "Deregistering…" : "Deregister"}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </CollapsiblePanel>
+      </Collapsible>
+    </ClerkUserProfileRow>
   );
 }
 
@@ -96,9 +124,10 @@ export function T3ConnectUserProfilePage() {
   });
   const [deregisteringEnvironmentId, setDeregisteringEnvironmentId] =
     useState<EnvironmentId | null>(null);
+  const [confirmingEnvironmentId, setConfirmingEnvironmentId] = useState<EnvironmentId | null>(
+    null,
+  );
   const mutationPendingRef = useRef(false);
-  // Clerk owns the surrounding modal stacking context, so nested dialogs must stay inside it.
-  const portalContainerRef = useRef<HTMLDivElement>(null);
   const [removedEnvironments, setRemovedEnvironments] = useState<{
     readonly accountId: string | null;
     readonly linkedAtById: ReadonlyMap<EnvironmentId, string>;
@@ -118,6 +147,7 @@ export function T3ConnectUserProfilePage() {
     setDeregisteringEnvironmentId(null);
 
     if (result._tag === "Success") {
+      setConfirmingEnvironmentId(null);
       setRemovedEnvironments((current) => {
         const linkedAtById = new Map(current.accountId === accountId ? current.linkedAtById : []);
         linkedAtById.set(environment.environmentId, environment.linkedAt);
@@ -169,31 +199,20 @@ export function T3ConnectUserProfilePage() {
     !environmentsState.accountId || (environmentsState.data === null && !environmentsState.error);
 
   return (
-    <div
-      ref={portalContainerRef}
-      className="flex min-h-[30rem] w-full flex-col bg-background text-foreground"
-    >
-      <header className="flex flex-col gap-4 border-b px-6 py-5 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h2 className="text-base font-semibold tracking-[-0.01em]">T3 Connect</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Environments registered to your account. Connections on this device are managed in
-            Settings.
-          </p>
-        </div>
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={environmentsState.isPending || deregisteringEnvironmentId !== null}
+    <ClerkUserProfilePage
+      title="T3 Connect"
+      description="Environments registered to your account. Connections on this device are managed in Settings."
+      action={
+        <ClerkUserProfileRefreshButton
+          disabled={deregisteringEnvironmentId !== null}
+          isPending={environmentsState.isPending}
           onClick={environmentsState.refresh}
-        >
-          {environmentsState.isPending ? "Refreshing…" : "Refresh"}
-        </Button>
-      </header>
-
-      <div className="flex-1 p-6">
+        />
+      }
+    >
+      <div>
         {environmentsState.error ? (
-          <div className="mb-4 border-y border-destructive/35 py-3 text-sm" role="alert">
+          <div className="mb-4 border-t border-destructive/35 py-3 text-[0.8125rem]" role="alert">
             <p className="font-medium text-destructive-foreground">
               Could not load T3 Connect environments
             </p>
@@ -202,35 +221,40 @@ export function T3ConnectUserProfilePage() {
         ) : null}
 
         {isInitialLoad ? (
-          <p className="py-6 text-sm text-muted-foreground" role="status">
+          <p className="border-t py-4 text-[0.8125rem] text-muted-foreground" role="status">
             Loading environments…
           </p>
         ) : environments.length > 0 ? (
-          <ul>
+          <ul className="border-t">
             {environments.map((environment) => (
               <T3ConnectEnvironmentRow
                 key={environment.environmentId}
                 environment={environment}
+                confirmationOpen={confirmingEnvironmentId === environment.environmentId}
                 mutationPending={deregisteringEnvironmentId !== null}
+                onConfirmationChange={(open) =>
+                  setConfirmingEnvironmentId(open ? environment.environmentId : null)
+                }
                 onDeregister={(selected) => void handleDeregister(selected)}
-                portalContainer={portalContainerRef}
               />
             ))}
           </ul>
         ) : environmentsState.error ? null : (
-          <Empty className="min-h-72 border-y">
-            <EmptyMedia variant="icon">
+          <Empty className="min-h-64 gap-4 border-t px-6 py-10 md:p-10">
+            <EmptyMedia className="mb-0" variant="icon">
               <ServerIcon />
             </EmptyMedia>
             <EmptyHeader>
-              <EmptyTitle>No T3 Connect environments</EmptyTitle>
-              <EmptyDescription>
+              <EmptyTitle className="text-[1.0625rem] leading-6">
+                No T3 Connect environments
+              </EmptyTitle>
+              <EmptyDescription className="text-[0.8125rem] leading-[1.125rem]">
                 Link an environment from its local Settings to make it available through T3 Connect.
               </EmptyDescription>
             </EmptyHeader>
           </Empty>
         )}
       </div>
-    </div>
+    </ClerkUserProfilePage>
   );
 }
