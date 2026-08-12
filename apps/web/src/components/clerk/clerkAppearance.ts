@@ -10,9 +10,11 @@ export const clerkAppearance = {
     // text, while the card surface provides the inverse filled-control pair.
     colorPrimary: "var(--update-foreground)",
     colorPrimaryForeground: "var(--card)",
-    colorDanger: "var(--error)",
-    colorSuccess: "var(--success)",
-    colorWarning: "var(--warning)",
+    // Clerk also renders status colors as inline text, so use the readable
+    // foreground roles instead of the deeper fills used for icons and tinting.
+    colorDanger: "var(--error-foreground)",
+    colorSuccess: "var(--success-foreground)",
+    colorWarning: "var(--warning-foreground)",
     colorNeutral: "var(--foreground)",
     colorForeground: "var(--foreground)",
     colorMuted: "var(--muted)",

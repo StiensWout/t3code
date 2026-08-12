@@ -44,9 +44,9 @@ describe("clerkAppearance", () => {
       variables: {
         colorPrimary: "var(--update-foreground)",
         colorPrimaryForeground: "var(--card)",
-        colorDanger: "var(--error)",
-        colorSuccess: "var(--success)",
-        colorWarning: "var(--warning)",
+        colorDanger: "var(--error-foreground)",
+        colorSuccess: "var(--success-foreground)",
+        colorWarning: "var(--warning-foreground)",
         colorNeutral: "var(--foreground)",
         colorForeground: "var(--foreground)",
         colorMuted: "var(--muted)",
@@ -64,5 +64,7 @@ describe("clerkAppearance", () => {
     expect(contrastRatio(colors.mutedForeground, colors.surface)).toBeGreaterThanOrEqual(4.5);
     expect(contrastRatio(colors.text, colors.secondary)).toBeGreaterThanOrEqual(4.5);
     expect(contrastRatio(colors.updateForeground, colors.surface)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(colors.errorForeground, colors.surface)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(colors.warningForeground, colors.surface)).toBeGreaterThanOrEqual(4.5);
   });
 });
