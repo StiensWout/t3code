@@ -26,6 +26,7 @@ import { environmentServerConfigsAtom } from "./server";
 import {
   allEnvironmentShellsBootstrappedAtom,
   authoritativeShellEnvironmentIdsAtom,
+  connectedShellEnvironmentIdsAtom,
 } from "./shell";
 import { environmentThreadDetails, environmentThreadShells } from "./threads";
 
@@ -129,6 +130,10 @@ export function useAllEnvironmentShellsBootstrapped(): boolean {
 
 export function useAuthoritativeShellEnvironmentIds(): ReadonlySet<EnvironmentId> {
   return useAtomValue(authoritativeShellEnvironmentIdsAtom);
+}
+
+export function useConnectedShellEnvironmentIds(): ReadonlySet<EnvironmentId> {
+  return useAtomValue(connectedShellEnvironmentIdsAtom);
 }
 
 export function useThreadShellsForProjectRefs(

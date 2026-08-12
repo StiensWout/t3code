@@ -144,7 +144,7 @@ describe("browser notification delivery", () => {
       }
     };
     const dependencies = { storage, now: () => 1_000, withLock };
-    const key = browserNotificationDeliveryKey({ ...input, updatedAt: "2026-08-10T08:00:00Z" });
+    const key = browserNotificationDeliveryKey({ ...input, version: "turn:turn-1" });
 
     await expect(
       Promise.all([

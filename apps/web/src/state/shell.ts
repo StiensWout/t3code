@@ -23,7 +23,7 @@ export const environmentShellSummaryAtom = createEnvironmentShellSummaryAtom({
   shellStateValueAtom: environmentShell.stateValueAtom,
 });
 
-const EMPTY_AUTHORITATIVE_SHELL_ENVIRONMENT_IDS: ReadonlySet<EnvironmentId> = new Set();
+const EMPTY_SHELL_ENVIRONMENT_IDS: ReadonlySet<EnvironmentId> = new Set();
 
 function environmentIdSetsEqual(
   current: ReadonlySet<EnvironmentId>,
@@ -43,16 +43,11 @@ function environmentIdSetsEqual(
 export const authoritativeShellEnvironmentIdsAtom = Atom.make((get) => {
   const catalog = AsyncResult.value(get(environmentCatalog.catalogAtom));
   if (Option.isNone(catalog)) {
-    return EMPTY_AUTHORITATIVE_SHELL_ENVIRONMENT_IDS;
+    return EMPTY_SHELL_ENVIRONMENT_IDS;
   }
   const environmentIds = new Set<EnvironmentId>();
   for (const environmentId of catalog.value.entries.keys()) {
-    const connection = Option.getOrElse(
-      AsyncResult.value(get(environmentCatalog.stateAtom(environmentId))),
-      () => AVAILABLE_CONNECTION_STATE,
-    );
-    // A live connection remains authoritative while its shell catches up after reconnect or wake.
-    if (connectionProjectionPhase(connection) !== "disconnected") {
+    if (get(environmentShell.stateValueAtom(environmentId)).status === "live") {
       environmentIds.add(environmentId);
     }
   }
@@ -60,6 +55,28 @@ export const authoritativeShellEnvironmentIdsAtom = Atom.make((get) => {
 }).pipe(
   Atom.withEquality(environmentIdSetsEqual),
   Atom.withLabel("web-authoritative-shell-environment-ids"),
+);
+
+export const connectedShellEnvironmentIdsAtom = Atom.make((get) => {
+  const catalog = AsyncResult.value(get(environmentCatalog.catalogAtom));
+  if (Option.isNone(catalog)) {
+    return EMPTY_SHELL_ENVIRONMENT_IDS;
+  }
+  const environmentIds = new Set<EnvironmentId>();
+  for (const environmentId of catalog.value.entries.keys()) {
+    const connection = Option.getOrElse(
+      AsyncResult.value(get(environmentCatalog.stateAtom(environmentId))),
+      () => AVAILABLE_CONNECTION_STATE,
+    );
+    // Keep connection-scoped observers mounted while the shell catches up after reconnect or wake.
+    if (connectionProjectionPhase(connection) !== "disconnected") {
+      environmentIds.add(environmentId);
+    }
+  }
+  return environmentIds;
+}).pipe(
+  Atom.withEquality(environmentIdSetsEqual),
+  Atom.withLabel("web-connected-shell-environment-ids"),
 );
 
 export const allEnvironmentShellsBootstrappedAtom = Atom.make((get) => {

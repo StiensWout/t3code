@@ -87,10 +87,10 @@ function trimDeliveryRecords(records: Record<string, number>, now: number): Reco
 
 export function browserNotificationDeliveryKey(
   input: Pick<DesktopNotificationShowInput, "environmentId" | "threadId" | "event"> & {
-    readonly updatedAt: string;
+    readonly version: string;
   },
 ): string {
-  return JSON.stringify([input.environmentId, input.threadId, input.event, input.updatedAt]);
+  return JSON.stringify([input.environmentId, input.threadId, input.event, input.version]);
 }
 
 export async function deliverBrowserNotificationOnce(

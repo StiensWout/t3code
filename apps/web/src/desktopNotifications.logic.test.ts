@@ -25,6 +25,7 @@ function state(phase: AgentAwarenessPhase): AgentAwarenessState {
     phase,
     headline: "Test",
     modelTitle: "gpt-5.4",
+    notificationVersion: "turn:turn-1",
     updatedAt: "2026-08-09T10:00:00.000Z",
     deepLink: "/threads/env-1/thread-1",
   };

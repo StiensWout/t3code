@@ -39,6 +39,7 @@ import {
   setActiveEnvironmentId,
   useAllEnvironmentShellsBootstrapped,
   useAuthoritativeShellEnvironmentIds,
+  useConnectedShellEnvironmentIds,
   useProjects,
   useServerConfigs,
   useThreadShells,
@@ -104,6 +105,7 @@ export function DesktopNotificationCoordinator() {
   const settingsHydrated = useClientSettingsHydrated();
   const shellsBootstrapped = useAllEnvironmentShellsBootstrapped();
   const authoritativeEnvironmentIds = useAuthoritativeShellEnvironmentIds();
+  const connectedEnvironmentIds = useConnectedShellEnvironmentIds();
   const projects = useProjects();
   const threads = useThreadShells();
   const serverConfigs = useServerConfigs();
@@ -334,14 +336,16 @@ export function DesktopNotificationCoordinator() {
           if (currentProject === null) {
             return false;
           }
-          // Metadata can update while a completion preview loads. The semantic phase, rather
-          // than the shell timestamp, decides whether this notification is still current.
+          const currentAwareness = projectThreadAwareness({
+            environmentId: currentThread.environmentId,
+            project: currentProject,
+            thread: currentThread,
+          });
+          // Metadata can update while a completion preview loads. The semantic phase and turn
+          // identity decide whether this notification is still current.
           return (
-            projectThreadAwareness({
-              environmentId: currentThread.environmentId,
-              project: currentProject,
-              thread: currentThread,
-            })?.phase === transition.state.phase
+            currentAwareness?.phase === transition.state.phase &&
+            currentAwareness.notificationVersion === transition.state.notificationVersion
           );
         };
         let completionPreview: string | null = null;
@@ -404,7 +408,7 @@ export function DesktopNotificationCoordinator() {
             environmentId: transition.state.environmentId,
             threadId: transition.state.threadId,
             event: transition.event,
-            updatedAt: transition.state.updatedAt,
+            version: transition.state.notificationVersion,
           }),
           () => {
             const deliverySettings = getClientSettings().desktopNotifications;
@@ -460,7 +464,7 @@ export function DesktopNotificationCoordinator() {
 
   return (
     <>
-      {[...authoritativeEnvironmentIds].map((environmentId) => (
+      {[...connectedEnvironmentIds].map((environmentId) => (
         <BrowserNotificationPolicyObserver
           key={environmentId}
           environmentId={environmentId}

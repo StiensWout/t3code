@@ -24,6 +24,7 @@ export interface AgentAwarenessState {
   readonly headline: string;
   readonly detail?: string;
   readonly modelTitle: string;
+  readonly notificationVersion: string;
   readonly updatedAt: string;
   readonly deepLink: string;
 }
@@ -48,7 +49,11 @@ export function notificationEventForAwarenessTransition(
   previous: AgentAwarenessState | null,
   current: AgentAwarenessState | null,
 ): DesktopNotificationEvent | null {
-  if (current === null || previous?.phase === current.phase) {
+  if (
+    current === null ||
+    (previous?.phase === current.phase &&
+      previous.notificationVersion === current.notificationVersion)
+  ) {
     return null;
   }
 
@@ -152,6 +157,7 @@ export interface ProjectThreadAwarenessInput {
     | "modelSelection"
     | "session"
     | "latestTurn"
+    | "latestUserMessageAt"
     | "updatedAt"
     | "hasPendingApprovals"
     | "hasPendingUserInput"
@@ -175,6 +181,16 @@ export function projectThreadAwareness(
   }
 
   const detail = detailForPhase(phase, thread);
+  const notificationVersion =
+    thread.latestTurn !== null
+      ? `turn:${thread.latestTurn.turnId}`
+      : thread.session?.activeTurnId
+        ? `turn:${thread.session.activeTurnId}`
+        : thread.latestUserMessageAt !== null
+          ? `prompt:${thread.latestUserMessageAt}`
+          : thread.session !== null
+            ? `session:${thread.session.updatedAt}`
+            : `thread:${thread.updatedAt}`;
   return {
     environmentId,
     threadId: thread.id,
@@ -184,6 +200,7 @@ export function projectThreadAwareness(
     headline: headlineForPhase(phase),
     ...(detail === undefined ? {} : { detail }),
     modelTitle: thread.modelSelection.model,
+    notificationVersion,
     updatedAt: thread.updatedAt,
     deepLink: buildAgentAwarenessDeepLink({ environmentId, threadId: thread.id }),
   };

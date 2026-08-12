@@ -33,6 +33,7 @@ function thread(
   | "modelSelection"
   | "session"
   | "latestTurn"
+  | "latestUserMessageAt"
   | "updatedAt"
   | "hasPendingApprovals"
   | "hasPendingUserInput"
@@ -43,6 +44,7 @@ function thread(
     modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
     session: null,
     latestTurn: null,
+    latestUserMessageAt: null,
     updatedAt: NOW,
     hasPendingApprovals: false,
     hasPendingUserInput: false,
@@ -138,6 +140,41 @@ describe("projectThreadAwareness", () => {
     expect(trulyInterrupted).toBeNull();
   });
 
+  it("versions notifications by turn rather than unrelated thread updates", () => {
+    const finishedTurn = {
+      turnId: "turn-1" as TurnId,
+      state: "completed" as const,
+      requestedAt: NOW,
+      startedAt: NOW,
+      completedAt: NOW,
+      assistantMessageId: null,
+    };
+    const first = projectThreadAwareness({
+      environmentId: "env-1" as EnvironmentId,
+      project,
+      thread: thread({ latestTurn: finishedTurn }),
+    });
+    const metadataUpdate = projectThreadAwareness({
+      environmentId: "env-1" as EnvironmentId,
+      project,
+      thread: thread({
+        latestTurn: finishedTurn,
+        updatedAt: "2026-05-22T12:01:00.000Z",
+      }),
+    });
+    const nextTurn = projectThreadAwareness({
+      environmentId: "env-1" as EnvironmentId,
+      project,
+      thread: thread({
+        latestTurn: { ...finishedTurn, turnId: "turn-2" as TurnId },
+        updatedAt: "2026-05-22T12:02:00.000Z",
+      }),
+    });
+
+    expect(metadataUpdate?.notificationVersion).toBe(first?.notificationVersion);
+    expect(nextTurn?.notificationVersion).not.toBe(first?.notificationVersion);
+  });
+
   it("projects ready sessions with no materialized turn as completed", () => {
     // Quick threads without code changes never get a checkpoint, so the SQL
     // shell has no latestTurn row and latest_turn_id is cleared when the
@@ -159,6 +196,33 @@ describe("projectThreadAwareness", () => {
     });
 
     expect(state?.phase).toBe("completed");
+  });
+
+  it("keeps turnless completion identity stable across session metadata updates", () => {
+    const session = {
+      threadId: "thread-1" as ThreadId,
+      status: "ready" as const,
+      providerName: "Codex",
+      runtimeMode: "full-access" as const,
+      activeTurnId: null,
+      lastError: null,
+      updatedAt: NOW,
+    };
+    const first = projectThreadAwareness({
+      environmentId: "env-1" as EnvironmentId,
+      project,
+      thread: thread({ latestUserMessageAt: NOW, session }),
+    });
+    const sessionUpdate = projectThreadAwareness({
+      environmentId: "env-1" as EnvironmentId,
+      project,
+      thread: thread({
+        latestUserMessageAt: NOW,
+        session: { ...session, updatedAt: "2026-05-22T12:01:00.000Z" },
+      }),
+    });
+
+    expect(sessionUpdate?.notificationVersion).toBe(first?.notificationVersion);
   });
 
   it("projects failures with the session error detail", () => {
@@ -195,6 +259,7 @@ function awarenessState(phase: AgentAwarenessPhase): AgentAwarenessState {
     phase,
     headline: "Test",
     modelTitle: "gpt-5.4",
+    notificationVersion: "turn:turn-1",
     updatedAt: NOW,
     deepLink: "/threads/env-1/thread-1",
   };
@@ -225,6 +290,15 @@ describe("desktop notification projection", () => {
         awarenessState("running"),
       ),
     ).toBeNull();
+  });
+
+  it("notifies when a newer turn reaches the same terminal phase", () => {
+    expect(
+      notificationEventForAwarenessTransition(awarenessState("completed"), {
+        ...awarenessState("completed"),
+        notificationVersion: "turn:turn-2",
+      }),
+    ).toBe("completion");
   });
 
   it("uses the same concise content for every platform adapter", () => {
