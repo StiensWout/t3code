@@ -26,9 +26,11 @@ where you enabled notifications can notify you; multiple tabs in one browser pro
 
 The title and message text are identical on macOS, Windows, Linux, and the web. The browser and
 operating system control the notification's visual style, placement, timing, and permission settings.
+Completion notifications use the thread title and a short preview of the agent's final response. If
+the response is unavailable, they show the project name instead.
 
 Turn off **Play sound** for silent notifications. Turn off **Show thread names** to replace project
-and thread names with a generic message on shared screens.
+and thread names, including completion previews, with a generic message on shared screens.
 
 Notification preferences are local to each desktop installation or browser profile. T3 Code treats
 the first thread snapshot after launch as current state, not a notification backlog, so reconnecting

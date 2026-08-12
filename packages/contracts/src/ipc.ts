@@ -187,6 +187,7 @@ export const DesktopNotificationShowInputSchema = Schema.Struct({
   event: DesktopNotificationEventSchema,
   projectTitle: TrimmedNonEmptyString,
   threadTitle: TrimmedNonEmptyString,
+  completionPreview: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
   showContext: Schema.Boolean,
   silent: Schema.Boolean,
 });

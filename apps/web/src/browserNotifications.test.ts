@@ -64,6 +64,26 @@ describe("browser notification delivery", () => {
     });
   });
 
+  it("uses the final response preview for completion notifications", () => {
+    FakeNotification.created = [];
+
+    showBrowserAgentNotification(
+      {
+        ...input,
+        event: "completion",
+        completionPreview: "Implemented the fix and the focused tests pass.",
+      },
+      { api: FakeNotification },
+    );
+
+    expect(FakeNotification.created[0]).toMatchObject({
+      title: "Fix browser notifications",
+      options: {
+        body: "Implemented the fix and the focused tests pass.",
+      },
+    });
+  });
+
   it("uses unambiguous tags when target ids contain separators", () => {
     FakeNotification.created = [];
 

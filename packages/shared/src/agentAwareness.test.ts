@@ -10,6 +10,7 @@ import type {
 import { ProviderInstanceId } from "@t3tools/contracts";
 
 import {
+  formatAgentCompletionPreview,
   formatAgentNotificationContent,
   notificationEventForAwarenessTransition,
   projectThreadAwareness,
@@ -240,6 +241,46 @@ describe("desktop notification projection", () => {
     });
   });
 
+  it("uses the thread title and final response preview for completions", () => {
+    expect(
+      formatAgentNotificationContent({
+        event: "completion",
+        projectTitle: "t3code",
+        threadTitle: "Fix failing CI",
+        completionPreview: "Implemented the fix and the focused tests now pass.",
+        showContext: true,
+      }),
+    ).toEqual({
+      title: "Fix failing CI",
+      body: "Implemented the fix and the focused tests now pass.",
+    });
+  });
+
+  it("falls back when a completed turn has no assistant response", () => {
+    expect(
+      formatAgentNotificationContent({
+        event: "completion",
+        projectTitle: "t3code",
+        threadTitle: "Fix failing CI",
+        showContext: true,
+      }),
+    ).toEqual({
+      title: "Fix failing CI",
+      body: "Finished · t3code",
+    });
+  });
+
+  it("normalizes markdown and caps completion previews at 90 characters", () => {
+    expect(
+      formatAgentCompletionPreview(
+        "## Done\n\n- Updated [notifications](https://example.com) and   verified the Windows build. " +
+          "This sentence makes the preview deliberately longer than the native notification limit.",
+      ),
+    ).toBe(
+      "Done Updated notifications and verified the Windows build. This sentence makes the previe…",
+    );
+  });
+
   it("can hide project and thread names", () => {
     expect(
       formatAgentNotificationContent({
@@ -250,6 +291,21 @@ describe("desktop notification projection", () => {
       }),
     ).toEqual({
       title: "Agent failed",
+      body: "Open T3 Code to view details.",
+    });
+  });
+
+  it("hides completion titles and response previews with context disabled", () => {
+    expect(
+      formatAgentNotificationContent({
+        event: "completion",
+        projectTitle: "Secret project",
+        threadTitle: "Sensitive task",
+        completionPreview: "The secret fix is ready.",
+        showContext: false,
+      }),
+    ).toEqual({
+      title: "Agent finished",
       body: "Open T3 Code to view details.",
     });
   });

@@ -29,13 +29,36 @@ import {
 import { useClientSettings, useClientSettingsHydrated } from "../../hooks/useSettings.ts";
 import { isElectron } from "../../env.ts";
 import {
+  readThreadShell,
   setActiveEnvironmentId,
   useAllEnvironmentShellsBootstrapped,
   useAuthoritativeShellEnvironmentIds,
   useProjects,
+  useServerConfigs,
   useThreadShells,
 } from "../../state/entities.ts";
+import { completionNotificationSnapshot } from "../../state/notificationPreview.ts";
 import { environmentBackgroundPolicy } from "../../state/server.ts";
+import { useAtomQueryRunner } from "../../state/use-atom-query-runner.ts";
+import { completionNotificationPreview } from "../../completionNotificationPreview.ts";
+
+const COMPLETION_NOTIFICATION_QUERY_TIMEOUT_MS = 1_250;
+
+function settleWithin<A>(promise: Promise<A>, timeoutMs: number): Promise<A | null> {
+  return new Promise((resolve) => {
+    const timer = window.setTimeout(() => resolve(null), timeoutMs);
+    void promise.then(
+      (value) => {
+        window.clearTimeout(timer);
+        resolve(value);
+      },
+      () => {
+        window.clearTimeout(timer);
+        resolve(null);
+      },
+    );
+  });
+}
 
 function BrowserNotificationPolicyObserver({
   environmentId,
@@ -77,7 +100,13 @@ export function DesktopNotificationCoordinator() {
   const authoritativeEnvironmentIds = useAuthoritativeShellEnvironmentIds();
   const projects = useProjects();
   const threads = useThreadShells();
+  const serverConfigs = useServerConfigs();
   const navigate = useNavigate();
+  const loadCompletionSnapshot = useAtomQueryRunner(completionNotificationSnapshot, {
+    label: "completion notification preview",
+    reportFailure: false,
+    reportDefect: false,
+  });
   const backgroundPoliciesRef = useRef(new Map<EnvironmentId, BackgroundPolicySnapshot>());
   const previousStatesRef = useRef<ReadonlyMap<string, AgentAwarenessState | null> | null>(null);
   const previousAuthoritativeEnvironmentIdsRef = useRef<ReadonlySet<string>>(new Set());
@@ -141,6 +170,23 @@ export function DesktopNotificationCoordinator() {
     });
   }, [projects, threads]);
 
+  const completionContexts = useMemo(
+    () =>
+      new Map(
+        threads.map((thread) => [
+          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+          {
+            assistantMessageId: thread.latestTurn?.assistantMessageId ?? null,
+            turnId: thread.latestTurn?.turnId ?? null,
+            updatedAt: thread.updatedAt,
+            supportsPagination:
+              serverConfigs.get(thread.environmentId)?.threadSnapshotPagination === true,
+          },
+        ]),
+      ),
+    [serverConfigs, threads],
+  );
+
   useEffect(() => {
     if (!bridge) {
       return;
@@ -188,45 +234,86 @@ export function DesktopNotificationCoordinator() {
           if (shouldSuppressDesktopNotification(document.hasFocus())) {
             return;
           }
-          await bridge.show({
-            environmentId: transition.state.environmentId,
-            threadId: transition.state.threadId,
-            event: transition.event,
-            projectTitle: transition.state.projectTitle,
-            threadTitle: transition.state.threadTitle,
-            showContext: settings.showContext,
-            silent: !settings.soundEnabled,
-          });
-          return;
+        } else {
+          if (getBrowserNotificationPermission() !== "granted") {
+            return;
+          }
+          if (
+            shouldSuppressBrowserNotification({
+              windowFocused: document.hasFocus(),
+              policy: backgroundPoliciesRef.current.get(transition.state.environmentId) ?? null,
+            })
+          ) {
+            return;
+          }
+          const claimed = await claimBrowserNotificationDelivery(
+            browserNotificationDeliveryKey({
+              environmentId: transition.state.environmentId,
+              threadId: transition.state.threadId,
+              event: transition.event,
+              updatedAt: transition.state.updatedAt,
+            }),
+          );
+          if (!claimed) {
+            return;
+          }
         }
 
-        if (getBrowserNotificationPermission() !== "granted") {
-          return;
+        let completionPreview: string | null = null;
+        if (transition.event === "completion" && settings.showContext) {
+          const target = scopeThreadRef(transition.state.environmentId, transition.state.threadId);
+          const context = completionContexts.get(scopedThreadKey(target));
+          if (context?.supportsPagination) {
+            const result = await settleWithin(
+              loadCompletionSnapshot({
+                environmentId: transition.state.environmentId,
+                input: {
+                  threadId: transition.state.threadId,
+                  updatedAt: context.updatedAt,
+                },
+              }),
+              COMPLETION_NOTIFICATION_QUERY_TIMEOUT_MS,
+            );
+            if (result?._tag === "Success" && Option.isSome(result.value)) {
+              completionPreview = completionNotificationPreview({
+                messages: result.value.value.thread.messages,
+                assistantMessageId: context.assistantMessageId,
+                turnId: context.turnId,
+              });
+            }
+
+            // Do not surface a finished turn after the thread has already moved on.
+            if (readThreadShell(target)?.updatedAt !== transition.state.updatedAt) {
+              return;
+            }
+          }
         }
-        if (
-          shouldSuppressBrowserNotification({
-            windowFocused: document.hasFocus(),
-            policy: backgroundPoliciesRef.current.get(transition.state.environmentId) ?? null,
-          })
-        ) {
-          return;
-        }
+
         const input = {
           environmentId: transition.state.environmentId,
           threadId: transition.state.threadId,
           event: transition.event,
           projectTitle: transition.state.projectTitle,
           threadTitle: transition.state.threadTitle,
+          ...(completionPreview === null ? {} : { completionPreview }),
           showContext: settings.showContext,
           silent: !settings.soundEnabled,
         };
-        const claimed = await claimBrowserNotificationDelivery(
-          browserNotificationDeliveryKey({
-            ...input,
-            updatedAt: transition.state.updatedAt,
-          }),
-        );
-        if (!claimed) {
+
+        if (bridge) {
+          if (shouldSuppressDesktopNotification(document.hasFocus())) {
+            return;
+          }
+          await bridge.show(input);
+          return;
+        }
+
+        if (
+          shouldSuppressBrowserNotification({
+            windowFocused: document.hasFocus(),
+            policy: backgroundPoliciesRef.current.get(transition.state.environmentId) ?? null,
+          })
+        ) {
           return;
         }
         showBrowserAgentNotification(input, { onActivated: activateTarget });
@@ -236,7 +323,9 @@ export function DesktopNotificationCoordinator() {
     bridge,
     activateTarget,
     authoritativeEnvironmentIds,
+    completionContexts,
     enqueueNotificationOperations,
+    loadCompletionSnapshot,
     observed,
     settings,
     settingsHydrated,

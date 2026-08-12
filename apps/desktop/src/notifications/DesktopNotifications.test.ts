@@ -95,6 +95,13 @@ describe("DesktopNotifications", () => {
         const notifications = yield* DesktopNotifications.DesktopNotifications;
         expect(yield* notifications.show(input)).toBe("shown");
         expect(yield* notifications.show({ ...input, event: "failure" })).toBe("shown");
+        expect(
+          yield* notifications.show({
+            ...input,
+            event: "completion",
+            completionPreview: "Implemented the fix and the focused tests pass.",
+          }),
+        ).toBe("shown");
       }).pipe(
         Effect.provide(DesktopNotifications.layerTest(platform).pipe(Layer.provide(window.layer))),
         Effect.scoped,
@@ -107,7 +114,14 @@ describe("DesktopNotifications", () => {
         timeoutType: "default",
       });
       expect(created[0]?.notification.closed).toBe(true);
-      expect(created[1]?.notification.shown).toBe(true);
+      expect(created[1]?.notification.closed).toBe(true);
+      expect(created[2]?.options).toEqual({
+        title: "Fix failing CI",
+        body: "Implemented the fix and the focused tests pass.",
+        silent: false,
+        timeoutType: "default",
+      });
+      expect(created[2]?.notification.shown).toBe(true);
     }),
   );
 
