@@ -25,6 +25,21 @@ export const environmentShellSummaryAtom = createEnvironmentShellSummaryAtom({
 
 const EMPTY_AUTHORITATIVE_SHELL_ENVIRONMENT_IDS: ReadonlySet<EnvironmentId> = new Set();
 
+function environmentIdSetsEqual(
+  current: ReadonlySet<EnvironmentId>,
+  next: ReadonlySet<EnvironmentId>,
+): boolean {
+  if (current.size !== next.size) {
+    return false;
+  }
+  for (const environmentId of current) {
+    if (!next.has(environmentId)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 export const authoritativeShellEnvironmentIdsAtom = Atom.make((get) => {
   const catalog = AsyncResult.value(get(environmentCatalog.catalogAtom));
   if (Option.isNone(catalog)) {
@@ -37,7 +52,10 @@ export const authoritativeShellEnvironmentIdsAtom = Atom.make((get) => {
     }
   }
   return environmentIds;
-}).pipe(Atom.withLabel("web-authoritative-shell-environment-ids"));
+}).pipe(
+  Atom.withEquality(environmentIdSetsEqual),
+  Atom.withLabel("web-authoritative-shell-environment-ids"),
+);
 
 export const allEnvironmentShellsBootstrappedAtom = Atom.make((get) => {
   const catalog = AsyncResult.value(get(environmentCatalog.catalogAtom));
