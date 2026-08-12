@@ -6,8 +6,8 @@ import {
 import type { EnvironmentId } from "@t3tools/contracts";
 import type { RelayClientEnvironmentRecord } from "@t3tools/contracts/relay";
 import { useAuth } from "@clerk/expo";
-import { useNavigation } from "@react-navigation/native";
-import { useRef, useState } from "react";
+import { StackActions, useNavigation } from "@react-navigation/native";
+import { useLayoutEffect, useRef, useState } from "react";
 import { Alert, Platform, Pressable, RefreshControl, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -20,6 +20,7 @@ import {
   deregisterManagedRelayEnvironmentCommand,
   useManagedRelayEnvironments,
 } from "../cloud/managedRelayState";
+import { hasCloudPublicConfig } from "../cloud/publicConfig";
 import { useAtomCommand } from "../../state/use-atom-command";
 
 const linkedAtFormatter = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
@@ -38,6 +39,18 @@ function endpointLabel(environment: RelayClientEnvironmentRecord): string {
 }
 
 export function SettingsT3ConnectRouteScreen() {
+  const navigation = useNavigation();
+
+  useLayoutEffect(() => {
+    if (!hasCloudPublicConfig()) {
+      navigation.dispatch(StackActions.replace("SettingsContent"));
+    }
+  }, [navigation]);
+
+  return hasCloudPublicConfig() ? <ConfiguredSettingsT3ConnectRouteScreen /> : null;
+}
+
+function ConfiguredSettingsT3ConnectRouteScreen() {
   const { isLoaded: isAuthLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();

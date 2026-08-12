@@ -46,6 +46,7 @@ function T3ConnectEnvironmentRow(props: {
   readonly environment: RelayClientEnvironmentRecord;
   readonly mutationPending: boolean;
   readonly onDeregister: (environment: RelayClientEnvironmentRecord) => void;
+  readonly portalContainer: React.RefObject<HTMLDivElement | null>;
 }) {
   const { environment } = props;
   return (
@@ -64,7 +65,7 @@ function T3ConnectEnvironmentRow(props: {
             </Button>
           }
         />
-        <AlertDialogPopup>
+        <AlertDialogPopup portalContainer={props.portalContainer}>
           <AlertDialogHeader>
             <AlertDialogTitle>Deregister “{environment.label}”?</AlertDialogTitle>
             <AlertDialogDescription>
@@ -96,6 +97,8 @@ export function T3ConnectUserProfilePage() {
   const [deregisteringEnvironmentId, setDeregisteringEnvironmentId] =
     useState<EnvironmentId | null>(null);
   const mutationPendingRef = useRef(false);
+  // Clerk owns the surrounding modal stacking context, so nested dialogs must stay inside it.
+  const portalContainerRef = useRef<HTMLDivElement>(null);
   const [removedEnvironments, setRemovedEnvironments] = useState<{
     readonly accountId: string | null;
     readonly linkedAtById: ReadonlyMap<EnvironmentId, string>;
@@ -166,7 +169,10 @@ export function T3ConnectUserProfilePage() {
     !environmentsState.accountId || (environmentsState.data === null && !environmentsState.error);
 
   return (
-    <div className="flex min-h-[30rem] w-full flex-col bg-background text-foreground">
+    <div
+      ref={portalContainerRef}
+      className="flex min-h-[30rem] w-full flex-col bg-background text-foreground"
+    >
       <header className="flex flex-col gap-4 border-b px-6 py-5 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-base font-semibold tracking-[-0.01em]">T3 Connect</h2>
@@ -207,6 +213,7 @@ export function T3ConnectUserProfilePage() {
                 environment={environment}
                 mutationPending={deregisteringEnvironmentId !== null}
                 onDeregister={(selected) => void handleDeregister(selected)}
+                portalContainer={portalContainerRef}
               />
             ))}
           </ul>
