@@ -749,8 +749,7 @@ export const DESKTOP_FILE_EXCLUSIONS = [
   // Windows stages the server sidecar below prod-resources so electron-builder
   // can copy it using project-relative extraResources matchers. Keep those
   // staging inputs out of app.asar; they are emitted once at resources/.
-  "!apps/desktop/prod-resources/server.asar",
-  "!apps/desktop/prod-resources/server.asar.unpacked/**/*",
+  "!apps/desktop/prod-resources/windows-server{,/**/*}",
 ] as const;
 // Windows ships the server tree (bundle + node_modules) as a separate
 // resources/server.asar sidecar instead of loose files: the NSIS installer
@@ -776,18 +775,16 @@ export const WINDOWS_SERVER_ASAR_IGNORE_GLOBS = [
   "**/node_modules/.bin/**",
 ] as const;
 export const WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT = 100;
+export const WINDOWS_SERVER_RESOURCE_SOURCE_DIR = "apps/desktop/prod-resources/windows-server";
 export const WINDOWS_SERVER_EXTRA_RESOURCES = [
   {
-    from: "apps/desktop/prod-resources/server.asar",
-    to: WINDOWS_SERVER_ASAR_RESOURCE,
-  },
-  {
-    from: "apps/desktop/prod-resources/server.asar.unpacked",
-    to: `${WINDOWS_SERVER_ASAR_RESOURCE}.unpacked`,
-    // Be explicit here. The first sidecar experiment relied on electron-
-    // builder's implicit directory matcher and produced an installer without
-    // this tree even though server.asar marked native files as unpacked.
-    filter: ["**/*"],
+    // Copy the archive and its .unpacked sibling from one parent directory.
+    // Mapping the .unpacked directory as an independent FileSet silently
+    // omitted it from Windows packages even though electron-builder copied
+    // the adjacent archive.
+    from: WINDOWS_SERVER_RESOURCE_SOURCE_DIR,
+    to: ".",
+    filter: [WINDOWS_SERVER_ASAR_RESOURCE, `${WINDOWS_SERVER_ASAR_RESOURCE}.unpacked/**/*`],
   },
 ] as const;
 // The WSL backend launches the server with plain `wsl.exe -- node`, which cannot
@@ -2277,6 +2274,7 @@ export const stageWindowsServerSidecar = Effect.fn("stageWindowsServerSidecar")(
   });
 
   yield* Effect.log("[desktop-artifact] Packing server.asar...");
+  yield* fs.makeDirectory(path.dirname(input.asarPath), { recursive: true });
   yield* packWindowsServerAsar({ sourceDir: serverStageDir, asarPath: input.asarPath });
   const packedStat = yield* fs.stat(input.asarPath);
   yield* Effect.log(
@@ -2365,7 +2363,10 @@ export const validateWindowsPackagedPayload = Effect.fn(
       // The entry lookup proves the archive contains the server executable,
       // while the single header walk identifies every file ASAR redirects to
       // the unpacked sibling at runtime.
-      statFile(asarPath, "apps/server/dist/bin.mjs");
+      // @electron/asar resolves entry names using the host path separator.
+      // POSIX separators work on Linux/macOS but fail on Windows even when the
+      // entry is present in the archive.
+      statFile(asarPath, path.join("apps", "server", "dist", "bin.mjs"));
       return [...collectUnpackedAsarFiles(getRawHeader(asarPath).header)].sort();
     },
     catch: (cause) =>
@@ -2694,7 +2695,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   );
   const windowsServerAsarPath =
     options.platform === "win"
-      ? path.join(stageProdResourcesDir, WINDOWS_SERVER_ASAR_RESOURCE)
+      ? path.join(stageAppDir, WINDOWS_SERVER_RESOURCE_SOURCE_DIR, WINDOWS_SERVER_ASAR_RESOURCE)
       : undefined;
   const stagePackageJson: StagePackageJson = {
     name: "t3code",

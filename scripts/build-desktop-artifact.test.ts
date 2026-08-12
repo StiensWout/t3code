@@ -55,6 +55,7 @@ import {
   WINDOWS_SERVER_EXTRA_RESOURCES,
   WINDOWS_SERVER_ASAR_RESOURCE,
   WINDOWS_SERVER_ASAR_UNPACK_GLOB,
+  WINDOWS_SERVER_RESOURCE_SOURCE_DIR,
 } from "./build-desktop-artifact.ts";
 import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
 import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
@@ -382,8 +383,15 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.deepStrictEqual(DESKTOP_ELECTRON_LANGUAGES, ["en-US"]);
     assert.deepStrictEqual(DESKTOP_FILE_EXCLUSIONS, [
       "!**/node_modules/@anthropic-ai/claude-agent-sdk-*/**/*",
-      "!apps/desktop/prod-resources/server.asar",
-      "!apps/desktop/prod-resources/server.asar.unpacked/**/*",
+      "!apps/desktop/prod-resources/windows-server{,/**/*}",
+    ]);
+    assert.equal(WINDOWS_SERVER_RESOURCE_SOURCE_DIR, "apps/desktop/prod-resources/windows-server");
+    assert.deepStrictEqual(WINDOWS_SERVER_EXTRA_RESOURCES, [
+      {
+        from: "apps/desktop/prod-resources/windows-server",
+        to: ".",
+        filter: ["server.asar", "server.asar.unpacked/**/*"],
+      },
     ]);
   });
 

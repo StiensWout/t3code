@@ -1,0 +1,56 @@
+name: Windows Package Smoke
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/windows-package-smoke.yml"
+      - "apps/desktop/package.json"
+      - "apps/server/package.json"
+      - "patches/**"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "scripts/build-desktop-artifact.ts"
+      - "scripts/package.json"
+
+concurrency:
+  group: windows-package-smoke-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    name: Package unsigned x64 NSIS artifact
+    runs-on: blacksmith-32vcpu-windows-2025
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      # This intentionally builds the real installer on Windows. Linux unit
+      # tests cannot exercise @electron/asar's native path separators or
+      # electron-builder's Windows extraResources copying behavior.
+      - name: Build and validate Windows package
+        shell: pwsh
+        run: >-
+          node scripts/build-desktop-artifact.ts
+          --platform win
+          --target nsis
+          --arch x64
+          --build-version 0.0.0-ci.${{ github.run_id }}
+          --output-dir release/windows-package-smoke
