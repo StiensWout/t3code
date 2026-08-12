@@ -471,7 +471,7 @@ function ConfiguredSettingsRouteScreen() {
             <SettingsRow
               icon="server.rack"
               label="T3 Connect"
-              value={isSignedIn ? "Manage" : "Sign in"}
+              value={isSignedIn ? "View" : "Sign in"}
               onPress={openT3ConnectAccount}
             />
           </SettingsSection>

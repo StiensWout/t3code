@@ -1,27 +1,15 @@
-import { findErrorTraceId } from "@t3tools/client-runtime/errors";
-import {
-  isAtomCommandInterrupted,
-  squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
-import type { EnvironmentId } from "@t3tools/contracts";
 import type { RelayClientEnvironmentRecord } from "@t3tools/contracts/relay";
 import { useAuth } from "@clerk/expo";
 import { StackActions, useNavigation } from "@react-navigation/native";
-import { useLayoutEffect, useRef, useState } from "react";
-import { Alert, Platform, Pressable, RefreshControl, ScrollView, View } from "react-native";
+import { useLayoutEffect } from "react";
+import { Platform, RefreshControl, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AndroidScreenHeader } from "../../components/AndroidScreenHeader";
 import { AppText as Text } from "../../components/AppText";
-import { showConfirmDialog } from "../../components/ConfirmDialogHost";
-import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
-import {
-  deregisterManagedRelayEnvironmentCommand,
-  useManagedRelayEnvironments,
-} from "../cloud/managedRelayState";
+import { useManagedRelayEnvironments } from "../cloud/managedRelayState";
 import { hasCloudPublicConfig } from "../cloud/publicConfig";
-import { useAtomCommand } from "../../state/use-atom-command";
 
 const linkedAtFormatter = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
 
@@ -59,98 +47,7 @@ function ConfiguredSettingsT3ConnectRouteScreen() {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const environmentsState = useManagedRelayEnvironments();
-  const deregisterEnvironment = useAtomCommand(deregisterManagedRelayEnvironmentCommand, {
-    reportFailure: false,
-  });
-  const mutationPendingRef = useRef(false);
-  const [deregisteringEnvironmentId, setDeregisteringEnvironmentId] =
-    useState<EnvironmentId | null>(null);
-  const [removedEnvironments, setRemovedEnvironments] = useState<{
-    readonly accountId: string | null;
-    readonly linkedAtById: ReadonlyMap<EnvironmentId, string>;
-  }>({ accountId: null, linkedAtById: new Map() });
-
-  const deregister = async (environment: RelayClientEnvironmentRecord) => {
-    const accountId = environmentsState.accountId;
-    if (!accountId || mutationPendingRef.current) return;
-
-    mutationPendingRef.current = true;
-    setDeregisteringEnvironmentId(environment.environmentId);
-    const result = await deregisterEnvironment({
-      accountId,
-      environmentId: environment.environmentId,
-    });
-    mutationPendingRef.current = false;
-    setDeregisteringEnvironmentId(null);
-
-    if (result._tag === "Success") {
-      setRemovedEnvironments((current) => {
-        const linkedAtById = new Map(current.accountId === accountId ? current.linkedAtById : []);
-        linkedAtById.set(environment.environmentId, environment.linkedAt);
-        return { accountId, linkedAtById };
-      });
-      environmentsState.refresh();
-      Alert.alert(
-        "Server deregistered",
-        `${environment.label} no longer has T3 Connect access. A host space is now available.`,
-      );
-      return;
-    }
-    if (isAtomCommandInterrupted(result)) return;
-
-    const cause = squashAtomCommandFailure(result);
-    const message = cause instanceof Error ? cause.message : "Could not deregister the server.";
-    const traceId = findErrorTraceId(cause);
-    console.error("[t3-connect] Could not deregister environment", {
-      environmentId: environment.environmentId,
-      message,
-      traceId,
-      cause,
-    });
-    Alert.alert(
-      "Could not deregister server",
-      message,
-      traceId
-        ? [
-            { text: "Dismiss", style: "cancel" },
-            {
-              text: "Copy trace ID",
-              onPress: () => copyTextWithHaptic(traceId, { target: "trace ID" }),
-            },
-          ]
-        : undefined,
-    );
-  };
-
-  const confirmDeregister = (environment: RelayClientEnvironmentRecord) => {
-    const title = `Deregister “${environment.label}”?`;
-    const message =
-      "This revokes this server’s T3 Connect access, removes any managed tunnel, and frees a host space. Local connections on your devices are not changed.";
-    const onConfirm = () => void deregister(environment);
-    if (Platform.OS === "ios") {
-      Alert.alert(title, message, [
-        { text: "Cancel", style: "cancel" },
-        { text: "Deregister", style: "destructive", onPress: onConfirm },
-      ]);
-      return;
-    }
-    showConfirmDialog({
-      title,
-      message,
-      confirmText: "Deregister",
-      destructive: true,
-      onConfirm,
-    });
-  };
-
-  const removedEnvironmentLinkedAt =
-    removedEnvironments.accountId === environmentsState.accountId
-      ? removedEnvironments.linkedAtById
-      : new Map<EnvironmentId, string>();
-  const environments = (environmentsState.data ?? []).filter(
-    (environment) =>
-      removedEnvironmentLinkedAt.get(environment.environmentId) !== environment.linkedAt,
-  );
+  const environments = environmentsState.data ?? [];
   const isSignedOut = isAuthLoaded && !isSignedIn;
   const isAccountLoading = !isSignedOut && environmentsState.accountId === null;
   const isInitialLoad =
@@ -199,7 +96,7 @@ function ConfiguredSettingsT3ConnectRouteScreen() {
 
         {isSignedOut ? (
           <Text className="border-y border-border py-6 text-sm text-foreground-muted">
-            Sign in to T3 Connect to manage account environments.
+            Sign in to T3 Connect to view account environments.
           </Text>
         ) : isAccountLoading || isInitialLoad ? (
           <Text className="border-y border-border py-6 text-sm text-foreground-muted">
@@ -212,28 +109,13 @@ function ConfiguredSettingsT3ConnectRouteScreen() {
                 key={environment.environmentId}
                 className={index === 0 ? "py-4" : "border-t border-border py-4"}
               >
-                <View className="flex-row items-center gap-4">
-                  <View className="min-w-0 flex-1">
-                    <Text className="text-base font-t3-medium text-foreground" numberOfLines={1}>
-                      {environment.label}
-                    </Text>
-                    <Text className="mt-1 text-sm text-foreground-muted" numberOfLines={1}>
-                      {linkedAtLabel(environment.linkedAt)} · {endpointLabel(environment)}
-                    </Text>
-                  </View>
-                  <Pressable
-                    accessibilityLabel={`Deregister ${environment.label}`}
-                    accessibilityRole="button"
-                    disabled={deregisteringEnvironmentId !== null}
-                    className="px-2 py-2 disabled:opacity-40"
-                    onPress={() => confirmDeregister(environment)}
-                  >
-                    <Text className="font-t3-medium text-danger-foreground">
-                      {deregisteringEnvironmentId === environment.environmentId
-                        ? "Deregistering…"
-                        : "Deregister"}
-                    </Text>
-                  </Pressable>
+                <View className="min-w-0">
+                  <Text className="text-base font-t3-medium text-foreground" numberOfLines={1}>
+                    {environment.label}
+                  </Text>
+                  <Text className="mt-1 text-sm text-foreground-muted" numberOfLines={1}>
+                    {linkedAtLabel(environment.linkedAt)} · {endpointLabel(environment)}
+                  </Text>
                 </View>
               </View>
             ))}
