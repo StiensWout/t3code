@@ -271,6 +271,7 @@ function ThemeLibraryCard({
                                   >
                                     <span className="pointer-events-none scale-[0.43]">
                                       <ThemePreviewCircle
+                                        compact
                                         colors={preview.colors}
                                         mode={preview.mode}
                                       />
