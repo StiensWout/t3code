@@ -123,19 +123,6 @@ function getThemePreviewStyle(
   };
 }
 
-// Miniature variant options need crisp, explicit palette regions. Scaling the
-// full blurred preview down makes related themes with a shared accent look the
-// same even when their canvas and surface colors differ.
-function getCompactThemePreviewStyle(colors: ThemeCardPreviewColors): CSSProperties {
-  return {
-    backgroundColor: colors.canvas,
-    backgroundImage: [
-      `radial-gradient(circle at 70% 28%, ${colors.accent} 0 15%, transparent 17%)`,
-      `linear-gradient(135deg, transparent 0 57%, ${colors.messageSurface} 59% 75%, ${colors.sidebar} 77%)`,
-    ].join(", "),
-  };
-}
-
 // The gradient halves of each ball can match the card surface, so every ball
 // carries a faint mode-appropriate inner ring to keep its silhouette legible.
 function themePreviewEdgeShadow(mode: ThemeAppearance): string {
@@ -145,11 +132,9 @@ function themePreviewEdgeShadow(mode: ThemeAppearance): string {
 }
 
 export function ThemePreviewCircle({
-  compact = false,
   colors,
   mode,
 }: {
-  compact?: boolean;
   colors: ThemeCardPreviewColors;
   mode: ThemeAppearance;
 }) {
@@ -160,11 +145,8 @@ export function ThemePreviewCircle({
       style={{ boxShadow: themePreviewEdgeShadow(mode) }}
     >
       <span
-        className={cn(
-          "absolute inset-0 rounded-full",
-          compact ? "scale-100" : "scale-110 blur-[3px]",
-        )}
-        style={compact ? getCompactThemePreviewStyle(colors) : getThemePreviewStyle(colors, mode)}
+        className="absolute inset-0 scale-110 rounded-full blur-[3px]"
+        style={getThemePreviewStyle(colors, mode)}
       />
     </span>
   );
