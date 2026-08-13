@@ -1658,6 +1658,10 @@ describe("AcpAdapterV2", () => {
       const sessionUpdateHandlers: Array<
         Parameters<RuntimeService["handleSessionUpdate"]>[0] | undefined
       > = [];
+      const backgroundMutationHandlers: Array<
+        AcpAdapterV2ExtensionContext["applyBackgroundTaskMutation"] | undefined
+      > = [];
+      let registeredExtensionOrdinal = 0;
       let runtimeOrdinalSeen = 0;
       const makeRuntime = makeMockRuntime({
         childProcessSpawner,
@@ -1691,11 +1695,19 @@ describe("AcpAdapterV2", () => {
         flavor: {
           driver: ACP_TEST_DRIVER,
           capabilities: AcpProviderCapabilitiesV2,
+          enablePostSettleContinuation: true,
+          registerExtensions: (context) =>
+            Effect.sync(() => {
+              backgroundMutationHandlers[registeredExtensionOrdinal] =
+                context.applyBackgroundTaskMutation;
+              registeredExtensionOrdinal += 1;
+            }),
           makeRuntime,
         },
         fileSystem,
         idAllocator,
         serverConfig,
+        continuationRequests: { offer: () => Effect.void },
       });
       const threadId = ThreadId.make("thread-acp-rollback-retry-generation");
       const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
@@ -1710,6 +1722,10 @@ describe("AcpAdapterV2", () => {
         modelSelection,
         runtimePolicy,
       });
+      if (runtime.hasPendingBackgroundWork === undefined) {
+        return yield* Effect.die("ACP runtime must expose background work state");
+      }
+      const hasPendingBackgroundWork = runtime.hasPendingBackgroundWork;
       const events = yield* Queue.unbounded<ProviderAdapterV2Event>();
       yield* runtime.events.pipe(
         Stream.runForEach((event) => Queue.offer(events, event)),
@@ -1733,7 +1749,9 @@ describe("AcpAdapterV2", () => {
 
       assert.equal(runtimeOrdinalSeen, 3);
       const failedReplacementHandler = sessionUpdateHandlers[1];
+      const failedBackgroundMutationHandler = backgroundMutationHandlers[1];
       assert.isDefined(failedReplacementHandler);
+      assert.isDefined(failedBackgroundMutationHandler);
       while (Option.isSome(yield* Queue.poll(events))) {
         // Discard setup events before exercising the stale callback.
       }
@@ -1745,6 +1763,115 @@ describe("AcpAdapterV2", () => {
         },
       });
       assert.isTrue(Option.isNone(yield* Queue.poll(events)));
+      yield* failedBackgroundMutationHandler!({
+        sessionId: "mock-session-3",
+        taskId: "stale-failed-replacement-task",
+        status: "running",
+      });
+      assert.isFalse(yield* hasPendingBackgroundWork);
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
+  it.effect("keeps the original ACP session usable when rollback replacement fails", () =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const idAllocator = yield* IdAllocatorV2;
+      const path = yield* Path.Path;
+      const serverConfig = yield* ServerConfig;
+      const mockAgentPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+      const makeRuntime = makeMockRuntime({
+        childProcessSpawner,
+        mockAgentPath,
+        wrapRuntime: (runtime, runtimeOrdinal) => ({
+          ...runtime,
+          ...(runtimeOrdinal > 1
+            ? {
+                start: () =>
+                  Effect.fail(
+                    new EffectAcpErrors.AcpTransportError({
+                      detail: "Forced rollback replacement failure",
+                      cause: "test",
+                    }),
+                  ),
+              }
+            : {}),
+        }),
+      });
+      const instanceId = ProviderInstanceId.make("acp-test-rollback-failure-compensation");
+      const adapter = makeAcpAdapterV2({
+        crypto: yield* Crypto.Crypto,
+        instanceId,
+        flavor: {
+          driver: ACP_TEST_DRIVER,
+          capabilities: AcpProviderCapabilitiesV2,
+          makeRuntime,
+        },
+        fileSystem,
+        idAllocator,
+        serverConfig,
+      });
+      const threadId = ThreadId.make("thread-acp-rollback-failure-compensation");
+      const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+      });
+      const modelSelection = { instanceId, model: "default" } as const;
+      const runtime = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make(
+          "provider-session-acp-rollback-failure-compensation",
+        ),
+        modelSelection,
+        runtimePolicy,
+      });
+      const events = yield* Queue.unbounded<ProviderAdapterV2Event>();
+      yield* runtime.events.pipe(
+        Stream.runForEach((event) => Queue.offer(events, event)),
+        Effect.forkScoped,
+      );
+      const providerThread = yield* runtime.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy,
+      });
+
+      const rollback = yield* runtime
+        .rollbackThread({
+          providerThread,
+          providerThreadTurns: [],
+          target: {
+            type: "thread_start",
+            checkpointId: CheckpointId.make("checkpoint-acp-rollback-failure-compensation"),
+            appRunOrdinal: 0,
+          },
+        })
+        .pipe(Effect.result);
+      assert.equal(rollback._tag, "Failure");
+
+      yield* runtime.startTurn(
+        makeTurnInput({
+          threadId,
+          providerThread,
+          instanceId,
+          runtimePolicy,
+          now: yield* DateTime.now,
+        }),
+      );
+      const providerTurnId = idAllocator.derive.providerTurn({
+        driver: ACP_TEST_DRIVER,
+        nativeTurnId: `${providerThread.nativeThreadRef?.nativeId}:turn:1`,
+      });
+      while (true) {
+        const event = yield* Queue.take(events);
+        if (event.type === "turn.terminal" && event.providerTurnId === providerTurnId) {
+          assert.equal(event.status, "completed");
+          break;
+        }
+      }
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 

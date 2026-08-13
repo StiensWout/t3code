@@ -204,109 +204,116 @@ export const makeAcpClientTerminals = (
 
     const create: AcpClientTerminals["create"] = (request) =>
       creationPermit.withPermit(
-        Effect.gen(function* () {
-          const liveCount = Array.from(terminals.values()).filter(
-            (terminal) => !terminal.released && terminal.exitStatus === undefined,
-          ).length;
-          const unreleasedCount = Array.from(terminals.values()).filter(
-            (terminal) => !terminal.released,
-          ).length;
-          if (unreleasedCount >= MAX_UNRELEASED_TERMINALS) {
-            return yield* terminalRequestError(
-              `ACP terminal/create exceeded the limit of ${MAX_UNRELEASED_TERMINALS} unreleased terminals.`,
+        Effect.uninterruptibleMask((restore) =>
+          Effect.gen(function* () {
+            const liveCount = Array.from(terminals.values()).filter(
+              (terminal) => !terminal.released && terminal.exitStatus === undefined,
+            ).length;
+            const unreleasedCount = Array.from(terminals.values()).filter(
+              (terminal) => !terminal.released,
+            ).length;
+            if (unreleasedCount >= MAX_UNRELEASED_TERMINALS) {
+              return yield* terminalRequestError(
+                `ACP terminal/create exceeded the limit of ${MAX_UNRELEASED_TERMINALS} unreleased terminals.`,
+              );
+            }
+            if (liveCount >= MAX_LIVE_TERMINALS) {
+              return yield* terminalRequestError(
+                `ACP terminal/create exceeded the limit of ${MAX_LIVE_TERMINALS} concurrent terminals.`,
+              );
+            }
+            const requestEnvironment = Object.fromEntries(
+              (request.env ?? []).map((variable) => [variable.name, variable.value] as const),
             );
-          }
-          if (liveCount >= MAX_LIVE_TERMINALS) {
-            return yield* terminalRequestError(
-              `ACP terminal/create exceeded the limit of ${MAX_LIVE_TERMINALS} concurrent terminals.`,
-            );
-          }
-          const requestEnvironment = Object.fromEntries(
-            (request.env ?? []).map((variable) => [variable.name, variable.value] as const),
-          );
-          const environment =
-            options.environment === undefined && (request.env?.length ?? 0) === 0
-              ? undefined
-              : { ...options.environment, ...requestEnvironment };
-          // Each terminal owns a scope so the spawned process is reliably reaped:
-          // closing the scope kills a still-running command and frees the handle.
-          const terminalScope = yield* Scope.make();
-          const child = yield* options.spawner
-            .spawn(
-              acpTerminalCommand({
-                request,
-                defaultCwd: options.defaultCwd,
-                environment,
-                forceKillAfter: options.forceKillAfter,
-              }),
-            )
-            .pipe(
-              Effect.provideService(Scope.Scope, terminalScope),
-              Effect.mapError((cause) =>
-                terminalRequestError(
-                  `Could not start terminal command '${request.command}'.`,
-                  cause,
-                ),
-              ),
-              Effect.tapError(() => Scope.close(terminalScope, Exit.void)),
-            );
-
-          const terminalId = `t3-term-${nextTerminalNumber}`;
-          nextTerminalNumber += 1;
-          const record: ManagedAcpTerminal = {
-            terminalId,
-            sessionId: request.sessionId,
-            buffer: {
-              chunks: [],
-              bytes: 0,
-              truncated: false,
-              limit: Math.min(
-                request.outputByteLimit ?? DEFAULT_OUTPUT_BYTE_LIMIT,
-                MAX_OUTPUT_BYTE_LIMIT,
-              ),
-            },
-            exit: yield* Deferred.make<EffectAcpSchema.WaitForTerminalExitResponse>(),
-            kill: child.kill().pipe(Effect.ignore),
-            dispose: Scope.close(terminalScope, Exit.void).pipe(Effect.ignore),
-            exitStatus: undefined,
-            released: false,
-          };
-          terminals.set(terminalId, record);
-
-          const pump = (stream: typeof child.stdout) =>
-            stream.pipe(
-              Stream.runForEach((chunk) =>
-                Effect.sync(() => {
-                  appendOutput(record.buffer, chunk);
-                  enforceTotalOutputLimit();
-                }),
-              ),
-              Effect.ignore,
-            );
-          const stdoutPump = yield* Effect.forkDetach(pump(child.stdout));
-          const stderrPump = yield* Effect.forkDetach(pump(child.stderr));
-          yield* Effect.forkDetach(
-            child.exitCode.pipe(
-              Effect.match({
-                onFailure: (error) => ({ exitCode: null, signal: terminalExitSignal(error) }),
-                onSuccess: (code) => ({ exitCode: Number(code), signal: null }),
-              }),
-              Effect.flatMap((status) =>
-                Effect.all([Fiber.join(stdoutPump), Fiber.join(stderrPump)], {
-                  discard: true,
-                }).pipe(
-                  Effect.andThen(
-                    Effect.sync(() => {
-                      record.exitStatus = status;
-                    }),
+            const environment =
+              options.environment === undefined && (request.env?.length ?? 0) === 0
+                ? undefined
+                : { ...options.environment, ...requestEnvironment };
+            // Each terminal owns a scope so the spawned process is reliably reaped:
+            // closing the scope kills a still-running command and frees the handle.
+            const terminalScope = yield* Scope.make();
+            const child = yield* restore(
+              options.spawner
+                .spawn(
+                  acpTerminalCommand({
+                    request,
+                    defaultCwd: options.defaultCwd,
+                    environment,
+                    forceKillAfter: options.forceKillAfter,
+                  }),
+                )
+                .pipe(
+                  Effect.provideService(Scope.Scope, terminalScope),
+                  Effect.mapError((cause) =>
+                    terminalRequestError(
+                      `Could not start terminal command '${request.command}'.`,
+                      cause,
+                    ),
                   ),
-                  Effect.andThen(Deferred.succeed(record.exit, status)),
+                ),
+            ).pipe(
+              Effect.onExit((exit) =>
+                Exit.isFailure(exit) ? Scope.close(terminalScope, Exit.void) : Effect.void,
+              ),
+            );
+
+            const terminalId = `t3-term-${nextTerminalNumber}`;
+            nextTerminalNumber += 1;
+            const record: ManagedAcpTerminal = {
+              terminalId,
+              sessionId: request.sessionId,
+              buffer: {
+                chunks: [],
+                bytes: 0,
+                truncated: false,
+                limit: Math.min(
+                  request.outputByteLimit ?? DEFAULT_OUTPUT_BYTE_LIMIT,
+                  MAX_OUTPUT_BYTE_LIMIT,
+                ),
+              },
+              exit: yield* Deferred.make<EffectAcpSchema.WaitForTerminalExitResponse>(),
+              kill: child.kill().pipe(Effect.ignore),
+              dispose: Scope.close(terminalScope, Exit.void).pipe(Effect.ignore),
+              exitStatus: undefined,
+              released: false,
+            };
+            terminals.set(terminalId, record);
+
+            const pump = (stream: typeof child.stdout) =>
+              stream.pipe(
+                Stream.runForEach((chunk) =>
+                  Effect.sync(() => {
+                    appendOutput(record.buffer, chunk);
+                    enforceTotalOutputLimit();
+                  }),
+                ),
+                Effect.ignore,
+              );
+            const stdoutPump = yield* Effect.forkDetach(pump(child.stdout));
+            const stderrPump = yield* Effect.forkDetach(pump(child.stderr));
+            yield* Effect.forkDetach(
+              child.exitCode.pipe(
+                Effect.match({
+                  onFailure: (error) => ({ exitCode: null, signal: terminalExitSignal(error) }),
+                  onSuccess: (code) => ({ exitCode: Number(code), signal: null }),
+                }),
+                Effect.flatMap((status) =>
+                  Effect.all([Fiber.join(stdoutPump), Fiber.join(stderrPump)], {
+                    discard: true,
+                  }).pipe(
+                    Effect.andThen(
+                      Effect.sync(() => {
+                        record.exitStatus = status;
+                      }),
+                    ),
+                    Effect.andThen(Deferred.succeed(record.exit, status)),
+                  ),
                 ),
               ),
-            ),
-          );
-          return { terminalId };
-        }),
+            );
+            return { terminalId };
+          }),
+        ),
       );
 
     const output: AcpClientTerminals["output"] = (request) =>

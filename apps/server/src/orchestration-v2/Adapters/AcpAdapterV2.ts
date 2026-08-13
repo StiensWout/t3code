@@ -1366,6 +1366,14 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
         const runtimeRestartRequired = yield* Ref.make(false);
         const runtimeTeardownState = yield* Ref.make<AcpRuntimeTeardownState>({ _tag: "Idle" });
         const runtimeCallbackGeneration = yield* Ref.make(0);
+        const runtimeCallbackGenerationCounter = yield* Ref.make(0);
+        const allocateRuntimeCallbackGeneration = Ref.updateAndGet(
+          runtimeCallbackGenerationCounter,
+          (generation) => generation + 1,
+        );
+        const advanceRuntimeCallbackGeneration = allocateRuntimeCallbackGeneration.pipe(
+          Effect.tap((generation) => Ref.set(runtimeCallbackGeneration, generation)),
+        );
         const runtimeCallbackPermit = yield* Semaphore.make(1);
         const runtimeTransitionPermit = yield* Semaphore.make(1);
         const nativeResponseAcknowledgements = yield* Ref.make(
@@ -1569,7 +1577,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
         });
         const closeNativeTransport = runtimeCallbackPermit.withPermit(
           Effect.gen(function* () {
-            yield* Ref.update(runtimeCallbackGeneration, (generation) => generation + 1);
+            yield* advanceRuntimeCallbackGeneration;
             const acknowledgements = yield* Ref.getAndSet(
               nativeResponseAcknowledgements,
               new Map(),
@@ -4232,8 +4240,22 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           }
         });
 
-        const wireAcpRuntimeHandlers = Effect.fnUntraced(function* () {
-          const handlerGeneration = yield* Ref.get(runtimeCallbackGeneration);
+        const wireAcpRuntimeTerminalHandlers = Effect.fnUntraced(function* (
+          targetRuntime: AcpSessionRuntime.AcpSessionRuntime["Service"],
+        ) {
+          if (clientTerminals === undefined) return;
+          yield* targetRuntime.handleCreateTerminal(clientTerminals.create);
+          yield* targetRuntime.handleTerminalOutput(clientTerminals.output);
+          yield* targetRuntime.handleTerminalWaitForExit(clientTerminals.waitForExit);
+          yield* targetRuntime.handleTerminalKill(clientTerminals.kill);
+          yield* targetRuntime.handleTerminalRelease(clientTerminals.release);
+        });
+
+        const wireAcpRuntimeHandlers = Effect.fnUntraced(function* (
+          targetRuntime: AcpSessionRuntime.AcpSessionRuntime["Service"],
+          handlerGeneration: number,
+          wireTerminalHandlers = true,
+        ) {
           const requestUserInput = (
             request: AcpAdapterV2UserInputRequest,
             requestContext: EffectAcpProtocol.AcpRequestContext,
@@ -4243,20 +4265,14 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               Effect.succeed(request),
               requestContext.requestId,
             );
-          yield* runtime.handleReadTextFile((request) =>
+          yield* targetRuntime.handleReadTextFile((request) =>
             acpReadTextFile(options.fileSystem, request),
           );
-          yield* runtime.handleWriteTextFile((request) =>
+          yield* targetRuntime.handleWriteTextFile((request) =>
             acpWriteTextFile(options.fileSystem, request),
           );
-          if (clientTerminals !== undefined) {
-            yield* runtime.handleCreateTerminal(clientTerminals.create);
-            yield* runtime.handleTerminalOutput(clientTerminals.output);
-            yield* runtime.handleTerminalWaitForExit(clientTerminals.waitForExit);
-            yield* runtime.handleTerminalKill(clientTerminals.kill);
-            yield* runtime.handleTerminalRelease(clientTerminals.release);
-          }
-          yield* runtime.handleSessionUpdate((rawNotification) =>
+          if (wireTerminalHandlers) yield* wireAcpRuntimeTerminalHandlers(targetRuntime);
+          yield* targetRuntime.handleSessionUpdate((rawNotification) =>
             runRuntimeCallbackAtGeneration(
               handlerGeneration,
               Effect.gen(function* () {
@@ -4286,7 +4302,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               ),
             ),
           );
-          yield* runtime.handleRequestPermission((params, requestContext) =>
+          yield* targetRuntime.handleRequestPermission((params, requestContext) =>
             Effect.gen(function* () {
               const transportRequestId = requestContext.requestId;
               const admitted = yield* runRuntimeCallbackAtGeneration(
@@ -4394,7 +4410,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               ),
             ),
           );
-          yield* runtime.handleElicitation((params, requestContext) =>
+          yield* targetRuntime.handleElicitation((params, requestContext) =>
             Effect.gen(function* () {
               const transportRequestId = requestContext.requestId;
               if (
@@ -4508,18 +4524,21 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           );
           if (flavor.registerExtensions !== undefined) {
             yield* flavor.registerExtensions({
-              runtime,
+              runtime: targetRuntime,
               requestUserInput,
               applyBackgroundTaskMutation: (mutation) =>
-                Effect.gen(function* () {
-                  // Direct Stop quarantine: drop residual task lifecycle from
-                  // the stopped run instead of mutating wake machinery.
-                  if (yield* Ref.get(stoppedRunQuarantine)) return;
-                  // Root-session tasks only: a cancelled subagent's re-run in
-                  // its child session must not gate root wake machinery.
-                  if ((yield* Ref.get(activeSessionId)) !== mutation.sessionId) return;
-                  yield* applyLateBackgroundMutation(mutation.sessionId, mutation);
-                }),
+                runRuntimeCallbackAtGeneration(
+                  handlerGeneration,
+                  Effect.gen(function* () {
+                    // Direct Stop quarantine: drop residual task lifecycle from
+                    // the stopped run instead of mutating wake machinery.
+                    if (yield* Ref.get(stoppedRunQuarantine)) return;
+                    // Root-session tasks only: a cancelled subagent's re-run in
+                    // its child session must not gate root wake machinery.
+                    if ((yield* Ref.get(activeSessionId)) !== mutation.sessionId) return;
+                    yield* applyLateBackgroundMutation(mutation.sessionId, mutation);
+                  }),
+                ).pipe(Effect.asVoid),
             });
           }
         });
@@ -4541,7 +4560,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
         const startAcpRuntime = Effect.fnUntraced(function* (resumeSessionId?: string) {
           const startup = Effect.gen(function* () {
             yield* spawnAcpRuntime(resumeSessionId);
-            yield* wireAcpRuntimeHandlers();
+            yield* wireAcpRuntimeHandlers(runtime, yield* Ref.get(runtimeCallbackGeneration));
             return yield* runtime.start();
           });
           return yield* flavor.withRuntimeStartup?.(startup) ?? startup;
@@ -4549,7 +4568,78 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
 
         const restartAcpRuntime = Effect.fnUntraced(function* () {
           yield* spawnAcpRuntime();
-          yield* wireAcpRuntimeHandlers();
+          yield* wireAcpRuntimeHandlers(runtime, yield* Ref.get(runtimeCallbackGeneration));
+        });
+
+        const startReplacementAcpRuntime = Effect.fnUntraced(function* () {
+          const previousScope = runtimeScope;
+          const previousGeneration = yield* Ref.get(runtimeCallbackGeneration);
+          yield* runtimeCallbackPermit.withPermit(awaitAdmittedNativeResponses);
+
+          // Keep the original generation active until the candidate has
+          // completed session startup. A failed candidate therefore cannot
+          // suppress termination or background callbacks from the live session.
+          const replacementGeneration = yield* allocateRuntimeCallbackGeneration;
+          const replacementScope = yield* Scope.make();
+          const startup = Effect.gen(function* () {
+            const replacementRuntime = yield* flavor
+              .makeRuntime(makeRuntimeInput(replacementGeneration))
+              .pipe(
+                Effect.provideService(Scope.Scope, replacementScope),
+                Effect.provideService(Crypto.Crypto, options.crypto),
+              );
+            // Candidate startup may fail. Defer terminal handlers until it has
+            // succeeded so the candidate cannot create session-global handles
+            // that outlive its replacement scope.
+            yield* wireAcpRuntimeHandlers(replacementRuntime, replacementGeneration, false);
+            const started = yield* replacementRuntime.start();
+            return { replacementRuntime, started };
+          });
+          const replacementExit = yield* Effect.exit(
+            (flavor.withRuntimeStartup?.(startup) ?? startup).pipe(
+              Effect.onInterrupt(() =>
+                Scope.close(replacementScope, Exit.void).pipe(Effect.ignore),
+              ),
+            ),
+          );
+          if (Exit.isFailure(replacementExit)) {
+            yield* runtimeCallbackPermit.withPermit(
+              quarantineNativeTransportAtGeneration(replacementGeneration),
+            );
+            yield* Scope.close(replacementScope, Exit.void).pipe(Effect.ignore);
+            return yield* Effect.failCause(replacementExit.cause);
+          }
+
+          yield* runtimeCallbackPermit
+            .withPermit(
+              Effect.uninterruptible(
+                Effect.gen(function* () {
+                  yield* awaitAdmittedNativeResponses;
+                  yield* quarantineNativeTransportAtGeneration(previousGeneration);
+                  runtime = replacementExit.value.replacementRuntime;
+                  runtimeScope = replacementScope;
+                  yield* Ref.set(runtimeCallbackGeneration, replacementGeneration);
+                  yield* wireAcpRuntimeTerminalHandlers(replacementExit.value.replacementRuntime);
+                }),
+              ),
+            )
+            .pipe(
+              Effect.onInterrupt(() =>
+                Scope.close(replacementScope, Exit.void).pipe(Effect.ignore),
+              ),
+            );
+          yield* cancelPendingRuntimeRequests();
+          if (previousScope !== undefined) {
+            yield* Scope.close(previousScope, Exit.void).pipe(
+              Effect.catchCause((cause) =>
+                Effect.logError("failed to close replaced ACP runtime scope", {
+                  driver,
+                  cause,
+                }),
+              ),
+            );
+          }
+          return replacementExit.value.started;
         });
 
         const initialStart = yield* Effect.result(startAcpRuntime(input.initialNativeThreadId));
@@ -5737,10 +5827,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                                 _tag: "InProgress",
                                 completed: teardownBarrier,
                               });
-                              yield* Ref.update(
-                                runtimeCallbackGeneration,
-                                (generation) => generation + 1,
-                              );
+                              yield* advanceRuntimeCallbackGeneration;
                             }),
                           );
                           // Capture before quarantineStoppedRun clears carryover.
@@ -5793,10 +5880,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                               _tag: "InProgress",
                               completed: teardownBarrier,
                             });
-                            yield* Ref.update(
-                              runtimeCallbackGeneration,
-                              (generation) => generation + 1,
-                            );
+                            yield* advanceRuntimeCallbackGeneration;
                             yield* (
                               options.testHooks?.afterHardTeardownTransportDrained?.() ??
                                 Effect.void
@@ -6056,31 +6140,14 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                       detail: `Cannot roll back ACP provider thread ${rollbackInput.providerThread.id} while turn ${currentTurn.providerTurnId} is active`,
                     });
                   }
-                  // ACP defines no conversation truncation, so rollback replaces
-                  // the native session immediately. Returning the replacement
-                  // binding keeps the next turn runnable without loading any of
-                  // the rolled-back conversation.
+                  // ACP defines no conversation truncation, so rollback stages
+                  // a fresh native session before retiring the original.
+                  // Returning its binding keeps the next turn runnable without
+                  // loading any of the rolled-back conversation.
                   yield* awaitRuntimeTeardown();
-                  yield* Ref.set(runtimeRestartRequired, true);
-                  yield* Ref.set(activeSessionId, null);
-                  yield* Ref.set(activeSessionSetup, null);
-                  const startReplacement = runtimeCallbackPermit
-                    .withPermit(
-                      Effect.gen(function* () {
-                        yield* awaitAdmittedNativeResponses;
-                        const replacedGeneration = yield* Ref.get(runtimeCallbackGeneration);
-                        yield* quarantineNativeTransportAtGeneration(replacedGeneration);
-                        yield* Ref.update(
-                          runtimeCallbackGeneration,
-                          (generation) => generation + 1,
-                        );
-                      }),
-                    )
-                    .pipe(
-                      Effect.andThen(cancelPendingRuntimeRequests()),
-                      Effect.andThen(startAcpRuntime()),
-                    );
-                  const replacement = yield* startReplacement.pipe(Effect.retry({ times: 1 }));
+                  const replacement = yield* startReplacementAcpRuntime().pipe(
+                    Effect.retry({ times: 1 }),
+                  );
                   yield* Ref.set(runtimeRestartRequired, false);
                   yield* Ref.set(activeSessionId, replacement.sessionId);
                   yield* Ref.set(activeSessionSetup, replacement);
