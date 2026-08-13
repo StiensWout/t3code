@@ -1,0 +1,133 @@
+import type { ProviderOptionChoice, ProviderOptionDescriptor } from "@t3tools/contracts";
+import type * as EffectAcpSchema from "effect-acp/schema";
+
+import type { AcpSessionModeState } from "./AcpRuntimeModel.ts";
+
+/**
+ * Maps ACP session configuration and session modes onto T3's provider option
+ * descriptors so the existing model-options UI can drive them.
+ *
+ * Model selection stays on the dedicated model picker: `category: "model"`
+ * options are excluded here because they already surface as models. Session
+ * modes advertised through the modes API (rather than a config option) are
+ * folded into one synthetic descriptor that the ACP adapter routes to
+ * `session/set_mode`.
+ */
+
+/** Synthetic descriptor ID for agents that expose modes outside config options. */
+export const ACP_SESSION_MODE_OPTION_ID = "_t3/session-mode";
+
+const MAX_OPTION_DESCRIPTORS = 16;
+const MAX_OPTION_CHOICES = 64;
+const MAX_TEXT_LENGTH = 256;
+const MAX_DESCRIPTION_LENGTH = 1_024;
+
+const boundedText = (value: string | null | undefined, maximumLength: number): string =>
+  (value ?? "").trim().slice(0, maximumLength);
+
+function flattenSelectChoices(
+  options: EffectAcpSchema.SessionConfigSelectOptions,
+): ReadonlyArray<EffectAcpSchema.SessionConfigSelectOption> {
+  return options.flatMap((candidate) => ("value" in candidate ? [candidate] : candidate.options));
+}
+
+function selectChoices(
+  candidates: ReadonlyArray<{
+    readonly value: string;
+    readonly name: string;
+    readonly description?: string | null | undefined;
+  }>,
+): ReadonlyArray<ProviderOptionChoice> {
+  const seen = new Set<string>();
+  const choices: Array<ProviderOptionChoice> = [];
+  for (const candidate of candidates) {
+    const id = boundedText(candidate.value, MAX_TEXT_LENGTH);
+    if (id.length === 0 || seen.has(id)) continue;
+    seen.add(id);
+    const description = boundedText(candidate.description, MAX_DESCRIPTION_LENGTH);
+    choices.push({
+      id,
+      label: boundedText(candidate.name, MAX_TEXT_LENGTH) || id,
+      ...(description ? { description } : {}),
+    });
+    if (choices.length === MAX_OPTION_CHOICES) break;
+  }
+  return choices;
+}
+
+export function acpProviderOptionDescriptors(input: {
+  readonly configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption> | null | undefined;
+  readonly modeState: AcpSessionModeState | undefined;
+}): ReadonlyArray<ProviderOptionDescriptor> {
+  const descriptors: Array<ProviderOptionDescriptor> = [];
+  const seen = new Set<string>();
+  let hasModeCategory = false;
+
+  for (const option of input.configOptions ?? []) {
+    // "model" options surface as the model list; "collaboration_mode" options
+    // are driven by T3's own plan/build interaction mode in the ACP adapter.
+    if (
+      option.type !== "select" ||
+      option.category === "model" ||
+      option.category === "collaboration_mode"
+    ) {
+      continue;
+    }
+    const id = boundedText(option.id, MAX_TEXT_LENGTH);
+    if (id.length === 0 || seen.has(id)) continue;
+    const choices = selectChoices(flattenSelectChoices(option.options));
+    if (choices.length === 0) continue;
+    seen.add(id);
+    if (option.category === "mode") hasModeCategory = true;
+    const description = boundedText(option.description, MAX_DESCRIPTION_LENGTH);
+    const currentValue = boundedText(option.currentValue, MAX_TEXT_LENGTH);
+    descriptors.push({
+      id,
+      label: boundedText(option.name, MAX_TEXT_LENGTH) || id,
+      ...(description ? { description } : {}),
+      type: "select",
+      options: choices,
+      ...(currentValue && choices.some((choice) => choice.id === currentValue)
+        ? { currentValue }
+        : {}),
+    });
+    if (descriptors.length === MAX_OPTION_DESCRIPTORS) return descriptors;
+  }
+
+  const modeState = input.modeState;
+  if (modeState !== undefined && !hasModeCategory) {
+    const choices = selectChoices(
+      modeState.availableModes.map((mode) => ({
+        value: mode.id,
+        name: mode.name,
+        description: mode.description,
+      })),
+    );
+    const currentValue = boundedText(modeState.currentModeId, MAX_TEXT_LENGTH);
+    // Some agents mirror one knob through both the modes API and a config
+    // option (codex-acp advertises its thinking levels as modes too). Skip
+    // the synthetic descriptor when an existing descriptor already exposes
+    // the same choice set, so the composer shows the knob once.
+    const modeChoiceIds = new Set(choices.map((choice) => choice.id));
+    const duplicatesExistingDescriptor = descriptors.some(
+      (descriptor) =>
+        descriptor.type === "select" &&
+        descriptor.options.length === choices.length &&
+        descriptor.options.every((option) => modeChoiceIds.has(option.id)),
+    );
+    if (choices.length > 1 && !duplicatesExistingDescriptor) {
+      descriptors.push({
+        id: ACP_SESSION_MODE_OPTION_ID,
+        label: "Mode",
+        description: "Session mode advertised by the ACP agent.",
+        type: "select",
+        options: choices,
+        ...(currentValue && choices.some((choice) => choice.id === currentValue)
+          ? { currentValue }
+          : {}),
+      });
+    }
+  }
+
+  return descriptors.slice(0, MAX_OPTION_DESCRIPTORS);
+}

@@ -57,9 +57,34 @@ automatic scan. Starting a real conversation takes priority over this disposable
 cancels or skips a same-agent scan while the conversation's ACP process is starting.
 
 The provider snapshot exposes model choices advertised through ACP's session model state or model
-configuration option, just like model discovery for built-in providers. Discovered models are not
-written into settings. An authenticated agent may still advertise no models, in which case T3 Code
-keeps the existing custom model controls.
+configuration option, just like model discovery for built-in providers. When an agent advertises a
+model configuration option, its base models are the model list; legacy model-times-reasoning
+combinations from the session models API are collapsed instead of duplicating the picker.
+Discovered models are not written into settings. An authenticated agent may still advertise no
+models, in which case T3 Code keeps the existing custom model controls.
+
+A successful discovery scan is reused for a while instead of re-running on every periodic health
+refresh, so configured agents are not repeatedly spawned in the background. Failed or
+unauthenticated scans always retry on the next refresh.
+
+Other session configuration the agent advertises (reasoning effort, approval mode, custom selects)
+appears in the composer's model options menu, exactly like built-in provider options. Two
+categories are integrated instead of listed: model selection stays on the model picker, and an
+agent-advertised plan/build collaboration mode follows T3 Code's own Plan and Build toggle.
+Agents that expose session modes without configuration options get a single **Mode** option with
+the same behavior.
+
+Checkpoint rollback works on ACP threads with reset semantics: ACP defines no conversation
+truncation, so T3 Code restores the checkpointed workspace state and the next turn starts a fresh
+agent session. The agent does not retain conversation context from before the checkpoint.
+
+## Agent Capabilities
+
+T3 Code advertises the ACP client `fs` and `terminal` capabilities to registry agents. Agents that
+prefer client-mediated file access read and write text files through T3 Code, and agents that run
+commands through client terminals execute them on the connected server with the provider
+instance's environment. Embedded terminal output appears inside the agent's tool call in the
+thread. Terminals are killed when the session closes.
 
 Commands advertised through ACP's `available_commands_update` stay current while a normal agent
 session is running. Type `/` to see regular commands under **Provider**. Advertised command names
@@ -67,6 +92,10 @@ that begin with `$` appear in T3 Code's `$` skill menu instead, with the prefix 
 display name and restored when selected. This works for any ACP agent that follows that convention.
 ACP does not define a separate portable installed-skills inventory, so T3 Code can only list skills
 the agent advertises as user-invocable `$` commands.
+
+When an agent advertises a terminal-based authentication method, the provider card shows the exact
+command to run in a thread terminal on that environment. For environment-variable methods, the
+card names the variables to set under the instance's environment settings.
 
 For Codex ACP, credentials belong to the Codex CLI on the server. Run `codex login status` there to
 check them, or `codex login --device-auth` to sign in with a ChatGPT subscription.

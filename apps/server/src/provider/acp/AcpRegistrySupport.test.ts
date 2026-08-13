@@ -18,7 +18,7 @@ import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import * as TestClock from "effect/testing/TestClock";
 
 import {
-  makeAcpRegistryResolver,
+  makeAcpRegistryCatalog,
   resolveAcpRegistryDistribution,
   resolveAcpRegistryPlatformTarget,
   type AcpRegistryAgent,
@@ -134,7 +134,7 @@ describe("AcpRegistrySupport", () => {
       const commandPath = `${cacheDir}/example-agent`;
       yield* fileSystem.writeFileString(commandPath, "#!/bin/sh\n");
       yield* fileSystem.chmod(commandPath, 0o755);
-      const resolver = yield* makeAcpRegistryResolver({ cacheDir, registryUrl });
+      const resolver = yield* makeAcpRegistryCatalog({ cacheDir, registryUrl });
       const resolved = yield* resolver.resolve(settings({ commandPath }), "/workspace", {
         HOST_VALUE: "host",
         OVERRIDE_ME: "host",
@@ -181,7 +181,7 @@ describe("AcpRegistrySupport", () => {
       yield* fileSystem.writeFileString(runner, "#!/bin/sh\n");
       yield* fileSystem.chmod(runner, 0o755);
       yield* fileSystem.symlink(runner, runnerLink);
-      const resolver = yield* makeAcpRegistryResolver({ cacheDir, registryUrl });
+      const resolver = yield* makeAcpRegistryCatalog({ cacheDir, registryUrl });
 
       const resolved = yield* resolver.resolve(settings(), "/workspace", {
         PATH: visibleBin,
@@ -219,7 +219,7 @@ describe("AcpRegistrySupport", () => {
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
         prefix: "t3-acp-registry-install-",
       });
-      const resolver = yield* makeAcpRegistryResolver({ cacheDir, registryUrl });
+      const resolver = yield* makeAcpRegistryCatalog({ cacheDir, registryUrl });
       const first = yield* resolver.resolve(settings(), "/workspace");
       const second = yield* resolver.resolve(settings(), "/workspace");
 
@@ -278,7 +278,7 @@ describe("AcpRegistrySupport", () => {
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
         prefix: "t3-acp-registry-search-",
       });
-      const resolver = yield* makeAcpRegistryResolver({ cacheDir, registryUrl });
+      const resolver = yield* makeAcpRegistryCatalog({ cacheDir, registryUrl });
       const result = yield* resolver.search({ query: "codex" });
 
       expect(result.agents.map((agent) => agent.id)).toEqual(["codex-acp", "other-agent"]);
@@ -316,7 +316,7 @@ describe("AcpRegistrySupport", () => {
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
         prefix: "t3-acp-registry-refresh-",
       });
-      const resolver = yield* makeAcpRegistryResolver({ cacheDir, registryUrl });
+      const resolver = yield* makeAcpRegistryCatalog({ cacheDir, registryUrl });
       yield* Effect.all(
         [resolver.search({ query: "example" }), resolver.search({ query: "example" })],
         { concurrency: "unbounded" },
@@ -354,7 +354,7 @@ describe("AcpRegistrySupport", () => {
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
         prefix: "t3-acp-registry-runner-filter-",
       });
-      const resolver = yield* makeAcpRegistryResolver({ cacheDir, registryUrl });
+      const resolver = yield* makeAcpRegistryCatalog({ cacheDir, registryUrl });
       const result = yield* resolver.search({ query: "" });
 
       expect(result.agents.map((agent) => agent.id)).toEqual(["binary-agent"]);
@@ -384,7 +384,7 @@ describe("AcpRegistrySupport", () => {
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
         prefix: "t3-acp-registry-unpinned-",
       });
-      const resolver = yield* makeAcpRegistryResolver({ cacheDir, registryUrl });
+      const resolver = yield* makeAcpRegistryCatalog({ cacheDir, registryUrl });
       const error = yield* resolver.search({ query: "" }).pipe(Effect.flip);
 
       expect(error.reason).toBe("registry_unavailable");
@@ -415,7 +415,7 @@ describe("AcpRegistrySupport", () => {
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
         prefix: "t3-acp-registry-checksum-",
       });
-      const resolver = yield* makeAcpRegistryResolver({ cacheDir, registryUrl });
+      const resolver = yield* makeAcpRegistryCatalog({ cacheDir, registryUrl });
       const error = yield* resolver.prepare({ agentId: agent.id }).pipe(Effect.flip);
 
       expect(error.reason).toBe("checksum_mismatch");
@@ -445,7 +445,7 @@ describe("AcpRegistrySupport", () => {
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
         prefix: "t3-acp-registry-runner-",
       });
-      const resolver = yield* makeAcpRegistryResolver({ cacheDir, registryUrl });
+      const resolver = yield* makeAcpRegistryCatalog({ cacheDir, registryUrl });
       const prepared = yield* resolver.prepare({ agentId: agent.id });
       expect(prepared).toEqual({
         agentId: "example-agent",
@@ -474,7 +474,7 @@ describe("AcpRegistrySupport", () => {
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
         prefix: "t3-acp-registry-missing-runner-",
       });
-      const resolver = yield* makeAcpRegistryResolver({ cacheDir, registryUrl });
+      const resolver = yield* makeAcpRegistryCatalog({ cacheDir, registryUrl });
       const error = yield* resolver.prepare({ agentId: agent.id }).pipe(Effect.flip);
 
       expect(error.reason).toBe("runner_unavailable");
@@ -505,7 +505,7 @@ describe("AcpRegistrySupport", () => {
       const registryDirectory = `${cacheDir}/acp-registry`;
       yield* fileSystem.makeDirectory(registryDirectory, { recursive: true });
       yield* fileSystem.writeFileString(`${registryDirectory}/registry.json`, makeRegistry(agent));
-      const resolver = yield* makeAcpRegistryResolver({ cacheDir, registryUrl });
+      const resolver = yield* makeAcpRegistryCatalog({ cacheDir, registryUrl });
       const resolved = yield* resolver.resolve(settings(), "/workspace");
 
       expect(resolved.spawn).toMatchObject({
@@ -539,7 +539,7 @@ describe("AcpRegistrySupport", () => {
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
         prefix: "t3-acp-registry-invalid-",
       });
-      const resolver = yield* makeAcpRegistryResolver({ cacheDir, registryUrl });
+      const resolver = yield* makeAcpRegistryCatalog({ cacheDir, registryUrl });
       const error = yield* resolver.resolve(settings(), "/workspace").pipe(Effect.flip);
 
       expect(error.reason).toBe("archive_invalid");
@@ -569,7 +569,7 @@ describe("AcpRegistrySupport", () => {
       yield* fileSystem.makeDirectory(registryDirectory, { recursive: true });
       yield* fileSystem.writeFileString(`${registryDirectory}/registry.json`, makeRegistry(agent));
 
-      const resolver = yield* makeAcpRegistryResolver({ cacheDir, registryUrl });
+      const resolver = yield* makeAcpRegistryCatalog({ cacheDir, registryUrl });
       const inspection = yield* resolver.inspect(settings());
 
       expect(inspection).toMatchObject({ status: "ready", agentId: agent.id });
@@ -594,7 +594,7 @@ describe("AcpRegistrySupport", () => {
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
         prefix: "t3-acp-registry-empty-inspect-",
       });
-      const resolver = yield* makeAcpRegistryResolver({ cacheDir, registryUrl });
+      const resolver = yield* makeAcpRegistryCatalog({ cacheDir, registryUrl });
       const error = yield* resolver.inspect(settings()).pipe(Effect.flip);
 
       expect(error.reason).toBe("registry_unavailable");
@@ -626,7 +626,7 @@ describe("AcpRegistrySupport", () => {
       yield* fileSystem.writeFileString(npxPath, "#!/bin/sh\n");
       yield* fileSystem.chmod(npxPath, 0o755);
 
-      const resolver = yield* makeAcpRegistryResolver({ cacheDir, registryUrl });
+      const resolver = yield* makeAcpRegistryCatalog({ cacheDir, registryUrl });
       const hostInspection = yield* resolver.inspect(settings());
       const providerEnvironment = { PATH: binDirectory };
       const instanceInspection = yield* resolver.inspect(settings(), providerEnvironment);
@@ -669,7 +669,7 @@ describe("AcpRegistrySupport", () => {
       yield* fileSystem.makeDirectory(fakeExecutable, { recursive: true });
       yield* fileSystem.writeFileString(`${registryDirectory}/registry.json`, makeRegistry(agent));
 
-      const resolver = yield* makeAcpRegistryResolver({ cacheDir, registryUrl });
+      const resolver = yield* makeAcpRegistryCatalog({ cacheDir, registryUrl });
       const directoryError = yield* resolver.inspect(settings()).pipe(Effect.flip);
 
       expect(directoryError.reason).toBe("archive_invalid");
@@ -708,7 +708,7 @@ describe("AcpRegistrySupport", () => {
       });
       yield* fileSystem.writeFileString(runnerCache, "{}");
 
-      const resolver = yield* makeAcpRegistryResolver({ cacheDir, registryUrl });
+      const resolver = yield* makeAcpRegistryCatalog({ cacheDir, registryUrl });
       const first = yield* resolver.uninstallManagedBinary({ agentId: "example-agent" });
       const second = yield* resolver.uninstallManagedBinary({ agentId: "example-agent" });
 
@@ -746,7 +746,7 @@ describe("AcpRegistrySupport", () => {
         const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
           prefix: "t3-acp-registry-uninstall-race-",
         });
-        const resolver = yield* makeAcpRegistryResolver({ cacheDir, registryUrl });
+        const resolver = yield* makeAcpRegistryCatalog({ cacheDir, registryUrl });
 
         const prepareFiber = yield* resolver
           .prepare({ agentId: agent.id })
@@ -819,7 +819,7 @@ describe("AcpRegistrySupport", () => {
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
         prefix: "t3-acp-registry-uninstall-reservation-",
       });
-      const resolver = yield* makeAcpRegistryResolver({ cacheDir, registryUrl });
+      const resolver = yield* makeAcpRegistryCatalog({ cacheDir, registryUrl });
 
       yield* resolver.prepare({ agentId: agent.id });
       expect(yield* resolver.uninstallManagedBinary({ agentId: agent.id })).toEqual({
@@ -863,7 +863,7 @@ describe("AcpRegistrySupport", () => {
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
         prefix: "t3-acp-registry-uninstall-expiry-",
       });
-      const resolver = yield* makeAcpRegistryResolver({ cacheDir, registryUrl });
+      const resolver = yield* makeAcpRegistryCatalog({ cacheDir, registryUrl });
 
       yield* resolver.prepare({ agentId: agent.id });
       yield* TestClock.adjust("31 seconds");

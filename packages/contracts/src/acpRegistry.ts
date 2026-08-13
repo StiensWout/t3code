@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema";
 
 import { TrimmedNonEmptyString, TrimmedString } from "./baseSchemas.ts";
+import { ProviderOptionDescriptor } from "./model.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 
 const AcpRegistryAgentId = TrimmedNonEmptyString.check(
@@ -75,6 +76,11 @@ export const AcpRegistryProbeAuthMethod = Schema.Struct({
   name: AcpRegistryProbeText,
   description: AcpRegistryProbeDescription,
   type: Schema.Literals(["agent", "env_var", "terminal"]),
+  // Terminal methods: the full command line the user runs in a thread
+  // terminal on the owning environment to complete interactive auth.
+  command: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(2_048))),
+  // Env-var methods: variable names the user sets on the provider instance.
+  envVarNames: Schema.optionalKey(Schema.Array(AcpRegistryProbeText).check(Schema.isMaxLength(16))),
 });
 export type AcpRegistryProbeAuthMethod = typeof AcpRegistryProbeAuthMethod.Type;
 
@@ -94,6 +100,9 @@ export const AcpRegistryProbeResult = Schema.Struct({
   authMethods: Schema.Array(AcpRegistryProbeAuthMethod).check(Schema.isMaxLength(32)),
   models: Schema.Array(AcpRegistryProbeModel).check(Schema.isMaxLength(256)),
   currentModelId: Schema.NullOr(AcpRegistryProbeText),
+  // Non-model session config options and session modes, pre-mapped onto T3's
+  // provider option descriptors so model capabilities can carry them directly.
+  configOptions: Schema.Array(ProviderOptionDescriptor).check(Schema.isMaxLength(16)),
 });
 export type AcpRegistryProbeResult = typeof AcpRegistryProbeResult.Type;
 

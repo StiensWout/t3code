@@ -43,6 +43,7 @@ import * as Result from "effect/Result";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
+import type { ChildProcessSpawner } from "effect/unstable/process";
 import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/schema";
 
@@ -60,6 +61,13 @@ import type {
   AcpSessionRuntimeOptions,
   AcpSessionRuntimeStartResult,
 } from "../../provider/acp/AcpSessionRuntime.ts";
+import { acpReadTextFile, acpWriteTextFile } from "../../provider/acp/AcpClientFs.ts";
+import {
+  makeAcpClientTerminals,
+  resolveEmbeddedTerminalContent,
+  type AcpClientTerminals,
+} from "../../provider/acp/AcpClientTerminals.ts";
+import { ACP_SESSION_MODE_OPTION_ID } from "../../provider/acp/AcpSessionConfig.ts";
 import * as AcpSessionRuntime from "../../provider/acp/AcpSessionRuntime.ts";
 import { t3OrchestrationPromptForFirstRun } from "../../provider/T3OrchestrationInstructions.ts";
 import { IdAllocatorV2, type IdAllocatorV2Shape } from "../IdAllocator.ts";
@@ -350,6 +358,15 @@ export interface AcpAdapterV2Options {
   readonly fileSystem: FileSystem.FileSystem;
   readonly idAllocator: IdAllocatorV2Shape;
   readonly serverConfig: ServerConfig["Service"];
+  /**
+   * Enables the ACP client `terminal` capability. Sessions advertise
+   * `terminal: true` and run agent-created terminals through this spawner
+   * with the provider instance's environment.
+   */
+  readonly clientTerminals?: {
+    readonly childProcessSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
+    readonly environment?: NodeJS.ProcessEnv;
+  };
   readonly nativeLogging?: (threadId: ThreadId) => AcpAdapterV2NativeLogging;
   /**
    * Shared with ProviderContinuationService so post-settle wake traffic can start
@@ -462,8 +479,11 @@ export const AcpProviderCapabilitiesV2 = {
   checkpointing: {
     appCanCheckpointFilesystem: true,
     supportsNestedCheckpointScopes: true,
-    providerCanRollbackConversation: false,
-    providerRollbackReturnsSnapshot: false,
+    // ACP defines no conversation truncation, so rollback resets the provider
+    // conversation: T3 restores checkpointed state and the next turn starts a
+    // fresh agent session without the rolled-back context.
+    providerCanRollbackConversation: true,
+    providerRollbackReturnsSnapshot: true,
     providerCanReadConversationSnapshot: false,
   },
   identity: {
@@ -483,7 +503,6 @@ function negotiatedCapabilities(
   const setup = started.sessionSetupResult;
   const hasModelConfig =
     setup.configOptions?.some((option) => option.category === "model") === true;
-  const supportsMcp = agent.mcpCapabilities?.http === true || agent.mcpCapabilities?.sse === true;
   const canLoad = agent.loadSession === true;
   const canFork = session?.fork != null;
   return {
@@ -500,7 +519,9 @@ function negotiatedCapabilities(
     },
     tools: {
       ...base.tools,
-      supportsMcpTools: supportsMcp,
+      // The stdio bridge (`t3 acp-mcp-bridge`) makes the t3-code MCP toolkit
+      // available regardless of the agent's optional http/sse MCP support.
+      supportsMcpTools: true,
     },
     checkpointing: {
       ...base.checkpointing,
@@ -515,16 +536,23 @@ function acpMcpServers(threadId: ThreadId | null): ReadonlyArray<EffectAcpSchema
   if (session === undefined) {
     return [];
   }
+  // Stdio is ACP's required baseline MCP transport. Agents that advertise
+  // optional http support still routinely fail to wire injected http servers
+  // through to their backend (codex-acp 1.2.0 and pi-acp both drop them), so
+  // every ACP session gets the `t3 acp-mcp-bridge` stdio server, which
+  // forwards JSON-RPC to T3's authenticated MCP endpoint. The credential
+  // travels via environment variables, never the command line.
+  // The agent spawns the bridge from its own working directory, so the server
+  // entrypoint must be an absolute path.
+  const serverEntrypoint = process.argv[1] === undefined ? "t3" : NodePath.resolve(process.argv[1]);
   return [
     {
-      type: "http",
       name: "t3-code",
-      url: session.endpoint,
-      headers: [
-        {
-          name: "Authorization",
-          value: session.authorizationHeader,
-        },
+      command: process.execPath,
+      args: [serverEntrypoint, "acp-mcp-bridge"],
+      env: [
+        { name: "T3_ACP_MCP_ENDPOINT", value: session.endpoint },
+        { name: "T3_ACP_MCP_AUTHORIZATION", value: session.authorizationHeader },
       ],
     },
   ];
@@ -1348,6 +1376,17 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
     openSession: Effect.fn("AcpAdapterV2.openSession")(
       function* (input: ProviderAdapterV2OpenSessionInput) {
         const sessionScope = yield* Effect.scope;
+        const clientTerminals: AcpClientTerminals | undefined =
+          options.clientTerminals === undefined
+            ? undefined
+            : yield* makeAcpClientTerminals({
+                spawner: options.clientTerminals.childProcessSpawner,
+                defaultCwd: input.runtimePolicy.cwd ?? process.cwd(),
+                environment: options.clientTerminals.environment,
+              });
+        if (clientTerminals !== undefined) {
+          yield* Scope.addFinalizer(sessionScope, clientTerminals.disposeAll);
+        }
         const events = yield* Queue.unbounded<ProviderAdapterV2Event>();
         const activeTurn = yield* Ref.make<ActiveAcpTurn | null>(null);
         const activeSessionId = yield* Ref.make<string | null>(null);
@@ -1749,8 +1788,8 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           ...(resumeSessionId === undefined ? {} : { resumeSessionId }),
           interruptPromptOnCancel: flavor.interruptPromptOnCancel ?? false,
           clientCapabilities: {
-            fs: { readTextFile: false, writeTextFile: false },
-            terminal: false,
+            fs: { readTextFile: true, writeTextFile: true },
+            terminal: clientTerminals !== undefined,
             elicitation: { form: {} },
           },
           clientInfo: { name: "t3-code", version: "0.0.0" },
@@ -4290,10 +4329,30 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                 correlated.value,
               );
             });
-          yield* runtime.handleSessionUpdate((notification) =>
+          yield* runtime.handleReadTextFile((request) =>
+            acpReadTextFile(options.fileSystem, request),
+          );
+          yield* runtime.handleWriteTextFile((request) =>
+            acpWriteTextFile(options.fileSystem, request),
+          );
+          if (clientTerminals !== undefined) {
+            yield* runtime.handleCreateTerminal(clientTerminals.create);
+            yield* runtime.handleTerminalOutput(clientTerminals.output);
+            yield* runtime.handleTerminalWaitForExit(clientTerminals.waitForExit);
+            yield* runtime.handleTerminalKill(clientTerminals.kill);
+            yield* runtime.handleTerminalRelease(clientTerminals.release);
+          }
+          yield* runtime.handleSessionUpdate((rawNotification) =>
             runRuntimeCallbackAtGeneration(
               handlerGeneration,
               Effect.gen(function* () {
+                const notification =
+                  clientTerminals === undefined
+                    ? rawNotification
+                    : resolveEmbeddedTerminalContent(
+                        rawNotification,
+                        clientTerminals.readOutputSnapshot,
+                      );
                 if (notification.update.sessionUpdate === "available_commands_update") {
                   yield* (
                     flavor.onAvailableCommandsUpdate?.(notification.update.availableCommands) ??
@@ -4667,9 +4726,16 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               yield* runtime.setSessionModel(requestedModel);
             }
           }
+          const optionSelections = modelSelection.options ?? [];
+          const modeSelection = optionSelections.find(
+            (selection) => selection.id === ACP_SESSION_MODE_OPTION_ID,
+          );
+          const configSelections = optionSelections.filter(
+            (selection) => selection.id !== ACP_SESSION_MODE_OPTION_ID,
+          );
           const configOptions = yield* runtime.getConfigOptions;
           const availableConfigIds = new Set(configOptions.map((option) => option.id));
-          const unsupportedConfigIds = (modelSelection.options ?? [])
+          const unsupportedConfigIds = configSelections
             .map((selection) => selection.id)
             .filter((id) => !availableConfigIds.has(id));
           if (unsupportedConfigIds.length > 0) {
@@ -4678,15 +4744,75 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               detail: `ACP session ${startResult.sessionId} does not expose requested configuration option(s): ${unsupportedConfigIds.join(", ")}`,
             });
           }
-          for (const selection of modelSelection.options ?? []) {
-            yield* runtime.setConfigOption(selection.id, selection.value);
+          for (const selection of configSelections) {
+            // Tuning knobs degrade instead of failing the session open: agents
+            // advertise the union of values across models but can reject a
+            // per-model invalid one at set time (codex-acp advertises "ultra"
+            // reasoning effort and then rejects it for most models). Skip
+            // values the session does not currently offer and downgrade an
+            // agent-side set rejection to a warning; the agent's default
+            // applies for that option.
+            const option = configOptions.find((candidate) => candidate.id === selection.id);
+            if (
+              option !== undefined &&
+              option.type === "select" &&
+              typeof selection.value === "string"
+            ) {
+              const advertisedValues = option.options.flatMap((entry) =>
+                "value" in entry ? [entry.value] : entry.options.map((choice) => choice.value),
+              );
+              if (!advertisedValues.includes(selection.value)) continue;
+            }
+            yield* runtime.setConfigOption(selection.id, selection.value).pipe(
+              Effect.catch((error) =>
+                error._tag === "AcpRequestError"
+                  ? Effect.logWarning("ACP session rejected a configuration option value", {
+                      optionId: selection.id,
+                      value: selection.value,
+                      detail: error.message,
+                    })
+                  : Effect.fail(error),
+              ),
+            );
           }
           const modeState = yield* runtime.getModeState;
+          // The synthetic mode selection is skipped rather than failed when the
+          // agent no longer advertises it: mode sets are volatile across agent
+          // versions and a stale persisted mode should not block the turn.
+          if (
+            modeSelection !== undefined &&
+            typeof modeSelection.value === "string" &&
+            modeState?.availableModes.some((mode) => mode.id === modeSelection.value) === true &&
+            modeState.currentModeId !== modeSelection.value
+          ) {
+            yield* runtime.setMode(modeSelection.value);
+          }
           if (runtimePolicy.interactionMode === "plan" && modeState !== undefined) {
             const planMode = modeState.availableModes.find(
               (mode) => mode.id === "plan" || mode.id === "architect",
             );
             if (planMode !== undefined) yield* runtime.setMode(planMode.id);
+          }
+          // T3's plan/build interaction mode also drives an agent-advertised
+          // collaboration-mode option (codex-acp: "default"/"plan"), so the
+          // agent follows T3's mode toggle instead of exposing its own menu.
+          const collaborationOption = configOptions.find(
+            (option) => option.type === "select" && option.category === "collaboration_mode",
+          );
+          if (collaborationOption !== undefined && collaborationOption.type === "select") {
+            const collaborationChoices = collaborationOption.options.flatMap((entry) =>
+              "value" in entry ? [entry.value] : entry.options.map((option) => option.value),
+            );
+            const planChoice = collaborationChoices.find((choice) => choice === "plan");
+            const buildChoice = collaborationChoices.find((choice) => choice !== planChoice);
+            const requestedChoice =
+              runtimePolicy.interactionMode === "plan" ? planChoice : buildChoice;
+            if (
+              requestedChoice !== undefined &&
+              collaborationOption.currentValue !== requestedChoice
+            ) {
+              yield* runtime.setConfigOption(collaborationOption.id, requestedChoice);
+            }
           }
         });
 
@@ -5990,14 +6116,48 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               ),
           ),
           rollbackThread: (rollbackInput) =>
-            Effect.fail(
-              new ProviderAdapterRollbackThreadError({
-                driver,
-                providerThreadId: rollbackInput.providerThread.id,
-                checkpointId: rollbackInput.target.checkpointId,
-                cause: "ACP does not define conversation rollback.",
-              }),
-            ),
+            runtimeTransitionPermit
+              .withPermit(
+                Effect.gen(function* () {
+                  // ACP defines no conversation truncation, so rollback resets
+                  // the provider conversation: drop the native session binding
+                  // and force a runtime restart. T3 restores checkpointed
+                  // workspace state; the next turn starts a fresh agent session
+                  // without the rolled-back context.
+                  yield* awaitRuntimeTeardown();
+                  yield* Ref.set(runtimeRestartRequired, true);
+                  yield* Ref.set(activeSessionId, null);
+                  yield* Ref.set(activeSessionSetup, null);
+                  yield* Ref.set(activeSelection, null);
+                  const now = yield* DateTime.now;
+                  return {
+                    providerThread: {
+                      ...rollbackInput.providerThread,
+                      nativeThreadRef: null,
+                      nativeConversationHeadRef:
+                        rollbackInput.target.type === "provider_turn"
+                          ? rollbackInput.target.providerTurn.nativeTurnRef
+                          : null,
+                      status: "idle" as const,
+                      updatedAt: now,
+                    },
+                    providerTurns: [],
+                    messages: [],
+                    runtimeRequests: [],
+                  };
+                }),
+              )
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderAdapterRollbackThreadError({
+                      driver,
+                      providerThreadId: rollbackInput.providerThread.id,
+                      checkpointId: rollbackInput.target.checkpointId,
+                      cause,
+                    }),
+                ),
+              ),
           forkThread: Effect.fn("AcpAdapterV2.forkThread")(
             function* (forkInput) {
               return yield* runtimeTransitionPermit.withPermit(

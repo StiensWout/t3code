@@ -14,7 +14,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 
 import { ServerConfig } from "../../config.ts";
 import type { AcpRegistryAvailableCommands } from "../../provider/acp/AcpRegistryProbe.ts";
-import { makeAcpRegistryResolver } from "../../provider/acp/AcpRegistrySupport.ts";
+import { makeAcpRegistryCatalog } from "../../provider/acp/AcpRegistrySupport.ts";
 import { layer as idAllocatorLayer, IdAllocatorV2 } from "../IdAllocator.ts";
 import { ProviderAdapterV2RuntimePolicy } from "../ProviderAdapter.ts";
 import { BUILT_IN_PROVIDER_ADAPTER_DRIVER_KINDS_V2 } from "../builtInProviderAdapterDrivers.ts";
@@ -100,7 +100,7 @@ describe("AcpRegistryAdapterV2", () => {
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
-      const resolver = yield* makeAcpRegistryResolver({
+      const resolver = yield* makeAcpRegistryCatalog({
         cacheDir: serverConfig.providerStatusCacheDir,
         registryUrl,
       });

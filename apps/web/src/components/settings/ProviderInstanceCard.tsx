@@ -42,7 +42,6 @@ import { ProviderSettingsForm } from "./ProviderSettingsForm";
 import { ProviderModelsSection } from "./ProviderModelsSection";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import { ProviderAccentColorPicker } from "./ProviderAccentColorPicker";
-import { AcpRegistryAgentIcon, officialAcpRegistryIconUrlForAgentId } from "./AcpRegistryIcon";
 import { RedactedSensitiveText } from "./RedactedSensitiveText";
 import {
   getProviderVersionAdvisoryPresentation,
@@ -627,30 +626,12 @@ export function ProviderInstanceCard({
     updateEnvironment(providerEnvironmentWithoutNames(instance.environment, new Set([field.name])));
   };
 
-  const registryIconUrl =
-    driverKind === "acpRegistry"
-      ? officialAcpRegistryIconUrlForAgentId(readConfigString(instance.config, "agentId"))
-      : null;
-  const titleIconNode = registryIconUrl ? (
-    <span className="relative inline-flex size-5 shrink-0 items-center justify-center">
-      <AcpRegistryAgentIcon
-        className="size-5 bg-transparent"
-        fallbackClassName="size-4 text-foreground/80"
-        icon={registryIconUrl}
-      />
-      <span
-        className={cn(
-          "pointer-events-none absolute -left-0.5 -top-0.5 size-2 rounded-full ring-2 ring-card",
-          statusStyle.dot,
-        )}
-        aria-hidden
-      />
-    </span>
-  ) : driverKind ? (
+  const titleIconNode = driverKind ? (
     <ProviderInstanceIcon
       driverKind={driverKind}
       displayName={displayName}
       accentColor={accentColor}
+      acpRegistryAgentId={readConfigString(instance.config, "agentId") ?? undefined}
       showBadge={Boolean(accentColor)}
       statusDotClassName={statusStyle.dot}
       indicatorBackground="var(--card)"

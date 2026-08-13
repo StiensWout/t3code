@@ -1343,10 +1343,16 @@ describe("AcpAdapterV2", () => {
         cwd: process.cwd(),
         mcpServers: [
           {
-            type: "http",
             name: "t3-code",
-            url: "http://127.0.0.1:43123/mcp",
-            headers: [{ name: "Authorization", value: "Bearer target-thread-token" }],
+            command: process.execPath,
+            args: [
+              process.argv[1] === undefined ? "t3" : NodePath.resolve(process.argv[1]),
+              "acp-mcp-bridge",
+            ],
+            env: [
+              { name: "T3_ACP_MCP_ENDPOINT", value: "http://127.0.0.1:43123/mcp" },
+              { name: "T3_ACP_MCP_AUTHORIZATION", value: "Bearer target-thread-token" },
+            ],
           },
         ],
       });

@@ -110,7 +110,11 @@ export function AcpRegistryAgentIcon({
     readonly status: "loading" | "loaded" | "failed";
   } | null>(null);
   const currentImage = image?.iconUrl === iconUrl ? image : null;
-  const source = currentImage?.source ?? iconUrl;
+  // Render only after the load pipeline resolves: the validated blob when the
+  // fetch succeeds, or the raw allowlisted CDN URL when it fails (the official
+  // CDN serves no CORS headers, so the validating fetch is often blocked in
+  // cross-origin browser contexts while native <img> loading still works).
+  const source = currentImage?.source ?? null;
   const status = currentImage?.status ?? "loading";
 
   useEffect(() => {
@@ -130,7 +134,12 @@ export function AcpRegistryAgentIcon({
           return { iconUrl, source: objectUrl!, status: "loading" };
         });
       })
-      .catch(() => undefined);
+      .catch(() => {
+        if (!active) return;
+        setImage((current) =>
+          current?.iconUrl === iconUrl ? current : { iconUrl, source: iconUrl, status: "loading" },
+        );
+      });
     return () => {
       active = false;
       if (objectUrl !== null) URL.revokeObjectURL(objectUrl);

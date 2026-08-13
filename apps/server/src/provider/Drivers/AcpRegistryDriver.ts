@@ -8,10 +8,12 @@ import {
 } from "@t3tools/contracts";
 import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 import { createModelCapabilities } from "@t3tools/shared/model";
+import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import { ChildProcessSpawner } from "effect/unstable/process";
@@ -50,6 +52,11 @@ import { AcpRegistryRuntimeCoordinator } from "../acp/AcpRegistryRuntimeCoordina
 
 const DRIVER_KIND = ProviderDriverKind.make("acpRegistry");
 const decodeSettings = Schema.decodeSync(AcpRegistrySettings);
+// How long a successful discovery probe stays valid. Periodic health
+// refreshes reuse it instead of spawning a fresh disposable ACP session;
+// failed or unauthenticated probes are never cached so a completed sign-in
+// is detected on the next refresh.
+const PROBE_SUCCESS_TTL_MS = 15 * 60 * 1_000;
 const EMPTY_CAPABILITIES = createModelCapabilities({ optionDescriptors: [] });
 const MAINTENANCE = makeManualOnlyProviderMaintenanceCapabilities({
   provider: DRIVER_KIND,
@@ -77,6 +84,12 @@ function modelsFromProbe(
   customModels: ReadonlyArray<string>,
 ): ReadonlyArray<ServerProviderModel> {
   const discovered = probe?.probe.models ?? [];
+  // Discovered session config options and modes ride on every model so the
+  // composer's generic option controls can drive them per thread.
+  const capabilities =
+    probe === undefined || probe.probe.configOptions.length === 0
+      ? EMPTY_CAPABILITIES
+      : createModelCapabilities({ optionDescriptors: probe.probe.configOptions });
   const builtInModels: ReadonlyArray<ServerProviderModel> =
     discovered.length === 0
       ? [
@@ -85,7 +98,7 @@ function modelsFromProbe(
             name: "Default",
             isCustom: false,
             isDefault: true,
-            capabilities: EMPTY_CAPABILITIES,
+            capabilities,
           },
         ]
       : discovered.map((model) => ({
@@ -93,9 +106,9 @@ function modelsFromProbe(
           name: model.name,
           isCustom: false,
           ...(model.id === probe?.probe.currentModelId ? { isDefault: true } : {}),
-          capabilities: EMPTY_CAPABILITIES,
+          capabilities,
         }));
-  return providerModelsFromSettings(builtInModels, customModels, EMPTY_CAPABILITIES);
+  return providerModelsFromSettings(builtInModels, customModels, capabilities);
 }
 
 export function acpRegistrySnapshotReadiness(
@@ -234,13 +247,21 @@ export function buildCheckedAcpRegistrySnapshot(
         ) ?? input.probeError.authMethods?.[0])
       : undefined;
   const authenticationMessage = advertisedAuthMethod
-    ? `Complete the advertised "${advertisedAuthMethod.name}" authentication method on the server. T3 Code will detect it automatically on the next provider refresh.`
+    ? advertisedAuthMethod.type === "terminal" && advertisedAuthMethod.command
+      ? `Run \`${advertisedAuthMethod.command}\` in a thread terminal on this environment. T3 Code will detect the completed sign-in on the next provider refresh.`
+      : advertisedAuthMethod.type === "env_var" &&
+          (advertisedAuthMethod.envVarNames?.length ?? 0) > 0
+        ? `Set ${advertisedAuthMethod.envVarNames!.join(", ")} under this instance's environment variables in provider settings. T3 Code will detect it on the next provider refresh.`
+        : `Complete the advertised "${advertisedAuthMethod.name}" authentication method on the server. T3 Code will detect it automatically on the next provider refresh.`
     : undefined;
   return baseSnapshot({
     ...input,
     installed: readiness.installed,
     version: readiness.version,
-    status: probeFailed ? "error" : readiness.status,
+    // A failed discovery probe on a ready installation is a warning, not an
+    // outage: the agent binary is present and a real turn may still work
+    // (for example after the user completes authentication).
+    status: probeFailed ? "warning" : readiness.status,
     auth: input.probe
       ? { status: "authenticated" }
       : input.probeError?.reason === "authentication_failed"
@@ -436,6 +457,30 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         Effect.provideService(Crypto.Crypto, crypto),
         Effect.flatMap(withAvailableCommands),
       );
+      const enrichmentCache = yield* Ref.make<{
+        readonly provider: ServerProvider;
+        readonly expiresAt: number;
+      } | null>(null);
+      const enrichProviderCached = (baseSnapshot: ServerProvider) =>
+        Effect.gen(function* () {
+          const now = yield* Clock.currentTimeMillis;
+          const cached = yield* Ref.get(enrichmentCache);
+          if (
+            cached !== null &&
+            cached.expiresAt > now &&
+            cached.provider.version === baseSnapshot.version
+          ) {
+            return { ...cached.provider, checkedAt: baseSnapshot.checkedAt };
+          }
+          const enriched = yield* enrichProvider;
+          if (enriched.auth.status === "authenticated") {
+            yield* Ref.set(enrichmentCache, {
+              provider: enriched,
+              expiresAt: now + PROBE_SUCCESS_TTL_MS,
+            });
+          }
+          return enriched;
+        });
       const snapshotSettings = makeProviderSnapshotSettingsSource(effectiveConfig, serverSettings);
       const snapshot = yield* makeManagedServerProvider<
         ProviderSnapshotSettings<AcpRegistrySettings>
@@ -450,8 +495,11 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
           if (!snapshot.installed) return Effect.void;
           const publishEnrichment = (
             Option.isSome(runtimeCoordinator)
-              ? runtimeCoordinator.value.runBackgroundProbe(effectiveConfig.agentId, enrichProvider)
-              : enrichProvider.pipe(Effect.map(Option.some))
+              ? runtimeCoordinator.value.runBackgroundProbe(
+                  effectiveConfig.agentId,
+                  enrichProviderCached(snapshot),
+                )
+              : enrichProviderCached(snapshot).pipe(Effect.map(Option.some))
           ).pipe(
             Effect.flatMap(
               Option.match({

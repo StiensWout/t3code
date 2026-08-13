@@ -1310,6 +1310,11 @@ const makeWsRpcLayer = (
         [WS_METHODS.serverUninstallAcpRegistryManagedBinary]: (input) =>
           observeRpcEffect(
             WS_METHODS.serverUninstallAcpRegistryManagedBinary,
+            // The reference check is not transactional with settings writes: an
+            // instance added between the check and the removal loses its cached
+            // binary. That window is already narrowed by the post-prepare
+            // reservation inside the catalog, and a missing binary self-heals
+            // because resolve() reinstalls it on the next session start.
             acpRegistryCatalog
               .uninstallManagedBinary(
                 input,
@@ -1330,7 +1335,7 @@ const makeWsRpcLayer = (
                     (cause) =>
                       new AcpRegistryError({
                         reason: "install_failed",
-                        detail: cause.message,
+                        detail: `Could not read provider settings while checking references for ACP Registry agent ${input.agentId}.`,
                         cause,
                       }),
                   ),

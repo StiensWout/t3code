@@ -329,14 +329,14 @@ describe("AcpRegistrySearchStep", () => {
     expect(visitElements(tree, (element) => element.type === "img")).toBeNull();
   });
 
-  it("shows the local fallback while an official ACP CDN icon loads", () => {
+  it("shows only the local fallback while an official ACP CDN icon loads", () => {
     const officialIcon = "https://cdn.agentclientprotocol.com/registry/icons/gemini.png";
     hooks.beginRender();
     const tree = AcpRegistryAgentIcon({ icon: officialIcon });
 
-    const image = visitElements(tree, (element) => element.type === "img");
-    expect(image?.props).toMatchObject({ src: officialIcon });
-    expect(image?.props.className).toContain("invisible");
+    // The raw CDN URL is never rendered directly; the image appears only once
+    // the validated blob object URL is ready.
+    expect(visitElements(tree, (element) => element.type === "img")).toBeNull();
     expect(
       visitElements(tree, (element) => element.props["data-slot"] === "acp-icon-fallback"),
     ).not.toBeNull();

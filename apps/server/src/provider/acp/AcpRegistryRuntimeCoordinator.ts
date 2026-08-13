@@ -9,29 +9,6 @@ import * as Stream from "effect/Stream";
 
 import type { AcpRegistryAvailableCommands } from "./AcpRegistryProbe.ts";
 
-export interface AcpRegistryRuntimeCoordinatorShape {
-  readonly withForegroundStartup: <A, E, R>(
-    agentId: string,
-    effect: Effect.Effect<A, E, R>,
-  ) => Effect.Effect<A, E, R>;
-  readonly runBackgroundProbe: <A, E, R>(
-    agentId: string,
-    effect: Effect.Effect<A, E, R>,
-  ) => Effect.Effect<Option.Option<A>, E, R>;
-  readonly clearAvailableCommands: (instanceId: ProviderInstanceId) => Effect.Effect<void>;
-  readonly publishAvailableCommands: (
-    instanceId: ProviderInstanceId,
-    commands: AcpRegistryAvailableCommands,
-  ) => Effect.Effect<void>;
-  readonly getAvailableCommands: (
-    instanceId: ProviderInstanceId,
-  ) => Effect.Effect<Option.Option<AcpRegistryAvailableCommands>>;
-  readonly watchAvailableCommands: (
-    instanceId: ProviderInstanceId,
-    onUpdate: (commands: AcpRegistryAvailableCommands) => Effect.Effect<void>,
-  ) => Effect.Effect<void>;
-}
-
 interface AvailableCommandsUpdate {
   readonly instanceId: ProviderInstanceId;
   readonly commands: AcpRegistryAvailableCommands;
@@ -40,7 +17,28 @@ interface AvailableCommandsUpdate {
 /** Gives a user-started ACP process priority over disposable discovery for the same agent. */
 export class AcpRegistryRuntimeCoordinator extends Context.Service<
   AcpRegistryRuntimeCoordinator,
-  AcpRegistryRuntimeCoordinatorShape
+  {
+    readonly withForegroundStartup: <A, E, R>(
+      agentId: string,
+      effect: Effect.Effect<A, E, R>,
+    ) => Effect.Effect<A, E, R>;
+    readonly runBackgroundProbe: <A, E, R>(
+      agentId: string,
+      effect: Effect.Effect<A, E, R>,
+    ) => Effect.Effect<Option.Option<A>, E, R>;
+    readonly clearAvailableCommands: (instanceId: ProviderInstanceId) => Effect.Effect<void>;
+    readonly publishAvailableCommands: (
+      instanceId: ProviderInstanceId,
+      commands: AcpRegistryAvailableCommands,
+    ) => Effect.Effect<void>;
+    readonly getAvailableCommands: (
+      instanceId: ProviderInstanceId,
+    ) => Effect.Effect<Option.Option<AcpRegistryAvailableCommands>>;
+    readonly watchAvailableCommands: (
+      instanceId: ProviderInstanceId,
+      onUpdate: (commands: AcpRegistryAvailableCommands) => Effect.Effect<void>,
+    ) => Effect.Effect<void>;
+  }
 >()("t3/provider/acp/AcpRegistryRuntimeCoordinator") {
   static readonly layer = Layer.effect(
     AcpRegistryRuntimeCoordinator,
@@ -52,28 +50,26 @@ export class AcpRegistryRuntimeCoordinator extends Context.Service<
         new Map<ProviderInstanceId, AcpRegistryAvailableCommands>(),
       );
 
-      const withForegroundStartup: AcpRegistryRuntimeCoordinatorShape["withForegroundStartup"] = (
-        agentId,
-        effect,
-      ) =>
-        Effect.acquireUseRelease(
-          Ref.update(activeForegroundCounts, (current) => {
-            const next = new Map(current);
-            next.set(agentId, (next.get(agentId) ?? 0) + 1);
-            return next;
-          }).pipe(Effect.andThen(PubSub.publish(foregroundStarts, agentId))),
-          () => effect,
-          () =>
+      const withForegroundStartup: AcpRegistryRuntimeCoordinator["Service"]["withForegroundStartup"] =
+        (agentId, effect) =>
+          Effect.acquireUseRelease(
             Ref.update(activeForegroundCounts, (current) => {
               const next = new Map(current);
-              const remaining = (next.get(agentId) ?? 1) - 1;
-              if (remaining <= 0) next.delete(agentId);
-              else next.set(agentId, remaining);
+              next.set(agentId, (next.get(agentId) ?? 0) + 1);
               return next;
-            }),
-        );
+            }).pipe(Effect.andThen(PubSub.publish(foregroundStarts, agentId))),
+            () => effect,
+            () =>
+              Ref.update(activeForegroundCounts, (current) => {
+                const next = new Map(current);
+                const remaining = (next.get(agentId) ?? 1) - 1;
+                if (remaining <= 0) next.delete(agentId);
+                else next.set(agentId, remaining);
+                return next;
+              }),
+          );
 
-      const runBackgroundProbe: AcpRegistryRuntimeCoordinatorShape["runBackgroundProbe"] = (
+      const runBackgroundProbe: AcpRegistryRuntimeCoordinator["Service"]["runBackgroundProbe"] = (
         agentId,
         effect,
       ) =>
@@ -94,16 +90,15 @@ export class AcpRegistryRuntimeCoordinator extends Context.Service<
           }),
         );
 
-      const clearAvailableCommands: AcpRegistryRuntimeCoordinatorShape["clearAvailableCommands"] = (
-        instanceId,
-      ) =>
-        Ref.update(availableCommandsByInstance, (current) => {
-          const next = new Map(current);
-          next.delete(instanceId);
-          return next;
-        });
+      const clearAvailableCommands: AcpRegistryRuntimeCoordinator["Service"]["clearAvailableCommands"] =
+        (instanceId) =>
+          Ref.update(availableCommandsByInstance, (current) => {
+            const next = new Map(current);
+            next.delete(instanceId);
+            return next;
+          });
 
-      const publishAvailableCommands: AcpRegistryRuntimeCoordinatorShape["publishAvailableCommands"] =
+      const publishAvailableCommands: AcpRegistryRuntimeCoordinator["Service"]["publishAvailableCommands"] =
         (instanceId, commands) =>
           Ref.update(availableCommandsByInstance, (current) => {
             const next = new Map(current);
@@ -119,32 +114,30 @@ export class AcpRegistryRuntimeCoordinator extends Context.Service<
             Effect.asVoid,
           );
 
-      const getAvailableCommands: AcpRegistryRuntimeCoordinatorShape["getAvailableCommands"] =
+      const getAvailableCommands: AcpRegistryRuntimeCoordinator["Service"]["getAvailableCommands"] =
         Effect.fn("AcpRegistryRuntimeCoordinator.getAvailableCommands")(function* (instanceId) {
           return Option.fromNullishOr(
             (yield* Ref.get(availableCommandsByInstance)).get(instanceId),
           );
         });
 
-      const watchAvailableCommands: AcpRegistryRuntimeCoordinatorShape["watchAvailableCommands"] = (
-        instanceId,
-        onUpdate,
-      ) =>
-        Effect.scoped(
-          Effect.gen(function* () {
-            // Subscribe before reading the current value so a publication in
-            // between is either observed from the snapshot, the queue, or both.
-            const subscription = yield* PubSub.subscribe(availableCommandsUpdates);
-            const current = yield* getAvailableCommands(instanceId);
-            if (Option.isSome(current)) {
-              yield* onUpdate(current.value);
-            }
-            yield* Stream.fromSubscription(subscription).pipe(
-              Stream.filter((update) => update.instanceId === instanceId),
-              Stream.runForEach((update) => onUpdate(update.commands)),
-            );
-          }),
-        );
+      const watchAvailableCommands: AcpRegistryRuntimeCoordinator["Service"]["watchAvailableCommands"] =
+        (instanceId, onUpdate) =>
+          Effect.scoped(
+            Effect.gen(function* () {
+              // Subscribe before reading the current value so a publication in
+              // between is either observed from the snapshot, the queue, or both.
+              const subscription = yield* PubSub.subscribe(availableCommandsUpdates);
+              const current = yield* getAvailableCommands(instanceId);
+              if (Option.isSome(current)) {
+                yield* onUpdate(current.value);
+              }
+              yield* Stream.fromSubscription(subscription).pipe(
+                Stream.filter((update) => update.instanceId === instanceId),
+                Stream.runForEach((update) => onUpdate(update.commands)),
+              );
+            }),
+          );
 
       return AcpRegistryRuntimeCoordinator.of({
         withForegroundStartup,

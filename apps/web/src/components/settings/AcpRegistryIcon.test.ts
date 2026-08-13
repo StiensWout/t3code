@@ -138,15 +138,54 @@ describe("ACP Registry icon cache", () => {
     expect(officialAcpRegistryIconUrlForAgentId("../kilo")).toBeNull();
   });
 
-  it("renders the official Kilo SVG directly and removes the fallback only after load", () => {
+  it("falls back to the raw allowlisted CDN URL when the validating fetch is blocked", async () => {
     const url = "https://cdn.agentclientprotocol.com/registry/v1/latest/kilo.svg";
-    fetchIcon.mockImplementation(() => new Promise(() => undefined));
+    // The official CDN serves no CORS headers, so the fetch can reject even
+    // though native <img> loading works.
+    fetchIcon.mockRejectedValue(new TypeError("Failed to fetch"));
+    hooks.beginRender();
+    AcpRegistryAgentIcon({ icon: url });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    hooks.beginRender();
+    const tree = AcpRegistryAgentIcon({ icon: url }) as ReactElement<Record<string, unknown>>;
+    const image = visitElements(tree, (element) => element.type === "img");
+    expect(image?.props).toMatchObject({ src: url, referrerPolicy: "no-referrer" });
+    expect(
+      visitElements(tree, (element) => element.props["data-slot"] === "acp-icon-fallback"),
+    ).not.toBeNull();
+  });
+
+  it("renders only the validated blob object URL and keeps the fallback until load", async () => {
+    const url = "https://cdn.agentclientprotocol.com/registry/v1/latest/kilo.svg";
+    const objectUrl = "blob:t3/kilo-icon";
+    Object.assign(URL, {
+      createObjectURL: vi.fn(() => objectUrl),
+      revokeObjectURL: vi.fn(),
+    });
+    fetchIcon.mockResolvedValue(
+      new Response("<svg/>", {
+        status: 200,
+        headers: { "content-type": "image/svg+xml" },
+      }),
+    );
+    hooks.beginRender();
+    const validating = AcpRegistryAgentIcon({ icon: url }) as ReactElement<Record<string, unknown>>;
+
+    // The raw CDN URL is never rendered; only the fallback shows while the
+    // blob is fetched and validated.
+    expect(visitElements(validating, (element) => element.type === "img")).toBeNull();
+    expect(
+      visitElements(validating, (element) => element.props["data-slot"] === "acp-icon-fallback"),
+    ).not.toBeNull();
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
     hooks.beginRender();
     const loading = AcpRegistryAgentIcon({ icon: url }) as ReactElement<Record<string, unknown>>;
     const loadingImage = visitElements(loading, (element) => element.type === "img");
 
     expect(loadingImage?.props).toMatchObject({
-      src: url,
+      src: objectUrl,
       alt: "",
       decoding: "async",
       referrerPolicy: "no-referrer",

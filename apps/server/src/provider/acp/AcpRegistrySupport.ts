@@ -255,34 +255,29 @@ export type AcpRegistryInspection =
       readonly distribution: AcpRegistryDistributionKind;
     };
 
-export interface AcpRegistryResolverShape {
-  readonly resolve: (
-    settings: AcpRegistrySettings,
-    cwd: string,
-    environment?: NodeJS.ProcessEnv,
-  ) => Effect.Effect<ResolvedAcpRegistryAgent, AcpRegistryError>;
-}
-
-export interface AcpRegistryCatalogShape extends AcpRegistryResolverShape {
-  readonly search: (
-    input: AcpRegistrySearchInput,
-  ) => Effect.Effect<AcpRegistrySearchResult, AcpRegistryError>;
-  readonly prepare: (
-    input: AcpRegistryPrepareInput,
-  ) => Effect.Effect<AcpRegistryPrepareResult, AcpRegistryError>;
-  readonly inspect: (
-    settings: AcpRegistrySettings,
-    environment?: NodeJS.ProcessEnv,
-  ) => Effect.Effect<AcpRegistryInspection, AcpRegistryError>;
-  readonly uninstallManagedBinary: (
-    input: AcpRegistryManagedBinaryUninstallInput,
-    isReferenced?: Effect.Effect<boolean, AcpRegistryError>,
-  ) => Effect.Effect<AcpRegistryManagedBinaryUninstallResult, AcpRegistryError>;
-}
-
 export class AcpRegistryCatalog extends Context.Service<
   AcpRegistryCatalog,
-  AcpRegistryCatalogShape
+  {
+    readonly search: (
+      input: AcpRegistrySearchInput,
+    ) => Effect.Effect<AcpRegistrySearchResult, AcpRegistryError>;
+    readonly prepare: (
+      input: AcpRegistryPrepareInput,
+    ) => Effect.Effect<AcpRegistryPrepareResult, AcpRegistryError>;
+    readonly inspect: (
+      settings: AcpRegistrySettings,
+      environment?: NodeJS.ProcessEnv,
+    ) => Effect.Effect<AcpRegistryInspection, AcpRegistryError>;
+    readonly resolve: (
+      settings: AcpRegistrySettings,
+      cwd: string,
+      environment?: NodeJS.ProcessEnv,
+    ) => Effect.Effect<ResolvedAcpRegistryAgent, AcpRegistryError>;
+    readonly uninstallManagedBinary: (
+      input: AcpRegistryManagedBinaryUninstallInput,
+      isReferenced?: Effect.Effect<boolean, AcpRegistryError>,
+    ) => Effect.Effect<AcpRegistryManagedBinaryUninstallResult, AcpRegistryError>;
+  }
 >()("t3/provider/acp/AcpRegistrySupport/AcpRegistryCatalog") {
   static layer(options: AcpRegistryCatalogOptions) {
     return Layer.effect(AcpRegistryCatalog, makeAcpRegistryCatalog(options));
@@ -376,36 +371,29 @@ function runnerFor(distribution: AcpRegistryDistributionKind): "npx" | "uvx" | u
   return distribution === "npx" ? "npx" : distribution === "uvx" ? "uvx" : undefined;
 }
 
-interface CollectedBytes {
-  readonly chunks: ReadonlyArray<Uint8Array<ArrayBufferLike>>;
-  readonly bytes: number;
-}
-
 const collectBoundedBytes = Effect.fn("AcpRegistryCatalog.collectBoundedBytes")(function* (
   response: HttpClientResponse.HttpClientResponse,
   maxBytes: number,
   error: () => AcpRegistryError,
 ) {
-  const collected = yield* response.stream.pipe(
-    Stream.runFoldEffect<CollectedBytes, Uint8Array<ArrayBufferLike>, AcpRegistryError, never>(
-      () => ({ chunks: [], bytes: 0 }),
-      (state, chunk) =>
-        state.bytes + chunk.byteLength > maxBytes
-          ? Effect.fail(error())
-          : Effect.succeed({
-              chunks: [...state.chunks, chunk],
-              bytes: state.bytes + chunk.byteLength,
-            }),
-    ),
+  const chunks: Array<Uint8Array<ArrayBufferLike>> = [];
+  let bytes = 0;
+  yield* response.stream.pipe(
+    Stream.runForEach((chunk) => {
+      if (bytes + chunk.byteLength > maxBytes) return Effect.fail(error());
+      chunks.push(chunk);
+      bytes += chunk.byteLength;
+      return Effect.void;
+    }),
     Effect.mapError((cause) => (isAcpRegistryError(cause) ? cause : error())),
   );
-  return new Uint8Array(NodeBuffer.Buffer.concat(collected.chunks, collected.bytes));
+  return new Uint8Array(NodeBuffer.Buffer.concat(chunks, bytes));
 });
 
 export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(function* (
   input: AcpRegistryCatalogOptions,
 ): Effect.fn.Return<
-  AcpRegistryCatalogShape,
+  AcpRegistryCatalog["Service"],
   never,
   | ChildProcessSpawner.ChildProcessSpawner
   | FileSystem.FileSystem
@@ -666,6 +654,14 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
       return yield* new AcpRegistryError({
         reason: "install_failed",
         detail: `ACP Registry install command '${command}' exited with code ${Number(exitCode)}: ${stderr.text.trim()}`,
+      });
+    }
+    // Archive listings feed validateArchiveEntries; a truncated listing would let
+    // unvalidated entries past the traversal check, so oversized output is fatal.
+    if (stdout.truncated) {
+      return yield* new AcpRegistryError({
+        reason: "archive_invalid",
+        detail: `ACP Registry install command '${command}' produced more output than expected.`,
       });
     }
     return stdout.text;
@@ -941,7 +937,7 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
     return distribution;
   });
 
-  const search: AcpRegistryCatalogShape["search"] = (input) =>
+  const search: AcpRegistryCatalog["Service"]["search"] = (input) =>
     Effect.gen(function* () {
       const registry = yield* refreshRegistry();
       const ranked = registry.agents.flatMap((agent) => {
@@ -985,7 +981,7 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
       } satisfies AcpRegistrySearchResult;
     });
 
-  const prepare: AcpRegistryCatalogShape["prepare"] = (input) =>
+  const prepare: AcpRegistryCatalog["Service"]["prepare"] = (input) =>
     Effect.gen(function* () {
       const registry = yield* refreshRegistry();
       const agent = yield* findAgent(registry, input.agentId);
@@ -1014,7 +1010,7 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
       } satisfies AcpRegistryPrepareResult;
     });
 
-  const inspect: AcpRegistryCatalogShape["inspect"] = (settings, environment) =>
+  const inspect: AcpRegistryCatalog["Service"]["inspect"] = (settings, environment) =>
     Effect.gen(function* () {
       const agentId = settings.agentId.trim();
       if (agentId.length === 0) return { status: "unconfigured" } as const;
@@ -1110,7 +1106,7 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
           } as const);
     });
 
-  const resolve: AcpRegistryCatalogShape["resolve"] = (settings, cwd, environment) =>
+  const resolve: AcpRegistryCatalog["Service"]["resolve"] = (settings, cwd, environment) =>
     Effect.gen(function* () {
       const agentId = settings.agentId.trim();
       if (agentId.length === 0) {
@@ -1193,7 +1189,7 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
       } satisfies ResolvedAcpRegistryAgent;
     });
 
-  const uninstallManagedBinary: AcpRegistryCatalogShape["uninstallManagedBinary"] = (
+  const uninstallManagedBinary: AcpRegistryCatalog["Service"]["uninstallManagedBinary"] = (
     input,
     isReferenced = Effect.succeed(false),
   ) =>
@@ -1251,6 +1247,3 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
     uninstallManagedBinary,
   });
 });
-
-/** @deprecated Use the shared AcpRegistryCatalog service for new integrations. */
-export const makeAcpRegistryResolver = makeAcpRegistryCatalog;

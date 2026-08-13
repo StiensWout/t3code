@@ -60,12 +60,44 @@ describe("ACP Registry probe", () => {
       icon: null,
       authMethods: [
         { id: "chatgpt", name: "ChatGPT", description: null, type: "agent" },
-        { id: "api-key", name: "API key", description: null, type: "env_var" },
+        {
+          id: "api-key",
+          name: "API key",
+          description: null,
+          type: "env_var",
+          envVarNames: ["OPENAI_API_KEY"],
+        },
         { id: "login", name: "Terminal login", description: null, type: "terminal" },
       ],
       models: [{ id: "gpt-5.4", name: "GPT-5.4", description: null }],
       currentModelId: "gpt-5.4",
+      configOptions: [],
     });
+  });
+
+  it("composes runnable terminal auth commands from the resolved spawn recipe", () => {
+    const methods = normalizeAcpRegistryAuthMethods(
+      [
+        {
+          id: "login",
+          name: "Terminal login",
+          type: "terminal",
+          args: ["auth", "log in"],
+          env: { FORCE_TTY: "1" },
+        },
+      ],
+      { command: "/opt/agents/devin", args: ["--acp"] },
+    );
+
+    expect(methods).toEqual([
+      {
+        id: "login",
+        name: "Terminal login",
+        description: null,
+        type: "terminal",
+        command: "FORCE_TTY=1 /opt/agents/devin --acp auth 'log in'",
+      },
+    ]);
   });
 
   it("falls back to model-category configuration options", () => {

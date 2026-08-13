@@ -16,14 +16,8 @@ import * as EffectAcpErrors from "effect-acp/errors";
 
 import { ServerConfig } from "../../config.ts";
 import { normalizeAcpRegistryCommands } from "../../provider/acp/AcpRegistryProbe.ts";
-import {
-  AcpRegistryCatalog,
-  type AcpRegistryResolverShape,
-} from "../../provider/acp/AcpRegistrySupport.ts";
-import {
-  AcpRegistryRuntimeCoordinator,
-  type AcpRegistryRuntimeCoordinatorShape,
-} from "../../provider/acp/AcpRegistryRuntimeCoordinator.ts";
+import { AcpRegistryCatalog } from "../../provider/acp/AcpRegistrySupport.ts";
+import { AcpRegistryRuntimeCoordinator } from "../../provider/acp/AcpRegistryRuntimeCoordinator.ts";
 import * as AcpSessionRuntime from "../../provider/acp/AcpSessionRuntime.ts";
 import { makeAcpNativeLoggerFactory } from "../../provider/acp/AcpNativeLogging.ts";
 import { ProviderEventLoggers } from "../../provider/Layers/ProviderEventLoggers.ts";
@@ -56,8 +50,8 @@ export interface AcpRegistryAdapterV2Options {
   readonly crypto: Crypto.Crypto;
   readonly fileSystem: FileSystem.FileSystem;
   readonly idAllocator: IdAllocatorV2["Service"];
-  readonly resolver: AcpRegistryResolverShape;
-  readonly runtimeCoordinator?: AcpRegistryRuntimeCoordinatorShape;
+  readonly resolver: Pick<AcpRegistryCatalog["Service"], "resolve">;
+  readonly runtimeCoordinator?: AcpRegistryRuntimeCoordinator["Service"];
   readonly serverConfig: ServerConfig["Service"];
   readonly nativeLogging?: Parameters<typeof makeAcpAdapterV2>[0]["nativeLogging"];
   readonly makeRuntime?: (
@@ -133,6 +127,10 @@ export function makeAcpRegistryAdapterV2(options: AcpRegistryAdapterV2Options) {
     fileSystem: options.fileSystem,
     idAllocator: options.idAllocator,
     serverConfig: options.serverConfig,
+    clientTerminals: {
+      childProcessSpawner: options.childProcessSpawner,
+      environment: options.environment,
+    },
     ...(options.nativeLogging === undefined ? {} : { nativeLogging: options.nativeLogging }),
   });
 }

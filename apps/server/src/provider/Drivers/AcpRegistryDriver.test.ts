@@ -8,11 +8,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-import {
-  AcpRegistryCatalog,
-  type AcpRegistryCatalogShape,
-  type AcpRegistryInspection,
-} from "../acp/AcpRegistrySupport.ts";
+import { AcpRegistryCatalog, type AcpRegistryInspection } from "../acp/AcpRegistrySupport.ts";
 import {
   acpRegistrySnapshotReadiness,
   applyAcpRegistryAvailableCommands,
@@ -29,7 +25,7 @@ const identity = {
   continuationKey: "acpRegistry:instance:acpRegistry_test",
 };
 
-function catalogWithInspection(inspection: AcpRegistryInspection): AcpRegistryCatalogShape {
+function catalogWithInspection(inspection: AcpRegistryInspection): AcpRegistryCatalog["Service"] {
   return {
     search: () => Effect.die("unused search"),
     prepare: () => Effect.die("unused prepare"),
@@ -59,6 +55,7 @@ describe("acpRegistrySnapshotReadiness", () => {
           authMethods: [],
           models: [],
           currentModelId: null,
+          configOptions: [],
         },
         slashCommands: [{ name: "stale" }],
         skills: [{ name: "stale-skill", path: "stale", enabled: true }],
@@ -141,6 +138,7 @@ describe("acpRegistrySnapshotReadiness", () => {
           authMethods: [],
           models: [{ id: "gpt-discovered", name: "GPT Discovered", description: null }],
           currentModelId: "gpt-discovered",
+          configOptions: [],
         },
         slashCommands: [{ name: "plan", description: "Create a plan", input: { hint: "topic" } }],
         skills: [{ name: "workspace-skill", path: "acp://skill/workspace-skill", enabled: true }],
@@ -196,6 +194,7 @@ describe("acpRegistrySnapshotReadiness", () => {
           authMethods: [],
           models: [],
           currentModelId: null,
+          configOptions: [],
         },
         slashCommands: [],
         skills: [],
@@ -240,7 +239,7 @@ describe("acpRegistrySnapshotReadiness", () => {
     expect(snapshot).toMatchObject({
       installed: true,
       version: "1.0.0",
-      status: "error",
+      status: "warning",
       auth: {
         status: "unauthenticated",
         type: "agent",
@@ -274,6 +273,7 @@ describe("acpRegistrySnapshotReadiness", () => {
                 authMethods: [],
                 models: [{ id: "agent-model", name: "Agent Model", description: null }],
                 currentModelId: "agent-model",
+                configOptions: [],
               },
               slashCommands: [{ name: "review" }],
               skills: [],
@@ -367,7 +367,7 @@ describe("acpRegistrySnapshotReadiness", () => {
 
       expect(refreshed.neighboringProvider).toBe("refreshed");
       expect(refreshed.failedAcp).toMatchObject({
-        status: "error",
+        status: "warning",
         auth: { status: "unauthenticated" },
         message: "Authentication required.",
       });

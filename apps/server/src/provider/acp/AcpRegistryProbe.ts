@@ -19,6 +19,8 @@ import type * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/schema";
 
 import { AcpRegistryCatalog, toAcpRegistryOperationError } from "./AcpRegistrySupport.ts";
+import { parseSessionModeState } from "./AcpRuntimeModel.ts";
+import { acpProviderOptionDescriptors } from "./AcpSessionConfig.ts";
 import * as AcpSessionRuntime from "./AcpSessionRuntime.ts";
 
 const MAX_AUTH_METHODS = 32;
@@ -27,7 +29,11 @@ const MAX_ID_LENGTH = 128;
 const MAX_NAME_LENGTH = 160;
 const MAX_DESCRIPTION_LENGTH = 1_024;
 const MAX_COMMANDS = 128;
-const PROBE_TIMEOUT = "20 seconds";
+const MAX_COMMAND_LINE_LENGTH = 2_048;
+// Covers cold npx/uvx package materialization, which happens on the first
+// probe after an agent is added and can dominate the session-create time.
+const PROBE_TIMEOUT_SECONDS = 60;
+const PROBE_TIMEOUT = `${PROBE_TIMEOUT_SECONDS} seconds`;
 const COMMAND_ADVERTISEMENT_GRACE = "500 millis";
 
 const boundedText = (value: string, maximumLength: number): string =>
@@ -47,18 +53,24 @@ function modelConfigOptions(
 function normalizeModels(
   setup: AcpSessionRuntime.AcpSessionRuntimeStartResult["sessionSetupResult"],
 ): ReadonlyArray<AcpRegistryProbeModel> {
-  const candidates = [
-    ...(setup.models?.availableModels.map((model) => ({
-      id: model.modelId,
-      name: model.name,
-      description: model.description ?? null,
-    })) ?? []),
-    ...modelConfigOptions(setup).map((model) => ({
-      id: model.value,
-      name: model.name,
-      description: model.description ?? null,
-    })),
-  ];
+  const configModels = modelConfigOptions(setup).map((model) => ({
+    id: model.value,
+    name: model.name,
+    description: model.description ?? null,
+  }));
+  // Agents with a model config option often also enumerate legacy
+  // model-times-option combinations through the session models API
+  // (codex-acp lists "gpt-5.6-sol[low]" variants). Prefer the config
+  // option's base models so those variants collapse onto the separate
+  // option descriptors instead of flooding the model picker.
+  const candidates =
+    configModels.length > 0
+      ? configModels
+      : (setup.models?.availableModels.map((model) => ({
+          id: model.modelId,
+          name: model.name,
+          description: model.description ?? null,
+        })) ?? []);
   const seen = new Set<string>();
   const models: Array<AcpRegistryProbeModel> = [];
   for (const candidate of candidates) {
@@ -78,24 +90,61 @@ function normalizeModels(
   return models;
 }
 
+/** Agent spawn recipe used to compose runnable terminal-auth command lines. */
+export interface AcpRegistryAuthSpawnContext {
+  readonly command: string;
+  readonly args: ReadonlyArray<string>;
+}
+
+const SHELL_SAFE_TOKEN = /^[A-Za-z0-9_@%+=:,./-]+$/u;
+
+function shellDisplayToken(token: string): string {
+  return SHELL_SAFE_TOKEN.test(token) ? token : `'${token.replaceAll("'", `'\\''`)}'`;
+}
+
+function terminalAuthCommand(
+  method: Extract<EffectAcpSchema.AuthMethod, { readonly type: "terminal" }>,
+  spawn: AcpRegistryAuthSpawnContext,
+): string {
+  const environmentPrefix = Object.entries(method.env ?? {}).map(
+    ([name, value]) => `${name}=${shellDisplayToken(value)}`,
+  );
+  const command = [spawn.command, ...spawn.args, ...(method.args ?? [])].map(shellDisplayToken);
+  return [...environmentPrefix, ...command].join(" ").slice(0, MAX_COMMAND_LINE_LENGTH);
+}
+
 export function normalizeAcpRegistryAuthMethods(
   methods: ReadonlyArray<EffectAcpSchema.AuthMethod> | undefined,
+  spawn?: AcpRegistryAuthSpawnContext,
 ): ReadonlyArray<AcpRegistryProbeAuthMethod> {
-  return (methods ?? []).slice(0, MAX_AUTH_METHODS).flatMap((method) => {
+  const normalized: Array<AcpRegistryProbeAuthMethod> = [];
+  for (const method of methods ?? []) {
     const id = boundedText(method.id, MAX_ID_LENGTH);
-    if (id.length === 0) return [];
-    return [
-      {
-        id,
-        name: boundedText(method.name, MAX_NAME_LENGTH) || id,
-        description:
-          method.description == null
-            ? null
-            : boundedText(method.description, MAX_DESCRIPTION_LENGTH) || null,
-        type: "type" in method ? method.type : "agent",
-      } satisfies AcpRegistryProbeAuthMethod,
-    ];
-  });
+    if (id.length === 0) continue;
+    const type = "type" in method ? method.type : "agent";
+    const envVarNames =
+      type === "env_var" && "vars" in method
+        ? method.vars
+            .map((variable) => boundedText(variable.name, MAX_ID_LENGTH))
+            .filter((name) => name.length > 0)
+            .slice(0, 16)
+        : [];
+    normalized.push({
+      id,
+      name: boundedText(method.name, MAX_NAME_LENGTH) || id,
+      description:
+        method.description == null
+          ? null
+          : boundedText(method.description, MAX_DESCRIPTION_LENGTH) || null,
+      type,
+      ...(spawn !== undefined && "type" in method && method.type === "terminal"
+        ? { command: terminalAuthCommand(method, spawn) }
+        : {}),
+      ...(envVarNames.length > 0 ? { envVarNames } : {}),
+    });
+    if (normalized.length === MAX_AUTH_METHODS) break;
+  }
+  return normalized;
 }
 
 export interface AcpRegistryAvailableCommands {
@@ -151,18 +200,31 @@ export function acpRegistryProbeResult(
   instanceId: ProviderInstanceId,
   started: AcpSessionRuntime.AcpSessionRuntimeStartResult,
   icon: string | null = null,
+  spawn?: AcpRegistryAuthSpawnContext,
 ): AcpRegistryProbeResult {
   const modelOption = (started.sessionSetupResult.configOptions ?? []).find(
     (option) => option.category === "model" && option.type === "select",
   );
   const configModelId = modelOption?.type === "select" ? modelOption.currentValue : null;
+  // Bound the agent-reported current model the same way normalizeModels bounds
+  // model IDs, so it stays wire-encodable and matches a normalized model row.
+  // Mirror normalizeModels: when a model config option exists its base models
+  // are the catalog, so its current value is the current model.
+  const rawCurrentModelId =
+    configModelId ?? started.sessionSetupResult.models?.currentModelId ?? null;
+  const currentModelId =
+    rawCurrentModelId == null ? null : boundedText(rawCurrentModelId, MAX_ID_LENGTH) || null;
   return AcpRegistryProbeResult.make({
     instanceId,
     ready: true,
     icon,
-    authMethods: normalizeAcpRegistryAuthMethods(started.initializeResult.authMethods),
+    authMethods: normalizeAcpRegistryAuthMethods(started.initializeResult.authMethods, spawn),
     models: normalizeModels(started.sessionSetupResult),
-    currentModelId: started.sessionSetupResult.models?.currentModelId ?? configModelId,
+    currentModelId,
+    configOptions: acpProviderOptionDescriptors({
+      configOptions: started.sessionSetupResult.configOptions,
+      modeState: parseSessionModeState(started.sessionSetupResult),
+    }),
   });
 }
 
@@ -230,7 +292,13 @@ export const probeAcpRegistryConfiguration = Effect.fn("AcpRegistryProbe.probeCo
           clientInfo: { name: "t3-code-provider-test", version: "0.0.0" },
           authenticateOnAuthRequired: false,
           onInitialized: (initializeResult) =>
-            Ref.set(authMethodsRef, normalizeAcpRegistryAuthMethods(initializeResult.authMethods)),
+            Ref.set(
+              authMethodsRef,
+              normalizeAcpRegistryAuthMethods(initializeResult.authMethods, {
+                command: resolved.spawn.command,
+                args: resolved.spawn.args,
+              }),
+            ),
           ...(input.settings.authMethodId ? { authMethodId: input.settings.authMethodId } : {}),
         }).pipe(
           Layer.provide(
@@ -274,7 +342,7 @@ export const probeAcpRegistryConfiguration = Effect.fn("AcpRegistryProbe.probeCo
           Effect.fail(
             new AcpRegistryOperationError({
               reason: "probe_failed",
-              message: "The ACP agent did not create a test session within 20 seconds.",
+              message: `The ACP agent did not create a test session within ${PROBE_TIMEOUT_SECONDS} seconds. A first run may still be downloading its package; this check retries on the next provider refresh.`,
             }),
           ),
       }),
@@ -283,7 +351,10 @@ export const probeAcpRegistryConfiguration = Effect.fn("AcpRegistryProbe.probeCo
       ),
     );
     return {
-      probe: acpRegistryProbeResult(input.instanceId, result.started, resolved.agent.icon ?? null),
+      probe: acpRegistryProbeResult(input.instanceId, result.started, resolved.agent.icon ?? null, {
+        command: resolved.spawn.command,
+        args: resolved.spawn.args,
+      }),
       slashCommands: result.commands.slashCommands,
       skills: result.commands.skills,
     };
