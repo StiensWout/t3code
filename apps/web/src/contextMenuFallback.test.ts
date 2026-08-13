@@ -239,6 +239,7 @@ describe("showContextMenuFallback", () => {
     const deleteButton = findButton("Delete");
     expect(renameButton?.className).toContain("text-foreground");
     expect(deleteButton?.className).toContain("text-destructive-foreground");
+    expect(menu?.getAttribute("data-slot")).toBe("menu-popup");
 
     renameButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     await expect(selectionPromise).resolves.toBe("rename");
@@ -294,16 +295,52 @@ describe("showContextMenuFallback", () => {
     document.dispatchEvent(keyboardEvent("ArrowRight", parentButton));
     const childButton = findButton("/tmp/project-a");
     expect(document.activeElement).toBe(childButton);
+    expect(parentButton?.getAttribute("aria-expanded")).toBe("true");
 
     document.dispatchEvent(keyboardEvent("ArrowLeft", childButton));
     expect(document.activeElement).toBe(parentButton);
+    expect(parentButton?.getAttribute("aria-expanded")).toBe("false");
 
     document.dispatchEvent(keyboardEvent("ArrowRight", parentButton));
     const secondChildButton = findButton("/tmp/project-b");
-    document.dispatchEvent(keyboardEvent("ArrowDown", childButton));
+    expect(parentButton?.getAttribute("aria-expanded")).toBe("true");
+    document.dispatchEvent(keyboardEvent("ArrowDown", findButton("/tmp/project-a")));
     document.dispatchEvent(keyboardEvent("Enter", secondChildButton));
 
     await expect(selectionPromise).resolves.toBe("rename:project-b");
+  });
+
+  it("restores focus when pointer navigation closes a submenu", () => {
+    showContextMenuFallback([
+      {
+        id: "rename:submenu",
+        label: "Rename project",
+        children: [{ id: "rename:project-a", label: "/tmp/project-a" }],
+      },
+      { id: "mark-unread", label: "Mark unread" },
+    ]);
+
+    const parentButton = findButton("Rename project");
+    parentButton?.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
+    const childButton = findButton("/tmp/project-a");
+    const siblingButton = findButton("Mark unread");
+    childButton?.focus();
+    siblingButton?.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
+
+    expect(document.activeElement).toBe(parentButton);
+  });
+
+  it("restores focus to the opener after cleanup", async () => {
+    const opener = document.createElement("button");
+    document.body.appendChild(opener);
+    opener.focus();
+
+    const selectionPromise = showContextMenuFallback([{ id: "rename", label: "Rename" }]);
+    const renameButton = findButton("Rename");
+    renameButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    await expect(selectionPromise).resolves.toBe("rename");
+    expect(document.activeElement).toBe(opener);
   });
 
   it("ignores a click from the gesture that opened the menu", async () => {

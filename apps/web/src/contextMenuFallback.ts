@@ -111,6 +111,7 @@ export function showContextMenuFallback<T extends string>(
   position?: { x: number; y: number },
 ): Promise<T | null> {
   return new Promise<T | null>((resolve) => {
+    const previousActiveElement = document.activeElement as HTMLElement | null;
     const menuStack: HTMLDivElement[] = [];
     const menuParentButtons: Array<HTMLButtonElement | null> = [];
     const buttonMetadata = new WeakMap<
@@ -134,15 +135,26 @@ export function showContextMenuFallback<T extends string>(
       for (const menu of menuStack) {
         menu.remove();
       }
+      previousActiveElement?.focus();
       resolve(result);
     };
 
     const closeMenusFromLevel = (level: number) => {
       while (menuStack.length > level) {
         const childLevel = menuStack.length - 1;
-        menuParentButtons[childLevel]?.setAttribute("aria-expanded", "false");
+        const childMenu = menuStack[childLevel];
+        const parentButton = menuParentButtons[childLevel];
+        if (
+          childMenu &&
+          parentButton &&
+          isNodeWithinMenuStack(document.activeElement, [childMenu])
+        ) {
+          parentButton.focus();
+        }
+        parentButton?.setAttribute("aria-expanded", "false");
         menuParentButtons.pop();
-        menuStack.pop()?.remove();
+        menuStack.pop();
+        childMenu?.remove();
       }
     };
 
@@ -190,18 +202,22 @@ export function showContextMenuFallback<T extends string>(
       switch (event.key) {
         case "ArrowDown":
           event.preventDefault();
+          closeMenusFromLevel(menuIndex + 1);
           focusMenuItem(menu, currentIndex + 1);
           break;
         case "ArrowUp":
           event.preventDefault();
+          closeMenusFromLevel(menuIndex + 1);
           focusMenuItem(menu, currentIndex - 1);
           break;
         case "Home":
           event.preventDefault();
+          closeMenusFromLevel(menuIndex + 1);
           focusMenuItem(menu, 0);
           break;
         case "End":
           event.preventDefault();
+          closeMenusFromLevel(menuIndex + 1);
           focusMenuItem(menu, buttons.length - 1);
           break;
         case "ArrowRight":
@@ -267,6 +283,7 @@ export function showContextMenuFallback<T extends string>(
       menu.dataset.level = String(level);
       menu.setAttribute("role", "menu");
       menu.setAttribute("aria-orientation", "vertical");
+      menu.setAttribute("data-slot", "menu-popup");
       menuParentButtons[level] = parentButton ?? null;
 
       const inner = document.createElement("div");
@@ -370,13 +387,14 @@ export function showContextMenuFallback<T extends string>(
 
           const openSubmenu = (shouldFocusFirst: boolean) => {
             const rect = button.getBoundingClientRect();
-            button.setAttribute("aria-expanded", "true");
             openMenu(item.children!, rect.right + 4, rect.top, level + 1, shouldFocusFirst, button);
 
             const childMenu = menuStack[level + 1];
             if (!childMenu) {
+              button.setAttribute("aria-expanded", "false");
               return;
             }
+            button.setAttribute("aria-expanded", "true");
             const childRect = childMenu.getBoundingClientRect();
             if (childRect.right > window.innerWidth) {
               clampMenuPosition(childMenu, rect.left - childRect.width - 4, rect.top);
