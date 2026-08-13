@@ -8,9 +8,11 @@ import {
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
 import { assert, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Duration from "effect/Duration";
 import * as FileSystem from "effect/FileSystem";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
@@ -238,6 +240,50 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       const next = yield* serverSettings.getSettings;
       assert.equal(next.providerInstances[firstId]?.displayName, "Work Codex");
       assert.equal(next.providerInstances[secondId]?.displayName, "Kilo");
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
+  it.effect("pauses provider-instance mutations while a settings snapshot is in use", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const snapshotEntered = yield* Deferred.make<void>();
+      const releaseSnapshot = yield* Deferred.make<void>();
+      const mutationCompleted = yield* Deferred.make<void>();
+      const instanceId = ProviderInstanceId.make("acpRegistry_kilo");
+
+      const snapshotFiber = yield* serverSettings
+        .withSettingsSnapshot(() =>
+          Deferred.succeed(snapshotEntered, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseSnapshot)),
+          ),
+        )
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(snapshotEntered);
+
+      const mutationFiber = yield* serverSettings
+        .updateProviderInstance({
+          operation: "upsert",
+          instanceId,
+          instance: {
+            driver: ProviderDriverKind.make("acpRegistry"),
+            displayName: "Kilo",
+            config: { agentId: "kilo", distribution: "auto" },
+          },
+        })
+        .pipe(
+          Effect.tap(() => Deferred.succeed(mutationCompleted, undefined)),
+          Effect.forkChild({ startImmediately: true }),
+        );
+      yield* Effect.yieldNow;
+
+      assert.isTrue(Option.isNone(yield* Deferred.poll(mutationCompleted)));
+      yield* Deferred.succeed(releaseSnapshot, undefined);
+      yield* Fiber.join(snapshotFiber);
+      yield* Fiber.join(mutationFiber);
+      assert.equal(
+        (yield* serverSettings.getSettings).providerInstances[instanceId]?.displayName,
+        "Kilo",
+      );
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 

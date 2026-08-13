@@ -9,6 +9,7 @@ import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import {
   DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL,
@@ -155,6 +156,7 @@ import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
 import * as RelayClient from "@t3tools/shared/relayClient";
 
+const isAcpRegistryError = Schema.is(AcpRegistryError);
 const EDITOR_DISCOVERY_TIMEOUT = Duration.seconds(5);
 
 export const resolveAvailableEditorsForConfig = <A, E, R>(
@@ -1310,16 +1312,11 @@ const makeWsRpcLayer = (
         [WS_METHODS.serverUninstallAcpRegistryManagedBinary]: (input) =>
           observeRpcEffect(
             WS_METHODS.serverUninstallAcpRegistryManagedBinary,
-            // The reference check is not transactional with settings writes: an
-            // instance added between the check and the removal loses its cached
-            // binary. That window is already narrowed by the post-prepare
-            // reservation inside the catalog, and a missing binary self-heals
-            // because resolve() reinstalls it on the next session start.
-            acpRegistryCatalog
-              .uninstallManagedBinary(
-                input,
-                serverSettings.getSettings.pipe(
-                  Effect.map((settings) =>
+            serverSettings
+              .withSettingsSnapshot((settings) =>
+                acpRegistryCatalog.uninstallManagedBinary(
+                  input,
+                  Effect.succeed(
                     Object.values(settings.providerInstances).some((instance) => {
                       if (
                         instance.driver !== "acpRegistry" ||
@@ -1331,17 +1328,20 @@ const makeWsRpcLayer = (
                       return (instance.config as Record<string, unknown>).agentId === input.agentId;
                     }),
                   ),
-                  Effect.mapError(
-                    (cause) =>
-                      new AcpRegistryError({
+                ),
+              )
+              .pipe(
+                Effect.mapError((cause) =>
+                  isAcpRegistryError(cause)
+                    ? cause
+                    : new AcpRegistryError({
                         reason: "install_failed",
                         detail: `Could not read provider settings while checking references for ACP Registry agent ${input.agentId}.`,
                         cause,
                       }),
-                  ),
                 ),
-              )
-              .pipe(Effect.mapError(toAcpRegistryOperationError)),
+                Effect.mapError(toAcpRegistryOperationError),
+              ),
             {
               "rpc.aggregate": "server",
               "acp_registry.agent_id": input.agentId,
