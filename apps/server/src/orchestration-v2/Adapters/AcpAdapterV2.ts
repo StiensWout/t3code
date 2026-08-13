@@ -418,7 +418,7 @@ export const AcpProviderCapabilitiesV2 = {
   threads: {
     canCreateEmptyThread: true,
     canReadThreadSnapshot: false,
-    canRollbackThread: false,
+    canRollbackThread: true,
     canForkThread: false,
     canForkFromTurn: false,
     canForkFromSubagentThread: false,
@@ -980,14 +980,10 @@ export function acpMcpToolApprovalElicitationDisposition(
   ) {
     return undefined;
   }
-  return acpPermissionDisposition(runtimePolicy, {
-    sessionId: request.sessionId,
-    toolCall: {
-      toolCallId: "mcp-tool-call-approval",
-      kind: "other",
-    },
-    options: [],
-  });
+  // This request comes from T3's authenticated, scope-checked MCP endpoint,
+  // not an arbitrary provider command. Let explicit approval mode surface it
+  // to the user and otherwise allow the endpoint to enforce its own policy.
+  return runtimePolicy.runtimeMode === "approval-required" ? "ask" : "allow";
 }
 
 function elicitationContent(
@@ -1341,13 +1337,17 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
     openSession: Effect.fn("AcpAdapterV2.openSession")(
       function* (input: ProviderAdapterV2OpenSessionInput) {
         const sessionScope = yield* Effect.scope;
+        const mcpContext = acpMcpContext(input.threadId);
         const clientTerminals: AcpClientTerminals | undefined =
           options.clientTerminals === undefined
             ? undefined
             : yield* makeAcpClientTerminals({
                 spawner: options.clientTerminals.childProcessSpawner,
                 defaultCwd: input.runtimePolicy.cwd ?? process.cwd(),
-                environment: options.clientTerminals.environment,
+                environment: {
+                  ...options.clientTerminals.environment,
+                  ...mcpContext.processEnvironment,
+                },
               });
         if (clientTerminals !== undefined) {
           yield* Scope.addFinalizer(sessionScope, clientTerminals.disposeAll);
@@ -1535,13 +1535,15 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           );
           return false;
         });
-        const awaitAdmittedNativeResponses = Effect.gen(function* () {
-          yield* awaitNativeResponseAcknowledgements(
-            [...(yield* Ref.get(nativeResponseAcknowledgements)).entries()].map(
-              ([requestId, entry]) => [requestId, entry.acknowledgement] as const,
+        const awaitAdmittedNativeResponses = Ref.get(nativeResponseAcknowledgements).pipe(
+          Effect.flatMap((current) =>
+            awaitNativeResponseAcknowledgements(
+              [...current.entries()].map(
+                ([requestId, entry]) => [requestId, entry.acknowledgement] as const,
+              ),
             ),
-          );
-        });
+          ),
+        );
         const quarantineNativeTransportAtGeneration = Effect.fnUntraced(function* (
           generation: number,
         ) {
@@ -4628,14 +4630,17 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
             }
           }
           const optionSelections = modelSelection.options ?? [];
-          const modeSelection = optionSelections.find(
-            (selection) => selection.id === ACP_SESSION_MODE_OPTION_ID,
-          );
-          const configSelections = optionSelections.filter(
-            (selection) => selection.id !== ACP_SESSION_MODE_OPTION_ID,
-          );
           const configOptions = yield* runtime.getConfigOptions;
           const availableConfigIds = new Set(configOptions.map((option) => option.id));
+          const hasNativeConfigWithSyntheticModeId = availableConfigIds.has(
+            ACP_SESSION_MODE_OPTION_ID,
+          );
+          const modeSelection = hasNativeConfigWithSyntheticModeId
+            ? undefined
+            : optionSelections.find((selection) => selection.id === ACP_SESSION_MODE_OPTION_ID);
+          const configSelections = hasNativeConfigWithSyntheticModeId
+            ? optionSelections
+            : optionSelections.filter((selection) => selection.id !== ACP_SESSION_MODE_OPTION_ID);
           const unsupportedConfigIds = configSelections
             .map((selection) => selection.id)
             .filter((id) => !availableConfigIds.has(id));
@@ -4665,15 +4670,14 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               if (!advertisedValues.includes(selection.value)) continue;
             }
             yield* runtime.setConfigOption(selection.id, selection.value).pipe(
-              Effect.catch((error) =>
-                error._tag === "AcpRequestError"
-                  ? Effect.logWarning("ACP session rejected a configuration option value", {
-                      optionId: selection.id,
-                      value: selection.value,
-                      detail: error.message,
-                    })
-                  : Effect.fail(error),
-              ),
+              Effect.catchTags({
+                AcpRequestError: (error) =>
+                  Effect.logWarning("ACP session rejected a configuration option value", {
+                    optionId: selection.id,
+                    value: selection.value,
+                    detail: error.message,
+                  }),
+              }),
             );
           }
           const modeState = yield* runtime.getModeState;
@@ -6045,26 +6049,78 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
             runtimeTransitionPermit
               .withPermit(
                 Effect.gen(function* () {
-                  // ACP defines no conversation truncation, so rollback resets
-                  // the provider conversation: drop the native session binding
-                  // and force a runtime restart. T3 restores checkpointed
-                  // workspace state; the next turn starts a fresh agent session
-                  // without the rolled-back context.
+                  const currentTurn = yield* Ref.get(activeTurn);
+                  if (currentTurn !== null) {
+                    return yield* new ProviderAdapterProtocolError({
+                      driver,
+                      detail: `Cannot roll back ACP provider thread ${rollbackInput.providerThread.id} while turn ${currentTurn.providerTurnId} is active`,
+                    });
+                  }
+                  // ACP defines no conversation truncation, so rollback replaces
+                  // the native session immediately. Returning the replacement
+                  // binding keeps the next turn runnable without loading any of
+                  // the rolled-back conversation.
                   yield* awaitRuntimeTeardown();
                   yield* Ref.set(runtimeRestartRequired, true);
                   yield* Ref.set(activeSessionId, null);
                   yield* Ref.set(activeSessionSetup, null);
+                  const startReplacement = runtimeCallbackPermit
+                    .withPermit(
+                      Effect.gen(function* () {
+                        yield* awaitAdmittedNativeResponses;
+                        const replacedGeneration = yield* Ref.get(runtimeCallbackGeneration);
+                        yield* quarantineNativeTransportAtGeneration(replacedGeneration);
+                        yield* Ref.update(
+                          runtimeCallbackGeneration,
+                          (generation) => generation + 1,
+                        );
+                      }),
+                    )
+                    .pipe(
+                      Effect.andThen(cancelPendingRuntimeRequests()),
+                      Effect.andThen(startAcpRuntime()),
+                    );
+                  const replacement = yield* startReplacement.pipe(Effect.retry({ times: 1 }));
+                  yield* Ref.set(runtimeRestartRequired, false);
+                  yield* Ref.set(activeSessionId, replacement.sessionId);
+                  yield* Ref.set(activeSessionSetup, replacement);
                   yield* Ref.set(activeSelection, null);
                   yield* Ref.set(activeInteractionMode, null);
+                  yield* Ref.set(promptInstructionStates, new Map());
+                  yield* Ref.set(itemOrdinals, new Map());
+                  yield* Ref.set(nextItemOrdinalsByTurn, new Map());
+                  yield* Ref.set(providerTurns, new Map());
+                  yield* Ref.set(snapshot, {
+                    order: [],
+                    messages: new Map(),
+                    loadingRole: null,
+                    loadingIndex: 0,
+                  });
+                  yield* continuationPermit.withPermit(
+                    Effect.gen(function* () {
+                      yield* Ref.update(continuationGeneration, (value) => value + 1);
+                      yield* Ref.set(stoppedRunQuarantine, false);
+                      yield* Ref.set(wakeBuffer, []);
+                      yield* Ref.set(continuationRequested, false);
+                      yield* Ref.set(runningBackgroundTaskIds, new Set());
+                      yield* Ref.set(endedBackgroundTaskIds, new Set());
+                      yield* Ref.set(midTurnUnreportedCompletedTaskIds, new Set());
+                      yield* Ref.set(handledBackgroundTaskIdsInActiveTurn, new Set());
+                      yield* Ref.set(carryoverSubagents, null);
+                      yield* Ref.set(suppressPostSettleMonitorPrompt, false);
+                      yield* Ref.set(lastTurnRoute, null);
+                    }),
+                  );
                   const now = yield* DateTime.now;
                   return {
                     providerThread: {
                       ...rollbackInput.providerThread,
-                      nativeThreadRef: null,
-                      nativeConversationHeadRef:
-                        rollbackInput.target.type === "provider_turn"
-                          ? rollbackInput.target.providerTurn.nativeTurnRef
-                          : null,
+                      nativeThreadRef: {
+                        driver,
+                        nativeId: replacement.sessionId,
+                        strength: "strong" as const,
+                      },
+                      nativeConversationHeadRef: null,
                       status: "idle" as const,
                       updatedAt: now,
                     },

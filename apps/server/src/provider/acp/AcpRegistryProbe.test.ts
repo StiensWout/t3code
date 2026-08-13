@@ -100,6 +100,47 @@ describe("ACP Registry probe", () => {
     ]);
   });
 
+  it("omits unsafe truncated auth commands instead of publishing broken shell", () => {
+    const methods = normalizeAcpRegistryAuthMethods(
+      [
+        {
+          id: "login",
+          name: "Terminal login",
+          type: "terminal",
+          args: ["x".repeat(2_048)],
+        },
+      ],
+      { command: "/opt/agents/devin", args: ["--acp"] },
+    );
+
+    expect(methods[0]).not.toHaveProperty("command");
+  });
+
+  it("omits overlong opaque auth method and environment variable ids", () => {
+    const methods = normalizeAcpRegistryAuthMethods([
+      { id: "x".repeat(129), name: "Invalid" },
+      {
+        id: "api-key",
+        name: "API key",
+        type: "env_var",
+        vars: [
+          { name: "y".repeat(129), label: "Invalid" },
+          { name: "OPENAI_API_KEY", label: "OpenAI API key" },
+        ],
+      },
+    ]);
+
+    expect(methods).toEqual([
+      {
+        id: "api-key",
+        name: "API key",
+        description: null,
+        type: "env_var",
+        envVarNames: ["OPENAI_API_KEY"],
+      },
+    ]);
+  });
+
   it("falls back to model-category configuration options", () => {
     const result = acpRegistryProbeResult(instanceId, {
       sessionId: "probe-session",
@@ -130,10 +171,65 @@ describe("ACP Registry probe", () => {
     expect(result.currentModelId).toBe("sonnet");
   });
 
+  it("omits overlong opaque model ids instead of publishing mutated ids", () => {
+    const result = acpRegistryProbeResult(instanceId, {
+      sessionId: "probe-session",
+      initializeResult: { protocolVersion: 1 },
+      sessionSetupResult: {
+        sessionId: "probe-session",
+        models: {
+          currentModelId: "valid",
+          availableModels: [
+            { modelId: "x".repeat(129), name: "Too long" },
+            { modelId: "valid", name: "Valid" },
+          ],
+        },
+      },
+      modelConfigId: undefined,
+    } satisfies AcpSessionRuntimeStartResult);
+
+    expect(result.models).toEqual([{ id: "valid", name: "Valid", description: null }]);
+  });
+
+  it("omits an overlong opaque current model id instead of mutating it", () => {
+    const result = acpRegistryProbeResult(instanceId, {
+      sessionId: "probe-session",
+      initializeResult: { protocolVersion: 1 },
+      sessionSetupResult: {
+        sessionId: "probe-session",
+        models: { currentModelId: "x".repeat(129), availableModels: [] },
+      },
+      modelConfigId: undefined,
+    } satisfies AcpSessionRuntimeStartResult);
+
+    expect(result.currentModelId).toBeNull();
+  });
+
+  it("omits a current model that falls outside the bounded model catalog", () => {
+    const result = acpRegistryProbeResult(instanceId, {
+      sessionId: "probe-session",
+      initializeResult: { protocolVersion: 1 },
+      sessionSetupResult: {
+        sessionId: "probe-session",
+        models: {
+          currentModelId: "model-256",
+          availableModels: Array.from({ length: 257 }, (_, index) => ({
+            modelId: `model-${index}`,
+            name: `Model ${index}`,
+          })),
+        },
+      },
+      modelConfigId: undefined,
+    } satisfies AcpSessionRuntimeStartResult);
+
+    expect(result.models).toHaveLength(256);
+    expect(result.currentModelId).toBeNull();
+  });
+
   it("bounds and de-duplicates advertised commands", () => {
     const commands = normalizeAcpRegistryCommands([
       {
-        name: " create_plan ",
+        name: "create_plan",
         description: " Create a plan ",
         input: { hint: " topic " },
       },

@@ -39,6 +39,9 @@ const COMMAND_ADVERTISEMENT_GRACE = "500 millis";
 const boundedText = (value: string, maximumLength: number): string =>
   value.trim().slice(0, maximumLength);
 
+const boundedOpaqueValue = (value: string, maximumLength: number): string | undefined =>
+  value.length > 0 && value === value.trim() && value.length <= maximumLength ? value : undefined;
+
 function modelConfigOptions(
   setup: AcpSessionRuntime.AcpSessionRuntimeStartResult["sessionSetupResult"],
 ): ReadonlyArray<EffectAcpSchema.SessionConfigSelectOption> {
@@ -74,8 +77,8 @@ function normalizeModels(
   const seen = new Set<string>();
   const models: Array<AcpRegistryProbeModel> = [];
   for (const candidate of candidates) {
-    const id = boundedText(candidate.id, MAX_ID_LENGTH);
-    if (id.length === 0 || seen.has(id)) continue;
+    const id = boundedOpaqueValue(candidate.id, MAX_ID_LENGTH);
+    if (id === undefined || seen.has(id)) continue;
     seen.add(id);
     models.push({
       id,
@@ -105,12 +108,13 @@ function shellDisplayToken(token: string): string {
 function terminalAuthCommand(
   method: Extract<EffectAcpSchema.AuthMethod, { readonly type: "terminal" }>,
   spawn: AcpRegistryAuthSpawnContext,
-): string {
+): string | undefined {
   const environmentPrefix = Object.entries(method.env ?? {}).map(
     ([name, value]) => `${name}=${shellDisplayToken(value)}`,
   );
   const command = [spawn.command, ...spawn.args, ...(method.args ?? [])].map(shellDisplayToken);
-  return [...environmentPrefix, ...command].join(" ").slice(0, MAX_COMMAND_LINE_LENGTH);
+  const displayCommand = [...environmentPrefix, ...command].join(" ");
+  return displayCommand.length <= MAX_COMMAND_LINE_LENGTH ? displayCommand : undefined;
 }
 
 export function normalizeAcpRegistryAuthMethods(
@@ -119,16 +123,22 @@ export function normalizeAcpRegistryAuthMethods(
 ): ReadonlyArray<AcpRegistryProbeAuthMethod> {
   const normalized: Array<AcpRegistryProbeAuthMethod> = [];
   for (const method of methods ?? []) {
-    const id = boundedText(method.id, MAX_ID_LENGTH);
-    if (id.length === 0) continue;
+    const id = boundedOpaqueValue(method.id, MAX_ID_LENGTH);
+    if (id === undefined) continue;
     const type = "type" in method ? method.type : "agent";
     const envVarNames =
       type === "env_var" && "vars" in method
         ? method.vars
-            .map((variable) => boundedText(variable.name, MAX_ID_LENGTH))
-            .filter((name) => name.length > 0)
+            .flatMap((variable) => {
+              const name = boundedOpaqueValue(variable.name, MAX_ID_LENGTH);
+              return name === undefined ? [] : [name];
+            })
             .slice(0, 16)
         : [];
+    const command =
+      spawn !== undefined && "type" in method && method.type === "terminal"
+        ? terminalAuthCommand(method, spawn)
+        : undefined;
     normalized.push({
       id,
       name: boundedText(method.name, MAX_NAME_LENGTH) || id,
@@ -137,9 +147,7 @@ export function normalizeAcpRegistryAuthMethods(
           ? null
           : boundedText(method.description, MAX_DESCRIPTION_LENGTH) || null,
       type,
-      ...(spawn !== undefined && "type" in method && method.type === "terminal"
-        ? { command: terminalAuthCommand(method, spawn) }
-        : {}),
+      ...(command === undefined ? {} : { command }),
       ...(envVarNames.length > 0 ? { envVarNames } : {}),
     });
     if (normalized.length === MAX_AUTH_METHODS) break;
@@ -166,15 +174,16 @@ export function normalizeAcpRegistryCommands(
   const skills: Array<ServerProviderSkill> = [];
   let accepted = 0;
   for (const command of commands) {
-    const name = boundedText(command.name, MAX_ID_LENGTH);
+    const name = boundedOpaqueValue(command.name, MAX_ID_LENGTH);
+    if (name === undefined) continue;
     const key = name.toLowerCase();
-    if (name.length === 0 || seen.has(key)) continue;
+    if (seen.has(key)) continue;
     seen.add(key);
     const description = boundedText(command.description, MAX_DESCRIPTION_LENGTH);
     const hint = command.input ? boundedText(command.input.hint, MAX_DESCRIPTION_LENGTH) : "";
     if (name.startsWith("$")) {
-      const skillName = boundedText(name.slice(1), MAX_ID_LENGTH);
-      if (skillName.length === 0) continue;
+      const skillName = boundedOpaqueValue(name.slice(1), MAX_ID_LENGTH);
+      if (skillName === undefined) continue;
       skills.push({
         name: skillName,
         ...(description ? { description } : {}),
@@ -212,14 +221,20 @@ export function acpRegistryProbeResult(
   // are the catalog, so its current value is the current model.
   const rawCurrentModelId =
     configModelId ?? started.sessionSetupResult.models?.currentModelId ?? null;
-  const currentModelId =
-    rawCurrentModelId == null ? null : boundedText(rawCurrentModelId, MAX_ID_LENGTH) || null;
+  const boundedCurrentModelId =
+    rawCurrentModelId == null
+      ? null
+      : (boundedOpaqueValue(rawCurrentModelId, MAX_ID_LENGTH) ?? null);
+  const models = normalizeModels(started.sessionSetupResult);
+  const currentModelId = models.some((model) => model.id === boundedCurrentModelId)
+    ? boundedCurrentModelId
+    : null;
   return AcpRegistryProbeResult.make({
     instanceId,
     ready: true,
     icon,
     authMethods: normalizeAcpRegistryAuthMethods(started.initializeResult.authMethods, spawn),
-    models: normalizeModels(started.sessionSetupResult),
+    models,
     currentModelId,
     configOptions: acpProviderOptionDescriptors({
       configOptions: started.sessionSetupResult.configOptions,

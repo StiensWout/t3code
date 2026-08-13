@@ -134,6 +134,11 @@ export type ProviderInstanceConfig = typeof ProviderInstanceConfig.Type;
 /** Atomic mutation for one provider-instance map entry. */
 export const ProviderInstanceMutation = Schema.Union([
   Schema.Struct({
+    operation: Schema.Literal("create"),
+    instanceId: ProviderInstanceId,
+    instance: ProviderInstanceConfig,
+  }),
+  Schema.Struct({
     operation: Schema.Literal("upsert"),
     instanceId: ProviderInstanceId,
     instance: ProviderInstanceConfig,

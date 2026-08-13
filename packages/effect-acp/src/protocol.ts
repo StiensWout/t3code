@@ -32,6 +32,13 @@ export interface AcpRequestContext {
   readonly method: string;
 }
 
+/** Lossless string identity for JSON-RPC request IDs used by callback maps. */
+export function acpRequestIdentity(requestId: AcpError.AcpRequestId): string {
+  const prefix = "$t3:jsonrpc:";
+  if (typeof requestId === "number") return `${prefix}number:${requestId}`;
+  return requestId.startsWith(prefix) ? `${prefix}string:${requestId}` : requestId;
+}
+
 export type AcpRequestHandler<Request, Response> = (
   request: Request,
   context: AcpRequestContext,
@@ -268,7 +275,7 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
         yield* Deferred.await(acknowledgement);
       }
       if (message._tag === "Exit" && options.onOutgoingResponse !== undefined) {
-        yield* options.onOutgoingResponse(String(message.requestId));
+        yield* options.onOutgoingResponse(acpRequestIdentity(message.requestId));
       }
     }
   });
@@ -278,7 +285,7 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
     onFound: (pendingRequest: AcpPendingRequest) => Effect.Effect<void>,
   ) =>
     Ref.modify(extPending, (pending) => {
-      const pendingKey = String(requestId);
+      const pendingKey = acpRequestIdentity(requestId);
       const pendingRequest = pending.get(pendingKey);
       if (!pendingRequest) {
         return [Effect.void, pending] as const;
@@ -290,7 +297,7 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
 
   const removeExtPending = (requestId: AcpError.AcpRequestId) =>
     Ref.update(extPending, (pending) => {
-      const pendingKey = String(requestId);
+      const pendingKey = acpRequestIdentity(requestId);
       if (!pending.has(pendingKey)) {
         return pending;
       }
@@ -388,7 +395,7 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
     }
     return options
       .onExtRequest(message.tag, message.payload, {
-        requestId: String(message.id),
+        requestId: acpRequestIdentity(message.id),
         method: message.tag,
       })
       .pipe(
@@ -457,7 +464,8 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
     }
 
     const observeIncoming =
-      options.onIncomingRequest?.(String(message.id), message.tag, message.payload) ?? Effect.void;
+      options.onIncomingRequest?.(acpRequestIdentity(message.id), message.tag, message.payload) ??
+      Effect.void;
 
     if (!options.serverRequestMethods.has(message.tag)) {
       return observeIncoming.pipe(
@@ -499,7 +507,7 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
   const handleExitEncoded = (message: RpcMessage.ResponseExitEncoded) =>
     Ref.get(extPending).pipe(
       Effect.flatMap((pending) => {
-        const pendingRequest = pending.get(String(message.requestId));
+        const pendingRequest = pending.get(acpRequestIdentity(message.requestId));
         if (!pendingRequest) {
           return forwardToRpcClient(message);
         }
@@ -539,7 +547,7 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
       case "Chunk":
         return Ref.get(extPending).pipe(
           Effect.flatMap((pending) => {
-            const pendingRequest = pending.get(String(message.requestId));
+            const pendingRequest = pending.get(acpRequestIdentity(message.requestId));
             return pendingRequest
               ? completeExtPendingFailure(
                   message.requestId,
@@ -774,7 +782,7 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
       offerOutgoing(response).pipe(
         Effect.tapError((error) =>
           response._tag === "Exit" && options.onOutgoingResponseFailure !== undefined
-            ? options.onOutgoingResponseFailure(String(response.requestId), error)
+            ? options.onOutgoingResponseFailure(acpRequestIdentity(response.requestId), error)
             : Effect.void,
         ),
         Effect.orDie,
@@ -810,7 +818,7 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
     );
     const deferred = yield* Deferred.make<unknown, AcpError.AcpError>();
     yield* Ref.update(extPending, (pending) =>
-      new Map(pending).set(String(requestId), { deferred, method }),
+      new Map(pending).set(acpRequestIdentity(requestId), { deferred, method }),
     );
     yield* offerOutgoing({
       _tag: "Request",

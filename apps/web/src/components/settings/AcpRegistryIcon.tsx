@@ -125,14 +125,7 @@ export function AcpRegistryAgentIcon({
       .then((blob) => {
         if (!active) return;
         objectUrl = URL.createObjectURL(blob);
-        setImage((current) => {
-          if (current?.iconUrl === iconUrl && current.status === "loaded") {
-            URL.revokeObjectURL(objectUrl!);
-            objectUrl = null;
-            return current;
-          }
-          return { iconUrl, source: objectUrl!, status: "loading" };
-        });
+        setImage({ iconUrl, source: objectUrl, status: "loading" });
       })
       .catch(() => {
         if (!active) return;

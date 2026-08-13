@@ -377,7 +377,7 @@ describe("AcpRegistrySupport", () => {
     );
   });
 
-  it.effect("rejects unpinned runner recipes from the registry", () => {
+  it.effect("ignores unpinned runner recipes from the registry", () => {
     const agent = makeAgent({ npx: { package: "@example/acp@latest" } });
     return Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -385,14 +385,52 @@ describe("AcpRegistrySupport", () => {
         prefix: "t3-acp-registry-unpinned-",
       });
       const resolver = yield* makeAcpRegistryCatalog({ cacheDir, registryUrl });
-      const error = yield* resolver.search({ query: "" }).pipe(Effect.flip);
+      const result = yield* resolver.search({ query: "" });
 
-      expect(error.reason).toBe("registry_unavailable");
+      expect(result.agents).toEqual([]);
     }).pipe(
       Effect.scoped,
       Effect.provide(
         resolverLayer((request) =>
           Effect.succeed(HttpClientResponse.fromWeb(request, new Response(makeRegistry(agent)))),
+        ),
+      ),
+    );
+  });
+
+  it.effect("rejects package syntax for the wrong runner", () => {
+    const invalidAgents = [
+      { ...makeAgent({ npx: { package: "example-agent==1.2.3" } }), id: "bad-npx" },
+    ];
+    const validAgents = [
+      { ...makeAgent({ uvx: { package: "minion-code@0.1.44" } }), id: "valid-at" },
+      { ...makeAgent({ uvx: { package: "fast-agent-acp==0.9.30" } }), id: "valid-equals" },
+    ];
+    return Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-acp-registry-runner-syntax-",
+      });
+      const resolver = yield* makeAcpRegistryCatalog({ cacheDir, registryUrl });
+      const invalid = yield* resolver.prepare({ agentId: "bad-npx" }).pipe(Effect.flip);
+      const validAt = yield* resolver.prepare({ agentId: "valid-at" }).pipe(Effect.flip);
+      const validEquals = yield* resolver.prepare({ agentId: "valid-equals" }).pipe(Effect.flip);
+
+      expect(invalid.reason).toBe("agent_not_found");
+      expect(validAt.reason).toBe("runner_unavailable");
+      expect(validEquals.reason).toBe("runner_unavailable");
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        resolverLayer((request) =>
+          Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              new Response(
+                JSON.stringify({ version: "1.0.0", agents: [...invalidAgents, ...validAgents] }),
+              ),
+            ),
+          ),
         ),
       ),
     );
@@ -468,7 +506,7 @@ describe("AcpRegistrySupport", () => {
   });
 
   it.effect("reports a missing runner without starting the ACP package", () => {
-    const agent = makeAgent({ uvx: { package: "example-agent==1.2.3" } });
+    const agent = makeAgent({ uvx: { package: "example-agent@1.2.3" } });
     return Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({

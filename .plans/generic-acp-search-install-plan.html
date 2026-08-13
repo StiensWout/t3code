@@ -602,7 +602,7 @@
   <body>
     <header>
       <div class="shell">
-        <p class="eyebrow">T3 Code · Orchestrator v2 · delivery state · updated 13 Aug 2026</p>
+        <p class="eyebrow">T3 Code · Orchestrator v2 · delivery state · updated 14 Aug 2026</p>
         <h1>Generic ACP delivery and standardization</h1>
         <p class="lede">
           The reviewed discovery plan is now implemented and has expanded through live testing:
@@ -613,7 +613,9 @@
           round standardizes request identity, current and legacy elicitation, approvals,
           instructions, session configuration, and MCP delivery across ACP providers. Real Codex ACP
           and Pi ACP parents have each created and completed the requested four-provider child matrix.
-          PR #6461 is ready for review, stacked directly on orchestrator v2 PR #2829.
+          A final adversarial review hardened opaque IDs, streaming MCP, terminal concurrency,
+          rollback, registry tolerance, and atomic provider settings. PR #6461 is ready for review,
+          stacked directly on orchestrator v2 PR #2829.
         </p>
         <div class="decision-strip">
           <div>
@@ -1344,12 +1346,10 @@
         </div>
 
         <p class="muted small" style="margin-top: 18px">
-          Verification at handoff: server, web, and contracts typecheck clean; ACP suites green
-          (adapter 100, registry/probe/driver 46+, new fs/terminal/config/bridge tests 33+, web 186);
-          lint clean on changed areas. Follow-up verification adds focused coverage for extended
-          elicitation correlation, MCP policy handling, waiting-run interruption, and boolean session
-          options. Server and client-runtime typechecks pass, and the isolated dev environment is active
-          and serving the worktree edits.
+          Verification at handoff: server, web, contracts, client-runtime, and effect-acp typechecks
+          pass. The latest focused run covers 225 tests across ACP protocol identity, registry,
+          probe, terminal, session configuration, MCP bridge, settings, icon, and adapter behavior.
+          The isolated dev environment served the final worktree edits for both live parent proofs.
         </p>
       </section>
 
@@ -1440,23 +1440,47 @@
           <h3>Acceptance completed with two real ACP parents</h3>
           <p class="muted small">
             The exact user prompt was run first under Codex ACP
-            (<code>acpRegistry_codex / gpt-5.6-luna</code>) and then under Pi ACP
-            (<code>acpRegistry_pi_acp / openai-codex/gpt-5.6-luna</code>). Both parents created four
-            durable child threads. All eight children reached <code>completed</code>.
+            (<code>acpRegistry_codex / gpt-5.6-sol</code>, thread
+            <code>a02eaa0d-27df-4b80-9a7b-0fa20c53d832</code>) and then under Pi ACP
+            (<code>acpRegistry_pi_acp / openai-codex/gpt-5.6-sol</code>, thread
+            <code>69e0ca9b-91be-47e6-9120-b4d799d1897a</code>). Both parents created four durable
+            child threads. All eight children reached <code>completed</code>.
           </p>
           <table>
             <thead><tr><th>Parent</th><th>Native Codex</th><th>Claude</th><th>Codex ACP</th><th>Codex in Pi</th></tr></thead>
             <tbody>
-              <tr><td>Codex ACP</td><td><code>codex / gpt-5.6-luna</code></td><td><code>claudeAgent / claude-sonnet-4-6</code></td><td><code>acpRegistry_codex / gpt-5.6-luna</code></td><td><code>acpRegistry_pi_acp / openai-codex/gpt-5.6-luna</code></td></tr>
-              <tr><td>Pi ACP</td><td><code>codex / gpt-5.6-sol</code></td><td><code>claudeAgent / claude-sonnet-4-6</code></td><td><code>acpRegistry_codex / gpt-5.6-sol</code></td><td><code>acpRegistry_pi_acp / openai-codex/gpt-5.6-luna</code></td></tr>
+              <tr><td>Codex ACP</td><td><code>codex / gpt-5.6-sol</code></td><td><code>claudeAgent / claude-sonnet-5</code></td><td><code>acpRegistry_codex / gpt-5.6-sol</code></td><td><code>acpRegistry_pi_acp / openai-codex/gpt-5.6-sol</code></td></tr>
+              <tr><td>Pi ACP</td><td><code>codex</code></td><td><code>claudeAgent / claude-fable-5</code></td><td><code>acpRegistry_codex / gpt-5.6-sol</code></td><td><code>acpRegistry_pi_acp / openai-codex/gpt-5.6-sol</code></td></tr>
             </tbody>
           </table>
           <p class="muted small" style="margin-top: 16px">
-            Final focused verification: server and effect-acp typechecks pass; changed TypeScript is
-            lint clean; 61 protocol, bridge, session-config, client-runtime, and registry tests pass;
-            four focused ACP adapter tests pass; current flat and legacy nested elicitation responses
-            have explicit wire-shape coverage.
+            Final focused verification: server, web, contracts, client-runtime, and effect-acp
+            typechecks pass. 225 focused tests pass, including the selected ACP adapter lifecycle scenarios;
+            current flat and legacy nested elicitation responses have explicit wire-shape coverage.
           </p>
+        </div>
+
+        <div class="grid-2" style="margin-top: 30px">
+          <div class="flat">
+            <h3>Final interoperability hardening</h3>
+            <ul class="muted small">
+              <li>Numeric and string JSON-RPC request IDs remain distinct across protocol, client, agent, and adapter boundaries.</li>
+              <li>The stdio MCP bridge orders session setup, then forwards independent requests and cancellation concurrently while streaming SSE events incrementally.</li>
+              <li>ACP terminal creation is concurrency-safe, waits for output drains, reports exit signals, force-kills uncooperative children, and bounds retained output without invalidating live handles.</li>
+              <li>Rollback starts a replacement ACP session immediately, quarantines every failed replacement generation, and clears session-scoped turn, item, and continuation state.</li>
+              <li>Opaque model, auth, and option IDs are preserved exactly or omitted when unsafe; current-model references always point into the published bounded inventory.</li>
+            </ul>
+          </div>
+          <div class="flat">
+            <h3>Final delivery hardening</h3>
+            <ul class="muted small">
+              <li>Registry entries are decoded independently, so one malformed third-party recipe cannot hide every valid ACP provider.</li>
+              <li><code>npx</code> and <code>uvx</code> validate their own package syntax, while oversized authentication commands are omitted instead of sliced into invalid commands.</li>
+              <li>Provider creation is atomic under concurrency. Secret writes and removals share one rollback, followed by one uninterruptible settings commit.</li>
+              <li>Registry icon URL replacement is safe under rapid A → B → A source changes.</li>
+              <li>Authenticated T3 MCP calls inherit the thread runtime policy instead of being mislabeled as unknown workspace writes.</li>
+            </ul>
+          </div>
         </div>
       </section>
     </main>

@@ -88,6 +88,7 @@ describe("ACP Registry contracts", () => {
           },
         ],
         currentModelId: "default",
+        configOptions: [],
       }),
     ).toMatchObject({ ready: true, currentModelId: "default" });
   });

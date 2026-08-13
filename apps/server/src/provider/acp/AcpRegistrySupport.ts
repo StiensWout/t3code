@@ -60,14 +60,19 @@ const EXACT_NPX_PACKAGE = new RegExp(
   `^(?:@[^/@\\s]+/[^@\\s]+|[a-z0-9][a-z0-9._-]*)@${EXACT_RUNNER_VERSION}$`,
   "iu",
 );
-const EXACT_UVX_PACKAGE = new RegExp(`^[a-z0-9][a-z0-9._-]*==${EXACT_RUNNER_VERSION}$`, "iu");
-const BoundedPackage = Schema.String.check(
+const EXACT_UVX_PACKAGE = new RegExp(`^[a-z0-9][a-z0-9._-]*(?:@|==)${EXACT_RUNNER_VERSION}$`, "iu");
+const NpxPackage = Schema.String.check(
   Schema.isMaxLength(256),
   Schema.makeFilter(
     (value) =>
-      EXACT_NPX_PACKAGE.test(value) ||
-      EXACT_UVX_PACKAGE.test(value) ||
-      "ACP Registry runner packages must include an exact version.",
+      EXACT_NPX_PACKAGE.test(value) || "ACP Registry npx packages must include an exact version.",
+  ),
+);
+const UvxPackage = Schema.String.check(
+  Schema.isMaxLength(256),
+  Schema.makeFilter(
+    (value) =>
+      EXACT_UVX_PACKAGE.test(value) || "ACP Registry uvx packages must include an exact version.",
   ),
 );
 const HttpsUrl = Schema.String.check(
@@ -85,10 +90,17 @@ const HttpsUrl = Schema.String.check(
   }),
 );
 
-const AcpRegistryPackageDistribution = Schema.Struct({
-  package: BoundedPackage,
+const AcpRegistryPackageDistributionFields = {
   args: Schema.optionalKey(Schema.Array(BoundedArgument).check(Schema.isMaxLength(64))),
   env: Schema.optionalKey(Schema.Record(BoundedMetadata, BoundedArgument)),
+} as const;
+const AcpRegistryNpxDistribution = Schema.Struct({
+  package: NpxPackage,
+  ...AcpRegistryPackageDistributionFields,
+});
+const AcpRegistryUvxDistribution = Schema.Struct({
+  package: UvxPackage,
+  ...AcpRegistryPackageDistributionFields,
 });
 
 const AcpRegistryBinaryTarget = Schema.Struct({
@@ -111,19 +123,23 @@ const AcpRegistryAgent = Schema.Struct({
   icon: Schema.optionalKey(HttpsUrl),
   distribution: Schema.Struct({
     binary: Schema.optionalKey(Schema.Record(Schema.String, AcpRegistryBinaryTarget)),
-    npx: Schema.optionalKey(AcpRegistryPackageDistribution),
-    uvx: Schema.optionalKey(AcpRegistryPackageDistribution),
+    npx: Schema.optionalKey(AcpRegistryNpxDistribution),
+    uvx: Schema.optionalKey(AcpRegistryUvxDistribution),
   }),
 });
 export type AcpRegistryAgent = typeof AcpRegistryAgent.Type;
 
-const AcpRegistryIndex = Schema.Struct({
+const AcpRegistryIndexEnvelope = Schema.Struct({
   version: BoundedVersion,
-  agents: Schema.Array(AcpRegistryAgent).check(Schema.isMaxLength(512)),
+  agents: Schema.Array(Schema.Unknown).check(Schema.isMaxLength(512)),
 });
-export type AcpRegistryIndex = typeof AcpRegistryIndex.Type;
+export interface AcpRegistryIndex {
+  readonly version: string;
+  readonly agents: ReadonlyArray<AcpRegistryAgent>;
+}
 
-const decodeRegistryIndex = Schema.decodeUnknownEffect(AcpRegistryIndex);
+const decodeRegistryIndexEnvelope = Schema.decodeUnknownEffect(AcpRegistryIndexEnvelope);
+const decodeRegistryAgent = Schema.decodeUnknownOption(AcpRegistryAgent);
 const decodeJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 const decodeHttpsUrl = Schema.decodeUnknownEffect(HttpsUrl);
 const decodeBoundedAgentId = Schema.decodeUnknownEffect(BoundedAgentId);
@@ -494,7 +510,7 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
           }),
       ),
     );
-    return yield* decodeRegistryIndex(decoded).pipe(
+    const envelope = yield* decodeRegistryIndexEnvelope(decoded).pipe(
       Effect.mapError(
         (cause) =>
           new AcpRegistryError({
@@ -504,6 +520,15 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
           }),
       ),
     );
+    const agents = envelope.agents.flatMap((candidate) => {
+      const decodedAgent = decodeRegistryAgent(candidate);
+      return Option.isSome(decodedAgent) ? [decodedAgent.value] : [];
+    });
+    const discarded = envelope.agents.length - agents.length;
+    if (discarded > 0) {
+      yield* Effect.logWarning("ignored invalid ACP Registry entries", { discarded });
+    }
+    return { version: envelope.version, agents } satisfies AcpRegistryIndex;
   });
 
   const readCachedRegistry = fileSystem

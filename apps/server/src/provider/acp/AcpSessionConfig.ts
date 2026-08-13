@@ -25,6 +25,9 @@ const MAX_DESCRIPTION_LENGTH = 1_024;
 const boundedText = (value: string | null | undefined, maximumLength: number): string =>
   (value ?? "").trim().slice(0, maximumLength);
 
+const boundedOpaqueValue = (value: string, maximumLength: number): string | undefined =>
+  value.length > 0 && value === value.trim() && value.length <= maximumLength ? value : undefined;
+
 function flattenSelectChoices(
   options: EffectAcpSchema.SessionConfigSelectOptions,
 ): ReadonlyArray<EffectAcpSchema.SessionConfigSelectOption> {
@@ -41,8 +44,8 @@ function selectChoices(
   const seen = new Set<string>();
   const choices: Array<ProviderOptionChoice> = [];
   for (const candidate of candidates) {
-    const id = boundedText(candidate.value, MAX_TEXT_LENGTH);
-    if (id.length === 0 || seen.has(id)) continue;
+    const id = boundedOpaqueValue(candidate.value, MAX_TEXT_LENGTH);
+    if (id === undefined || seen.has(id)) continue;
     seen.add(id);
     const description = boundedText(candidate.description, MAX_DESCRIPTION_LENGTH);
     choices.push({
@@ -61,6 +64,7 @@ export function acpProviderOptionDescriptors(input: {
 }): ReadonlyArray<ProviderOptionDescriptor> {
   const descriptors: Array<ProviderOptionDescriptor> = [];
   const seen = new Set<string>();
+  const mirroredModeChoiceSets: Array<ReadonlySet<string>> = [];
   let hasModeCategory = false;
 
   for (const option of input.configOptions ?? []) {
@@ -69,8 +73,8 @@ export function acpProviderOptionDescriptors(input: {
     if (option.category === "model" || option.category === "collaboration_mode") {
       continue;
     }
-    const id = boundedText(option.id, MAX_TEXT_LENGTH);
-    if (id.length === 0 || seen.has(id)) continue;
+    const id = boundedOpaqueValue(option.id, MAX_TEXT_LENGTH);
+    if (id === undefined || seen.has(id)) continue;
     seen.add(id);
     const description = boundedText(option.description, MAX_DESCRIPTION_LENGTH);
     const base = {
@@ -94,7 +98,10 @@ export function acpProviderOptionDescriptors(input: {
       continue;
     }
     if (option.category === "mode") hasModeCategory = true;
-    const currentValue = boundedText(option.currentValue, MAX_TEXT_LENGTH);
+    if (option.category === "thought_level") {
+      mirroredModeChoiceSets.push(new Set(choices.map((choice) => choice.id)));
+    }
+    const currentValue = option.currentValue;
     descriptors.push({
       ...base,
       type: "select",
@@ -115,19 +122,20 @@ export function acpProviderOptionDescriptors(input: {
         description: mode.description,
       })),
     );
-    const currentValue = boundedText(modeState.currentModeId, MAX_TEXT_LENGTH);
+    const currentValue = modeState.currentModeId;
     // Some agents mirror one knob through both the modes API and a config
     // option (codex-acp advertises its thinking levels as modes too). Skip
     // the synthetic descriptor when an existing descriptor already exposes
     // the same choice set, so the composer shows the knob once.
-    const modeChoiceIds = new Set(choices.map((choice) => choice.id));
-    const duplicatesExistingDescriptor = descriptors.some(
-      (descriptor) =>
-        descriptor.type === "select" &&
-        descriptor.options.length === choices.length &&
-        descriptor.options.every((option) => modeChoiceIds.has(option.id)),
+    const duplicatesKnownModeDescriptor = mirroredModeChoiceSets.some(
+      (choiceIds) =>
+        choiceIds.size === choices.length && choices.every((choice) => choiceIds.has(choice.id)),
     );
-    if (choices.length > 1 && !duplicatesExistingDescriptor) {
+    if (
+      choices.length > 1 &&
+      !duplicatesKnownModeDescriptor &&
+      !seen.has(ACP_SESSION_MODE_OPTION_ID)
+    ) {
       descriptors.push({
         id: ACP_SESSION_MODE_OPTION_ID,
         label: "Mode",

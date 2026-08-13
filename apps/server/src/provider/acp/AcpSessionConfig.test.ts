@@ -178,6 +178,61 @@ describe("acpProviderOptionDescriptors", () => {
     expect(descriptors.map((descriptor) => descriptor.id)).toEqual(["thinking"]);
   });
 
+  it("does not let an unrelated select option hide the session modes API", () => {
+    const descriptors = acpProviderOptionDescriptors({
+      configOptions: [
+        {
+          id: "unrelated",
+          name: "Unrelated",
+          type: "select",
+          currentValue: "safe",
+          options: [
+            { value: "safe", name: "Safe" },
+            { value: "yolo", name: "YOLO" },
+          ],
+        },
+      ],
+      modeState: {
+        currentModeId: "safe",
+        availableModes: [
+          { id: "safe", name: "Safe" },
+          { id: "yolo", name: "YOLO" },
+        ],
+      },
+    });
+
+    expect(descriptors.map((descriptor) => descriptor.id)).toEqual([
+      "unrelated",
+      ACP_SESSION_MODE_OPTION_ID,
+    ]);
+  });
+
+  it("preserves canonical opaque option values and omits values the wire would mutate", () => {
+    const exactValue = "value:with:opaque-markers";
+    const descriptors = acpProviderOptionDescriptors({
+      configOptions: [
+        {
+          id: "opaque",
+          name: "Opaque",
+          type: "select",
+          currentValue: exactValue,
+          options: [
+            { value: exactValue, name: "Exact" },
+            { value: " value with spaces ", name: "Would be trimmed" },
+            { value: "x".repeat(257), name: "Too long" },
+          ],
+        },
+      ],
+      modeState: undefined,
+    });
+
+    expect(descriptors[0]).toMatchObject({
+      id: "opaque",
+      currentValue: exactValue,
+      options: [{ id: exactValue, label: "Exact" }],
+    });
+  });
+
   it("suppresses the synthetic mode descriptor when a mode-category option exists", () => {
     const descriptors = acpProviderOptionDescriptors({
       configOptions: [

@@ -1,9 +1,11 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Result from "effect/Result";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import {
+  acpTerminalCommand,
   makeAcpClientTerminals,
   resolveEmbeddedTerminalContent,
   type AcpClientTerminals,
@@ -20,6 +22,15 @@ const withTerminals = <A, E>(use: (terminals: AcpClientTerminals) => Effect.Effe
   }).pipe(Effect.provide(NodeServices.layer), Effect.scoped);
 
 describe("AcpClientTerminals", () => {
+  it("configures bounded force-kill escalation on terminal commands", () => {
+    const command = acpTerminalCommand({
+      request: { sessionId: "session", command: "agent-command" },
+      defaultCwd: "/workspace",
+    });
+
+    expect(command.options.forceKillAfter).toBe("5 seconds");
+  });
+
   it.effect("runs a command, buffers output, and reports the exit status", () =>
     withTerminals((terminals) =>
       Effect.gen(function* () {
@@ -82,6 +93,7 @@ describe("AcpClientTerminals", () => {
           terminalId: created.terminalId,
         });
         expect(exit.exitCode === 0 ? null : exit.exitCode).not.toBe(0);
+        expect(exit.signal).toBe("SIGTERM");
 
         yield* terminals.release({ sessionId: "session", terminalId: created.terminalId });
         const rejected = yield* Effect.flip(
@@ -91,6 +103,110 @@ describe("AcpClientTerminals", () => {
 
         // Embedded tool-call content still renders released terminals.
         expect(terminals.readOutputSnapshot(created.terminalId)).toBeDefined();
+      }),
+    ),
+  );
+
+  it.effect("reserves terminal capacity across concurrent creates", () =>
+    withTerminals((terminals) =>
+      Effect.gen(function* () {
+        const results = yield* Effect.all(
+          Array.from({ length: 17 }, () =>
+            terminals
+              .create({
+                sessionId: "session",
+                command: process.execPath,
+                args: ["-e", "setInterval(() => {}, 1000);"],
+              })
+              .pipe(Effect.result),
+          ),
+          { concurrency: "unbounded" },
+        );
+
+        expect(results.filter(Result.isSuccess)).toHaveLength(16);
+        expect(results.filter(Result.isFailure)).toHaveLength(1);
+      }),
+    ),
+  );
+
+  it.effect("bounds retained snapshots after terminals are released", () =>
+    withTerminals((terminals) =>
+      Effect.gen(function* () {
+        const terminalIds: string[] = [];
+        for (let index = 0; index < 33; index += 1) {
+          const created = yield* terminals.create({
+            sessionId: "session",
+            command: process.execPath,
+            args: ["-e", `process.stdout.write('${index}');`],
+          });
+          yield* terminals.release({ sessionId: "session", terminalId: created.terminalId });
+          terminalIds.push(created.terminalId);
+        }
+
+        expect(terminals.readOutputSnapshot(terminalIds[0]!)).toBeUndefined();
+        expect(terminals.readOutputSnapshot(terminalIds.at(-1)!)).toBeDefined();
+      }),
+    ),
+  );
+
+  it.effect("bounds unreleased terminal handles without invalidating existing ids", () =>
+    withTerminals((terminals) =>
+      Effect.gen(function* () {
+        const terminalIds: string[] = [];
+        for (let index = 0; index < 64; index += 1) {
+          const created = yield* terminals.create({
+            sessionId: "session",
+            command: process.execPath,
+            args: ["-e", `process.stdout.write('${index}');`],
+          });
+          yield* terminals.waitForExit({
+            sessionId: "session",
+            terminalId: created.terminalId,
+          });
+          terminalIds.push(created.terminalId);
+        }
+
+        const rejected = yield* terminals
+          .create({
+            sessionId: "session",
+            command: process.execPath,
+            args: ["-e", ""],
+          })
+          .pipe(Effect.result);
+        expect(Result.isFailure(rejected)).toBe(true);
+        expect(terminals.readOutputSnapshot(terminalIds[0]!)).toBeDefined();
+        expect(terminals.readOutputSnapshot(terminalIds.at(-1)!)).toBeDefined();
+      }),
+    ),
+  );
+
+  it.effect("bounds aggregate output retained across unreleased terminals", () =>
+    withTerminals((terminals) =>
+      Effect.gen(function* () {
+        const terminalIds: string[] = [];
+        for (let index = 0; index < 3; index += 1) {
+          const created = yield* terminals.create({
+            sessionId: "session",
+            command: process.execPath,
+            args: ["-e", "process.stdout.write('x'.repeat(8 * 1024 * 1024));"],
+            outputByteLimit: 8 * 1024 * 1024,
+          });
+          yield* terminals.waitForExit({
+            sessionId: "session",
+            terminalId: created.terminalId,
+          });
+          terminalIds.push(created.terminalId);
+        }
+
+        const snapshots = terminalIds.map(
+          (terminalId) => terminals.readOutputSnapshot(terminalId)!,
+        );
+        const retainedBytes = snapshots.reduce(
+          (total, snapshot) => total + Buffer.byteLength(snapshot.output),
+          0,
+        );
+        expect(retainedBytes).toBeLessThanOrEqual(16 * 1024 * 1024);
+        expect(snapshots.some((snapshot) => snapshot.truncated)).toBe(true);
       }),
     ),
   );

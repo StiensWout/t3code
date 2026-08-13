@@ -534,7 +534,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
             new ProviderDriverError({
               driver: DRIVER_KIND,
               instanceId,
-              detail: `Failed to build ACP Registry snapshot: ${cause.message}`,
+              detail: "Failed to build the ACP Registry provider snapshot.",
               cause,
             }),
         ),

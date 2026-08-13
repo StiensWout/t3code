@@ -439,7 +439,10 @@ export const make = Effect.fn("effect-acp/AcpClient.make")(function* (
   const requestContext = (
     requestId: RpcMessage.RequestId,
     method: string,
-  ): AcpProtocol.AcpRequestContext => ({ requestId: String(requestId), method });
+  ): AcpProtocol.AcpRequestContext => ({
+    requestId: AcpProtocol.acpRequestIdentity(requestId),
+    method,
+  });
 
   const clientHandlerLayer = AcpRpcs.ClientRpcs.toLayer(
     AcpRpcs.ClientRpcs.of({

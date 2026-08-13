@@ -15,6 +15,7 @@ import * as NodeReadline from "node:readline";
 
 interface JsonRpcEnvelope {
   readonly id?: unknown;
+  readonly method?: unknown;
   readonly error?: unknown;
   readonly result?: unknown;
 }
@@ -63,21 +64,29 @@ async function* sseDataLines(response: Response): AsyncGenerator<string> {
   }
 }
 
-async function responsePayloads(response: Response): Promise<ReadonlyArray<unknown>> {
+async function forEachResponsePayload(
+  response: Response,
+  handle: (payload: unknown) => void,
+): Promise<void> {
   if (response.status === 202 || response.status === 204) {
     await response.body?.cancel().catch(() => undefined);
-    return [];
+    return;
   }
   const contentType = response.headers.get("content-type") ?? "";
   if (contentType.includes("text/event-stream")) {
-    const payloads: Array<unknown> = [];
     for await (const data of sseDataLines(response)) {
-      payloads.push(JSON.parse(data));
+      handle(JSON.parse(data));
     }
-    return payloads;
+    return;
   }
   const text = await response.text();
-  return text.trim().length === 0 ? [] : [JSON.parse(text)];
+  if (text.trim().length > 0) handle(JSON.parse(text));
+}
+
+async function responsePayloads(response: Response): Promise<ReadonlyArray<unknown>> {
+  const payloads: Array<unknown> = [];
+  await forEachResponsePayload(response, (payload) => payloads.push(payload));
+  return payloads;
 }
 
 export interface AcpMcpToolCallOptions {
@@ -175,23 +184,15 @@ export async function runAcpMcpStdioBridge(options: AcpMcpStdioBridgeOptions): P
     }
   };
 
-  const respondWithError = (requestId: unknown, message: string): void => {
+  const respondWithError = (requestId: unknown, message: string, code = -32603): void => {
     writeMessage({
       jsonrpc: "2.0",
       id: requestId ?? null,
-      error: { code: -32603, message },
+      error: { code, message },
     });
   };
 
-  const forward = async (line: string): Promise<void> => {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(line);
-    } catch {
-      return;
-    }
-    const envelope = asEnvelope(parsed);
-    if (envelope === null) return;
+  const forward = async (line: string, envelope: JsonRpcEnvelope): Promise<void> => {
     try {
       const response = await fetchImplementation(options.endpoint, {
         method: "POST",
@@ -215,9 +216,7 @@ export async function runAcpMcpStdioBridge(options: AcpMcpStdioBridgeOptions): P
         await response.body?.cancel().catch(() => undefined);
         return;
       }
-      for (const payload of await responsePayloads(response)) {
-        handleServerPayload(payload);
-      }
+      await forEachResponsePayload(response, handleServerPayload);
     } catch (error) {
       if (envelope.id !== undefined) {
         respondWithError(
@@ -229,10 +228,43 @@ export async function runAcpMcpStdioBridge(options: AcpMcpStdioBridgeOptions): P
   };
 
   await new Promise<void>((resolve) => {
+    let sessionBarrier = Promise.resolve();
+    let sessionBarrierPending = false;
     const reader = NodeReadline.createInterface({ input: options.input });
     reader.on("line", (line) => {
       if (line.trim().length === 0) return;
-      const task = forward(line).finally(() => {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        respondWithError(null, "Parse error", -32700);
+        return;
+      }
+      const envelope = asEnvelope(parsed);
+      if (envelope === null) return;
+      const isResponse = envelope.id !== undefined && ("result" in envelope || "error" in envelope);
+      const isSessionHandshake =
+        envelope.method === "initialize" || envelope.method === "notifications/initialized";
+      // Client responses to server-initiated SSE requests must bypass the
+      // session barrier or they would deadlock the still-open HTTP exchange.
+      // Only session establishment is ordered; normal MCP calls and control
+      // notifications remain concurrent after initialization.
+      let task: Promise<void>;
+      if (isResponse) {
+        task = forward(line, envelope);
+      } else if (isSessionHandshake) {
+        task = sessionBarrier.then(() => forward(line, envelope));
+        sessionBarrier = task;
+        sessionBarrierPending = true;
+        void task.finally(() => {
+          if (sessionBarrier === task) sessionBarrierPending = false;
+        });
+      } else {
+        task = sessionBarrierPending
+          ? sessionBarrier.then(() => forward(line, envelope))
+          : forward(line, envelope);
+      }
+      void task.finally(() => {
         pending.delete(task);
       });
       pending.add(task);

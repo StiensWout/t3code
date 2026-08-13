@@ -367,6 +367,43 @@ it.layer(NodeServices.layer)("effect-acp protocol", (it) => {
     }),
   );
 
+  it.effect("does not correlate a string response id with a numeric extension request id", () =>
+    Effect.gen(function* () {
+      const { stdio, input, output } = yield* makeInMemoryStdio();
+      const transport = yield* AcpProtocol.makeAcpPatchedProtocol({
+        stdio,
+        serverRequestMethods: new Set(),
+      });
+
+      const response = yield* transport
+        .request("x/test", { hello: "world" })
+        .pipe(Effect.forkScoped);
+      yield* Queue.take(output);
+      yield* Queue.offer(
+        input,
+        encoder.encode(
+          `${encodeUnknownJsonString({
+            jsonrpc: "2.0",
+            id: "1",
+            result: { ok: false },
+          })}\n`,
+        ),
+      );
+      yield* Effect.yieldNow;
+      assert.isUndefined(response.pollUnsafe());
+
+      yield* Queue.offer(
+        input,
+        yield* encodeJsonl(ExtResponse, {
+          jsonrpc: "2.0",
+          id: 1,
+          result: { ok: true },
+        }),
+      );
+      assert.deepEqual(yield* Fiber.join(response), { ok: true });
+    }),
+  );
+
   it.effect("correlates extension response errors with the originating request", () =>
     Effect.gen(function* () {
       const { stdio, input, output } = yield* makeInMemoryStdio();
@@ -451,6 +488,34 @@ it.layer(NodeServices.layer)("effect-acp protocol", (it) => {
           ok: true,
         },
       });
+    }),
+  );
+
+  it.effect("keeps numeric and string extension request ids distinct in handler context", () =>
+    Effect.gen(function* () {
+      const { stdio, input } = yield* makeInMemoryStdio();
+      const contexts = yield* Queue.unbounded<string>();
+      yield* AcpProtocol.makeAcpPatchedProtocol({
+        stdio,
+        serverRequestMethods: new Set(),
+        onExtRequest: (_method, _params, context) =>
+          Queue.offer(contexts, context.requestId).pipe(Effect.as({ ok: true })),
+      });
+
+      for (const id of [1, "1"] as const) {
+        yield* Queue.offer(
+          input,
+          yield* encodeJsonl(ExtRequest, {
+            jsonrpc: "2.0",
+            id,
+            method: "x/test",
+            params: { hello: "world" },
+            headers: [],
+          }),
+        );
+      }
+
+      assert.deepEqual(yield* Queue.takeAll(contexts), ["$t3:jsonrpc:number:1", "1"]);
     }),
   );
 

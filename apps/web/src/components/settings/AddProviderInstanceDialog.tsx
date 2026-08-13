@@ -284,7 +284,7 @@ export function AddProviderInstanceDialog({
     const brandedId = ProviderInstanceId.make(instanceId);
     setIsSaving(true);
     const result = await persistProviderInstance({
-      operation: "upsert",
+      operation: "create",
       instanceId: brandedId,
       instance: nextInstance,
     });

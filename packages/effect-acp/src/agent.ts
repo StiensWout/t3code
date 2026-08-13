@@ -303,7 +303,10 @@ export const make = Effect.fn("effect-acp/AcpAgent.make")(function* (
   const requestContext = (
     requestId: RpcMessage.RequestId,
     method: string,
-  ): AcpProtocol.AcpRequestContext => ({ requestId: String(requestId), method });
+  ): AcpProtocol.AcpRequestContext => ({
+    requestId: AcpProtocol.acpRequestIdentity(requestId),
+    method,
+  });
 
   const agentHandlerLayer = AcpRpcs.AgentRpcs.toLayer(
     AcpRpcs.AgentRpcs.of({
