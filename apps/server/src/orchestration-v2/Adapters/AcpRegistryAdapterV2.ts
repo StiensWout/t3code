@@ -73,6 +73,7 @@ function makeAcpRegistryRuntime(options: AcpRegistryAdapterV2Options) {
     Crypto.Crypto | Scope.Scope
   > =>
     Effect.gen(function* () {
+      const { processEnvironment, ...runtimeInput } = input;
       const resolved = yield* options.resolver
         .resolve(options.settings, input.cwd, options.environment)
         .pipe(
@@ -86,8 +87,14 @@ function makeAcpRegistryRuntime(options: AcpRegistryAdapterV2Options) {
         );
       const context = yield* Layer.build(
         AcpSessionRuntime.layer({
-          ...input,
-          spawn: resolved.spawn,
+          ...runtimeInput,
+          spawn:
+            processEnvironment === undefined
+              ? resolved.spawn
+              : {
+                  ...resolved.spawn,
+                  env: { ...resolved.spawn.env, ...processEnvironment },
+                },
           ...(options.settings.authMethodId ? { authMethodId: options.settings.authMethodId } : {}),
         }).pipe(
           Layer.provide(

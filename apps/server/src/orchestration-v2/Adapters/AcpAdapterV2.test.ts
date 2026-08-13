@@ -66,10 +66,8 @@ import type { ProviderContinuationRequest } from "../ProviderContinuationRequest
 import {
   AcpProviderCapabilitiesV2,
   acpCarryoverTerminalShouldClearContinuation,
-  acpCanonicalJson,
-  acpClaimNativeTransportRequest,
+  acpMcpToolApprovalElicitationDisposition,
   acpPermissionDisposition,
-  acpNativeUserInputRequestMatches,
   acpPostSettleContinuationOfferEvidence,
   acpIsAppOwnedWakeTurn,
   acpPostSettleMonitorPromptShouldSuppress,
@@ -497,9 +495,6 @@ function makeMockRuntime(input: {
   readonly wrapOutgoingResponse?: (
     onOutgoingResponse: NonNullable<AcpAdapterV2RuntimeInput["onOutgoingResponse"]>,
   ) => NonNullable<AcpAdapterV2RuntimeInput["onOutgoingResponse"]>;
-  readonly wrapIncomingRequest?: (
-    onIncomingRequest: NonNullable<AcpAdapterV2RuntimeInput["onIncomingRequest"]>,
-  ) => NonNullable<AcpAdapterV2RuntimeInput["onIncomingRequest"]>;
   readonly wrapRuntime?: (
     runtime: AcpSessionRuntime.AcpSessionRuntime["Service"],
     runtimeOrdinal: number,
@@ -558,12 +553,6 @@ function makeMockRuntime(input: {
             },
           },
           authMethodId: "test",
-          ...(input.wrapIncomingRequest === undefined ||
-          runtimeInput.onIncomingRequest === undefined
-            ? {}
-            : {
-                onIncomingRequest: input.wrapIncomingRequest(runtimeInput.onIncomingRequest),
-              }),
           ...(input.wrapOutgoingResponse === undefined ||
           runtimeInput.onOutgoingResponse === undefined
             ? {}
@@ -622,6 +611,21 @@ function rawProtocolRequestParam(
 ): unknown {
   const params = rawProtocolRequest(event)?.params;
   return typeof params === "object" && params !== null ? Reflect.get(params, key) : undefined;
+}
+
+function rawProtocolPromptText(event: EffectAcpProtocol.AcpProtocolLogEvent): string {
+  const prompt = rawProtocolRequestParam(event, "prompt");
+  if (!Array.isArray(prompt)) return "";
+  return prompt
+    .flatMap((block) =>
+      typeof block === "object" &&
+      block !== null &&
+      Reflect.get(block, "type") === "text" &&
+      typeof Reflect.get(block, "text") === "string"
+        ? [Reflect.get(block, "text") as string]
+        : [],
+    )
+    .join("\n");
 }
 
 const pollProtocolMethods = (events: Queue.Queue<EffectAcpProtocol.AcpProtocolLogEvent>) =>
@@ -703,6 +707,119 @@ function makeTurnInput(input: {
 }
 
 describe("AcpAdapterV2", () => {
+  it.live("refreshes ACP prompt instructions when the interaction mode changes", () =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const idAllocator = yield* IdAllocatorV2;
+      const path = yield* Path.Path;
+      const serverConfig = yield* ServerConfig;
+      const mockAgentPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+      const protocolEvents = yield* Queue.unbounded<EffectAcpProtocol.AcpProtocolLogEvent>();
+      const instanceId = ProviderInstanceId.make("acp-test-instruction-transitions");
+      const threadId = ThreadId.make("thread-acp-instruction-transitions");
+      McpProviderSession.setMcpProviderSession({
+        environmentId: EnvironmentId.make("environment-acp-instruction-transitions"),
+        threadId,
+        providerSessionId: "mcp-session-acp-instruction-transitions",
+        providerInstanceId: instanceId,
+        endpoint: "http://127.0.0.1:43123/mcp",
+        authorizationHeader: "Bearer instruction-transition-token",
+      });
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => McpProviderSession.clearMcpProviderSession(threadId)),
+      );
+      const adapter = makeAcpAdapterV2({
+        crypto: yield* Crypto.Crypto,
+        instanceId,
+        flavor: {
+          driver: ACP_TEST_DRIVER,
+          capabilities: AcpProviderCapabilitiesV2,
+          makeRuntime: makeMockRuntime({ childProcessSpawner, mockAgentPath, protocolEvents }),
+        },
+        fileSystem,
+        idAllocator,
+        serverConfig,
+      });
+      const policy = (interactionMode: "default" | "plan") =>
+        ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "full-access",
+          interactionMode,
+          cwd: process.cwd(),
+        });
+      const defaultPolicy = policy("default");
+      const modelSelection = { instanceId, model: "default" } as const;
+      const runtime = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("provider-session-acp-instruction-transitions"),
+        modelSelection,
+        runtimePolicy: defaultPolicy,
+      });
+      const providerThread = yield* runtime.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy: defaultPolicy,
+      });
+      const now = yield* DateTime.now;
+      const runTurn = Effect.fnUntraced(function* (
+        ordinal: number,
+        runtimePolicy: ProviderAdapterV2RuntimePolicy,
+        messageText: string,
+      ) {
+        yield* runtime.startTurn(
+          makeTurnInput({
+            threadId,
+            providerThread,
+            instanceId,
+            runtimePolicy,
+            now,
+            ordinal,
+            messageText,
+          }),
+        );
+        yield* runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runDrain,
+        );
+        const methods: Array<string> = [];
+        while (true) {
+          const event = yield* Queue.take(protocolEvents);
+          if (event.direction !== "outgoing") continue;
+          const method = rawProtocolMethod(event);
+          if (method === undefined) continue;
+          methods.push(method);
+          if (method === "session/prompt") {
+            return { methods, prompt: rawProtocolPromptText(event) };
+          }
+        }
+      });
+
+      const firstDefault = (yield* runTurn(1, defaultPolicy, "First default request.")).prompt;
+      assert.include(firstDefault, "T3 Code interaction mode: Default");
+      assert.include(firstDefault, "T3 Code collaborative browser");
+      assert.include(firstDefault, "T3 Code orchestration");
+      assert.equal(
+        (yield* runTurn(2, defaultPolicy, "Second default request.")).prompt,
+        "Second default request.",
+      );
+
+      const planPolicy = policy("plan");
+      const firstPlan = yield* runTurn(3, planPolicy, "Plan this change.");
+      assert.include(firstPlan.prompt, "T3 Code interaction mode: Plan");
+      assert.include(firstPlan.methods, "session/set_config_option");
+      assert.equal(
+        (yield* runTurn(4, planPolicy, "Continue planning.")).prompt,
+        "Continue planning.",
+      );
+      assert.include(
+        (yield* runTurn(5, defaultPolicy, "Implement the change.")).prompt,
+        "T3 Code interaction mode: Default",
+      );
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
   it.live(
     "loads the persisted ACP session during startup without creating a throwaway session",
     () =>
@@ -873,88 +990,50 @@ describe("AcpAdapterV2", () => {
     }).pipe(Effect.provide(testLayer)),
   );
 
-  it("matches xAI native request identities exactly across shared prefixes", () => {
-    const request = {
-      nativeMethod: "x.ai/ask_user_question",
-      nativeRequestId: "1",
-      nativeSessionId: "session-1",
-    };
-    assert.isTrue(
-      acpNativeUserInputRequestMatches(request, {
-        method: "x.ai/ask_user_question",
-        payload: { sessionId: "session-1", toolCallId: 1 },
-      }),
-    );
-    assert.isFalse(
-      acpNativeUserInputRequestMatches(request, {
-        method: "x.ai/ask_user_question",
-        payload: { sessionId: "session-1", toolCallId: "10", note: "request 1" },
-      }),
-    );
-    for (const incomplete of [
-      { ...request, nativeMethod: "" },
-      { ...request, nativeRequestId: "" },
-      { ...request, nativeSessionId: "" },
-    ]) {
-      assert.isFalse(
-        acpNativeUserInputRequestMatches(incomplete, {
-          method: "x.ai/ask_user_question",
-          payload: { sessionId: "session-1", toolCallId: "1" },
-        }),
-      );
-    }
-    assert.isFalse(
-      acpNativeUserInputRequestMatches(request, {
-        method: "_x.ai/ask_user_question",
-        payload: { sessionId: "session-1", toolCallId: "1" },
-      }),
-    );
-    assert.isFalse(
-      acpNativeUserInputRequestMatches(request, {
-        method: "x.ai/ask_user_question",
-        payload: {
-          method: "x.ai/ask_user_question",
-          params: { sessionId: "session-10", toolCallId: "1" },
-        },
-      }),
-    );
-  });
+  it("applies runtime policy only to explicitly tagged MCP approval elicitations", () => {
+    const fullAccess = ProviderAdapterV2RuntimePolicy.make({
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      cwd: process.cwd(),
+    });
+    const approvalRequired = ProviderAdapterV2RuntimePolicy.make({
+      runtimeMode: "approval-required",
+      interactionMode: "default",
+      cwd: process.cwd(),
+    });
+    const tagged = {
+      sessionId: "session-1",
+      message: "Approve this request?",
+      mode: "form",
+      requestedSchema: { type: "object", properties: {} },
+      _meta: { codex_approval_kind: "mcp_tool_call" },
+    } satisfies EffectAcpSchema.ElicitationRequest;
 
-  it("claims concurrent identical native requests in per-runtime sequence order", () => {
-    const requests = [
-      { generation: 2, requestId: "second", sequence: 8, identity: "shared" },
-      { generation: 1, requestId: "stale", sequence: 1, identity: "shared" },
-      { generation: 2, requestId: "first", sequence: 7, identity: "shared" },
-      { generation: 2, requestId: "other", sequence: 6, identity: "other" },
-    ];
-    const [firstId, afterFirst] = acpClaimNativeTransportRequest(
-      requests,
-      2,
-      (request) => request.identity === "shared",
-    );
-    const [secondId, afterSecond] = acpClaimNativeTransportRequest(
-      afterFirst,
-      2,
-      (request) => request.identity === "shared",
-    );
-
-    assert.equal(firstId, "first");
-    assert.equal(secondId, "second");
-    assert.deepEqual(
-      afterSecond.map((request) => request.requestId),
-      ["stale", "other"],
-    );
-  });
-
-  it("canonicalizes nested elicitation schemas independently of object key order", () => {
+    assert.equal(acpMcpToolApprovalElicitationDisposition(fullAccess, tagged), "allow");
+    assert.equal(acpMcpToolApprovalElicitationDisposition(approvalRequired, tagged), "ask");
+    const { _meta: _tag, ...untagged } = tagged;
     assert.equal(
-      acpCanonicalJson({
-        type: "object",
-        properties: { answer: { type: "string", title: "Answer", enum: ["a", "b"] } },
+      acpMcpToolApprovalElicitationDisposition(
+        fullAccess,
+        untagged,
+        "mcp_tool_call_approval_exec-123",
+      ),
+      "allow",
+    );
+    assert.isUndefined(
+      acpMcpToolApprovalElicitationDisposition(fullAccess, {
+        ...tagged,
+        _meta: { codex_approval_kind: "ordinary_form" },
       }),
-      acpCanonicalJson({
-        properties: { answer: { enum: ["a", "b"], title: "Answer", type: "string" } },
-        type: "object",
+    );
+    assert.isUndefined(
+      acpMcpToolApprovalElicitationDisposition(fullAccess, {
+        sessionId: "session-1",
+        message: "Authenticate",
+        mode: "url",
+        elicitationId: "elicitation-1",
+        url: "https://example.com/login",
+        _meta: { codex_approval_kind: "mcp_tool_call" },
       }),
     );
   });
@@ -2014,7 +2093,7 @@ describe("AcpAdapterV2", () => {
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 
-  it.live("correlates reordered elicitation schemas through the completed stdout write", () =>
+  it.live("carries elicitation request identity through the completed stdout write", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const fileSystem = yield* FileSystem.FileSystem;
@@ -2037,21 +2116,6 @@ describe("AcpAdapterV2", () => {
             childProcessSpawner,
             mockAgentPath,
             environment: { T3_ACP_EMIT_ELICITATION: "1" },
-            wrapIncomingRequest: (onIncomingRequest) => (requestId, method, payload) => {
-              if (method !== "session/elicitation") {
-                return onIncomingRequest(requestId, method, payload);
-              }
-              const record = payload as Record<string, unknown>;
-              return onIncomingRequest(requestId, method, {
-                ...record,
-                requestedSchema: {
-                  properties: {
-                    approved: { title: "Approved", type: "boolean" },
-                  },
-                  type: "object",
-                },
-              });
-            },
             wrapOutgoingResponse: (onOutgoingResponse) => (requestId) =>
               Deferred.succeed(responseWritten, undefined).pipe(
                 Effect.andThen(Deferred.await(releaseResponseAcknowledgement)),
@@ -2113,6 +2177,72 @@ describe("AcpAdapterV2", () => {
       assert.isUndefined(responseFiber.pollUnsafe());
       yield* Deferred.succeed(releaseResponseAcknowledgement, undefined);
       yield* Fiber.join(responseFiber);
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
+  it.live("auto-approves tagged MCP elicitations under full-access policy", () =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const idAllocator = yield* IdAllocatorV2;
+      const path = yield* Path.Path;
+      const serverConfig = yield* ServerConfig;
+      const mockAgentPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+      const instanceId = ProviderInstanceId.make("acp-test-mcp-approval-elicitation");
+      const adapter = makeAcpAdapterV2({
+        crypto: yield* Crypto.Crypto,
+        instanceId,
+        flavor: {
+          driver: ACP_TEST_DRIVER,
+          capabilities: AcpProviderCapabilitiesV2,
+          makeRuntime: makeMockRuntime({
+            childProcessSpawner,
+            mockAgentPath,
+            environment: { T3_ACP_EMIT_MCP_TOOL_APPROVAL_ELICITATION: "1" },
+          }),
+        },
+        fileSystem,
+        idAllocator,
+        serverConfig,
+      });
+      const threadId = ThreadId.make("thread-acp-mcp-approval-elicitation");
+      const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+      });
+      const modelSelection = { instanceId, model: "default" } as const;
+      const runtime = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("provider-session-acp-mcp-approval-elicitation"),
+        modelSelection,
+        runtimePolicy,
+      });
+      const providerThread = yield* runtime.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy,
+      });
+      yield* runtime.startTurn(
+        makeTurnInput({
+          threadId,
+          providerThread,
+          instanceId,
+          runtimePolicy,
+          now: yield* DateTime.now,
+        }),
+      );
+      const events = Array.from(
+        yield* runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runCollect,
+        ),
+      );
+
+      assert.isFalse(events.some((event) => event.type === "runtime_request.updated"));
+      assert.isTrue(events.some((event) => event.type === "turn.terminal"));
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 
@@ -10892,16 +11022,18 @@ describe("AcpAdapterV2", () => {
         })
         .pipe(Effect.forkScoped);
       yield* Deferred.await(transportDrained);
-      const heldInboundFiber = yield* runtimeInputs[0]!.onIncomingRequest!(
-        "post-drain-stale-permission-id",
-        "session/request_permission",
-        permissionRequest,
-      ).pipe(Effect.forkScoped);
+      const oldHandlers = handlerRecords[0]!;
+      assert.isDefined(oldHandlers.permission);
+      const heldInboundFiber = yield* oldHandlers.permission!(permissionRequest, {
+        requestId: "post-drain-stale-permission-id",
+        method: "session/request_permission",
+      }).pipe(Effect.forkScoped);
       yield* Effect.yieldNow;
       assert.isUndefined(heldInboundFiber.pollUnsafe());
       yield* Deferred.succeed(releaseTransportDrain, undefined);
-      yield* Fiber.join(heldInboundFiber);
       yield* Fiber.join(interruptFiber);
+      yield* Effect.yieldNow;
+      assert.isUndefined(heldInboundFiber.pollUnsafe());
       assert.notInclude(responseLifecycle, "registered");
       assert.notInclude(responseLifecycle, "watcher_started");
       assert.isFalse(
@@ -10922,7 +11054,6 @@ describe("AcpAdapterV2", () => {
         Stream.runHead,
       );
       assert.equal(runtimeOrdinalSeen, 2);
-      const oldHandlers = handlerRecords[0]!;
       const replacementHandlers = handlerRecords[1]!;
       assert.isDefined(oldHandlers.sessionUpdate);
       assert.isDefined(oldHandlers.permission);
@@ -10955,33 +11086,43 @@ describe("AcpAdapterV2", () => {
           rawOutput: { output: "stale continuation evidence" },
         },
       });
-      const oldPermissionFiber = yield* oldHandlers.permission!(permissionRequest).pipe(
-        Effect.exit,
-        Effect.forkScoped,
-      );
-      const oldElicitationFiber = yield* oldHandlers.elicitation!({
-        sessionId: "mock-session-1",
-        message: "Stale generation 1 elicitation",
-        mode: "form",
-        requestedSchema: {
-          type: "object",
-          properties: { approved: { type: "boolean", title: "Approved" } },
-        },
+      const oldPermissionFiber = yield* oldHandlers.permission!(permissionRequest, {
+        requestId: "stale-generation-1-permission-id",
+        method: "session/request_permission",
       }).pipe(Effect.exit, Effect.forkScoped);
-      const oldXAiUserInputFiber = yield* oldHandlers.requestUserInput!({
-        nativeItemId: "stale-generation-1-xai-item",
-        nativeMethod: "_x.ai/ask_user_question",
-        nativeRequestId: "stale-generation-1-xai-request",
-        nativeSessionId: "mock-session-1",
-        questions: [
-          {
-            id: "approved",
-            header: "Approve",
-            question: "Approve stale generation 1?",
-            options: [{ label: "yes", description: "Approve" }],
+      const oldElicitationFiber = yield* oldHandlers.elicitation!(
+        {
+          sessionId: "mock-session-1",
+          message: "Stale generation 1 elicitation",
+          mode: "form",
+          requestedSchema: {
+            type: "object",
+            properties: { approved: { type: "boolean", title: "Approved" } },
           },
-        ],
-      }).pipe(Effect.exit, Effect.forkScoped);
+        },
+        {
+          requestId: "stale-generation-1-elicitation-id",
+          method: "session/elicitation",
+        },
+      ).pipe(Effect.exit, Effect.forkScoped);
+      const oldXAiUserInputFiber = yield* oldHandlers.requestUserInput!(
+        {
+          nativeItemId: "stale-generation-1-xai-item",
+          nativeRequestId: "stale-generation-1-xai-request",
+          questions: [
+            {
+              id: "approved",
+              header: "Approve",
+              question: "Approve stale generation 1?",
+              options: [{ label: "yes", description: "Approve" }],
+            },
+          ],
+        },
+        {
+          requestId: "stale-generation-1-xai-transport-id",
+          method: "_x.ai/ask_user_question",
+        },
+      ).pipe(Effect.exit, Effect.forkScoped);
       yield* Deferred.succeed(oldPromptCompletion, { stopReason: "end_turn" });
       yield* Effect.sleep("100 millis");
       assert.isTrue(Option.isNone(yield* Queue.poll(adapterEvents)));
@@ -11003,19 +11144,10 @@ describe("AcpAdapterV2", () => {
         replacementMessageSeen =
           event.type === "message.updated" && event.message.text.includes("live generation 2");
       }
-      const missingPermissionTransport = yield* replacementHandlers.permission!(
-        permissionRequest,
-      ).pipe(Effect.exit);
-      if (Exit.isSuccess(missingPermissionTransport)) {
-        assert.fail("a core permission request without transport correlation must fail closed");
-      }
-      assert.include(Cause.pretty(missingPermissionTransport.cause), "Could not correlate");
-      yield* runtimeInputs[1]!.onIncomingRequest!(
-        "live-generation-2-permission-id",
-        "session/request_permission",
-        permissionRequest,
-      );
-      const replacementPermission = yield* replacementHandlers.permission!(permissionRequest);
+      const replacementPermission = yield* replacementHandlers.permission!(permissionRequest, {
+        requestId: "live-generation-2-permission-id",
+        method: "session/request_permission",
+      });
       assert.equal(replacementPermission.outcome.outcome, "selected");
       yield* runtimeInputs[1]!.onOutgoingResponse!("live-generation-2-permission-id");
       const urlElicitation = {
@@ -11025,72 +11157,30 @@ describe("AcpAdapterV2", () => {
         sessionId: "mock-session-1",
         url: "https://example.com/replacement",
       };
-      const missingElicitationTransport = yield* replacementHandlers.elicitation!(
-        urlElicitation,
-      ).pipe(Effect.exit);
-      if (Exit.isSuccess(missingElicitationTransport)) {
-        assert.fail("a core elicitation request without transport correlation must fail closed");
-      }
-      assert.include(Cause.pretty(missingElicitationTransport.cause), "Could not correlate");
-      yield* runtimeInputs[1]!.onIncomingRequest!(
-        "live-generation-2-url-id",
-        "session/elicitation",
-        urlElicitation,
-      );
-      yield* replacementHandlers.elicitation!(urlElicitation);
+      yield* replacementHandlers.elicitation!(urlElicitation, {
+        requestId: "live-generation-2-url-id",
+        method: "session/elicitation",
+      });
       yield* runtimeInputs[1]!.onOutgoingResponse!("live-generation-2-url-id");
 
-      const collidingRequestPayload = {
-        sessionId: "mock-session-1",
-        toolCallId: "shared-request-id",
-      };
-      const missingXAiTransport = yield* replacementHandlers.requestUserInput!({
-        nativeItemId: "missing-generation-2-xai-item",
-        nativeMethod: "_x.ai/ask_user_question",
-        nativeRequestId: "shared-request-id",
-        nativeSessionId: "mock-session-1",
-        questions: [
-          {
-            id: "approved",
-            header: "Approve",
-            question: "Approve missing transport?",
-            options: [{ label: "yes", description: "Approve" }],
-          },
-        ],
-      }).pipe(Effect.exit);
-      if (Exit.isSuccess(missingXAiTransport)) {
-        assert.fail("an xAI user input request without transport correlation must fail closed");
-      }
-      assert.include(Cause.pretty(missingXAiTransport.cause), "Could not correlate");
-      yield* runtimeInputs[0]!.onIncomingRequest!(
-        "stale-generation-1-transport-id",
-        "x.ai/ask_user_question",
-        collidingRequestPayload,
-      );
-      yield* runtimeInputs[1]!.onIncomingRequest!(
-        "live-generation-2-wrong-method-id",
-        "x.ai/ask_user_question",
-        collidingRequestPayload,
-      );
-      yield* runtimeInputs[1]!.onIncomingRequest!(
-        "live-generation-2-transport-id",
-        "_x.ai/ask_user_question",
-        collidingRequestPayload,
-      );
-      const replacementUserInputFiber = yield* replacementHandlers.requestUserInput!({
-        nativeItemId: "live-generation-2-xai-item",
-        nativeMethod: "_x.ai/ask_user_question",
-        nativeRequestId: "shared-request-id",
-        nativeSessionId: "mock-session-1",
-        questions: [
-          {
-            id: "approved",
-            header: "Approve",
-            question: "Approve live generation 2?",
-            options: [{ label: "yes", description: "Approve" }],
-          },
-        ],
-      }).pipe(Effect.forkScoped);
+      const replacementUserInputFiber = yield* replacementHandlers.requestUserInput!(
+        {
+          nativeItemId: "live-generation-2-xai-item",
+          nativeRequestId: "shared-request-id",
+          questions: [
+            {
+              id: "approved",
+              header: "Approve",
+              question: "Approve live generation 2?",
+              options: [{ label: "yes", description: "Approve" }],
+            },
+          ],
+        },
+        {
+          requestId: "live-generation-2-transport-id",
+          method: "_x.ai/ask_user_question",
+        },
+      ).pipe(Effect.forkScoped);
       let replacementRequest: ProviderAdapterV2Event | undefined;
       while (replacementRequest === undefined) {
         const event = yield* Queue.take(adapterEvents);

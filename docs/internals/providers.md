@@ -54,6 +54,22 @@ Deleting the final configured instance for an agent removes only T3-owned binary
 runner caches remain owned by `npx` and `uvx`. Registry icons are restricted to the official HTTPS
 CDN and cached by the client after their first bounded fetch.
 
+### ACP runtime boundary
+
+`packages/effect-acp` carries the original JSON-RPC request ID and method beside every decoded core
+or extension request. The generic V2 ACP adapter uses that identity for response admission and
+acknowledgement. It never attempts to rediscover an ID by comparing decoded payloads with raw wire
+payloads; schema defaults and provider extension fields make payload correlation inherently lossy.
+
+All registry agents share the same client capabilities, stdio MCP bridge, session configuration,
+T3 interaction instructions, permission policy, and response lifecycle. Agents that accept but
+drop ACP's injected MCP servers can reach the same authenticated, thread-scoped tools through the
+hidden `acp-mcp-call` terminal fallback. Provider-specific ACP code is limited to actual extensions
+such as Grok's xAI background-task and user-input methods. Standard permission requests and
+explicitly tagged MCP approval elicitations both resolve through the thread's runtime and sandbox
+policy. Runtime generation checks quarantine late requests and responses after Stop or restart
+without allowing them to mutate the replacement turn.
+
 ## Registry and routing
 
 Two registries separate configuration from live processes:

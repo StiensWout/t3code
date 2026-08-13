@@ -16,7 +16,9 @@ import { it, assert } from "@effect/vitest";
 
 import * as AcpClient from "./client.ts";
 import * as AcpSchema from "./_generated/schema.gen.ts";
+import * as AcpCompat from "./compat.ts";
 import * as AcpError from "./errors.ts";
+import type * as AcpProtocol from "./protocol.ts";
 import {
   encodeJsonl,
   jsonRpcNotification,
@@ -31,6 +33,21 @@ const ExtRequest = jsonRpcRequest("x/test", Schema.Struct({ hello: Schema.String
 const ExtResponse = jsonRpcResponse(Schema.Struct({ ok: Schema.Boolean }));
 const PromptRequest = jsonRpcRequest("session/prompt", AcpSchema.PromptRequest);
 const PromptResponse = jsonRpcResponse(AcpSchema.PromptResponse);
+const PermissionRequest = jsonRpcRequest(
+  "session/request_permission",
+  AcpSchema.RequestPermissionRequest,
+);
+const PermissionResponse = jsonRpcResponse(AcpSchema.RequestPermissionResponse);
+const CurrentElicitationRequest = jsonRpcRequest(
+  AcpCompat.CURRENT_CLIENT_METHODS.elicitation_create,
+  AcpSchema.ElicitationRequest,
+);
+const CurrentElicitationResponse = jsonRpcResponse(AcpCompat.NormalizedElicitationResponse);
+const LegacyElicitationRequest = jsonRpcRequest(
+  "session/elicitation",
+  AcpSchema.ElicitationRequest,
+);
+const LegacyElicitationResponse = jsonRpcResponse(AcpSchema.ElicitationResponse);
 const decodePromptRequestLine = Schema.decodeEffect(Schema.fromJsonString(PromptRequest));
 const XAiPromptCompleteNotification = jsonRpcNotification(
   "_x.ai/session/prompt_complete",
@@ -88,6 +105,7 @@ it.layer(NodeServices.layer)("effect-acp client", (it) => {
       const elicitationCompletions = yield* Ref.make<Array<unknown>>([]);
       const typedRequests = yield* Ref.make<Array<unknown>>([]);
       const typedNotifications = yield* Ref.make<Array<unknown>>([]);
+      const requestContexts = yield* Ref.make<Array<AcpProtocol.AcpRequestContext>>([]);
       const handle = yield* makeHandle();
       const scope = yield* Scope.make();
       const acpLayer = AcpClient.layerChildProcess(handle);
@@ -96,23 +114,25 @@ it.layer(NodeServices.layer)("effect-acp client", (it) => {
       const ext = yield* Effect.gen(function* () {
         const acp = yield* AcpClient.AcpClient;
 
-        yield* acp.handleRequestPermission(() =>
-          Effect.succeed({
-            outcome: {
-              outcome: "selected",
-              optionId: "allow",
-            },
-          }),
+        yield* acp.handleRequestPermission((_request, requestContext) =>
+          Ref.update(requestContexts, (current) => [...current, requestContext]).pipe(
+            Effect.as({
+              outcome: {
+                outcome: "selected",
+                optionId: "allow",
+              },
+            }),
+          ),
         );
-        yield* acp.handleElicitation(() =>
-          Effect.succeed({
-            action: {
+        yield* acp.handleElicitation((_request, requestContext) =>
+          Ref.update(requestContexts, (current) => [...current, requestContext]).pipe(
+            Effect.as({
               action: "accept",
               content: {
                 approved: true,
               },
-            },
-          }),
+            }),
+          ),
         );
         yield* acp.handleSessionUpdate((notification) =>
           Ref.update(updates, (current) => [...current, notification]),
@@ -123,8 +143,11 @@ it.layer(NodeServices.layer)("effect-acp client", (it) => {
         yield* acp.handleExtRequest(
           "x/typed_request",
           Schema.Struct({ message: Schema.String }),
-          (payload) =>
+          (payload, requestContext) =>
             Ref.update(typedRequests, (current) => [...current, payload]).pipe(
+              Effect.andThen(
+                Ref.update(requestContexts, (current) => [...current, requestContext]),
+              ),
               Effect.as({
                 ok: true,
                 echoedMessage: payload.message,
@@ -172,6 +195,15 @@ it.layer(NodeServices.layer)("effect-acp client", (it) => {
         assert.equal((yield* Ref.get(elicitationCompletions)).length, 1);
         assert.deepEqual(yield* Ref.get(typedRequests), [{ message: "hello from typed request" }]);
         assert.deepEqual(yield* Ref.get(typedNotifications), [{ count: 2 }]);
+        const observedRequestContexts = yield* Ref.get(requestContexts);
+        assert.deepEqual(
+          observedRequestContexts.map((requestContext) => requestContext.method),
+          ["session/request_permission", "elicitation/create", "x/typed_request"],
+        );
+        assert.equal(
+          new Set(observedRequestContexts.map((requestContext) => requestContext.requestId)).size,
+          observedRequestContexts.length,
+        );
 
         return yield* acp.raw.request("x/echo", {
           hello: "world",
@@ -209,11 +241,9 @@ it.layer(NodeServices.layer)("effect-acp client", (it) => {
           );
           yield* acp.handleElicitation(() =>
             Effect.succeed({
-              action: {
-                action: "accept",
-                content: {
-                  approved: true,
-                },
+              action: "accept",
+              content: {
+                approved: true,
               },
             }),
           );
@@ -283,11 +313,9 @@ it.layer(NodeServices.layer)("effect-acp client", (it) => {
         );
         yield* acp.handleElicitation(() =>
           Effect.succeed({
-            action: {
-              action: "accept",
-              content: {
-                approved: true,
-              },
+            action: "accept",
+            content: {
+              approved: true,
             },
           }),
         );
@@ -366,11 +394,9 @@ it.layer(NodeServices.layer)("effect-acp client", (it) => {
         );
         yield* acp.handleElicitation(() =>
           Effect.succeed({
-            action: {
-              action: "accept",
-              content: {
-                approved: true,
-              },
+            action: "accept",
+            content: {
+              approved: true,
             },
           }),
         );
@@ -484,6 +510,120 @@ it.layer(NodeServices.layer)("effect-acp client", (it) => {
 
       yield* Fiber.join(initializeFiber);
       assert.deepEqual(yield* Fiber.join(extFiber), { ok: true });
+      yield* Scope.close(scope, Exit.void);
+    }),
+  );
+
+  it.effect("preserves exact ids for parallel requests with identical payloads", () =>
+    Effect.gen(function* () {
+      const { stdio, input, output } = yield* makeInMemoryStdio();
+      const scope = yield* Scope.make();
+      const acp = yield* AcpClient.make(stdio).pipe(Effect.provideService(Scope.Scope, scope));
+      const contexts = yield* Ref.make<Array<AcpProtocol.AcpRequestContext>>([]);
+      yield* acp.handleRequestPermission((_request, context) =>
+        Ref.update(contexts, (current) => [...current, context]).pipe(
+          Effect.as({ outcome: { outcome: "selected", optionId: "allow" } } as const),
+        ),
+      );
+      const payload = {
+        sessionId: "session-1",
+        toolCall: { toolCallId: "shared-tool", title: "Shared tool" },
+        options: [{ optionId: "allow", name: "Allow", kind: "allow_once" as const }],
+      };
+      yield* Queue.offer(
+        input,
+        concatBytes(
+          yield* Effect.all(
+            ["permission-a", "permission-b"].map((id) =>
+              encodeJsonl(PermissionRequest, {
+                jsonrpc: "2.0",
+                id,
+                method: "session/request_permission",
+                params: payload,
+                headers: [],
+              }),
+            ),
+          ),
+        ),
+      );
+
+      const decodeResponse = Schema.decodeEffect(Schema.fromJsonString(PermissionResponse));
+      const responses = yield* Effect.all([
+        Queue.take(output).pipe(Effect.flatMap(decodeResponse)),
+        Queue.take(output).pipe(Effect.flatMap(decodeResponse)),
+      ]);
+      assert.deepEqual(responses.map((response) => response.id).toSorted(), [
+        "permission-a",
+        "permission-b",
+      ]);
+      assert.deepEqual(
+        (yield* Ref.get(contexts))
+          .map(({ requestId, method }) => ({ requestId, method }))
+          .toSorted((left, right) => left.requestId.localeCompare(right.requestId)),
+        [
+          { requestId: "permission-a", method: "session/request_permission" },
+          { requestId: "permission-b", method: "session/request_permission" },
+        ],
+      );
+      yield* Scope.close(scope, Exit.void);
+    }),
+  );
+
+  it.effect("normalizes current and legacy elicitation response shapes", () =>
+    Effect.gen(function* () {
+      const { stdio, input, output } = yield* makeInMemoryStdio();
+      const scope = yield* Scope.make();
+      const acp = yield* AcpClient.make(stdio).pipe(Effect.provideService(Scope.Scope, scope));
+      yield* acp.handleElicitation(() =>
+        Effect.succeed({ action: "accept", content: { approved: true } }),
+      );
+      const params = {
+        sessionId: "session-1",
+        mode: "form" as const,
+        message: "Approve this call?",
+        requestedSchema: {
+          type: "object" as const,
+          properties: { approved: { type: "boolean" as const } },
+        },
+      };
+
+      yield* Queue.offer(
+        input,
+        yield* encodeJsonl(CurrentElicitationRequest, {
+          jsonrpc: "2.0",
+          id: "current-elicitation",
+          method: AcpCompat.CURRENT_CLIENT_METHODS.elicitation_create,
+          params,
+          headers: [],
+        }),
+      );
+      const current = yield* Queue.take(output).pipe(
+        Effect.flatMap(Schema.decodeEffect(Schema.fromJsonString(CurrentElicitationResponse))),
+      );
+      assert.deepEqual(current.result, {
+        action: "accept",
+        content: { approved: true },
+      });
+
+      yield* Queue.offer(
+        input,
+        yield* encodeJsonl(LegacyElicitationRequest, {
+          jsonrpc: "2.0",
+          id: "legacy-elicitation",
+          method: "session/elicitation",
+          params,
+          headers: [],
+        }),
+      );
+      const legacy = yield* Queue.take(output).pipe(
+        Effect.flatMap(Schema.decodeEffect(Schema.fromJsonString(LegacyElicitationResponse))),
+      );
+      assert.deepEqual(legacy.result, {
+        action: {
+          action: "accept",
+          content: { approved: true },
+        },
+      });
       yield* Scope.close(scope, Exit.void);
     }),
   );

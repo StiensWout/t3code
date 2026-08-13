@@ -67,12 +67,24 @@ A successful discovery scan is reused for a while instead of re-running on every
 refresh, so configured agents are not repeatedly spawned in the background. Failed or
 unauthenticated scans always retry on the next refresh.
 
-Other session configuration the agent advertises (reasoning effort, approval mode, custom selects)
-appears in the composer's model options menu, exactly like built-in provider options. Two
-categories are integrated instead of listed: model selection stays on the model picker, and an
-agent-advertised plan/build collaboration mode follows T3 Code's own Plan and Build toggle.
+Other session configuration the agent advertises (reasoning effort, approval mode, custom selects,
+and boolean toggles) appears in the composer's model options menu, exactly like built-in provider
+options. Two categories are integrated instead of listed: model selection stays on the model picker,
+and an agent-advertised plan/build collaboration mode follows T3 Code's own Plan and Build toggle.
 Agents that expose session modes without configuration options get a single **Mode** option with
 the same behavior.
+
+ACP does not define a system or developer prompt channel. T3 Code supplies concise interaction-mode
+guidance with the first prompt and whenever Plan or Build mode changes. When the T3 Code MCP tools
+are attached, that guidance also explains delegated tasks, scheduled work, and the collaborative
+browser.
+
+T3 Code supplies its orchestration tools through ACP's stdio MCP transport. If an agent accepts but
+does not expose the injected server, T3 Code provides the same thread-scoped tools through a terminal
+fallback. Agents can therefore delegate child tasks and use the other T3 Code tools without optional
+HTTP MCP support. Permission requests for these tools follow the thread's normal runtime and sandbox
+settings. Full-access threads approve permitted calls automatically; approval-required threads
+continue to ask.
 
 Checkpoint rollback works on ACP threads with reset semantics: ACP defines no conversation
 truncation, so T3 Code restores the checkpointed workspace state and the next turn starts a fresh

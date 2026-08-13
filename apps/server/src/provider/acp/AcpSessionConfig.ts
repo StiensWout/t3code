@@ -66,25 +66,37 @@ export function acpProviderOptionDescriptors(input: {
   for (const option of input.configOptions ?? []) {
     // "model" options surface as the model list; "collaboration_mode" options
     // are driven by T3's own plan/build interaction mode in the ACP adapter.
-    if (
-      option.type !== "select" ||
-      option.category === "model" ||
-      option.category === "collaboration_mode"
-    ) {
+    if (option.category === "model" || option.category === "collaboration_mode") {
       continue;
     }
     const id = boundedText(option.id, MAX_TEXT_LENGTH);
     if (id.length === 0 || seen.has(id)) continue;
-    const choices = selectChoices(flattenSelectChoices(option.options));
-    if (choices.length === 0) continue;
     seen.add(id);
-    if (option.category === "mode") hasModeCategory = true;
     const description = boundedText(option.description, MAX_DESCRIPTION_LENGTH);
-    const currentValue = boundedText(option.currentValue, MAX_TEXT_LENGTH);
-    descriptors.push({
+    const base = {
       id,
       label: boundedText(option.name, MAX_TEXT_LENGTH) || id,
       ...(description ? { description } : {}),
+    } as const;
+    if (option.type === "boolean") {
+      if (option.category === "mode") hasModeCategory = true;
+      descriptors.push({
+        ...base,
+        type: "boolean",
+        currentValue: option.currentValue,
+      });
+      if (descriptors.length === MAX_OPTION_DESCRIPTORS) return descriptors;
+      continue;
+    }
+    const choices = selectChoices(flattenSelectChoices(option.options));
+    if (choices.length === 0) {
+      seen.delete(id);
+      continue;
+    }
+    if (option.category === "mode") hasModeCategory = true;
+    const currentValue = boundedText(option.currentValue, MAX_TEXT_LENGTH);
+    descriptors.push({
+      ...base,
       type: "select",
       options: choices,
       ...(currentValue && choices.some((choice) => choice.id === currentValue)

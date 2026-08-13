@@ -16,7 +16,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { it, assert } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
-import * as AcpSchema from "./_generated/schema.gen.ts";
+import * as AcpSchema from "./schema.ts";
 import * as AcpProtocol from "./protocol.ts";
 import {
   encodeJsonl,

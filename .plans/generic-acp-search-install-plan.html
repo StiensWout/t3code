@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Generic ACP Registry support delivery state</title>
+    <title>Generic ACP delivery and standardization state</title>
     <style>
       :root {
         color-scheme: dark;
@@ -603,20 +603,23 @@
     <header>
       <div class="shell">
         <p class="eyebrow">T3 Code · Orchestrator v2 · delivery state · updated 13 Aug 2026</p>
-        <h1>Generic ACP Registry support</h1>
+        <h1>Generic ACP delivery and standardization</h1>
         <p class="lede">
           The reviewed discovery plan is now implemented and has expanded through live testing:
           official search and provisioning, generic authentication guidance, automatic model and
           command and skill discovery, official agent icons, managed-binary cleanup, atomic settings,
           and non-blocking health checks. Kilo, Codex, and Pi exposed real compatibility gaps during
-          live testing; those fixes now stay generic and capability-driven. Delivery is a draft PR
-          stacked directly on orchestrator v2 PR #2829.
+          live testing; those fixes now stay generic and capability-driven. The final hardening
+          round standardizes request identity, current and legacy elicitation, approvals,
+          instructions, session configuration, and MCP delivery across ACP providers. Real Codex ACP
+          and Pi ACP parents have each created and completed the requested four-provider child matrix.
+          PR #6461 is ready for review, stacked directly on orchestrator v2 PR #2829.
         </p>
         <div class="decision-strip">
           <div>
             <span class="label">Delivery</span>
-            <strong>Draft PR #6461 is open</strong>
-            <p>Rebased onto the latest orchestrator v2 head and pushed as a one-commit draft. No babysitting or merge is requested.</p>
+            <strong>PR #6461 is review-ready</strong>
+            <p>The implementation and two-parent live proof are complete. PR #6461 is out of WIP and draft state, with active CI and review monitoring underway.</p>
           </div>
           <div>
             <span class="label">Implemented flow</span>
@@ -645,6 +648,7 @@
         <a href="#verified">Branch check</a>
         <a href="#validate">Decisions</a>
         <a href="#handoff">Round 2 + handoff</a>
+        <a href="#standardization">ACP standardization</a>
       </div>
     </nav>
 
@@ -1105,7 +1109,7 @@
       </section>
 
       <section id="implementation">
-        <h2>Implementation checkpoint and remaining work</h2>
+        <h2>Implementation complete</h2>
         <ol>
           <li>
             <strong>Complete: extract a shared catalog service from the current resolver.</strong>
@@ -1162,11 +1166,12 @@
             wizard retains prepare’s refreshed version and distribution metadata.
           </li>
           <li>
-            <strong>Complete: documentation, final proof, and the stacked draft.</strong>
+            <strong>Complete: documentation, final proof, and the stacked PR.</strong>
             Keep user and internals docs aligned with server-side install, generic authentication,
             discovery timing, icon caching, managed cleanup, remote environments, and latency behavior.
-            Draft PR <a href="https://github.com/pingdotgg/t3code/pull/6461" target="_blank" rel="noopener noreferrer">#6461</a>
-            is based on the latest head of PR #2829. Per request, it is pushed without babysitting or merging.
+            PR <a href="https://github.com/pingdotgg/t3code/pull/6461" target="_blank" rel="noopener noreferrer">#6461</a>
+            is based on PR #2829. The final ACP standardization changes are verified and are moving
+            through active CI and review monitoring without automatic merge.
           </li>
         </ol>
 
@@ -1279,17 +1284,17 @@
             <li><strong>Health:</strong> provider selection and refresh wait only for local readiness; full ACP discovery is asynchronous and individually bounded.</li>
             <li><strong>Priority:</strong> starting a user session interrupts or suppresses disposable discovery for the same registry agent.</li>
             <li><strong>Removal:</strong> remove only T3-managed binary data after the final reference; keep package-manager caches untouched.</li>
-            <li><strong>Delivery:</strong> focused draft PR <a href="https://github.com/pingdotgg/t3code/pull/6461" target="_blank" rel="noopener noreferrer">#6461</a> is based directly on <code>t3code/codex-turn-mapping</code>, the head branch for orchestrator v2 PR #2829. The commit is pushed; no babysitting is active.</li>
+            <li><strong>Delivery:</strong> focused PR <a href="https://github.com/pingdotgg/t3code/pull/6461" target="_blank" rel="noopener noreferrer">#6461</a> is based directly on <code>t3code/codex-turn-mapping</code>, the head branch for orchestrator v2 PR #2829. WIP and draft state are removed, and active monitoring is underway.</li>
           </ol>
           <p class="muted small">
-            Implementation and requested delivery are complete. The draft remains intentionally marked
-            <code>[WIP]</code> for maintainer review and follow-up testing.
+            Implementation and requested delivery are complete. The two real-parent proofs close the
+            former WIP boundary, so the PR is ready for normal review.
           </p>
         </div>
 
         <div class="sources">
           <span>Sources:</span>
-          <a href="https://github.com/pingdotgg/t3code/pull/6461" target="_blank" rel="noopener noreferrer">draft ACP Registry PR #6461</a>
+          <a href="https://github.com/pingdotgg/t3code/pull/6461" target="_blank" rel="noopener noreferrer">ACP Registry PR #6461</a>
           <a href="https://github.com/pingdotgg/t3code/pull/2829" target="_blank" rel="noopener noreferrer">orchestrator v2 PR #2829</a>
           <a href="https://github.com/pingdotgg/t3code/pull/5654" target="_blank" rel="noopener noreferrer">merged Open VSX search PR #5654</a>
           <a href="https://github.com/pingdotgg/t3code/pull/6071" target="_blank" rel="noopener noreferrer">adjacent generic ACP PR #6071</a>
@@ -1303,7 +1308,7 @@
         <p class="muted">
           A second working session addressed the Macroscope review round on #6461, implemented the
           previously unused ACP capabilities, and fixed every defect surfaced during live testing.
-          All of it is committed on <code>t3code/acp-registry-search-install</code> and not pushed.
+          That earlier handoff is now incorporated into the final ACP standardization and live proof.
         </p>
 
         <div class="grid-2" style="margin-top: 26px">
@@ -1324,12 +1329,15 @@
             </ul>
           </div>
           <div class="flat">
-            <h3>Handoff: leads for the next session</h3>
+            <h3>Follow-up results and completed handoff</h3>
             <ul class="muted small">
-              <li><strong>ACP interrupts (primary lead, user-reported):</strong> Stop targets only <code>preparing/starting/running</code> runs — <code>interruptThreadTurn</code> in <code>packages/client-runtime/src/operations/commands.ts</code> deliberately skips <code>waiting</code> runs (test: "does not dispatch Stop for a waiting run"). An ACP run waiting on an approval or runtime request therefore cannot be stopped from the composer. Proposed fix: Stop on a waiting run should cancel/decline the pending runtime request, then interrupt. Reproduce first and capture the exact symptom; the server-side path is <code>AcpAdapterV2.interruptTurn</code> (~line 5707, settled-soft logic).</li>
-              <li><strong>Failed <code>exec-…</code> tool item (watch):</strong> one pi-acp command execution failed in 120&nbsp;ms with no server signal. Client-terminal operations now log failures — grep the env journal for "ACP client terminal operation failed" if it recurs.</li>
-              <li><strong>Verify the stdio bridge live:</strong> ask codex-acp or pi-acp to start subagents; <code>t3-code.delegate_task</code> items must appear in <code>orchestration_v2_projection_turn_items</code>. The bridge has unit tests but no live agent round yet.</li>
-              <li><strong>On push:</strong> reply to the 11 Macroscope comments on #6461 (all addressed; the uninstall TOCTOU is accepted-with-comment: post-prepare reservation plus lazy reinstall self-heal), then babysit per the repo loop.</li>
+              <li><strong>ACP interrupts resolved:</strong> Stop now selects <code>waiting</code> runs as well as <code>preparing/starting/running</code>. The existing ACP interrupt path already cancels the pending runtime request; the missing client dispatch was the defect.</li>
+              <li><strong>Failed <code>exec-…</code> item diagnosed:</strong> the native item was a failed <code>t3-code.delegate_task</code> MCP call, not a command execution. Codex ACP sent an extended elicitation schema for MCP approval. T3 decoded away the extension fields, failed an exact raw-schema correlation, returned a protocol error, and codex-acp converted that error to <code>user cancelled MCP tool call</code>.</li>
+              <li><strong>Subagent approval fixed:</strong> the final boundary carries the exact transport request ID and supports both current <code>elicitation/create</code> flat responses and legacy <code>session/elicitation</code> nested responses. Explicitly tagged MCP approvals follow the thread runtime policy, while ordinary forms and URL elicitation retain their existing behavior.</li>
+              <li><strong>Real retry complete:</strong> both a Codex ACP parent and a Pi ACP parent created native Codex, Claude, Codex ACP, and Codex-through-Pi child tasks. All eight child tasks completed.</li>
+              <li><strong>Claude review follow-ups:</strong> boolean ACP session options are no longer discarded, and cached provider snapshots now refresh their live slash-command and skill inventory instead of returning stale cached values.</li>
+              <li><strong>ACP instruction parity:</strong> because ACP has no system/developer prompt field, T3 now supplies a provider-neutral interaction-mode bundle in the first prompt and again after Plan/Build transitions. It includes collaborative-browser and orchestration guidance when the <code>t3-code</code> MCP tools are attached; native Codex and Claude prompt paths remain unchanged.</li>
+              <li><strong>Review handoff:</strong> the former Macroscope findings are incorporated. The PR now moves to ready-for-review state and stays under active monitoring until the latest commit is green with no unresolved actionable feedback.</li>
               <li><strong>Environment quirks:</strong> the dev env symlinks <code>/srv/...-d23f5fac/repo</code> to this worktree and live-serves edits — batch server changes and restart <code>t3dev-env@t3code-codex-turn-mapping-d23f5fac</code> deliberately; Vite keeps stale <code>packages/*</code> transforms across branch switches. <code>vp test</code> flakes at collection on this VPS — run <code>corepack pnpm test &lt;paths&gt;</code> from <code>apps/server</code>. <code>AcpSessionRuntime.processTree</code> has one pre-existing environment-only failure (node not in <code>/usr/bin</code>).</li>
             </ul>
           </div>
@@ -1338,8 +1346,118 @@
         <p class="muted small" style="margin-top: 18px">
           Verification at handoff: server, web, and contracts typecheck clean; ACP suites green
           (adapter 100, registry/probe/driver 46+, new fs/terminal/config/bridge tests 33+, web 186);
-          lint clean on changed areas. The dev environment runs the committed state.
+          lint clean on changed areas. Follow-up verification adds focused coverage for extended
+          elicitation correlation, MCP policy handling, waiting-run interruption, and boolean session
+          options. Server and client-runtime typechecks pass, and the isolated dev environment is active
+          and serving the worktree edits.
         </p>
+      </section>
+
+      <section id="standardization">
+        <h2>Round 3: ACP standardization and subagent repair, proven</h2>
+        <div class="signal good">
+          <h3>Resolved: current Codex elicitation crossed a legacy ACP boundary</h3>
+          <p>
+            <code>codex-acp</code> 1.2.0 sends <code>elicitation/create</code> and expects the current
+            flat response <code>{"action":"accept"}</code>. T3's pinned ACP 0.11.3 schema registered
+            only <code>session/elicitation</code> and encoded a nested action. Codex translated that
+            protocol mismatch into a cancelled MCP call before child creation.
+          </p>
+          <p class="muted small">
+            The compatibility boundary now registers both method generations. Internally both use a
+            flat normalized action; only the legacy wire response is converted back to the nested
+            shape. Exact JSON-RPC request IDs travel beside decoded requests, so approval routing no
+            longer depends on raw payload queues or schema-shape correlation.
+          </p>
+        </div>
+
+        <div class="flow">
+          <div class="flow-node">
+            <span class="label">ACP agent</span>
+            <strong>JSON-RPC request</strong>
+            <span>One native ID, standard method, provider-owned extension fields.</span>
+          </div>
+          <div class="arrow">→</div>
+          <div class="flow-node">
+            <span class="label">effect-acp</span>
+            <strong>Typed request context</strong>
+            <span>Carry the exact request ID and method beside the decoded payload.</span>
+          </div>
+          <div class="arrow">→</div>
+          <div class="flow-node">
+            <span class="label">Generic adapter</span>
+            <strong>Policy + projection</strong>
+            <span>Approve, ask, deny, render input, or execute client capability.</span>
+          </div>
+          <div class="arrow">→</div>
+          <div class="flow-node">
+            <span class="label">Response lifecycle</span>
+            <strong>Acknowledge exact ID</strong>
+            <span>No payload matching, FIFO guesses, or provider-specific correlation.</span>
+          </div>
+        </div>
+
+        <div class="grid-2" style="margin-top: 34px">
+          <div class="flat">
+            <h3>Standardized in this PR</h3>
+            <ul class="muted small">
+              <li>First-class transport request context for all typed core and extension request handlers.</li>
+              <li>One approval translation for standard permission requests and tagged MCP approval elicitations.</li>
+              <li>One provider-neutral T3 instruction bundle, re-applied only when the interaction mode changes.</li>
+              <li>One ACP session configuration projection for select, boolean, and model options.</li>
+              <li>One MCP delivery boundary: stdio for compliant agents and the same authenticated, thread-scoped tools through <code>acp-mcp-call</code> when an agent drops injected servers.</li>
+              <li>One current/legacy elicitation normalizer instead of upgrading the entire pinned schema and breaking older agents.</li>
+              <li>One response-admission lifecycle keyed by the real transport ID across restart, Stop, and stale generations.</li>
+              <li>One live command and skill refresh path, including cached provider snapshots.</li>
+            </ul>
+          </div>
+          <div class="flat">
+            <h3>Deleted complexity</h3>
+            <ul class="muted small">
+              <li>No second queue of raw requests inside the orchestration adapter.</li>
+              <li>No canonical JSON comparison or decoded-subset heuristic.</li>
+              <li>No request correlation based on session IDs, tool-call IDs, messages, schemas, or provider extensions.</li>
+              <li>No Codex-only execution path for ordinary ACP request identity.</li>
+              <li>No silent fallback from a missing transport identity to an unrelated pending request.</li>
+            </ul>
+          </div>
+        </div>
+
+        <h3 style="margin-top: 38px">Provider conformance matrix</h3>
+        <table>
+          <thead><tr><th>Capability</th><th>Codex ACP</th><th>Pi ACP</th><th>Kilo ACP</th><th>Grok ACP</th></tr></thead>
+          <tbody>
+            <tr><td>Typed request identity</td><td>Required for MCP approval elicitation</td><td>Shared core path</td><td>Shared core path</td><td>Shared core and xAI extension path</td></tr>
+            <tr><td>T3 orchestration MCP</td><td>stdio bridge</td><td>authenticated terminal fallback because pi-acp drops injected servers</td><td>stdio bridge</td><td>stdio bridge plus native extensions</td></tr>
+            <tr><td>Instructions</td><td>First prompt + mode transitions</td><td>First prompt + mode transitions</td><td>First prompt + mode transitions</td><td>First prompt + mode transitions</td></tr>
+            <tr><td>Permission policy</td><td>Standard permission + tagged elicitation</td><td>Standard permission</td><td>Standard permission</td><td>Standard permission + xAI user input</td></tr>
+            <tr><td>Session options</td><td>Select, boolean, model</td><td>Select, boolean, model</td><td>Select, boolean, model</td><td>Select, boolean, model</td></tr>
+            <tr><td>Stop and restart</td><td>Waiting and running turns</td><td>Waiting and running turns</td><td>Waiting and running turns</td><td>Waiting and running turns plus background-task policy</td></tr>
+          </tbody>
+        </table>
+
+        <div class="signal good" style="margin-top: 30px">
+          <h3>Acceptance completed with two real ACP parents</h3>
+          <p class="muted small">
+            The exact user prompt was run first under Codex ACP
+            (<code>acpRegistry_codex / gpt-5.6-luna</code>) and then under Pi ACP
+            (<code>acpRegistry_pi_acp / openai-codex/gpt-5.6-luna</code>). Both parents created four
+            durable child threads. All eight children reached <code>completed</code>.
+          </p>
+          <table>
+            <thead><tr><th>Parent</th><th>Native Codex</th><th>Claude</th><th>Codex ACP</th><th>Codex in Pi</th></tr></thead>
+            <tbody>
+              <tr><td>Codex ACP</td><td><code>codex / gpt-5.6-luna</code></td><td><code>claudeAgent / claude-sonnet-4-6</code></td><td><code>acpRegistry_codex / gpt-5.6-luna</code></td><td><code>acpRegistry_pi_acp / openai-codex/gpt-5.6-luna</code></td></tr>
+              <tr><td>Pi ACP</td><td><code>codex / gpt-5.6-sol</code></td><td><code>claudeAgent / claude-sonnet-4-6</code></td><td><code>acpRegistry_codex / gpt-5.6-sol</code></td><td><code>acpRegistry_pi_acp / openai-codex/gpt-5.6-luna</code></td></tr>
+            </tbody>
+          </table>
+          <p class="muted small" style="margin-top: 16px">
+            Final focused verification: server and effect-acp typechecks pass; changed TypeScript is
+            lint clean; 61 protocol, bridge, session-config, client-runtime, and registry tests pass;
+            four focused ACP adapter tests pass; current flat and legacy nested elicitation responses
+            have explicit wire-shape coverage.
+          </p>
+        </div>
       </section>
     </main>
   </body>

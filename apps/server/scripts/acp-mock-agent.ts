@@ -26,6 +26,8 @@ const emitInTurnTaskOutputThenLateDuplicate =
 const injectedReportTriggerPath = process.env.T3_ACP_INJECTED_REPORT_TRIGGER_PATH;
 const emitAskQuestion = process.env.T3_ACP_EMIT_ASK_QUESTION === "1";
 const emitElicitation = process.env.T3_ACP_EMIT_ELICITATION === "1";
+const emitMcpToolApprovalElicitation =
+  process.env.T3_ACP_EMIT_MCP_TOOL_APPROVAL_ELICITATION === "1";
 const emitUrlElicitation = process.env.T3_ACP_EMIT_URL_ELICITATION === "1";
 const emitXAiAskUserQuestion = process.env.T3_ACP_EMIT_XAI_ASK_USER_QUESTION === "1";
 const emitXAiPromptCompleteThenHang = process.env.T3_ACP_EMIT_XAI_PROMPT_COMPLETE_THEN_HANG === "1";
@@ -979,7 +981,7 @@ const program = Effect.gen(function* () {
         return { stopReason: "end_turn" };
       }
 
-      if (emitElicitation) {
+      if (emitElicitation || emitMcpToolApprovalElicitation) {
         yield* agent.client.elicit({
           sessionId: requestedSessionId,
           message: "Approve this request?",
@@ -990,6 +992,9 @@ const program = Effect.gen(function* () {
               approved: { type: "boolean", title: "Approved" },
             },
           },
+          ...(emitMcpToolApprovalElicitation
+            ? { _meta: { codex_approval_kind: "mcp_tool_call" } }
+            : {}),
         });
         return { stopReason: "end_turn" };
       }

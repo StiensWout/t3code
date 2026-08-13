@@ -15,8 +15,11 @@ import * as NodeReadline from "node:readline";
 
 interface JsonRpcEnvelope {
   readonly id?: unknown;
+  readonly error?: unknown;
   readonly result?: unknown;
 }
+
+const MCP_PROTOCOL_VERSION = "2025-06-18";
 
 export interface AcpMcpStdioBridgeOptions {
   readonly endpoint: string;
@@ -58,6 +61,101 @@ async function* sseDataLines(response: Response): AsyncGenerator<string> {
       separatorIndex = buffered.search(/\n\n|\r\n\r\n/u);
     }
   }
+}
+
+async function responsePayloads(response: Response): Promise<ReadonlyArray<unknown>> {
+  if (response.status === 202 || response.status === 204) {
+    await response.body?.cancel().catch(() => undefined);
+    return [];
+  }
+  const contentType = response.headers.get("content-type") ?? "";
+  if (contentType.includes("text/event-stream")) {
+    const payloads: Array<unknown> = [];
+    for await (const data of sseDataLines(response)) {
+      payloads.push(JSON.parse(data));
+    }
+    return payloads;
+  }
+  const text = await response.text();
+  return text.trim().length === 0 ? [] : [JSON.parse(text)];
+}
+
+export interface AcpMcpToolCallOptions {
+  readonly endpoint: string;
+  readonly authorization: string;
+  readonly tool: string;
+  readonly arguments: Readonly<Record<string, unknown>>;
+  readonly fetchImplementation?: (url: string, init?: RequestInit) => Promise<Response>;
+}
+
+/**
+ * Call one MCP tool through a fresh authenticated HTTP session.
+ *
+ * This is the terminal fallback for ACP agents that accept `mcpServers` in
+ * `session/new` but fail to expose those tools to their model. Compliant ACP
+ * agents continue to use the stdio bridge above.
+ */
+export async function callAcpMcpTool(options: AcpMcpToolCallOptions): Promise<unknown> {
+  const fetchImplementation = options.fetchImplementation ?? fetch;
+  let sessionId: string | null = null;
+  let protocolVersion: string | null = null;
+
+  const send = async (message: unknown): Promise<ReadonlyArray<unknown>> => {
+    const response = await fetchImplementation(options.endpoint, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+        authorization: options.authorization,
+        ...(sessionId === null ? {} : { "mcp-session-id": sessionId }),
+        ...(protocolVersion === null ? {} : { "mcp-protocol-version": protocolVersion }),
+      },
+      body: JSON.stringify(message),
+    });
+    sessionId = response.headers.get("mcp-session-id") ?? sessionId;
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
+      throw new Error(`T3 Code MCP endpoint responded with HTTP ${response.status}.`);
+    }
+    const payloads = await responsePayloads(response);
+    for (const payload of payloads) {
+      protocolVersion = protocolVersionOf(payload) ?? protocolVersion;
+    }
+    return payloads;
+  };
+
+  const initializeId = "t3-acp-cli-initialize";
+  const initialized = await send({
+    jsonrpc: "2.0",
+    id: initializeId,
+    method: "initialize",
+    params: {
+      protocolVersion: MCP_PROTOCOL_VERSION,
+      capabilities: {},
+      clientInfo: { name: "t3-code-acp-cli", version: "0.0.0" },
+    },
+  });
+  const initializeResponse = initialized.find((entry) => asEnvelope(entry)?.id === initializeId);
+  if (initializeResponse === undefined || asEnvelope(initializeResponse)?.error !== undefined) {
+    throw new Error("T3 Code MCP endpoint rejected initialization.");
+  }
+  await send({ jsonrpc: "2.0", method: "notifications/initialized" });
+
+  const callId = "t3-acp-cli-tool-call";
+  const responses = await send({
+    jsonrpc: "2.0",
+    id: callId,
+    method: "tools/call",
+    params: { name: options.tool, arguments: options.arguments },
+  });
+  const response = responses.find((entry) => asEnvelope(entry)?.id === callId);
+  const envelope = asEnvelope(response);
+  if (envelope === null || envelope.error !== undefined) {
+    throw new Error(
+      `T3 Code MCP tool call failed${envelope?.error === undefined ? "." : `: ${JSON.stringify(envelope.error)}`}`,
+    );
+  }
+  return envelope.result;
 }
 
 export async function runAcpMcpStdioBridge(options: AcpMcpStdioBridgeOptions): Promise<void> {
@@ -117,20 +215,9 @@ export async function runAcpMcpStdioBridge(options: AcpMcpStdioBridgeOptions): P
         await response.body?.cancel().catch(() => undefined);
         return;
       }
-      if (response.status === 202 || response.status === 204) {
-        await response.body?.cancel().catch(() => undefined);
-        return;
+      for (const payload of await responsePayloads(response)) {
+        handleServerPayload(payload);
       }
-      const contentType = response.headers.get("content-type") ?? "";
-      if (contentType.includes("text/event-stream")) {
-        for await (const data of sseDataLines(response)) {
-          handleServerPayload(JSON.parse(data));
-        }
-        return;
-      }
-      const text = await response.text();
-      if (text.trim().length === 0) return;
-      handleServerPayload(JSON.parse(text));
     } catch (error) {
       if (envelope.id !== undefined) {
         respondWithError(

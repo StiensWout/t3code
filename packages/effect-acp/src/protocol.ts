@@ -14,8 +14,9 @@ import * as RpcMessage from "effect/unstable/rpc/RpcMessage";
 import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization";
 import * as RpcServer from "effect/unstable/rpc/RpcServer";
 
-import * as AcpSchema from "./_generated/schema.gen.ts";
+import * as AcpSchema from "./schema.ts";
 import { CLIENT_METHODS } from "./_generated/meta.gen.ts";
+import * as AcpCompat from "./compat.ts";
 import * as AcpError from "./errors.ts";
 const isAcpError = Schema.is(AcpError.AcpError);
 
@@ -25,6 +26,17 @@ export interface AcpProtocolLogEvent {
   readonly payload: unknown;
 }
 
+/** Stable transport identity for an inbound ACP JSON-RPC request. */
+export interface AcpRequestContext {
+  readonly requestId: string;
+  readonly method: string;
+}
+
+export type AcpRequestHandler<Request, Response> = (
+  request: Request,
+  context: AcpRequestContext,
+) => Effect.Effect<Response, AcpError.AcpError>;
+
 export type AcpIncomingNotification =
   | {
       readonly _tag: "SessionUpdate";
@@ -33,7 +45,9 @@ export type AcpIncomingNotification =
     }
   | {
       readonly _tag: "ElicitationComplete";
-      readonly method: typeof CLIENT_METHODS.session_elicitation_complete;
+      readonly method:
+        | typeof AcpCompat.CURRENT_CLIENT_METHODS.elicitation_complete
+        | typeof CLIENT_METHODS.session_elicitation_complete;
       readonly params: AcpSchema.ElicitationCompleteNotification;
     }
   | {
@@ -60,6 +74,7 @@ export interface AcpPatchedProtocolOptions {
   readonly onExtRequest?: (
     method: string,
     params: unknown,
+    context: AcpRequestContext,
   ) => Effect.Effect<unknown, AcpError.AcpError, never>;
   readonly onTermination?: (error: AcpError.AcpError) => Effect.Effect<void, never, never>;
   readonly onOutgoingResponseFailure?: (
@@ -371,16 +386,21 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
     if (!options.onExtRequest) {
       return respondWithError(message.id, AcpError.AcpRequestError.methodNotFound(message.tag));
     }
-    return options.onExtRequest(message.tag, message.payload).pipe(
-      Effect.matchEffect({
-        onFailure: (error) =>
-          respondWithError(
-            message.id,
-            AcpError.AcpRequestError.fromExtensionHandlerError(error, message.tag),
-          ),
-        onSuccess: (value) => respondWithSuccess(message.id, value),
-      }),
-    );
+    return options
+      .onExtRequest(message.tag, message.payload, {
+        requestId: String(message.id),
+        method: message.tag,
+      })
+      .pipe(
+        Effect.matchEffect({
+          onFailure: (error) =>
+            respondWithError(
+              message.id,
+              AcpError.AcpRequestError.fromExtensionHandlerError(error, message.tag),
+            ),
+          onSuccess: (value) => respondWithSuccess(message.id, value),
+        }),
+      );
   };
 
   const handleRequestEncoded = (message: RpcMessage.RequestEncoded) => {
@@ -405,20 +425,24 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
           Effect.flatMap(dispatchNotification),
         );
       }
-      if (message.tag === CLIENT_METHODS.session_elicitation_complete) {
+      if (
+        message.tag === AcpCompat.CURRENT_CLIENT_METHODS.elicitation_complete ||
+        message.tag === CLIENT_METHODS.session_elicitation_complete
+      ) {
+        const method = message.tag;
         return decodeElicitationComplete(message.payload).pipe(
           Effect.map(
             (params) =>
               ({
                 _tag: "ElicitationComplete",
-                method: CLIENT_METHODS.session_elicitation_complete,
+                method,
                 params,
               }) satisfies AcpIncomingNotification,
           ),
           Effect.mapError((cause) =>
             AcpError.AcpProtocolParseError.fromSchemaError(
               "decode-notification-payload",
-              CLIENT_METHODS.session_elicitation_complete,
+              method,
               cause,
             ),
           ),
@@ -436,7 +460,8 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
       options.onIncomingRequest?.(String(message.id), message.tag, message.payload) ?? Effect.void;
 
     if (!options.serverRequestMethods.has(message.tag)) {
-      return observeIncoming.pipe(Effect.andThen(handleExtRequest(message))).pipe(
+      return observeIncoming.pipe(
+        Effect.andThen(handleExtRequest(message)),
         Effect.catchTags({
           AcpProtocolParseError: (error) =>
             Effect.logWarning(error).pipe(
@@ -810,15 +835,4 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
   } satisfies AcpPatchedProtocol;
 });
 
-function isProtocolError(
-  value: unknown,
-): value is { code: number; message: string; data?: unknown } {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "code" in value &&
-    typeof value.code === "number" &&
-    "message" in value &&
-    typeof value.message === "string"
-  );
-}
+const isProtocolError = Schema.is(AcpSchema.Error);

@@ -470,7 +470,10 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
             cached.expiresAt > now &&
             cached.provider.version === baseSnapshot.version
           ) {
-            return { ...cached.provider, checkedAt: baseSnapshot.checkedAt };
+            return yield* withAvailableCommands({
+              ...cached.provider,
+              checkedAt: baseSnapshot.checkedAt,
+            });
           }
           const enriched = yield* enrichProvider;
           if (enriched.auth.status === "authenticated") {

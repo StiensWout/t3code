@@ -40,7 +40,6 @@ import {
   createProject,
   interruptThreadTurn,
   forkThreadFromRun,
-  interruptThreadTurn,
   mergeThreadBack,
   cancelQueuedRun,
   editQueuedRun,
@@ -401,7 +400,7 @@ describe("V2 environment commands", () => {
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
   );
 
-  it.effect("does not dispatch Stop for a waiting run", () =>
+  it.effect("dispatches Stop for a waiting run", () =>
     Effect.gen(function* () {
       const waitingRunId = RunId.make("run-waiting");
       const projection: OrchestrationV2ThreadProjection = {
@@ -433,8 +432,15 @@ describe("V2 environment commands", () => {
         Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
       );
 
-      expect(result).toEqual({ sequence: 0 });
-      expect(commands).toEqual([]);
+      expect(result).toEqual({ sequence: 1 });
+      expect(commands).toEqual([
+        {
+          type: "run.interrupt",
+          commandId: expect.any(String),
+          threadId: v2ThreadId,
+          runId: waitingRunId,
+        },
+      ]);
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
   );
 

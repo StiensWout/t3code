@@ -20,6 +20,7 @@ import {
   type OrchestrationV2UserInputQuestion,
   type ProviderApprovalDecision,
   type ProviderInstanceId,
+  type ProviderInteractionMode,
   type ProviderDriverKind,
   type ProviderRequestKind,
   type ProviderThreadId,
@@ -45,6 +46,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import type { ChildProcessSpawner } from "effect/unstable/process";
 import * as EffectAcpErrors from "effect-acp/errors";
+import type * as EffectAcpProtocol from "effect-acp/protocol";
 import type * as EffectAcpSchema from "effect-acp/schema";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
@@ -69,7 +71,10 @@ import {
 } from "../../provider/acp/AcpClientTerminals.ts";
 import { ACP_SESSION_MODE_OPTION_ID } from "../../provider/acp/AcpSessionConfig.ts";
 import * as AcpSessionRuntime from "../../provider/acp/AcpSessionRuntime.ts";
-import { t3OrchestrationPromptForFirstRun } from "../../provider/T3OrchestrationInstructions.ts";
+import {
+  t3AcpPromptWithInstructions,
+  type T3AcpInstructionState,
+} from "../../provider/T3OrchestrationInstructions.ts";
 import { IdAllocatorV2, type IdAllocatorV2Shape } from "../IdAllocator.ts";
 import { type ProviderContinuationRequest } from "../ProviderContinuationRequests.ts";
 import { makeProviderFailure } from "../ProviderFailure.ts";
@@ -107,13 +112,14 @@ export const ACP_PROTOCOL = "acp.ndjson-jsonrpc" as const;
 export interface AcpAdapterV2RuntimeInput {
   readonly cwd: string;
   readonly mcpServers: ReadonlyArray<EffectAcpSchema.McpServer>;
+  /** Scoped credentials for terminal fallback when an ACP agent drops `mcpServers`. */
+  readonly processEnvironment?: NodeJS.ProcessEnv;
   readonly resumeSessionId?: string;
   readonly interruptPromptOnCancel?: boolean;
   readonly clientCapabilities: EffectAcpSchema.InitializeRequest["clientCapabilities"];
   readonly clientInfo: AcpSessionRuntimeOptions["clientInfo"];
   readonly requestLogger?: NonNullable<AcpSessionRuntimeOptions["requestLogger"]>;
   readonly protocolLogging: NonNullable<AcpSessionRuntimeOptions["protocolLogging"]>;
-  readonly onIncomingRequest?: AcpSessionRuntimeOptions["onIncomingRequest"];
   readonly onTermination: NonNullable<AcpSessionRuntimeOptions["onTermination"]>;
   readonly onOutgoingResponseFailure?: AcpSessionRuntimeOptions["onOutgoingResponseFailure"];
   readonly onOutgoingResponse?: AcpSessionRuntimeOptions["onOutgoingResponse"];
@@ -126,9 +132,7 @@ export type AcpAdapterV2NativeLogging = Pick<
 
 export interface AcpAdapterV2UserInputRequest {
   readonly nativeItemId: string;
-  readonly nativeMethod?: string;
   readonly nativeRequestId: string;
-  readonly nativeSessionId?: string;
   readonly questions: ReadonlyArray<OrchestrationV2UserInputQuestion>;
 }
 
@@ -144,7 +148,10 @@ export interface AcpAdapterV2ExtensionContext {
     readonly taskId: string;
     readonly status: "running" | "completed" | "failed";
   }) => Effect.Effect<void>;
-  readonly requestUserInput: (input: AcpAdapterV2UserInputRequest) => Effect.Effect<
+  readonly requestUserInput: (
+    input: AcpAdapterV2UserInputRequest,
+    requestContext: EffectAcpProtocol.AcpRequestContext,
+  ) => Effect.Effect<
     {
       readonly acknowledgeNativeResponse: Effect.Effect<void, EffectAcpErrors.AcpError>;
       readonly answers: ProviderUserInputAnswers | null;
@@ -530,11 +537,16 @@ function negotiatedCapabilities(
   };
 }
 
-function acpMcpServers(threadId: ThreadId | null): ReadonlyArray<EffectAcpSchema.McpServer> {
-  if (threadId === null) return [];
+interface AcpMcpContext {
+  readonly servers: ReadonlyArray<EffectAcpSchema.McpServer>;
+  readonly processEnvironment?: NodeJS.ProcessEnv;
+}
+
+function acpMcpContext(threadId: ThreadId | null): AcpMcpContext {
+  if (threadId === null) return { servers: [] };
   const session = McpProviderSession.readMcpProviderSession(threadId);
   if (session === undefined) {
-    return [];
+    return { servers: [] };
   }
   // Stdio is ACP's required baseline MCP transport. Agents that advertise
   // optional http support still routinely fail to wire injected http servers
@@ -545,17 +557,29 @@ function acpMcpServers(threadId: ThreadId | null): ReadonlyArray<EffectAcpSchema
   // The agent spawns the bridge from its own working directory, so the server
   // entrypoint must be an absolute path.
   const serverEntrypoint = process.argv[1] === undefined ? "t3" : NodePath.resolve(process.argv[1]);
-  return [
-    {
-      name: "t3-code",
-      command: process.execPath,
-      args: [serverEntrypoint, "acp-mcp-bridge"],
-      env: [
-        { name: "T3_ACP_MCP_ENDPOINT", value: session.endpoint },
-        { name: "T3_ACP_MCP_AUTHORIZATION", value: session.authorizationHeader },
-      ],
+  return {
+    servers: [
+      {
+        name: "t3-code",
+        command: process.execPath,
+        args: [serverEntrypoint, "acp-mcp-bridge"],
+        env: [
+          { name: "T3_ACP_MCP_ENDPOINT", value: session.endpoint },
+          { name: "T3_ACP_MCP_AUTHORIZATION", value: session.authorizationHeader },
+        ],
+      },
+    ],
+    processEnvironment: {
+      T3_ACP_MCP_ENDPOINT: session.endpoint,
+      T3_ACP_MCP_AUTHORIZATION: session.authorizationHeader,
+      T3_ACP_MCP_NODE: process.execPath,
+      T3_ACP_MCP_ENTRYPOINT: serverEntrypoint,
     },
-  ];
+  };
+}
+
+function acpMcpServers(threadId: ThreadId | null): ReadonlyArray<EffectAcpSchema.McpServer> {
+  return acpMcpContext(threadId).servers;
 }
 
 function nativeThreadId(
@@ -615,88 +639,6 @@ function unknownRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined;
-}
-
-export function acpCanonicalJson(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map(acpCanonicalJson).join(",")}]`;
-  }
-  const record = unknownRecord(value);
-  if (record !== undefined) {
-    return `{${Object.keys(record)
-      .toSorted()
-      .map((key) => `${JSON.stringify(key)}:${acpCanonicalJson(record[key])}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value) ?? "undefined";
-}
-
-export function acpNativeUserInputRequestMatches(
-  request: Pick<
-    AcpAdapterV2UserInputRequest,
-    "nativeMethod" | "nativeRequestId" | "nativeSessionId"
-  >,
-  transport: { readonly method: string; readonly payload: unknown },
-): boolean {
-  if (
-    request.nativeMethod === undefined ||
-    request.nativeMethod.trim().length === 0 ||
-    request.nativeRequestId.trim().length === 0 ||
-    request.nativeSessionId === undefined ||
-    request.nativeSessionId.trim().length === 0
-  ) {
-    return false;
-  }
-  if (
-    transport.method !== "x.ai/ask_user_question" &&
-    transport.method !== "_x.ai/ask_user_question"
-  ) {
-    return false;
-  }
-  if (transport.method !== request.nativeMethod) {
-    return false;
-  }
-  const payloadRecord = unknownRecord(transport.payload);
-  const paramsRecord = unknownRecord(payloadRecord?.params) ?? payloadRecord;
-  return (
-    paramsRecord?.toolCallId !== undefined &&
-    String(paramsRecord.toolCallId).trim().length > 0 &&
-    String(paramsRecord.toolCallId) === request.nativeRequestId &&
-    paramsRecord.sessionId !== undefined &&
-    String(paramsRecord.sessionId).trim().length > 0 &&
-    String(paramsRecord.sessionId) === request.nativeSessionId
-  );
-}
-
-export function acpClaimNativeTransportRequest<
-  T extends {
-    readonly generation: number;
-    readonly requestId: string;
-    readonly sequence: number;
-  },
->(
-  requests: ReadonlyArray<T>,
-  generation: number,
-  predicate: (request: T) => boolean,
-): readonly [string | undefined, Array<T>] {
-  let claimedIndex = -1;
-  let claimedSequence = Number.POSITIVE_INFINITY;
-  for (let index = 0; index < requests.length; index += 1) {
-    const request = requests[index]!;
-    if (
-      request.generation === generation &&
-      request.sequence < claimedSequence &&
-      predicate(request)
-    ) {
-      claimedIndex = index;
-      claimedSequence = request.sequence;
-    }
-  }
-  if (claimedIndex < 0) return [undefined, [...requests]];
-  return [
-    requests[claimedIndex]!.requestId,
-    [...requests.slice(0, claimedIndex), ...requests.slice(claimedIndex + 1)],
-  ];
 }
 
 function nonEmptyText(value: unknown, fallback: string): string {
@@ -1023,6 +965,29 @@ export function acpPermissionDisposition(
     default:
       return "deny";
   }
+}
+
+/** Resolve explicitly tagged MCP approvals through the thread's normal policy. */
+export function acpMcpToolApprovalElicitationDisposition(
+  runtimePolicy: ProviderAdapterV2RuntimePolicy,
+  request: EffectAcpSchema.ElicitationRequest,
+  nativeRequestId?: string,
+): AcpPermissionDisposition | undefined {
+  if (
+    request.mode !== "form" ||
+    (unknownRecord(request._meta)?.codex_approval_kind !== "mcp_tool_call" &&
+      nativeRequestId?.startsWith("mcp_tool_call_approval_") !== true)
+  ) {
+    return undefined;
+  }
+  return acpPermissionDisposition(runtimePolicy, {
+    sessionId: request.sessionId,
+    toolCall: {
+      toolCallId: "mcp-tool-call-approval",
+      kind: "other",
+    },
+    options: [],
+  });
 }
 
 function elicitationContent(
@@ -1396,21 +1361,13 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
         } | null>(null);
         const activeSessionSetup = yield* Ref.make<AcpSessionRuntimeStartResult | null>(null);
         const activeSelection = yield* Ref.make<ModelSelection | null>(null);
+        const activeInteractionMode = yield* Ref.make<ProviderInteractionMode | null>(null);
+        const promptInstructionStates = yield* Ref.make(new Map<string, T3AcpInstructionState>());
         const runtimeRestartRequired = yield* Ref.make(false);
         const runtimeTeardownState = yield* Ref.make<AcpRuntimeTeardownState>({ _tag: "Idle" });
         const runtimeCallbackGeneration = yield* Ref.make(0);
         const runtimeCallbackPermit = yield* Semaphore.make(1);
         const runtimeTransitionPermit = yield* Semaphore.make(1);
-        const nativeTransportRequests = yield* Ref.make<
-          Array<{
-            readonly generation: number;
-            readonly method: string;
-            readonly payload: unknown;
-            readonly requestId: string;
-            readonly sequence: number;
-          }>
-        >([]);
-        const nextNativeTransportSequence = yield* Ref.make(0);
         const nativeResponseAcknowledgements = yield* Ref.make(
           new Map<
             string,
@@ -1456,25 +1413,6 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               }
               return Option.some(yield* effect);
             }),
-          );
-        const claimNativeTransportRequest = (
-          generation: number,
-          predicate: (request: { readonly method: string; readonly payload: unknown }) => boolean,
-        ) =>
-          Ref.modify(
-            nativeTransportRequests,
-            (
-              requests,
-            ): readonly [
-              string | undefined,
-              Array<{
-                readonly generation: number;
-                readonly method: string;
-                readonly payload: unknown;
-                readonly requestId: string;
-                readonly sequence: number;
-              }>,
-            ] => acpClaimNativeTransportRequest(requests, generation, predicate),
           );
         const registerNativeResponseAcknowledgement = (
           generation: number,
@@ -1607,9 +1545,6 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
         const quarantineNativeTransportAtGeneration = Effect.fnUntraced(function* (
           generation: number,
         ) {
-          yield* Ref.update(nativeTransportRequests, (requests) =>
-            requests.filter((request) => request.generation !== generation),
-          );
           const quarantined = yield* Ref.modify(nativeResponseAcknowledgements, (current) => {
             const updated = new Map(current);
             const acknowledgements: Array<Deferred.Deferred<void, EffectAcpErrors.AcpError>> = [];
@@ -1633,7 +1568,6 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
         const closeNativeTransport = runtimeCallbackPermit.withPermit(
           Effect.gen(function* () {
             yield* Ref.update(runtimeCallbackGeneration, (generation) => generation + 1);
-            yield* Ref.set(nativeTransportRequests, []);
             const acknowledgements = yield* Ref.getAndSet(
               nativeResponseAcknowledgements,
               new Map(),
@@ -1782,103 +1716,95 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
         const makeRuntimeInput = (
           runtimeGeneration: number,
           resumeSessionId?: string,
-        ): AcpAdapterV2RuntimeInput => ({
-          cwd: input.runtimePolicy.cwd ?? process.cwd(),
-          mcpServers: acpMcpServers(input.threadId),
-          ...(resumeSessionId === undefined ? {} : { resumeSessionId }),
-          interruptPromptOnCancel: flavor.interruptPromptOnCancel ?? false,
-          clientCapabilities: {
-            fs: { readTextFile: true, writeTextFile: true },
-            terminal: clientTerminals !== undefined,
-            elicitation: { form: {} },
-          },
-          clientInfo: { name: "t3-code", version: "0.0.0" },
-          onIncomingRequest: (requestId, method, payload) =>
-            runRuntimeCallbackAtGeneration(
-              runtimeGeneration,
-              Effect.gen(function* () {
-                const sequence = yield* Ref.getAndUpdate(
-                  nextNativeTransportSequence,
-                  (current) => current + 1,
-                );
-                yield* Ref.update(nativeTransportRequests, (current) => [
-                  ...current,
-                  { generation: runtimeGeneration, method, payload, requestId, sequence },
-                ]);
-              }),
-            ).pipe(Effect.asVoid),
-          onTermination: () =>
-            runRuntimeCallbackAtGeneration(
-              runtimeGeneration,
-              Ref.set(runtimeRestartRequired, true),
-            ).pipe(Effect.asVoid),
-          onOutgoingResponseFailure: (requestId, error) =>
-            Ref.modify(nativeResponseAcknowledgements, (current) => {
-              const entry = current.get(requestId);
-              if (entry === undefined || entry.generation !== runtimeGeneration) {
-                return [
-                  emitNativeResponseLifecycle({
-                    type: "late_noop",
-                    generation: runtimeGeneration,
-                    requestId,
-                  }),
-                  current,
-                ] as const;
-              }
-              const updated = new Map(current);
-              updated.delete(requestId);
-              return [
-                Deferred.fail(entry.acknowledgement, error).pipe(
-                  Effect.andThen(
+        ): AcpAdapterV2RuntimeInput => {
+          const mcpContext = acpMcpContext(input.threadId);
+          return {
+            cwd: input.runtimePolicy.cwd ?? process.cwd(),
+            mcpServers: mcpContext.servers,
+            ...(mcpContext.processEnvironment === undefined
+              ? {}
+              : { processEnvironment: mcpContext.processEnvironment }),
+            ...(resumeSessionId === undefined ? {} : { resumeSessionId }),
+            interruptPromptOnCancel: flavor.interruptPromptOnCancel ?? false,
+            clientCapabilities: {
+              fs: { readTextFile: true, writeTextFile: true },
+              terminal: clientTerminals !== undefined,
+              elicitation: { form: {} },
+            },
+            clientInfo: { name: "t3-code", version: "0.0.0" },
+            onTermination: () =>
+              runRuntimeCallbackAtGeneration(
+                runtimeGeneration,
+                Ref.set(runtimeRestartRequired, true),
+              ).pipe(Effect.asVoid),
+            onOutgoingResponseFailure: (requestId, error) =>
+              Ref.modify(nativeResponseAcknowledgements, (current) => {
+                const entry = current.get(requestId);
+                if (entry === undefined || entry.generation !== runtimeGeneration) {
+                  return [
                     emitNativeResponseLifecycle({
-                      type: "removed",
+                      type: "late_noop",
                       generation: runtimeGeneration,
                       requestId,
                     }),
-                  ),
-                  Effect.asVoid,
-                ),
-                updated,
-              ] as const;
-            }).pipe(Effect.flatten),
-          onOutgoingResponse: (requestId) =>
-            Ref.modify(nativeResponseAcknowledgements, (current) => {
-              const entry = current.get(requestId);
-              if (entry === undefined || entry.generation !== runtimeGeneration) {
+                    current,
+                  ] as const;
+                }
+                const updated = new Map(current);
+                updated.delete(requestId);
                 return [
-                  emitNativeResponseLifecycle({
-                    type: "late_noop",
-                    generation: runtimeGeneration,
-                    requestId,
-                  }),
-                  current,
+                  Deferred.fail(entry.acknowledgement, error).pipe(
+                    Effect.andThen(
+                      emitNativeResponseLifecycle({
+                        type: "removed",
+                        generation: runtimeGeneration,
+                        requestId,
+                      }),
+                    ),
+                    Effect.asVoid,
+                  ),
+                  updated,
                 ] as const;
-              }
-              const updated = new Map(current);
-              updated.delete(requestId);
-              return [
-                Deferred.succeed(entry.acknowledgement, undefined).pipe(
-                  Effect.andThen(
+              }).pipe(Effect.flatten),
+            onOutgoingResponse: (requestId) =>
+              Ref.modify(nativeResponseAcknowledgements, (current) => {
+                const entry = current.get(requestId);
+                if (entry === undefined || entry.generation !== runtimeGeneration) {
+                  return [
                     emitNativeResponseLifecycle({
-                      type: "removed",
+                      type: "late_noop",
                       generation: runtimeGeneration,
                       requestId,
                     }),
+                    current,
+                  ] as const;
+                }
+                const updated = new Map(current);
+                updated.delete(requestId);
+                return [
+                  Deferred.succeed(entry.acknowledgement, undefined).pipe(
+                    Effect.andThen(
+                      emitNativeResponseLifecycle({
+                        type: "removed",
+                        generation: runtimeGeneration,
+                        requestId,
+                      }),
+                    ),
+                    Effect.asVoid,
                   ),
-                  Effect.asVoid,
-                ),
-                updated,
-              ] as const;
-            }).pipe(Effect.flatten),
-          ...(nativeLogging?.requestLogger === undefined
-            ? {}
-            : { requestLogger: nativeLogging.requestLogger }),
-          protocolLogging: nativeLogging?.protocolLogging ?? {
-            logIncoming: true,
-            logOutgoing: true,
-            logger: () => Effect.void,
-          },
-        });
+                  updated,
+                ] as const;
+              }).pipe(Effect.flatten),
+            ...(nativeLogging?.requestLogger === undefined
+              ? {}
+              : { requestLogger: nativeLogging.requestLogger }),
+            protocolLogging: nativeLogging?.protocolLogging ?? {
+              logIncoming: true,
+              logOutgoing: true,
+              logger: () => Effect.void,
+            },
+          };
+        };
         let runtimeScope: Scope.Closeable | undefined;
         let runtime!: AcpSessionRuntime.AcpSessionRuntime["Service"];
         yield* Effect.addFinalizer(() =>
@@ -4306,29 +4232,15 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
 
         const wireAcpRuntimeHandlers = Effect.fnUntraced(function* () {
           const handlerGeneration = yield* Ref.get(runtimeCallbackGeneration);
-          const requestUserInput = (request: AcpAdapterV2UserInputRequest) =>
-            Effect.gen(function* () {
-              const transportRequestId = yield* claimNativeTransportRequest(
-                handlerGeneration,
-                (transport) => acpNativeUserInputRequestMatches(request, transport),
-              );
-              const correlated = yield* runRuntimeCallbackAtGeneration(
-                handlerGeneration,
-                transportRequestId === undefined
-                  ? new EffectAcpErrors.AcpTransportError({
-                      detail:
-                        "Could not correlate the ACP user input request with its transport ID",
-                      cause: "Could not correlate xAI user input transport request",
-                    })
-                  : Effect.succeed(transportRequestId),
-              );
-              if (Option.isNone(correlated)) return yield* Effect.never;
-              return yield* requestUserInputWithAdmission(
-                handlerGeneration,
-                Effect.succeed(request),
-                correlated.value,
-              );
-            });
+          const requestUserInput = (
+            request: AcpAdapterV2UserInputRequest,
+            requestContext: EffectAcpProtocol.AcpRequestContext,
+          ) =>
+            requestUserInputWithAdmission(
+              handlerGeneration,
+              Effect.succeed(request),
+              requestContext.requestId,
+            );
           yield* runtime.handleReadTextFile((request) =>
             acpReadTextFile(options.fileSystem, request),
           );
@@ -4372,28 +4284,9 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               ),
             ),
           );
-          yield* runtime.handleRequestPermission((params) =>
+          yield* runtime.handleRequestPermission((params, requestContext) =>
             Effect.gen(function* () {
-              const transportRequestId = yield* claimNativeTransportRequest(
-                handlerGeneration,
-                ({ method, payload }) =>
-                  method === "session/request_permission" &&
-                  unknownRecord(payload)?.sessionId === params.sessionId &&
-                  unknownRecord(unknownRecord(payload)?.toolCall)?.toolCallId ===
-                    params.toolCall.toolCallId,
-              );
-              const correlated = yield* runRuntimeCallbackAtGeneration(
-                handlerGeneration,
-                transportRequestId === undefined
-                  ? new EffectAcpErrors.AcpTransportError({
-                      detail:
-                        "Could not correlate the ACP permission request with its transport ID",
-                      cause: "Could not correlate session/request_permission transport request",
-                    })
-                  : Effect.succeed(transportRequestId),
-              );
-              if (Option.isNone(correlated)) return yield* Effect.never;
-              const correlatedTransportRequestId = correlated.value;
+              const transportRequestId = requestContext.requestId;
               const admitted = yield* runRuntimeCallbackAtGeneration(
                 handlerGeneration,
                 Effect.gen(function* () {
@@ -4425,7 +4318,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                       context,
                       params,
                       handlerGeneration,
-                      correlatedTransportRequestId,
+                      transportRequestId,
                     ),
                   };
                 }),
@@ -4444,7 +4337,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                     >();
                     yield* registerNativeResponseAcknowledgement(
                       handlerGeneration,
-                      correlatedTransportRequestId,
+                      transportRequestId,
                       nativeResponseAcknowledgement,
                     );
                     return response;
@@ -4499,36 +4392,46 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               ),
             ),
           );
-          yield* runtime.handleElicitation((params) =>
+          yield* runtime.handleElicitation((params, requestContext) =>
             Effect.gen(function* () {
-              const transportRequestId = yield* claimNativeTransportRequest(
-                handlerGeneration,
-                ({ method, payload }) => {
-                  const record = unknownRecord(payload);
-                  return (
-                    method === "session/elicitation" &&
-                    record?.sessionId === params.sessionId &&
-                    record.message === params.message &&
-                    record.mode === params.mode &&
-                    (params.mode === "url"
-                      ? record.elicitationId === params.elicitationId && record.url === params.url
-                      : acpCanonicalJson(record.requestedSchema) ===
-                        acpCanonicalJson(params.requestedSchema))
-                  );
-                },
-              );
-              const correlated = yield* runRuntimeCallbackAtGeneration(
-                handlerGeneration,
-                transportRequestId === undefined
-                  ? new EffectAcpErrors.AcpTransportError({
-                      detail:
-                        "Could not correlate the ACP elicitation request with its transport ID",
-                      cause: "Could not correlate session/elicitation transport request",
-                    })
-                  : Effect.succeed(transportRequestId),
-              );
-              if (Option.isNone(correlated)) return yield* Effect.never;
-              const correlatedTransportRequestId = correlated.value;
+              const transportRequestId = requestContext.requestId;
+              if (
+                params.mode === "form" &&
+                (unknownRecord(params._meta)?.codex_approval_kind === "mcp_tool_call" ||
+                  transportRequestId.startsWith("mcp_tool_call_approval_"))
+              ) {
+                const mcpApprovalDisposition = yield* runRuntimeCallbackAtGeneration(
+                  handlerGeneration,
+                  Effect.gen(function* () {
+                    const context = yield* activeContext;
+                    const disposition = acpMcpToolApprovalElicitationDisposition(
+                      context.input.runtimePolicy,
+                      params,
+                      transportRequestId,
+                    );
+                    if (disposition === undefined || disposition === "ask") {
+                      return disposition;
+                    }
+                    const nativeResponseAcknowledgement = yield* Deferred.make<
+                      void,
+                      EffectAcpErrors.AcpError
+                    >();
+                    yield* registerNativeResponseAcknowledgement(
+                      handlerGeneration,
+                      transportRequestId,
+                      nativeResponseAcknowledgement,
+                    );
+                    return disposition;
+                  }),
+                );
+                if (Option.isNone(mcpApprovalDisposition)) return yield* Effect.never;
+                if (mcpApprovalDisposition.value === "allow") {
+                  return { action: "accept", content: {} } as const;
+                }
+                if (mcpApprovalDisposition.value === "deny") {
+                  return { action: "decline" } as const;
+                }
+              }
               if (params.mode === "url") {
                 const admitted = yield* runRuntimeCallbackAtGeneration(
                   handlerGeneration,
@@ -4539,10 +4442,10 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                     >();
                     yield* registerNativeResponseAcknowledgement(
                       handlerGeneration,
-                      correlatedTransportRequestId,
+                      transportRequestId,
                       nativeResponseAcknowledgement,
                     );
-                    return { action: { action: "decline" } } as const;
+                    return { action: "decline" } as const;
                   }),
                 );
                 if (Option.isNone(admitted)) return yield* Effect.never;
@@ -4585,19 +4488,17 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                     questions,
                   };
                 }),
-                correlatedTransportRequestId,
+                transportRequestId,
               );
               const response =
                 userInput.answers === null
-                  ? ({ action: { action: "cancel" } } as const)
+                  ? ({ action: "cancel" } as const)
                   : ({
-                      action: {
-                        action: "accept",
-                        content: elicitationContent(
-                          userInput.answers,
-                          new Set(Object.keys(params.requestedSchema.properties ?? {})),
-                        ),
-                      },
+                      action: "accept",
+                      content: elicitationContent(
+                        userInput.answers,
+                        new Set(Object.keys(params.requestedSchema.properties ?? {})),
+                      ),
                     } as const);
               yield* userInput.acknowledgeNativeResponse;
               return response;
@@ -4818,6 +4719,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
 
         yield* configureSession(started, input.modelSelection, input.runtimePolicy);
         yield* Ref.set(activeSelection, input.modelSelection);
+        yield* Ref.set(activeInteractionMode, input.runtimePolicy.interactionMode);
         const createdAt = yield* DateTime.now;
         const providerSession: OrchestrationV2ProviderSession = {
           id: input.providerSessionId,
@@ -5125,12 +5027,20 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
 
         const resolvePromptParts = Effect.fnUntraced(function* (
           turnInput: ProviderAdapterV2TurnInput,
+          sessionId: string,
         ) {
           const prompt: Array<EffectAcpSchema.ContentBlock> = [];
-          const text = t3OrchestrationPromptForFirstRun({
-            prompt: turnInput.message.text,
-            runOrdinal: turnInput.runOrdinal,
+          const instructionState = {
+            interactionMode: turnInput.runtimePolicy.interactionMode,
             hasT3Mcp: acpMcpServers(turnInput.threadId).length > 0,
+          } satisfies T3AcpInstructionState;
+          const previousInstructionState = (yield* Ref.get(promptInstructionStates)).get(sessionId);
+          const text = t3AcpPromptWithInstructions({
+            prompt: turnInput.message.text,
+            state: instructionState,
+            ...(previousInstructionState === undefined
+              ? {}
+              : { previousState: previousInstructionState }),
           });
           if (text.length > 0) {
             prompt.push({ type: "text", text });
@@ -5185,6 +5095,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           yield* Ref.set(activeSessionId, null);
           yield* Ref.set(activeSessionSetup, null);
           yield* Ref.set(activeSelection, null);
+          yield* Ref.set(activeInteractionMode, null);
           yield* Ref.set(snapshot, {
             order: [],
             messages: new Map(),
@@ -5214,11 +5125,14 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               yield* Ref.set(activeSessionSetup, activated);
               yield* configureSession(activated, turnInput.modelSelection, turnInput.runtimePolicy);
               yield* Ref.set(activeSelection, turnInput.modelSelection);
+              yield* Ref.set(activeInteractionMode, turnInput.runtimePolicy.interactionMode);
             } else {
               const configuredSelection = yield* Ref.get(activeSelection);
+              const configuredInteractionMode = yield* Ref.get(activeInteractionMode);
               if (
                 configuredSelection === null ||
-                !modelSelectionsEqual(configuredSelection, turnInput.modelSelection)
+                !modelSelectionsEqual(configuredSelection, turnInput.modelSelection) ||
+                configuredInteractionMode !== turnInput.runtimePolicy.interactionMode
               ) {
                 const currentSessionSetup = yield* Ref.get(activeSessionSetup);
                 if (currentSessionSetup === null) {
@@ -5233,6 +5147,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                   turnInput.runtimePolicy,
                 );
                 yield* Ref.set(activeSelection, turnInput.modelSelection);
+                yield* Ref.set(activeInteractionMode, turnInput.runtimePolicy.interactionMode);
               }
             }
             yield* Ref.set(lastTurnRoute, {
@@ -5281,7 +5196,9 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                 return wasRequested;
               }),
             );
-            const prompt = isContinuationTurn ? null : yield* resolvePromptParts(turnInput);
+            const prompt = isContinuationTurn
+              ? null
+              : yield* resolvePromptParts(turnInput, requestedSessionId);
             const startedAt = yield* DateTime.now;
             const nativeTurnId = `${requestedSessionId}:turn:${turnInput.providerTurnOrdinal}`;
             const providerTurnId = idAllocator.derive.providerTurn({ driver, nativeTurnId });
@@ -5429,6 +5346,16 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
             }
             const promptGeneration = yield* Ref.get(runtimeCallbackGeneration);
             yield* runtime.prompt({ prompt: prompt! }).pipe(
+              Effect.tap(() =>
+                Ref.update(promptInstructionStates, (current) => {
+                  const updated = new Map(current);
+                  updated.set(requestedSessionId, {
+                    interactionMode: turnInput.runtimePolicy.interactionMode,
+                    hasT3Mcp: acpMcpServers(turnInput.threadId).length > 0,
+                  });
+                  return updated;
+                }),
+              ),
               // Wire settlement precedes the completion callback's permit request so
               // settled-soft classification can observe the native return even when
               // the completion fiber has not yet set promptSettled under the permit.
@@ -5666,12 +5593,10 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                     yield* Ref.set(activeSessionId, activated.sessionId);
                     yield* Ref.set(activeSessionSetup, activated);
                     const nextSelection = threadInput.modelSelection ?? input.modelSelection;
-                    yield* configureSession(
-                      activated,
-                      nextSelection,
-                      threadInput.runtimePolicy ?? input.runtimePolicy,
-                    );
+                    const nextRuntimePolicy = threadInput.runtimePolicy ?? input.runtimePolicy;
+                    yield* configureSession(activated, nextSelection, nextRuntimePolicy);
                     yield* Ref.set(activeSelection, nextSelection);
+                    yield* Ref.set(activeInteractionMode, nextRuntimePolicy.interactionMode);
                   }
                   const now = yield* DateTime.now;
                   return {
@@ -6082,6 +6007,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                     yield* Ref.set(activeSessionId, activated.sessionId);
                     yield* Ref.set(activeSessionSetup, activated);
                     yield* Ref.set(activeSelection, null);
+                    yield* Ref.set(activeInteractionMode, null);
                   }
                   const state = yield* Ref.get(snapshot);
                   const now = yield* DateTime.now;
@@ -6129,6 +6055,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                   yield* Ref.set(activeSessionId, null);
                   yield* Ref.set(activeSessionSetup, null);
                   yield* Ref.set(activeSelection, null);
+                  yield* Ref.set(activeInteractionMode, null);
                   const now = yield* DateTime.now;
                   return {
                     providerThread: {
@@ -6186,6 +6113,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                   yield* Ref.set(activeSessionId, forked.sessionId);
                   yield* Ref.set(activeSessionSetup, forked);
                   yield* Ref.set(activeSelection, null);
+                  yield* Ref.set(activeInteractionMode, null);
                   const now = yield* DateTime.now;
                   return makeProviderThread({
                     driver,

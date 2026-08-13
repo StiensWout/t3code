@@ -3,6 +3,7 @@ import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 
 import * as AcpSchema from "./_generated/schema.gen.ts";
 import { AGENT_METHODS, CLIENT_METHODS } from "./_generated/meta.gen.ts";
+import * as AcpCompat from "./compat.ts";
 
 export const InitializeRpc = Rpc.make(AGENT_METHODS.initialize, {
   payload: AcpSchema.InitializeRequest,
@@ -94,7 +95,13 @@ export const RequestPermissionRpc = Rpc.make(CLIENT_METHODS.session_request_perm
   error: AcpSchema.Error,
 });
 
-export const ElicitationRpc = Rpc.make(CLIENT_METHODS.session_elicitation, {
+export const ElicitationRpc = Rpc.make(AcpCompat.CURRENT_CLIENT_METHODS.elicitation_create, {
+  payload: AcpSchema.ElicitationRequest,
+  success: AcpCompat.NormalizedElicitationResponse,
+  error: AcpSchema.Error,
+});
+
+export const LegacyElicitationRpc = Rpc.make(CLIENT_METHODS.session_elicitation, {
   payload: AcpSchema.ElicitationRequest,
   success: AcpSchema.ElicitationResponse,
   error: AcpSchema.Error,
@@ -150,6 +157,7 @@ export const ClientRpcs = RpcGroup.make(
   WriteTextFileRpc,
   RequestPermissionRpc,
   ElicitationRpc,
+  LegacyElicitationRpc,
   CreateTerminalRpc,
   TerminalOutputRpc,
   ReleaseTerminalRpc,
