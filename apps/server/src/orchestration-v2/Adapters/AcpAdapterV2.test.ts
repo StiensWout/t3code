@@ -616,6 +616,14 @@ function rawProtocolRequest(
   return undefined;
 }
 
+function rawProtocolRequestParam(
+  event: EffectAcpProtocol.AcpProtocolLogEvent,
+  key: string,
+): unknown {
+  const params = rawProtocolRequest(event)?.params;
+  return typeof params === "object" && params !== null ? Reflect.get(params, key) : undefined;
+}
+
 const pollProtocolMethods = (events: Queue.Queue<EffectAcpProtocol.AcpProtocolLogEvent>) =>
   Effect.gen(function* () {
     const methods: string[] = [];
@@ -695,6 +703,137 @@ function makeTurnInput(input: {
 }
 
 describe("AcpAdapterV2", () => {
+  it.live(
+    "loads the persisted ACP session during startup without creating a throwaway session",
+    () =>
+      Effect.gen(function* () {
+        const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const idAllocator = yield* IdAllocatorV2;
+        const path = yield* Path.Path;
+        const serverConfig = yield* ServerConfig;
+        const mockAgentPath = yield* path.fromFileUrl(
+          new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+        );
+        const protocolEvents = yield* Queue.unbounded<EffectAcpProtocol.AcpProtocolLogEvent>();
+        const instanceId = ProviderInstanceId.make("acp-test-eager-resume");
+        const adapter = makeAcpAdapterV2({
+          crypto: yield* Crypto.Crypto,
+          instanceId,
+          flavor: {
+            driver: ACP_TEST_DRIVER,
+            capabilities: AcpProviderCapabilitiesV2,
+            makeRuntime: makeMockRuntime({
+              childProcessSpawner,
+              mockAgentPath,
+              protocolEvents,
+            }),
+          },
+          fileSystem,
+          idAllocator,
+          serverConfig,
+        });
+        const threadId = ThreadId.make("thread-acp-eager-resume");
+        const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: process.cwd(),
+        });
+        const modelSelection = { instanceId, model: "default" } as const;
+        const runtime = yield* adapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("provider-session-acp-eager-resume"),
+          modelSelection,
+          runtimePolicy,
+          initialNativeThreadId: "persisted-session",
+        });
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+
+        assert.equal(providerThread.nativeThreadRef?.nativeId, "persisted-session");
+        const startupMethods = yield* pollProtocolMethods(protocolEvents);
+        assert.include(startupMethods, "session/load");
+        assert.notInclude(startupMethods, "session/new");
+
+        yield* runtime.resumeThread({ providerThread, modelSelection, runtimePolicy });
+        assert.notInclude(yield* pollProtocolMethods(protocolEvents), "session/load");
+      }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
+  it.live("preserves new-session fallback when an eager ACP session load is stale", () =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const idAllocator = yield* IdAllocatorV2;
+      const path = yield* Path.Path;
+      const serverConfig = yield* ServerConfig;
+      const mockAgentPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+      const protocolEvents = yield* Queue.unbounded<EffectAcpProtocol.AcpProtocolLogEvent>();
+      const instanceId = ProviderInstanceId.make("acp-test-stale-eager-resume");
+      const adapter = makeAcpAdapterV2({
+        crypto: yield* Crypto.Crypto,
+        instanceId,
+        flavor: {
+          driver: ACP_TEST_DRIVER,
+          capabilities: AcpProviderCapabilitiesV2,
+          makeRuntime: makeMockRuntime({
+            childProcessSpawner,
+            mockAgentPath,
+            protocolEvents,
+            environment: (runtimeOrdinal) =>
+              runtimeOrdinal === 1 ? { T3_ACP_FAIL_LOAD_SESSION: "1" } : {},
+          }),
+        },
+        fileSystem,
+        idAllocator,
+        serverConfig,
+      });
+      const threadId = ThreadId.make("thread-acp-stale-eager-resume");
+      const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+      });
+      const modelSelection = { instanceId, model: "default" } as const;
+      const runtime = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("provider-session-acp-stale-eager-resume"),
+        modelSelection,
+        runtimePolicy,
+        initialNativeThreadId: "stale-session",
+      });
+      const replacementThread = yield* runtime.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy,
+      });
+      const staleThread: OrchestrationV2ProviderThread = {
+        ...replacementThread,
+        nativeThreadRef: {
+          driver: ACP_TEST_DRIVER,
+          nativeId: "stale-session",
+          strength: "strong",
+        },
+      };
+
+      const startupMethods = yield* pollProtocolMethods(protocolEvents);
+      assert.equal(startupMethods.filter((method) => method === "session/load").length, 1);
+      assert.equal(startupMethods.filter((method) => method === "session/new").length, 1);
+
+      const resumeError = yield* runtime
+        .resumeThread({ providerThread: staleThread, modelSelection, runtimePolicy })
+        .pipe(Effect.flip);
+      assert.equal(resumeError._tag, "ProviderAdapterResumeThreadError");
+      assert.notInclude(yield* pollProtocolMethods(protocolEvents), "session/load");
+      assert.notEqual(replacementThread.nativeThreadRef?.nativeId, "stale-session");
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
   it.live("cleans detached fixtures when an assertion aborts the test scope", () =>
     Effect.gen(function* () {
       if ((yield* HostProcessPlatform) !== "linux") return;
@@ -1403,9 +1542,12 @@ describe("AcpAdapterV2", () => {
       const initialSelection = { instanceId, model: "default" } satisfies ModelSelection;
       const alternateSelection = {
         instanceId,
-        model: "grok-mock-alt",
+        model: "composer-2",
       } satisfies ModelSelection;
-      const originalSelection = { instanceId, model: "grok-build" } satisfies ModelSelection;
+      const originalSelection = {
+        instanceId,
+        model: "gpt-5.3-codex[reasoning=medium,fast=false]",
+      } satisfies ModelSelection;
       const runtime = yield* adapter.openSession({
         threadId: firstThreadId,
         providerSessionId: ProviderSessionId.make("provider-session-acp-active-setup"),
@@ -1465,11 +1607,64 @@ describe("AcpAdapterV2", () => {
         Stream.runHead,
       );
 
-      const setModelRequests = Array.from(yield* Queue.takeAll(protocolEvents)).filter(
+      const modelConfigurationRequests = Array.from(yield* Queue.takeAll(protocolEvents)).filter(
         (event) =>
-          event.direction === "outgoing" && rawProtocolMethod(event) === "session/set_model",
+          event.direction === "outgoing" &&
+          rawProtocolMethod(event) === "session/set_config_option" &&
+          rawProtocolRequestParam(event, "configId") === "model",
       );
-      assert.lengthOf(setModelRequests, 2);
+      assert.lengthOf(modelConfigurationRequests, 2);
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
+  it.effect("falls back to unstable model switching when no model config is advertised", () =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const idAllocator = yield* IdAllocatorV2;
+      const path = yield* Path.Path;
+      const serverConfig = yield* ServerConfig;
+      const mockAgentPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+      const protocolEvents = yield* Queue.bounded<EffectAcpProtocol.AcpProtocolLogEvent>(64);
+      const instanceId = ProviderInstanceId.make("acp-test");
+      const adapter = makeAcpAdapterV2({
+        crypto: yield* Crypto.Crypto,
+        instanceId,
+        flavor: {
+          driver: ACP_TEST_DRIVER,
+          capabilities: AcpProviderCapabilitiesV2,
+          makeRuntime: makeMockRuntime({
+            childProcessSpawner,
+            mockAgentPath,
+            protocolEvents,
+            environment: { T3_ACP_OMIT_MODEL_CONFIG_OPTION: "1" },
+          }),
+        },
+        fileSystem,
+        idAllocator,
+        serverConfig,
+      });
+      const threadId = ThreadId.make("thread-acp-model-method-fallback");
+      const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+      });
+
+      yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("provider-session-acp-model-method-fallback"),
+        modelSelection: { instanceId, model: "grok-mock-alt" },
+        runtimePolicy,
+      });
+
+      const outgoingMethods = Array.from(yield* Queue.takeAll(protocolEvents))
+        .filter((event) => event.direction === "outgoing")
+        .map(rawProtocolMethod);
+      assert.include(outgoingMethods, "session/set_model");
+      assert.notInclude(outgoingMethods, "session/set_config_option");
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 

@@ -430,7 +430,7 @@ export const AcpRegistrySettings = makeProviderSettingsSchema(
         title: "Executable override",
         description:
           "Optional local executable to use instead of installing the registry distribution. Registry arguments and environment are still applied.",
-        providerSettingsForm: { placeholder: "devin", clearWhenEmpty: "omit" },
+        providerSettingsForm: { placeholder: "Registry default", clearWhenEmpty: "omit" },
       }),
     ),
     authMethodId: TrimmedString.pipe(

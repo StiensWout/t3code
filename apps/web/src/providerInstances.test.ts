@@ -157,6 +157,31 @@ describe("applyProviderInstanceSettings", () => {
 
     expect(entry?.enabled).toBe(false);
   });
+
+  it("projects generic ACP registry identity and catalog icon metadata", () => {
+    const instanceId = ProviderInstanceId.make("acpRegistry_kilo");
+    const entries = deriveProviderInstanceEntries([
+      provider({ provider: ProviderDriverKind.make("acpRegistry"), instanceId }),
+    ]);
+    const [entry] = applyProviderInstanceSettings(entries, {
+      providerInstances: {
+        [instanceId]: {
+          driver: ProviderDriverKind.make("acpRegistry"),
+          enabled: true,
+          config: {
+            agentId: "kilo",
+            registryIconUrl: "https://cdn.agentclientprotocol.com/registry/v1/latest/kilo.svg",
+          },
+        },
+      },
+      providers: {} as never,
+    });
+
+    expect(entry).toMatchObject({
+      acpRegistryAgentId: "kilo",
+      acpRegistryIconUrl: "https://cdn.agentclientprotocol.com/registry/v1/latest/kilo.svg",
+    });
+  });
 });
 
 describe("deriveProviderInstanceEntries", () => {

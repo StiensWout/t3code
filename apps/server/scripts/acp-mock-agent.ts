@@ -64,11 +64,15 @@ const emitOverlappingXAiPromptCompleteOutOfOrder =
 const failPrompt = process.env.T3_ACP_FAIL_PROMPT === "1";
 const failSetConfigOption = process.env.T3_ACP_FAIL_SET_CONFIG_OPTION === "1";
 const exitOnSetConfigOption = process.env.T3_ACP_EXIT_ON_SET_CONFIG_OPTION === "1";
+const omitModelConfigOption = process.env.T3_ACP_OMIT_MODEL_CONFIG_OPTION === "1";
 const promptResponseText = process.env.T3_ACP_PROMPT_RESPONSE_TEXT;
 const promptDelayMs = Number(process.env.T3_ACP_PROMPT_DELAY_MS ?? "0");
 const supportsSessionLifecycle = process.env.T3_ACP_SESSION_LIFECYCLE === "1";
 const advertisedAuthMethodId = process.env.T3_ACP_AUTH_METHOD_ID?.trim();
 const requiresAuthentication = process.env.T3_ACP_REQUIRE_AUTH === "1";
+const commandAdvertisementDelayMs = Number(
+  process.env.T3_ACP_COMMAND_ADVERTISEMENT_DELAY_MS ?? "-1",
+);
 const permissionOptionIds = {
   allowOnce: process.env.T3_ACP_ALLOW_ONCE_OPTION_ID ?? "allow-once",
   allowAlways: process.env.T3_ACP_ALLOW_ALWAYS_OPTION_ID ?? "allow-always",
@@ -129,6 +133,9 @@ process.once("exit", (code) => {
 });
 
 function configOptions(): ReadonlyArray<AcpSchema.SessionConfigOption> {
+  if (omitModelConfigOption) {
+    return [];
+  }
   if (parameterizedModelPicker) {
     const baseOptions: Array<AcpSchema.SessionConfigOption> = [
       {
@@ -356,6 +363,31 @@ const program = Effect.gen(function* () {
   yield* agent.handleCreateSession(() =>
     Effect.gen(function* () {
       yield* requireAuthentication();
+      if (commandAdvertisementDelayMs >= 0) {
+        yield* Effect.sleep(`${commandAdvertisementDelayMs} millis`).pipe(
+          Effect.andThen(
+            agent.client.sessionUpdate({
+              sessionId,
+              update: {
+                sessionUpdate: "available_commands_update",
+                availableCommands: [
+                  {
+                    name: "review",
+                    description: "Review the current changes",
+                    input: { hint: "focus" },
+                  },
+                  {
+                    name: "$workspace-skill",
+                    description: "Run the workspace skill",
+                    input: null,
+                  },
+                ],
+              },
+            }),
+          ),
+          Effect.forkDetach,
+        );
+      }
       return {
         sessionId,
         modes: modeState(),

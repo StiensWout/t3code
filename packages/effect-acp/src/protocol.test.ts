@@ -53,6 +53,14 @@ const decodeExtResponse = Schema.decodeEffect(Schema.fromJsonString(ExtResponse)
 const decodeRequestPermissionResponse = Schema.decodeEffect(
   Schema.fromJsonString(RequestPermissionResponse),
 );
+const decodeJsonRpcRequestId = Schema.decodeEffect(
+  Schema.fromJsonString(Schema.Struct({ id: Schema.Number })),
+);
+const JsonRpcErrorResponse = Schema.Struct({
+  jsonrpc: Schema.Literal("2.0"),
+  id: Schema.Number,
+  error: Schema.Struct({ code: Schema.Number, message: Schema.String }),
+});
 const encodeUnknownJsonString = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 const encoder = new TextEncoder();
 const mockPeerPath = Effect.map(Effect.service(Path.Path), (path) =>
@@ -137,6 +145,32 @@ it.layer(NodeServices.layer)("effect-acp protocol", (it) => {
         assert.equal(update?._tag, "SessionUpdate");
         assert.equal(completion?._tag, "ElicitationComplete");
       }),
+  );
+
+  it.effect("decodes standard JSON-RPC errors into typed ACP request failures", () =>
+    Effect.gen(function* () {
+      const { stdio, input, output } = yield* makeInMemoryStdio();
+      const transport = yield* AcpProtocol.makeAcpPatchedProtocol({
+        stdio,
+        serverRequestMethods: new Set(),
+      });
+
+      const request = yield* transport.request("x/auth", {}).pipe(Effect.forkScoped);
+      const outbound = yield* decodeJsonRpcRequestId(yield* Queue.take(output));
+      yield* Queue.offer(
+        input,
+        yield* encodeJsonl(JsonRpcErrorResponse, {
+          jsonrpc: "2.0",
+          id: outbound.id,
+          error: { code: -32000, message: "Authentication required" },
+        }),
+      );
+
+      const error = yield* Fiber.join(request).pipe(Effect.flip, Effect.orDie);
+      assert.instanceOf(error, AcpError.AcpRequestError);
+      assert.equal(error.code, -32000);
+      assert.equal(error.message, "Authentication required");
+    }),
   );
 
   it.effect("keeps invalid core notification values only in the schema cause", () =>

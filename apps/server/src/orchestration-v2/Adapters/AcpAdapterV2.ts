@@ -39,6 +39,7 @@ import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
+import * as Result from "effect/Result";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
@@ -98,6 +99,7 @@ export const ACP_PROTOCOL = "acp.ndjson-jsonrpc" as const;
 export interface AcpAdapterV2RuntimeInput {
   readonly cwd: string;
   readonly mcpServers: ReadonlyArray<EffectAcpSchema.McpServer>;
+  readonly resumeSessionId?: string;
   readonly interruptPromptOnCancel?: boolean;
   readonly clientCapabilities: EffectAcpSchema.InitializeRequest["clientCapabilities"];
   readonly clientInfo: AcpSessionRuntimeOptions["clientInfo"];
@@ -194,6 +196,10 @@ export function acpRootTurnShouldRearmRecoveryTimers(context: {
 export interface AcpAdapterV2Flavor {
   readonly driver: ProviderDriverKind;
   readonly capabilities: OrchestrationV2ProviderCapabilities;
+  readonly onAvailableCommandsUpdate?: (
+    commands: ReadonlyArray<EffectAcpSchema.AvailableCommand>,
+  ) => Effect.Effect<void>;
+  readonly withRuntimeStartup?: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
   readonly makeRuntime: (
     input: AcpAdapterV2RuntimeInput,
   ) => Effect.Effect<
@@ -1345,6 +1351,10 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
         const events = yield* Queue.unbounded<ProviderAdapterV2Event>();
         const activeTurn = yield* Ref.make<ActiveAcpTurn | null>(null);
         const activeSessionId = yield* Ref.make<string | null>(null);
+        const initialSessionActivationFailure = yield* Ref.make<{
+          readonly sessionId: string;
+          readonly error: EffectAcpErrors.AcpError;
+        } | null>(null);
         const activeSessionSetup = yield* Ref.make<AcpSessionRuntimeStartResult | null>(null);
         const activeSelection = yield* Ref.make<ModelSelection | null>(null);
         const runtimeRestartRequired = yield* Ref.make(false);
@@ -1730,9 +1740,13 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           Effect.void;
 
         const nativeLogging = options.nativeLogging?.(input.threadId);
-        const makeRuntimeInput = (runtimeGeneration: number): AcpAdapterV2RuntimeInput => ({
+        const makeRuntimeInput = (
+          runtimeGeneration: number,
+          resumeSessionId?: string,
+        ): AcpAdapterV2RuntimeInput => ({
           cwd: input.runtimePolicy.cwd ?? process.cwd(),
           mcpServers: acpMcpServers(input.threadId),
+          ...(resumeSessionId === undefined ? {} : { resumeSessionId }),
           interruptPromptOnCancel: flavor.interruptPromptOnCancel ?? false,
           clientCapabilities: {
             fs: { readTextFile: false, writeTextFile: false },
@@ -4279,7 +4293,15 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           yield* runtime.handleSessionUpdate((notification) =>
             runRuntimeCallbackAtGeneration(
               handlerGeneration,
-              handleSessionUpdate(notification),
+              Effect.gen(function* () {
+                if (notification.update.sessionUpdate === "available_commands_update") {
+                  yield* (
+                    flavor.onAvailableCommandsUpdate?.(notification.update.availableCommands) ??
+                      Effect.void
+                  );
+                }
+                yield* handleSessionUpdate(notification);
+              }),
             ).pipe(
               Effect.asVoid,
               Effect.mapError(
@@ -4540,18 +4562,27 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           }
         });
 
-        const spawnAcpRuntime = Effect.fnUntraced(function* () {
+        const spawnAcpRuntime = Effect.fnUntraced(function* (resumeSessionId?: string) {
           if (runtimeScope !== undefined) {
             yield* Scope.close(runtimeScope, Exit.void);
           }
           runtimeScope = yield* Scope.make();
           const runtimeGeneration = yield* Ref.get(runtimeCallbackGeneration);
           runtime = yield* flavor
-            .makeRuntime(makeRuntimeInput(runtimeGeneration))
+            .makeRuntime(makeRuntimeInput(runtimeGeneration, resumeSessionId))
             .pipe(
               Effect.provideService(Scope.Scope, runtimeScope),
               Effect.provideService(Crypto.Crypto, options.crypto),
             );
+        });
+
+        const startAcpRuntime = Effect.fnUntraced(function* (resumeSessionId?: string) {
+          const startup = Effect.gen(function* () {
+            yield* spawnAcpRuntime(resumeSessionId);
+            yield* wireAcpRuntimeHandlers();
+            return yield* runtime.start();
+          });
+          return yield* flavor.withRuntimeStartup?.(startup) ?? startup;
         });
 
         const restartAcpRuntime = Effect.fnUntraced(function* () {
@@ -4559,10 +4590,24 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           yield* wireAcpRuntimeHandlers();
         });
 
-        yield* spawnAcpRuntime();
-        yield* wireAcpRuntimeHandlers();
-
-        const started = yield* runtime.start();
+        const initialStart = yield* Effect.result(startAcpRuntime(input.initialNativeThreadId));
+        const started = Result.isSuccess(initialStart)
+          ? initialStart.success
+          : yield* Effect.gen(function* () {
+              if (
+                input.initialNativeThreadId === undefined ||
+                !("method" in initialStart.failure) ||
+                initialStart.failure.method !== "session/load"
+              ) {
+                return yield* initialStart.failure;
+              }
+              yield* Ref.set(initialSessionActivationFailure, {
+                sessionId: input.initialNativeThreadId,
+                error: initialStart.failure,
+              });
+              yield* Ref.set(runtimeRestartRequired, false);
+              return yield* startAcpRuntime();
+            });
         yield* Ref.set(activeSessionId, started.sessionId);
         yield* Ref.set(activeSessionSetup, started);
         const capabilities = negotiatedCapabilities(flavor.capabilities, started);
@@ -4579,6 +4624,12 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           sessionId: string,
           threadId: ThreadId | null,
         ) {
+          const initialFailure = yield* Ref.modify(initialSessionActivationFailure, (failure) =>
+            failure?.sessionId === sessionId ? [failure.error, null] : [undefined, failure],
+          );
+          if (initialFailure !== undefined) {
+            return yield* initialFailure;
+          }
           const activationOptions = { mcpServers: acpMcpServers(threadId) };
           if (canLoadSession) {
             return yield* runtime.loadSession(sessionId, activationOptions);
@@ -4603,17 +4654,17 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
             requestedModel !== "auto" &&
             requestedModel !== "default"
           ) {
-            const currentModel = startResult.sessionSetupResult.models?.currentModelId;
-            if (currentModel !== requestedModel) {
-              if (startResult.sessionSetupResult.models != null) {
-                yield* runtime.setSessionModel(requestedModel);
-              } else if (
-                startResult.sessionSetupResult.configOptions?.some(
-                  (option) => option.category === "model",
-                ) === true
-              ) {
-                yield* runtime.setModel(requestedModel);
-              }
+            const hasModelConfig =
+              startResult.sessionSetupResult.configOptions?.some(
+                (option) => option.category === "model",
+              ) === true;
+            if (hasModelConfig) {
+              yield* runtime.setModel(requestedModel);
+            } else if (
+              startResult.sessionSetupResult.models != null &&
+              startResult.sessionSetupResult.models.currentModelId !== requestedModel
+            ) {
+              yield* runtime.setSessionModel(requestedModel);
             }
           }
           const configOptions = yield* runtime.getConfigOptions;

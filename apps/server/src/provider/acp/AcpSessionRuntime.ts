@@ -90,6 +90,12 @@ export interface AcpSessionRuntimeOptions {
     readonly version: string;
   };
   readonly authMethodId?: string;
+  /** Disable only for non-interactive discovery that must surface auth-required immediately. */
+  readonly authenticateOnAuthRequired?: boolean;
+  /** Observes the normalized handshake before any session setup or authentication retry. */
+  readonly onInitialized?: (
+    result: EffectAcpSchema.InitializeResponse,
+  ) => Effect.Effect<void, never>;
   readonly mcpServers?: ReadonlyArray<EffectAcpSchema.McpServer>;
   readonly requestLogger?: (event: AcpSessionRequestLogEvent) => Effect.Effect<void, never>;
   readonly protocolLogging?: {
@@ -1901,6 +1907,7 @@ export const make = (
         initializePayload,
         acp.agent.initialize(initializePayload),
       );
+      yield* options.onInitialized?.(initializeResult) ?? Effect.void;
 
       const authenticateAfterRequired = (
         authRequiredError: EffectAcpErrors.AcpError,
@@ -1977,9 +1984,9 @@ export const make = (
 
       const { sessionId, sessionSetupResult } = yield* setupSession.pipe(
         Effect.catch((error) =>
-          isAcpAuthenticationRequired(error)
-            ? authenticateAfterRequired(error).pipe(Effect.andThen(setupSession))
-            : Effect.fail(error),
+          !isAcpAuthenticationRequired(error) || options.authenticateOnAuthRequired === false
+            ? Effect.fail(error)
+            : authenticateAfterRequired(error).pipe(Effect.andThen(setupSession)),
         ),
       );
 

@@ -42,6 +42,7 @@ import { ProviderSettingsForm } from "./ProviderSettingsForm";
 import { ProviderModelsSection } from "./ProviderModelsSection";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import { ProviderAccentColorPicker } from "./ProviderAccentColorPicker";
+import { AcpRegistryAgentIcon, officialAcpRegistryIconUrlForAgentId } from "./AcpRegistryIcon";
 import { RedactedSensitiveText } from "./RedactedSensitiveText";
 import {
   getProviderVersionAdvisoryPresentation,
@@ -88,6 +89,12 @@ function readConfigStringArray(config: unknown, key: string): ReadonlyArray<stri
   const value = (config as Record<string, unknown>)[key];
   if (!Array.isArray(value)) return [];
   return value.filter((entry): entry is string => typeof entry === "string");
+}
+
+function readConfigString(config: unknown, key: string): string | null {
+  if (config === null || typeof config !== "object") return null;
+  const value = (config as Record<string, unknown>)[key];
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
 /**
@@ -457,7 +464,7 @@ interface ProviderInstanceCardProps {
  *
  * Behavior notes:
  *   - `liveProvider` is matched by the caller via `instanceId`; when no
- *     match is available (e.g. the server hasn't probed yet, or the
+ *     match is available (e.g. the server hasn't checked it yet, or the
  *     driver is not shipped by the current build) the card still renders
  *     with a neutral "checking" summary.
  *   - Unknown drivers (`driverOption === undefined`) get a read-only
@@ -465,8 +472,8 @@ interface ProviderInstanceCardProps {
  *     without accidentally destroying their config.
  *   - The enabled Switch writes to the envelope's `instance.enabled`
  *     field; the server's registry consults this at `entry.enabled ?? true`
- *     before materializing the instance, and the probe also checks its
- *     driver-specific `config.enabled`. We treat the envelope flag as the
+ *     before materializing the instance, and provider health checks also
+ *     honor its driver-specific `config.enabled`. We treat the envelope flag as the
  *     single source of truth from the UI — built-in cards used to write
  *     the inner flag, but on the promotion-to-instance path every edit
  *     flows through the envelope.
@@ -493,7 +500,7 @@ export function ProviderInstanceCard({
   const enabled = instance.enabled ?? true;
   // The server-reported status wins when present; otherwise fall back to
   // "disabled"/"warning" based on the local `enabled` flag so the dot
-  // reflects the persisted intent even before the first probe completes.
+  // reflects the persisted intent even before the first health check completes.
   const statusKey: ProviderStatusKey =
     (liveProvider?.status as ProviderStatusKey | undefined) ?? (enabled ? "warning" : "disabled");
   const statusStyle = PROVIDER_STATUS_STYLES[statusKey];
@@ -546,7 +553,7 @@ export function ProviderInstanceCard({
     instance.environment,
     environmentFieldNames,
   );
-  // Server-returned models may lag behind settings writes. Treat probe
+  // Server-returned models may lag behind settings writes. Treat server
   // models as the source for built-ins only; custom rows come directly
   // from the current instance config so add/remove reflects immediately.
   const modelsForDisplay = deriveProviderModelsForDisplay({
@@ -620,7 +627,26 @@ export function ProviderInstanceCard({
     updateEnvironment(providerEnvironmentWithoutNames(instance.environment, new Set([field.name])));
   };
 
-  const titleIconNode = driverKind ? (
+  const registryIconUrl =
+    driverKind === "acpRegistry"
+      ? officialAcpRegistryIconUrlForAgentId(readConfigString(instance.config, "agentId"))
+      : null;
+  const titleIconNode = registryIconUrl ? (
+    <span className="relative inline-flex size-5 shrink-0 items-center justify-center">
+      <AcpRegistryAgentIcon
+        className="size-5 bg-transparent"
+        fallbackClassName="size-4 text-foreground/80"
+        icon={registryIconUrl}
+      />
+      <span
+        className={cn(
+          "pointer-events-none absolute -left-0.5 -top-0.5 size-2 rounded-full ring-2 ring-card",
+          statusStyle.dot,
+        )}
+        aria-hidden
+      />
+    </span>
+  ) : driverKind ? (
     <ProviderInstanceIcon
       driverKind={driverKind}
       displayName={displayName}
