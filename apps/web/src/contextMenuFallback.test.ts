@@ -323,9 +323,9 @@ describe("showContextMenuFallback", () => {
     const parentButton = findButton("Rename project");
     parentButton?.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
     const childButton = findButton("/tmp/project-a");
-    const siblingButton = findButton("Mark unread");
     childButton?.focus();
-    siblingButton?.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
+    const rootMenu = (document as unknown as FakeDocument).body.children[0];
+    rootMenu?.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
 
     expect(document.activeElement).toBe(parentButton);
   });
@@ -341,6 +341,32 @@ describe("showContextMenuFallback", () => {
 
     await expect(selectionPromise).resolves.toBe("rename");
     expect(document.activeElement).toBe(opener);
+  });
+
+  it("keeps keyboard focus aligned with hovered menu items", () => {
+    showContextMenuFallback([
+      {
+        id: "project-a",
+        label: "Project A",
+        children: [{ id: "project-a:branch", label: "Project A branch" }],
+      },
+      {
+        id: "project-b",
+        label: "Project B",
+        children: [{ id: "project-b:branch", label: "Project B branch" }],
+      },
+      { id: "mark-unread", label: "Mark unread" },
+    ]);
+
+    const projectA = findButton("Project A");
+    const projectB = findButton("Project B");
+    const markUnread = findButton("Mark unread");
+    projectA?.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
+    projectB?.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
+
+    expect(document.activeElement).toBe(projectB);
+    document.dispatchEvent(keyboardEvent("ArrowDown", projectB));
+    expect(document.activeElement).toBe(markUnread);
   });
 
   it("ignores a click from the gesture that opened the menu", async () => {

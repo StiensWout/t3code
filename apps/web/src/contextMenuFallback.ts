@@ -404,6 +404,7 @@ export function showContextMenuFallback<T extends string>(
 
           if (hasChildren) {
             button.addEventListener("mouseenter", () => {
+              button.focus();
               openSubmenu(false);
             });
             button.addEventListener("click", (event) => {
@@ -412,6 +413,7 @@ export function showContextMenuFallback<T extends string>(
             });
           } else {
             button.addEventListener("mouseenter", () => {
+              button.focus();
               closeMenusFromLevel(level + 1);
             });
             button.addEventListener("click", () => {
