@@ -9,7 +9,6 @@ import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
-import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import {
   DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL,
@@ -106,6 +105,7 @@ import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import {
   AcpRegistryCatalog,
   AcpRegistryError,
+  isAcpRegistryError,
   toAcpRegistryOperationError,
 } from "./provider/acp/AcpRegistrySupport.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
@@ -156,7 +156,6 @@ import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
 import * as RelayClient from "@t3tools/shared/relayClient";
 
-const isAcpRegistryError = Schema.is(AcpRegistryError);
 const EDITOR_DISCOVERY_TIMEOUT = Duration.seconds(5);
 
 export const resolveAvailableEditorsForConfig = <A, E, R>(

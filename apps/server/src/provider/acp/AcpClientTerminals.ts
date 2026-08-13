@@ -95,6 +95,7 @@ export interface AcpTerminalOutputSnapshot {
 
 interface ManagedAcpTerminal {
   readonly terminalId: string;
+  readonly sessionId: string;
   readonly buffer: OutputBufferState;
   readonly exit: Deferred.Deferred<EffectAcpSchema.WaitForTerminalExitResponse>;
   readonly kill: Effect.Effect<void>;
@@ -121,7 +122,10 @@ export interface AcpClientTerminals {
     request: EffectAcpSchema.ReleaseTerminalRequest,
   ) => Effect.Effect<EffectAcpSchema.ReleaseTerminalResponse, EffectAcpErrors.AcpRequestError>;
   /** Buffered output for embedded tool-call content; survives release. */
-  readonly readOutputSnapshot: (terminalId: string) => AcpTerminalOutputSnapshot | undefined;
+  readonly readOutputSnapshot: (
+    sessionId: string,
+    terminalId: string,
+  ) => AcpTerminalOutputSnapshot | undefined;
   /** Kills every terminal that is still running. Safe to call repeatedly. */
   readonly disposeAll: Effect.Effect<void>;
 }
@@ -185,11 +189,12 @@ export const makeAcpClientTerminals = (
     };
 
     const requireTerminal = (
+      sessionId: string,
       terminalId: string,
       operation: string,
     ): Effect.Effect<ManagedAcpTerminal, EffectAcpErrors.AcpRequestError> => {
       const terminal = terminals.get(terminalId);
-      if (terminal === undefined || terminal.released) {
+      if (terminal === undefined || terminal.sessionId !== sessionId || terminal.released) {
         return Effect.fail(
           terminalRequestError(`ACP ${operation} received an unknown terminal ID '${terminalId}'.`),
         );
@@ -250,6 +255,7 @@ export const makeAcpClientTerminals = (
           nextTerminalNumber += 1;
           const record: ManagedAcpTerminal = {
             terminalId,
+            sessionId: request.sessionId,
             buffer: {
               chunks: [],
               bytes: 0,
@@ -304,7 +310,7 @@ export const makeAcpClientTerminals = (
       );
 
     const output: AcpClientTerminals["output"] = (request) =>
-      requireTerminal(request.terminalId, "terminal/output").pipe(
+      requireTerminal(request.sessionId, request.terminalId, "terminal/output").pipe(
         Effect.map((terminal) => ({
           output: readOutput(terminal.buffer),
           truncated: terminal.buffer.truncated,
@@ -313,19 +319,19 @@ export const makeAcpClientTerminals = (
       );
 
     const waitForExit: AcpClientTerminals["waitForExit"] = (request) =>
-      requireTerminal(request.terminalId, "terminal/wait_for_exit").pipe(
+      requireTerminal(request.sessionId, request.terminalId, "terminal/wait_for_exit").pipe(
         Effect.flatMap((terminal) => Deferred.await(terminal.exit)),
       );
 
     const kill: AcpClientTerminals["kill"] = (request) =>
-      requireTerminal(request.terminalId, "terminal/kill").pipe(
+      requireTerminal(request.sessionId, request.terminalId, "terminal/kill").pipe(
         Effect.flatMap((terminal) => terminal.kill),
         Effect.as({}),
       );
 
     const release: AcpClientTerminals["release"] = (request) =>
       Effect.uninterruptible(
-        requireTerminal(request.terminalId, "terminal/release").pipe(
+        requireTerminal(request.sessionId, request.terminalId, "terminal/release").pipe(
           Effect.flatMap((terminal) =>
             Effect.sync(() => {
               terminal.released = true;
@@ -339,9 +345,12 @@ export const makeAcpClientTerminals = (
         ),
       );
 
-    const readOutputSnapshot: AcpClientTerminals["readOutputSnapshot"] = (terminalId) => {
+    const readOutputSnapshot: AcpClientTerminals["readOutputSnapshot"] = (
+      sessionId,
+      terminalId,
+    ) => {
       const terminal = terminals.get(terminalId);
-      if (terminal === undefined) return undefined;
+      if (terminal === undefined || terminal.sessionId !== sessionId) return undefined;
       return {
         output: readOutput(terminal.buffer),
         truncated: terminal.buffer.truncated,
@@ -411,7 +420,7 @@ export function resolveEmbeddedTerminalContent(
   }
   const mapped = content.map((entry): EffectAcpSchema.ToolCallContent => {
     if (entry.type !== "terminal") return entry;
-    const snapshot = readOutputSnapshot(entry.terminalId);
+    const snapshot = readOutputSnapshot(notification.sessionId, entry.terminalId);
     return {
       type: "content",
       content: {

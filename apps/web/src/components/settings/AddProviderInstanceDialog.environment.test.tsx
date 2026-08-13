@@ -106,7 +106,7 @@ describe("AddProviderInstanceDialog environment routing", () => {
     expect(settingsHooks.useMutation).toHaveBeenCalledWith(remoteEnvironmentId);
   });
 
-  it("awaits an atomic upsert before closing and retains prepared ACP metadata", async () => {
+  it("awaits an atomic create before closing and retains prepared ACP metadata", async () => {
     const onOpenChange = vi.fn();
     let resolveMutation!: (value: { readonly _tag: "Success"; readonly value: unknown }) => void;
     settingsHooks.mutate.mockReturnValueOnce(
@@ -125,7 +125,7 @@ describe("AddProviderInstanceDialog environment routing", () => {
     ).not.toBeNull();
     (findByChildren(identityStep, "Add instance").props.onClick as (() => void) | undefined)?.();
     expect(settingsHooks.mutate).toHaveBeenCalledWith({
-      operation: "upsert",
+      operation: "create",
       instanceId: "acpRegistry_kilo_code",
       instance: {
         driver: ProviderDriverKind.make("acpRegistry"),

@@ -1347,7 +1347,7 @@
 
         <p class="muted small" style="margin-top: 18px">
           Verification at handoff: server, web, contracts, client-runtime, and effect-acp typechecks
-          pass. The latest focused run covers 225 tests across ACP protocol identity, registry,
+          pass. The latest focused run covers 226 tests across ACP protocol identity, registry,
           probe, terminal, session configuration, MCP bridge, settings, icon, and adapter behavior.
           The isolated dev environment served the final worktree edits for both live parent proofs.
         </p>
@@ -1455,7 +1455,7 @@
           </table>
           <p class="muted small" style="margin-top: 16px">
             Final focused verification: server, web, contracts, client-runtime, and effect-acp
-            typechecks pass. 225 focused tests pass, including the selected ACP adapter lifecycle scenarios;
+            typechecks pass. 226 focused tests pass, including the selected ACP adapter lifecycle scenarios;
             current flat and legacy nested elicitation responses have explicit wire-shape coverage.
           </p>
         </div>
@@ -1466,7 +1466,7 @@
             <ul class="muted small">
               <li>Numeric and string JSON-RPC request IDs remain distinct across protocol, client, agent, and adapter boundaries.</li>
               <li>The stdio MCP bridge orders session setup, then forwards independent requests and cancellation concurrently while streaming SSE events incrementally.</li>
-              <li>ACP terminal creation is concurrency-safe, waits for output drains, reports exit signals, force-kills uncooperative children, and bounds retained output without invalidating live handles.</li>
+              <li>ACP terminal creation is concurrency-safe and session-scoped, waits for output drains, reports exit signals, force-kills uncooperative children, and bounds retained output without invalidating live handles.</li>
               <li>Rollback starts a replacement ACP session immediately, quarantines every failed replacement generation, and clears session-scoped turn, item, and continuation state.</li>
               <li>Opaque model, auth, and option IDs are preserved exactly or omitted when unsafe; current-model references always point into the published bounded inventory.</li>
             </ul>

@@ -102,7 +102,7 @@ describe("AcpClientTerminals", () => {
         expect(rejected.message).toContain("unknown terminal ID");
 
         // Embedded tool-call content still renders released terminals.
-        expect(terminals.readOutputSnapshot(created.terminalId)).toBeDefined();
+        expect(terminals.readOutputSnapshot("session", created.terminalId)).toBeDefined();
       }),
     ),
   );
@@ -143,8 +143,8 @@ describe("AcpClientTerminals", () => {
           terminalIds.push(created.terminalId);
         }
 
-        expect(terminals.readOutputSnapshot(terminalIds[0]!)).toBeUndefined();
-        expect(terminals.readOutputSnapshot(terminalIds.at(-1)!)).toBeDefined();
+        expect(terminals.readOutputSnapshot("session", terminalIds[0]!)).toBeUndefined();
+        expect(terminals.readOutputSnapshot("session", terminalIds.at(-1)!)).toBeDefined();
       }),
     ),
   );
@@ -174,8 +174,8 @@ describe("AcpClientTerminals", () => {
           })
           .pipe(Effect.result);
         expect(Result.isFailure(rejected)).toBe(true);
-        expect(terminals.readOutputSnapshot(terminalIds[0]!)).toBeDefined();
-        expect(terminals.readOutputSnapshot(terminalIds.at(-1)!)).toBeDefined();
+        expect(terminals.readOutputSnapshot("session", terminalIds[0]!)).toBeDefined();
+        expect(terminals.readOutputSnapshot("session", terminalIds.at(-1)!)).toBeDefined();
       }),
     ),
   );
@@ -199,7 +199,7 @@ describe("AcpClientTerminals", () => {
         }
 
         const snapshots = terminalIds.map(
-          (terminalId) => terminals.readOutputSnapshot(terminalId)!,
+          (terminalId) => terminals.readOutputSnapshot("session", terminalId)!,
         );
         const retainedBytes = snapshots.reduce(
           (total, snapshot) => total + Buffer.byteLength(snapshot.output),
@@ -207,6 +207,35 @@ describe("AcpClientTerminals", () => {
         );
         expect(retainedBytes).toBeLessThanOrEqual(16 * 1024 * 1024);
         expect(snapshots.some((snapshot) => snapshot.truncated)).toBe(true);
+      }),
+    ),
+  );
+
+  it.effect("rejects terminal handles from a different ACP session", () =>
+    withTerminals((terminals) =>
+      Effect.gen(function* () {
+        const created = yield* terminals.create({
+          sessionId: "owner-session",
+          command: process.execPath,
+          args: ["-e", "process.stdout.write('owned');"],
+        });
+        const foreignRequest = {
+          sessionId: "foreign-session",
+          terminalId: created.terminalId,
+        };
+        const results = yield* Effect.all(
+          [
+            terminals.output(foreignRequest),
+            terminals.waitForExit(foreignRequest),
+            terminals.kill(foreignRequest),
+            terminals.release(foreignRequest),
+          ].map((effect) => effect.pipe(Effect.result)),
+          { concurrency: "unbounded" },
+        );
+
+        expect(results.every(Result.isFailure)).toBe(true);
+        expect(terminals.readOutputSnapshot("foreign-session", created.terminalId)).toBeUndefined();
+        expect(terminals.readOutputSnapshot("owner-session", created.terminalId)).toBeDefined();
       }),
     ),
   );
@@ -227,8 +256,8 @@ describe("resolveEmbeddedTerminalContent", () => {
       },
     };
 
-    const resolved = resolveEmbeddedTerminalContent(notification, (terminalId) =>
-      terminalId === "t3-term-1"
+    const resolved = resolveEmbeddedTerminalContent(notification, (sessionId, terminalId) =>
+      sessionId === "session" && terminalId === "t3-term-1"
         ? { output: "compiled 3 files", truncated: false, exitStatus: undefined }
         : undefined,
     );
