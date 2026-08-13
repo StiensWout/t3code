@@ -103,7 +103,8 @@ function isNodeWithinMenuStack(target: EventTarget | null, menuStack: readonly H
 
 /**
  * Imperative DOM-based context menu for non-Electron environments.
- * Supports nested submenus and resolves with the clicked leaf item id.
+ * Supports keyboard and pointer navigation through nested submenus and resolves
+ * with the selected leaf item id.
  */
 export function showContextMenuFallback<T extends string>(
   items: readonly ContextMenuItem<T>[],
@@ -111,6 +112,14 @@ export function showContextMenuFallback<T extends string>(
 ): Promise<T | null> {
   return new Promise<T | null>((resolve) => {
     const menuStack: HTMLDivElement[] = [];
+    const menuParentButtons: Array<HTMLButtonElement | null> = [];
+    const buttonMetadata = new WeakMap<
+      HTMLButtonElement,
+      {
+        readonly item: ContextMenuItem<T>;
+        readonly openSubmenu: (focusFirstItem: boolean) => void;
+      }
+    >();
     let isDisposed = false;
     let canDismissFromPointer = false;
 
@@ -128,10 +137,98 @@ export function showContextMenuFallback<T extends string>(
       resolve(result);
     };
 
+    const closeMenusFromLevel = (level: number) => {
+      while (menuStack.length > level) {
+        const childLevel = menuStack.length - 1;
+        menuParentButtons[childLevel]?.setAttribute("aria-expanded", "false");
+        menuParentButtons.pop();
+        menuStack.pop()?.remove();
+      }
+    };
+
+    const getEnabledMenuButtons = (menu: HTMLDivElement): HTMLButtonElement[] =>
+      Array.from(menu.querySelectorAll<HTMLButtonElement>("button")).filter(
+        (button) => !button.disabled,
+      );
+
+    const focusMenuItem = (menu: HTMLDivElement, index: number) => {
+      const buttons = getEnabledMenuButtons(menu);
+      if (buttons.length === 0) {
+        return;
+      }
+      const normalizedIndex = (index + buttons.length) % buttons.length;
+      const button = buttons[normalizedIndex];
+      if (!button) {
+        return;
+      }
+      button.focus();
+      button.scrollIntoView?.({ block: "nearest" });
+    };
+
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
         cleanup(null);
+        return;
+      }
+
+      const eventTarget = event.target ?? document.activeElement;
+      const menuIndex = menuStack.findIndex((menu) => isNodeWithinMenuStack(eventTarget, [menu]));
+      const menu = menuStack[menuIndex];
+      if (!menu) {
+        return;
+      }
+
+      const buttons = getEnabledMenuButtons(menu);
+      const button = buttons.find((candidate) => candidate === eventTarget);
+      const metadata = button ? buttonMetadata.get(button) : undefined;
+      if (!button || !metadata) {
+        return;
+      }
+
+      const currentIndex = buttons.indexOf(button);
+      switch (event.key) {
+        case "ArrowDown":
+          event.preventDefault();
+          focusMenuItem(menu, currentIndex + 1);
+          break;
+        case "ArrowUp":
+          event.preventDefault();
+          focusMenuItem(menu, currentIndex - 1);
+          break;
+        case "Home":
+          event.preventDefault();
+          focusMenuItem(menu, 0);
+          break;
+        case "End":
+          event.preventDefault();
+          focusMenuItem(menu, buttons.length - 1);
+          break;
+        case "ArrowRight":
+          if (metadata.item.children && metadata.item.children.length > 0) {
+            event.preventDefault();
+            metadata.openSubmenu(true);
+          }
+          break;
+        case "ArrowLeft": {
+          const parentButton = menuParentButtons[menuIndex];
+          if (!parentButton) {
+            return;
+          }
+          event.preventDefault();
+          closeMenusFromLevel(menuIndex);
+          parentButton.focus();
+          break;
+        }
+        case "Enter":
+        case " ":
+          event.preventDefault();
+          if (metadata.item.children && metadata.item.children.length > 0) {
+            metadata.openSubmenu(true);
+          } else {
+            cleanup(metadata.item.id);
+          }
+          break;
       }
     };
 
@@ -150,17 +247,13 @@ export function showContextMenuFallback<T extends string>(
       cleanup(null);
     };
 
-    const closeMenusFromLevel = (level: number) => {
-      while (menuStack.length > level) {
-        menuStack.pop()?.remove();
-      }
-    };
-
     const openMenu = (
       entries: readonly ContextMenuItem<T>[],
       preferredLeft: number,
       preferredTop: number,
       level: number,
+      focusFirstItem = false,
+      parentButton?: HTMLButtonElement,
     ) => {
       closeMenusFromLevel(level);
 
@@ -172,6 +265,9 @@ export function showContextMenuFallback<T extends string>(
       menu.style.left = `${preferredLeft}px`;
       menu.style.top = `${preferredTop}px`;
       menu.dataset.level = String(level);
+      menu.setAttribute("role", "menu");
+      menu.setAttribute("aria-orientation", "vertical");
+      menuParentButtons[level] = parentButton ?? null;
 
       const inner = document.createElement("div");
       inner.className =
@@ -194,6 +290,8 @@ export function showContextMenuFallback<T extends string>(
 
         const button = document.createElement("button");
         button.type = "button";
+        button.tabIndex = -1;
+        button.setAttribute("role", "menuitem");
         const isDisabled = item.disabled === true;
         button.disabled = isDisabled;
         const rowBase =
@@ -231,42 +329,68 @@ export function showContextMenuFallback<T extends string>(
           chevron.className = "ms-auto shrink-0 text-muted-foreground/80 text-sm leading-none";
           chevron.textContent = ">";
           button.appendChild(chevron);
+          button.setAttribute("aria-haspopup", "menu");
+          button.setAttribute("aria-expanded", "false");
         }
 
         if (!isDisabled) {
+          let isHovered = false;
+          let isFocused = false;
+          const applyInteractionStyles = () => {
+            const isActive = isHovered || isFocused;
+            button.style.background = isActive
+              ? isLeafDestructive
+                ? "color-mix(in srgb, var(--destructive) 10%, transparent)"
+                : "var(--accent)"
+              : "transparent";
+            button.style.color = isActive
+              ? isLeafDestructive
+                ? "var(--destructive-foreground)"
+                : "var(--accent-foreground)"
+              : isLeafDestructive
+                ? "var(--destructive-foreground)"
+                : "var(--foreground)";
+          };
+          button.addEventListener("focus", () => {
+            isFocused = true;
+            applyInteractionStyles();
+          });
+          button.addEventListener("blur", () => {
+            isFocused = false;
+            applyInteractionStyles();
+          });
           button.addEventListener("mouseenter", () => {
-            button.style.background = isLeafDestructive
-              ? "color-mix(in srgb, var(--destructive) 10%, transparent)"
-              : "var(--accent)";
-            button.style.color = isLeafDestructive
-              ? "var(--destructive-foreground)"
-              : "var(--accent-foreground)";
+            isHovered = true;
+            applyInteractionStyles();
           });
           button.addEventListener("mouseleave", () => {
-            button.style.background = "transparent";
-            button.style.color = isLeafDestructive
-              ? "var(--destructive-foreground)"
-              : "var(--foreground)";
+            isHovered = false;
+            applyInteractionStyles();
           });
+
+          const openSubmenu = (shouldFocusFirst: boolean) => {
+            const rect = button.getBoundingClientRect();
+            button.setAttribute("aria-expanded", "true");
+            openMenu(item.children!, rect.right + 4, rect.top, level + 1, shouldFocusFirst, button);
+
+            const childMenu = menuStack[level + 1];
+            if (!childMenu) {
+              return;
+            }
+            const childRect = childMenu.getBoundingClientRect();
+            if (childRect.right > window.innerWidth) {
+              clampMenuPosition(childMenu, rect.left - childRect.width - 4, rect.top);
+            }
+          };
+          buttonMetadata.set(button, { item, openSubmenu });
 
           if (hasChildren) {
             button.addEventListener("mouseenter", () => {
-              const rect = button.getBoundingClientRect();
-              const nextLeft = rect.right + 4;
-              const nextTop = rect.top;
-              openMenu(item.children!, nextLeft, nextTop, level + 1);
-
-              const childMenu = menuStack[level + 1];
-              if (!childMenu) {
-                return;
-              }
-              const childRect = childMenu.getBoundingClientRect();
-              if (childRect.right > window.innerWidth) {
-                clampMenuPosition(childMenu, rect.left - childRect.width - 4, rect.top);
-              }
+              openSubmenu(false);
             });
             button.addEventListener("click", (event) => {
               event.preventDefault();
+              openSubmenu(true);
             });
           } else {
             button.addEventListener("mouseenter", () => {
@@ -292,13 +416,16 @@ export function showContextMenuFallback<T extends string>(
 
       requestAnimationFrame(() => {
         clampMenuPosition(menu, preferredLeft, preferredTop);
+        if (focusFirstItem) {
+          focusMenuItem(menu, 0);
+        }
       });
     };
 
     document.addEventListener("keydown", onKeyDown);
     document.addEventListener("pointerdown", onPointerDown, true);
     document.addEventListener("contextmenu", onContextMenu, true);
-    openMenu(items, position?.x ?? 0, position?.y ?? 0, 0);
+    openMenu(items, position?.x ?? 0, position?.y ?? 0, 0, true);
 
     requestAnimationFrame(() => {
       canDismissFromPointer = true;

@@ -19,6 +19,8 @@ class FakeDomEvent {
   }
 }
 
+let activeElement: FakeElement | null = null;
+
 class FakeElement {
   children: FakeElement[] = [];
   parent: FakeElement | null = null;
@@ -27,7 +29,9 @@ class FakeElement {
   className = "";
   disabled = false;
   type = "";
+  tabIndex = 0;
   private textValue = "";
+  private readonly attributes = new Map<string, string>();
   private readonly listeners = new Map<string, FakeListener[]>();
 
   constructor(readonly tagName: string) {}
@@ -47,6 +51,9 @@ class FakeElement {
       this.parent.children.splice(index, 1);
     }
     this.parent = null;
+    if (activeElement === this) {
+      activeElement = null;
+    }
   }
 
   addEventListener(type: string, listener: FakeListener) {
@@ -56,10 +63,27 @@ class FakeElement {
   }
 
   dispatchEvent(event: FakeDomEvent) {
+    if (!("target" in event)) {
+      Object.assign(event, { target: this });
+    }
     for (const listener of this.listeners.get(event.type) ?? []) {
       listener(event);
     }
     return true;
+  }
+
+  focus() {
+    activeElement = this;
+  }
+
+  scrollIntoView() {}
+
+  setAttribute(name: string, value: string) {
+    this.attributes.set(name, value);
+  }
+
+  getAttribute(name: string) {
+    return this.attributes.get(name) ?? null;
   }
 
   set textContent(value: string) {
@@ -118,6 +142,10 @@ class FakeDocument {
   body = new FakeBody();
   private readonly listeners = new Map<string, FakeListener[]>();
 
+  get activeElement() {
+    return activeElement;
+  }
+
   createElement(tagName: string) {
     return new FakeElement(tagName);
   }
@@ -139,6 +167,13 @@ class FakeDocument {
     }
   }
 
+  dispatchEvent(event: FakeDomEvent) {
+    for (const listener of this.listeners.get(event.type) ?? []) {
+      listener(event);
+    }
+    return true;
+  }
+
   querySelectorAll(tagName: string) {
     return this.body.querySelectorAll(tagName);
   }
@@ -150,7 +185,14 @@ function findButton(label: string): FakeElement | undefined {
     .find((button) => button.textContent.includes(label));
 }
 
+function keyboardEvent(key: string, target: FakeElement | undefined) {
+  const event = new KeyboardEvent("keydown", { key });
+  Object.assign(event, { target });
+  return event;
+}
+
 beforeEach(() => {
+  activeElement = null;
   vi.stubGlobal("document", new FakeDocument());
   vi.stubGlobal("window", {
     innerWidth: 1280,
@@ -213,6 +255,55 @@ describe("showContextMenuFallback", () => {
     renameButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     await expect(selectionPromise).resolves.toBe("rename");
+  });
+
+  it("supports keyboard navigation and activation", async () => {
+    const selectionPromise = showContextMenuFallback([
+      { id: "rename", label: "Rename" },
+      { id: "delete", label: "Delete", destructive: true },
+    ]);
+    const document = globalThis.document as unknown as FakeDocument;
+    const renameButton = findButton("Rename");
+    const deleteButton = findButton("Delete");
+
+    expect(document.activeElement).toBe(renameButton);
+    const moveDown = keyboardEvent("ArrowDown", renameButton);
+    document.dispatchEvent(moveDown);
+    expect(moveDown.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(deleteButton);
+
+    const activate = keyboardEvent("Enter", deleteButton);
+    document.dispatchEvent(activate);
+    await expect(selectionPromise).resolves.toBe("delete");
+  });
+
+  it("opens and closes nested menus with the keyboard", async () => {
+    const selectionPromise = showContextMenuFallback([
+      {
+        id: "rename:submenu",
+        label: "Rename project",
+        children: [
+          { id: "rename:project-a", label: "/tmp/project-a" },
+          { id: "rename:project-b", label: "/tmp/project-b" },
+        ],
+      },
+    ]);
+    const document = globalThis.document as unknown as FakeDocument;
+    const parentButton = findButton("Rename project");
+
+    document.dispatchEvent(keyboardEvent("ArrowRight", parentButton));
+    const childButton = findButton("/tmp/project-a");
+    expect(document.activeElement).toBe(childButton);
+
+    document.dispatchEvent(keyboardEvent("ArrowLeft", childButton));
+    expect(document.activeElement).toBe(parentButton);
+
+    document.dispatchEvent(keyboardEvent("ArrowRight", parentButton));
+    const secondChildButton = findButton("/tmp/project-b");
+    document.dispatchEvent(keyboardEvent("ArrowDown", childButton));
+    document.dispatchEvent(keyboardEvent("Enter", secondChildButton));
+
+    await expect(selectionPromise).resolves.toBe("rename:project-b");
   });
 
   it("ignores a click from the gesture that opened the menu", async () => {
