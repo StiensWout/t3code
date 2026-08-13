@@ -7,6 +7,20 @@ import { resetRequestLatencyStateForTests } from "./rpc/requestLatencyState";
 
 let cachedApi: LocalApi | undefined;
 
+/**
+ * Native Electron menus can follow light/dark mode, but they cannot consume
+ * the renderer's custom T3 theme variables. Keep app menus in the renderer on
+ * web, Windows, and Linux so those builds share the same themed implementation.
+ * macOS stays native until its menu treatment is revisited.
+ */
+function isMacOSHost(): boolean {
+  if (typeof navigator === "undefined") return false;
+  return (
+    navigator.platform.toLowerCase().startsWith("mac") ||
+    navigator.userAgent.toLowerCase().includes("mac os")
+  );
+}
+
 function createBrowserLocalApi(): LocalApi {
   return {
     dialogs: {
@@ -36,7 +50,7 @@ function createBrowserLocalApi(): LocalApi {
         items: readonly ContextMenuItem<T>[],
         position?: { x: number; y: number },
       ): Promise<T | null> => {
-        if (window.desktopBridge) {
+        if (window.desktopBridge && isMacOSHost()) {
           return window.desktopBridge.showContextMenu(items, position) as Promise<T | null>;
         }
         return showContextMenuFallback(items, position);

@@ -183,6 +183,25 @@ afterEach(() => {
 });
 
 describe("showContextMenuFallback", () => {
+  it("uses themed surface and action tokens for app menus", async () => {
+    const selectionPromise = showContextMenuFallback([
+      { id: "rename", label: "Rename" },
+      { id: "delete", label: "Delete", destructive: true },
+    ]);
+
+    const menu = (document as unknown as FakeDocument).body.children[0];
+    expect(menu?.className).toContain("dropdown-glass");
+    expect(menu?.style.cssText).toContain("var(--popover-foreground)");
+
+    const renameButton = findButton("Rename");
+    const deleteButton = findButton("Delete");
+    expect(renameButton?.className).toContain("text-foreground");
+    expect(deleteButton?.className).toContain("text-destructive-foreground");
+
+    renameButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await expect(selectionPromise).resolves.toBe("rename");
+  });
+
   it("resolves a clicked flat menu item", async () => {
     const selectionPromise = showContextMenuFallback([
       { id: "rename", label: "Rename" },

@@ -50,6 +50,10 @@ function testWindow(): Window & typeof globalThis {
 beforeEach(() => {
   vi.resetModules();
   vi.clearAllMocks();
+  vi.stubGlobal("navigator", {
+    platform: "Linux x86_64",
+    userAgent: "Mozilla/5.0 (X11; Linux x86_64)",
+  });
   if (globalThis.window === undefined) {
     Object.defineProperty(globalThis, "window", {
       configurable: true,
@@ -64,6 +68,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
@@ -85,6 +90,52 @@ describe("LocalApi", () => {
     expect(showContextMenuFallbackMock).toHaveBeenCalledWith(items, { x: 4, y: 5 });
   });
 
+  it("uses the themed context-menu fallback on Windows desktop", async () => {
+    vi.stubGlobal("navigator", {
+      platform: "Win32",
+      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+    });
+    showContextMenuFallbackMock.mockResolvedValue("rename");
+    const showContextMenu = vi.fn().mockResolvedValue("delete");
+    testWindow().desktopBridge = { showContextMenu } as unknown as DesktopBridge;
+
+    const { createLocalApi } = await import("./localApi");
+    const items = [{ id: "rename", label: "Rename" }] as const;
+
+    await expect(createLocalApi().contextMenu.show(items, { x: 4, y: 5 })).resolves.toBe("rename");
+    expect(showContextMenu).not.toHaveBeenCalled();
+    expect(showContextMenuFallbackMock).toHaveBeenCalledWith(items, { x: 4, y: 5 });
+  });
+
+  it("uses the themed context-menu fallback on Linux desktop", async () => {
+    showContextMenuFallbackMock.mockResolvedValue("rename");
+    const showContextMenu = vi.fn().mockResolvedValue("delete");
+    testWindow().desktopBridge = { showContextMenu } as unknown as DesktopBridge;
+
+    const { createLocalApi } = await import("./localApi");
+    const items = [{ id: "rename", label: "Rename" }] as const;
+
+    await expect(createLocalApi().contextMenu.show(items, { x: 4, y: 5 })).resolves.toBe("rename");
+    expect(showContextMenu).not.toHaveBeenCalled();
+    expect(showContextMenuFallbackMock).toHaveBeenCalledWith(items, { x: 4, y: 5 });
+  });
+
+  it("keeps the native context-menu bridge on macOS desktop", async () => {
+    vi.stubGlobal("navigator", {
+      platform: "MacIntel",
+      userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+    });
+    const showContextMenu = vi.fn().mockResolvedValue("rename");
+    testWindow().desktopBridge = { showContextMenu } as unknown as DesktopBridge;
+
+    const { createLocalApi } = await import("./localApi");
+    const items = [{ id: "rename", label: "Rename" }] as const;
+
+    await expect(createLocalApi().contextMenu.show(items, { x: 4, y: 5 })).resolves.toBe("rename");
+    expect(showContextMenu).toHaveBeenCalledWith(items, { x: 4, y: 5 });
+    expect(showContextMenuFallbackMock).not.toHaveBeenCalled();
+  });
+
   it("uses the themed confirmation host when it is available", async () => {
     requestConfirmDialogMock.mockResolvedValue(true);
     const { createLocalApi } = await import("./localApi");
@@ -104,6 +155,10 @@ describe("LocalApi", () => {
   });
 
   it("delegates host capabilities and persistence to the desktop bridge", async () => {
+    vi.stubGlobal("navigator", {
+      platform: "MacIntel",
+      userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+    });
     const showContextMenu = vi.fn().mockResolvedValue("delete");
     const pickFolder = vi.fn().mockResolvedValue("/tmp/project");
     const getClientSettings = vi.fn().mockResolvedValue(DEFAULT_CLIENT_SETTINGS);
