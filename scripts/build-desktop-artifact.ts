@@ -2338,6 +2338,7 @@ export const verifyWindowsPrimaryFffNativeLoad = Effect.fn(
 )(function* (input: {
   readonly packagedAppDir: string;
   readonly asarPath: string;
+  readonly appExecutableName: string;
   readonly targetArch: typeof BuildArch.Type;
   readonly verbose: boolean;
 }) {
@@ -2347,22 +2348,13 @@ export const verifyWindowsPrimaryFffNativeLoad = Effect.fn(
 
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  let executablePath: string | undefined;
-  for (const entry of (yield* fs.readDirectory(input.packagedAppDir)).sort()) {
-    if (!entry.toLowerCase().endsWith(".exe")) continue;
-    const candidate = path.join(input.packagedAppDir, entry);
-    const stat = yield* fs.stat(candidate).pipe(Effect.orElseSucceed(() => null));
-    if (stat?.type === "File") {
-      executablePath = candidate;
-      break;
-    }
-  }
-
-  if (executablePath === undefined) {
+  const executablePath = path.join(input.packagedAppDir, input.appExecutableName);
+  const executableStat = yield* fs.stat(executablePath).pipe(Effect.orElseSucceed(() => null));
+  if (executableStat?.type !== "File") {
     return yield* new WindowsPrimaryNativeProbeError({
-      executablePath: input.packagedAppDir,
+      executablePath,
       exitCode: -1,
-      output: "The unpacked application does not contain a primary .exe.",
+      output: "The unpacked application does not contain its expected primary executable.",
     });
   }
 
@@ -2430,6 +2422,7 @@ export const validateWindowsPackagedPayload = Effect.fn(
   "desktopArtifact.validateWindowsPackagedPayload",
 )(function* (input: {
   readonly stageDistDir: string;
+  readonly appExecutableName: string;
   readonly targetArch: typeof BuildArch.Type;
   readonly fileLimit?: number;
   readonly verbose?: boolean;
@@ -2543,6 +2536,7 @@ export const validateWindowsPackagedPayload = Effect.fn(
   yield* verifyWindowsPrimaryFffNativeLoad({
     packagedAppDir,
     asarPath,
+    appExecutableName: input.appExecutableName,
     targetArch: input.targetArch,
     verbose: input.verbose ?? false,
   });
@@ -2997,6 +2991,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   if (options.platform === "win") {
     yield* validateWindowsPackagedPayload({
       stageDistDir,
+      appExecutableName: `${resolveDesktopProductName(appVersion)}.exe`,
       targetArch: options.arch,
       verbose: options.verbose,
     });

@@ -132,9 +132,17 @@ const makeWindowsPayloadFixture = Effect.fn("test.makeWindowsPayloadFixture")(fu
     path.join(resourcesDir, "resource-monitor/t3-resource-monitor.exe"),
     "monitor",
   );
-  yield* fs.writeFileString(path.join(packagedAppDir, "T3 Code.exe"), "electron");
+  const appExecutableName = "t3code.exe";
+  yield* fs.writeFileString(path.join(packagedAppDir, appExecutableName), "electron");
+  yield* fs.writeFileString(path.join(packagedAppDir, "chrome_crashpad_handler.exe"), "crashpad");
 
-  return { stageDistDir, packagedAppDir, sourceDir, generatedAsarPath } as const;
+  return {
+    stageDistDir,
+    packagedAppDir,
+    sourceDir,
+    generatedAsarPath,
+    appExecutableName,
+  } as const;
 });
 
 it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
@@ -474,6 +482,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         const fixture = yield* makeWindowsPayloadFixture({ copyUnpackedNatives: true });
         const result = yield* validateWindowsPackagedPayload({
           stageDistDir: fixture.stageDistDir,
+          appExecutableName: fixture.appExecutableName,
           targetArch: "x64",
         });
 
@@ -495,7 +504,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     ),
   );
 
-  it.effect("probes fff through the packaged Windows primary from inside server.asar", () => {
+  it.effect("probes fff through the packaged Windows primary instead of helper executables", () => {
     const commands: Array<{
       readonly command: string;
       readonly args: ReadonlyArray<string>;
@@ -518,6 +527,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         const fixture = yield* makeWindowsPayloadFixture({ copyUnpackedNatives: true });
         yield* validateWindowsPackagedPayload({
           stageDistDir: fixture.stageDistDir,
+          appExecutableName: fixture.appExecutableName,
           targetArch: "x64",
         });
 
@@ -526,7 +536,10 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         );
         if (primaryProbe === undefined) return assert.fail("Windows primary probe was not spawned");
 
-        assert.equal(primaryProbe.command, path.join(fixture.packagedAppDir, "T3 Code.exe"));
+        assert.equal(
+          primaryProbe.command,
+          path.join(fixture.packagedAppDir, fixture.appExecutableName),
+        );
         assert.deepStrictEqual(primaryProbe.args.slice(0, 3), [
           "--no-global-search-paths",
           "--input-type=module",
@@ -574,6 +587,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         const fixture = yield* makeWindowsPayloadFixture({ copyUnpackedNatives: true });
         yield* validateWindowsPackagedPayload({
           stageDistDir: fixture.stageDistDir,
+          appExecutableName: fixture.appExecutableName,
           targetArch: "arm64",
         });
 
@@ -604,6 +618,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         const fixture = yield* makeWindowsPayloadFixture({ copyUnpackedNatives: false });
         const error = yield* validateWindowsPackagedPayload({
           stageDistDir: fixture.stageDistDir,
+          appExecutableName: fixture.appExecutableName,
           targetArch: "x64",
         }).pipe(Effect.flip);
 
@@ -631,6 +646,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
         const nativeError = yield* validateWindowsPackagedPayload({
           stageDistDir: fixture.stageDistDir,
+          appExecutableName: fixture.appExecutableName,
           targetArch: "x64",
         }).pipe(Effect.flip);
         assert.instanceOf(nativeError, WindowsPackagedPayloadValidationError);
@@ -650,6 +666,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
         const resourceMonitorError = yield* validateWindowsPackagedPayload({
           stageDistDir: fixture.stageDistDir,
+          appExecutableName: fixture.appExecutableName,
           targetArch: "x64",
         }).pipe(Effect.flip);
         assert.instanceOf(resourceMonitorError, WindowsPackagedPayloadValidationError);
@@ -667,6 +684,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         const fixture = yield* makeWindowsPayloadFixture({ copyUnpackedNatives: true });
         const error = yield* validateWindowsPackagedPayload({
           stageDistDir: fixture.stageDistDir,
+          appExecutableName: fixture.appExecutableName,
           targetArch: "x64",
           fileLimit: 2,
         }).pipe(Effect.flip);
@@ -687,6 +705,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         });
         const error = yield* validateWindowsPackagedPayload({
           stageDistDir: fixture.stageDistDir,
+          appExecutableName: fixture.appExecutableName,
           targetArch: "x64",
         }).pipe(Effect.flip);
 
