@@ -67,8 +67,6 @@ import type { ProviderContinuationRequest } from "../ProviderContinuationRequest
 import {
   AcpProviderCapabilitiesV2,
   acpCarryoverTerminalShouldClearContinuation,
-  acpMcpToolApprovalElicitationDisposition,
-  acpPermissionDisposition,
   acpPostSettleContinuationOfferEvidence,
   acpIsAppOwnedWakeTurn,
   acpPostSettleMonitorPromptShouldSuppress,
@@ -90,180 +88,6 @@ const serverConfigLayer = ServerConfig.layerTest(process.cwd(), {
 const testLayer = Layer.mergeAll(NodeServices.layer, idAllocatorLayer, serverConfigLayer);
 const ACP_TEST_DRIVER = ProviderDriverKind.make("acp-test");
 const decodeUnknownJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
-
-function permissionRequest(
-  kind: NonNullable<EffectAcpSchema.RequestPermissionRequest["toolCall"]["kind"]>,
-  locations?: ReadonlyArray<EffectAcpSchema.ToolCallLocation>,
-): EffectAcpSchema.RequestPermissionRequest {
-  return {
-    options: [],
-    sessionId: "permission-session",
-    toolCall: {
-      kind,
-      ...(locations === undefined ? {} : { locations }),
-      toolCallId: "permission-tool-call",
-    },
-  };
-}
-
-describe("acpPermissionDisposition", () => {
-  const cwd = NodePath.resolve(process.cwd(), "acp-permission-workspace");
-  const writableRoot = NodePath.resolve(process.cwd(), "acp-additional-writable-root");
-  const policy = ProviderAdapterV2RuntimePolicy.make({
-    runtimeMode: "full-access",
-    interactionMode: "default",
-    cwd,
-    approvalPolicy: "never",
-    sandboxPolicy: {
-      type: "workspaceWrite",
-      writableRoots: [writableRoot],
-      networkAccess: false,
-    },
-  });
-
-  it("auto-allows mutations only when every location is in cwd or an additional writable root", () => {
-    assert.equal(
-      acpPermissionDisposition(policy, permissionRequest("edit", [{ path: "src/index.ts" }])),
-      "allow",
-    );
-    assert.equal(
-      acpPermissionDisposition(
-        policy,
-        permissionRequest("delete", [{ path: NodePath.join(writableRoot, "generated.ts") }]),
-      ),
-      "allow",
-    );
-    assert.equal(
-      acpPermissionDisposition(
-        policy,
-        permissionRequest("move", [
-          { path: NodePath.join(cwd, "from.ts") },
-          { path: NodePath.join(writableRoot, "to.ts") },
-        ]),
-      ),
-      "allow",
-    );
-  });
-
-  it("denies missing or out-of-root mutation locations", () => {
-    const outside = NodePath.resolve(process.cwd(), "outside-acp-permission-workspace", "file.ts");
-    assert.equal(acpPermissionDisposition(policy, permissionRequest("edit")), "deny");
-    assert.equal(
-      acpPermissionDisposition(policy, permissionRequest("delete", [{ path: "../escape.ts" }])),
-      "deny",
-    );
-    assert.equal(
-      acpPermissionDisposition(
-        policy,
-        permissionRequest("move", [{ path: NodePath.join(cwd, "inside.ts") }, { path: outside }]),
-      ),
-      "deny",
-    );
-  });
-
-  it("keeps non-mutating workspace permissions and denials unchanged", () => {
-    assert.equal(acpPermissionDisposition(policy, permissionRequest("read")), "allow");
-    assert.equal(acpPermissionDisposition(policy, permissionRequest("execute")), "deny");
-  });
-
-  it.effect("denies mutations through workspace symlinks that escape the writable roots", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const workspace = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-acp-permission-workspace-",
-      });
-      const outside = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-acp-permission-outside-",
-      });
-      const outsideFile = path.join(outside, "existing.ts");
-      yield* fileSystem.writeFileString(outsideFile, "outside");
-      yield* fileSystem.symlink(outsideFile, path.join(workspace, "linked-file.ts"));
-      yield* fileSystem.symlink(outside, path.join(workspace, "linked-directory"));
-
-      const realPolicy = ProviderAdapterV2RuntimePolicy.make({
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        cwd: workspace,
-        approvalPolicy: "never",
-        sandboxPolicy: {
-          type: "workspaceWrite",
-          writableRoots: [],
-          networkAccess: false,
-        },
-      });
-
-      assert.equal(
-        acpPermissionDisposition(
-          realPolicy,
-          permissionRequest("edit", [{ path: "linked-file.ts" }]),
-        ),
-        "deny",
-      );
-      assert.equal(
-        acpPermissionDisposition(
-          realPolicy,
-          permissionRequest("edit", [{ path: "linked-directory/new-file.ts" }]),
-        ),
-        "deny",
-        "a missing leaf below an escaping directory symlink must not be auto-approved",
-      );
-      assert.equal(
-        acpPermissionDisposition(
-          realPolicy,
-          permissionRequest("edit", [{ path: "linked-directory/../escaped-file.ts" }]),
-        ),
-        "deny",
-        "physical symlink traversal must be resolved before parent segments",
-      );
-    }).pipe(Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("allows existing and new files beneath canonical writable roots", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const workspace = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-acp-permission-workspace-",
-      });
-      const workspaceLinkParent = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-acp-permission-link-parent-",
-      });
-      const workspaceLink = path.join(workspaceLinkParent, "workspace-link");
-      yield* fileSystem.makeDirectory(path.join(workspace, "src"), { recursive: true });
-      yield* fileSystem.writeFileString(path.join(workspace, "src", "existing.ts"), "existing");
-      yield* fileSystem.symlink(workspace, workspaceLink);
-
-      const realPolicy = ProviderAdapterV2RuntimePolicy.make({
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        cwd: workspaceLink,
-        approvalPolicy: "never",
-        sandboxPolicy: {
-          type: "workspaceWrite",
-          writableRoots: [],
-          networkAccess: false,
-        },
-      });
-
-      assert.equal(
-        acpPermissionDisposition(
-          realPolicy,
-          permissionRequest("edit", [{ path: "src/existing.ts" }]),
-        ),
-        "allow",
-      );
-      assert.equal(
-        acpPermissionDisposition(
-          realPolicy,
-          permissionRequest("edit", [{ path: "src/generated/new-file.ts" }]),
-        ),
-        "allow",
-        "non-existent descendants of a real in-root ancestor remain writable",
-      );
-    }).pipe(Effect.provide(NodeServices.layer)),
-  );
-});
 
 describe("acpProjectedCommandExitCode", () => {
   const successOutput = { type: "Bash", exit_code: 0 };
@@ -991,71 +815,6 @@ describe("AcpAdapterV2", () => {
     }).pipe(Effect.provide(testLayer)),
   );
 
-  it("applies runtime policy only to explicitly tagged MCP approval elicitations", () => {
-    const fullAccess = ProviderAdapterV2RuntimePolicy.make({
-      runtimeMode: "full-access",
-      interactionMode: "default",
-      cwd: process.cwd(),
-    });
-    const approvalRequired = ProviderAdapterV2RuntimePolicy.make({
-      runtimeMode: "approval-required",
-      interactionMode: "default",
-      cwd: process.cwd(),
-    });
-    const tagged = {
-      sessionId: "session-1",
-      message: "Approve this request?",
-      mode: "form",
-      requestedSchema: { type: "object", properties: {} },
-      _meta: { codex_approval_kind: "mcp_tool_call" },
-    } satisfies EffectAcpSchema.ElicitationRequest;
-
-    assert.equal(acpMcpToolApprovalElicitationDisposition(fullAccess, tagged), "allow");
-    assert.equal(acpMcpToolApprovalElicitationDisposition(approvalRequired, tagged), "ask");
-    assert.equal(
-      acpMcpToolApprovalElicitationDisposition(
-        ProviderAdapterV2RuntimePolicy.make({
-          runtimeMode: "auto-accept-edits",
-          interactionMode: "default",
-          cwd: process.cwd(),
-          approvalPolicy: "never",
-          sandboxPolicy: {
-            type: "workspaceWrite",
-            writableRoots: [],
-            networkAccess: false,
-          },
-        }),
-        tagged,
-      ),
-      "allow",
-    );
-    const { _meta: _tag, ...untagged } = tagged;
-    assert.equal(
-      acpMcpToolApprovalElicitationDisposition(
-        fullAccess,
-        untagged,
-        "mcp_tool_call_approval_exec-123",
-      ),
-      "allow",
-    );
-    assert.isUndefined(
-      acpMcpToolApprovalElicitationDisposition(fullAccess, {
-        ...tagged,
-        _meta: { codex_approval_kind: "ordinary_form" },
-      }),
-    );
-    assert.isUndefined(
-      acpMcpToolApprovalElicitationDisposition(fullAccess, {
-        sessionId: "session-1",
-        message: "Authenticate",
-        mode: "url",
-        elicitationId: "elicitation-1",
-        url: "https://example.com/login",
-        _meta: { codex_approval_kind: "mcp_tool_call" },
-      }),
-    );
-  });
-
   it.live("replaces an unexpectedly terminated ACP runtime before the next turn", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -1516,6 +1275,168 @@ describe("AcpAdapterV2", () => {
         { requestId: "test-terminal-output", method: "terminal/output" },
       );
       assert.equal(terminalOutput.output, "Bearer target-thread-token");
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
+  it.effect("denies client-mediated writes and terminals when the policy requires approval", () =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const idAllocator = yield* IdAllocatorV2;
+      const path = yield* Path.Path;
+      const serverConfig = yield* ServerConfig;
+      const mockAgentPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+      type RuntimeService = AcpSessionRuntime.AcpSessionRuntime["Service"];
+      let writeTextFile: Parameters<RuntimeService["handleWriteTextFile"]>[0] | undefined;
+      let createTerminal: Parameters<RuntimeService["handleCreateTerminal"]>[0] | undefined;
+      const makeRuntime = makeMockRuntime({
+        childProcessSpawner,
+        mockAgentPath,
+        wrapRuntime: (runtime) => ({
+          ...runtime,
+          handleWriteTextFile: (handler) =>
+            Effect.sync(() => {
+              writeTextFile = handler;
+            }).pipe(Effect.andThen(runtime.handleWriteTextFile(handler))),
+          handleCreateTerminal: (handler) =>
+            Effect.sync(() => {
+              createTerminal = handler;
+            }).pipe(Effect.andThen(runtime.handleCreateTerminal(handler))),
+        }),
+      });
+      const instanceId = ProviderInstanceId.make("acp-test-client-policy-approval");
+      const adapter = makeAcpAdapterV2({
+        crypto: yield* Crypto.Crypto,
+        instanceId,
+        flavor: {
+          driver: ACP_TEST_DRIVER,
+          capabilities: AcpProviderCapabilitiesV2,
+          makeRuntime,
+        },
+        fileSystem,
+        idAllocator,
+        serverConfig,
+        clientTerminals: { childProcessSpawner },
+      });
+      const workspace = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-acp-client-policy-approval-",
+      });
+      const threadId = ThreadId.make("thread-acp-client-policy-approval");
+      const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        cwd: workspace,
+      });
+      const modelSelection = { instanceId, model: "default" } as const;
+      const runtime = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("provider-session-acp-client-policy-approval"),
+        modelSelection,
+        runtimePolicy,
+      });
+      yield* runtime.ensureThread({ threadId, modelSelection, runtimePolicy });
+      if (writeTextFile === undefined || createTerminal === undefined) {
+        return yield* Effect.die("ACP runtime must register fs and terminal handlers");
+      }
+
+      const deniedPath = path.join(workspace, "denied.ts");
+      const deniedWrite = yield* writeTextFile(
+        { sessionId: "mock-session-1", path: deniedPath, content: "denied" },
+        { requestId: "test-denied-write", method: "fs/write_text_file" },
+      ).pipe(Effect.exit);
+      assert.isTrue(Exit.isFailure(deniedWrite));
+      assert.include(
+        Exit.isFailure(deniedWrite) ? String(Cause.squash(deniedWrite.cause)) : "",
+        "requires approval",
+      );
+      assert.isFalse(yield* fileSystem.exists(deniedPath));
+
+      const deniedTerminal = yield* createTerminal(
+        { sessionId: "mock-session-1", command: process.execPath, args: ["-e", ""] },
+        { requestId: "test-denied-terminal", method: "terminal/create" },
+      ).pipe(Effect.exit);
+      assert.isTrue(Exit.isFailure(deniedTerminal));
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
+  it.effect("confines client-mediated writes under an explicit workspace-write sandbox", () =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const idAllocator = yield* IdAllocatorV2;
+      const path = yield* Path.Path;
+      const serverConfig = yield* ServerConfig;
+      const mockAgentPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+      type RuntimeService = AcpSessionRuntime.AcpSessionRuntime["Service"];
+      let writeTextFile: Parameters<RuntimeService["handleWriteTextFile"]>[0] | undefined;
+      const makeRuntime = makeMockRuntime({
+        childProcessSpawner,
+        mockAgentPath,
+        wrapRuntime: (runtime) => ({
+          ...runtime,
+          handleWriteTextFile: (handler) =>
+            Effect.sync(() => {
+              writeTextFile = handler;
+            }).pipe(Effect.andThen(runtime.handleWriteTextFile(handler))),
+        }),
+      });
+      const instanceId = ProviderInstanceId.make("acp-test-client-policy-workspace");
+      const adapter = makeAcpAdapterV2({
+        crypto: yield* Crypto.Crypto,
+        instanceId,
+        flavor: {
+          driver: ACP_TEST_DRIVER,
+          capabilities: AcpProviderCapabilitiesV2,
+          makeRuntime,
+        },
+        fileSystem,
+        idAllocator,
+        serverConfig,
+      });
+      const workspace = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-acp-client-policy-workspace-",
+      });
+      const outside = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-acp-client-policy-outside-",
+      });
+      const threadId = ThreadId.make("thread-acp-client-policy-workspace");
+      const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: workspace,
+        approvalPolicy: "never",
+        sandboxPolicy: { type: "workspaceWrite", writableRoots: [], networkAccess: false },
+      });
+      const modelSelection = { instanceId, model: "default" } as const;
+      const runtime = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("provider-session-acp-client-policy-workspace"),
+        modelSelection,
+        runtimePolicy,
+      });
+      yield* runtime.ensureThread({ threadId, modelSelection, runtimePolicy });
+      if (writeTextFile === undefined) {
+        return yield* Effect.die("ACP runtime must register the fs write handler");
+      }
+
+      const insidePath = path.join(workspace, "src", "inside.ts");
+      yield* writeTextFile(
+        { sessionId: "mock-session-1", path: insidePath, content: "inside" },
+        { requestId: "test-inside-write", method: "fs/write_text_file" },
+      );
+      assert.equal(yield* fileSystem.readFileString(insidePath), "inside");
+
+      const outsidePath = path.join(outside, "outside.ts");
+      const deniedWrite = yield* writeTextFile(
+        { sessionId: "mock-session-1", path: outsidePath, content: "outside" },
+        { requestId: "test-outside-write", method: "fs/write_text_file" },
+      ).pipe(Effect.exit);
+      assert.isTrue(Exit.isFailure(deniedWrite));
+      assert.isFalse(yield* fileSystem.exists(outsidePath));
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 

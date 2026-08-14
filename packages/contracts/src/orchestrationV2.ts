@@ -265,6 +265,19 @@ export const OrchestrationV2CheckpointCapabilities = Schema.Struct({
 export type OrchestrationV2CheckpointCapabilities =
   typeof OrchestrationV2CheckpointCapabilities.Type;
 
+export const OrchestrationV2RuntimePolicyCapabilities = Schema.Struct({
+  /**
+   * Where T3 runtime modes are actually enforced. "native" providers receive
+   * the approval and sandbox policy each turn and confine their own execution.
+   * "client-boundary" providers only have policy applied where T3 mediates the
+   * work (permission requests and client fs/terminal handlers); provider-owned
+   * execution is not confined, so sandbox guarantees are reduced.
+   */
+  enforcement: Schema.Literals(["native", "client-boundary"]),
+});
+export type OrchestrationV2RuntimePolicyCapabilities =
+  typeof OrchestrationV2RuntimePolicyCapabilities.Type;
+
 export const OrchestrationV2IdentityCapabilities = Schema.Struct({
   nativeThreadIds: OrchestrationV2NativeRefStrength,
   nativeTurnIds: OrchestrationV2NativeRefStrength,
@@ -285,6 +298,7 @@ export const OrchestrationV2ProviderCapabilities = Schema.Struct({
   context: OrchestrationV2ContextCapabilities,
   checkpointing: OrchestrationV2CheckpointCapabilities,
   identity: OrchestrationV2IdentityCapabilities,
+  runtimePolicy: OrchestrationV2RuntimePolicyCapabilities,
 });
 export type OrchestrationV2ProviderCapabilities = typeof OrchestrationV2ProviderCapabilities.Type;
 

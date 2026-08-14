@@ -1,5 +1,4 @@
 // @effect-diagnostics nodeBuiltinImport:off
-import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
 import {
@@ -64,6 +63,15 @@ import type {
   AcpSessionRuntimeStartResult,
 } from "../../provider/acp/AcpSessionRuntime.ts";
 import { acpReadTextFile, acpWriteTextFile } from "../../provider/acp/AcpClientFs.ts";
+import {
+  acpClientExecuteDisposition,
+  acpClientWriteDisposition,
+  acpMcpToolApprovalElicitationDisposition,
+  acpPermissionDisposition,
+  makeAcpClientPolicyGrants,
+  unknownRecord,
+  type AcpPermissionDisposition,
+} from "../../provider/acp/AcpClientPolicy.ts";
 import {
   makeAcpClientTerminals,
   resolveEmbeddedTerminalContent,
@@ -499,6 +507,11 @@ export const AcpProviderCapabilitiesV2 = {
     nativeItemIds: "weak",
     nativeRequestIds: "weak",
   },
+  runtimePolicy: {
+    // T3 policy-checks permission requests and its own client fs/terminal
+    // handlers, but ACP agents execute their own tools unconfined.
+    enforcement: "client-boundary",
+  },
 } satisfies OrchestrationV2ProviderCapabilities;
 
 function negotiatedCapabilities(
@@ -633,12 +646,6 @@ function makeProviderThread(input: {
     createdAt: input.now,
     updatedAt: input.now,
   };
-}
-
-function unknownRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 function nonEmptyText(value: unknown, fallback: string): string {
@@ -816,174 +823,6 @@ function selectAutoApprovedPermissionOption(
     selectPermissionOptionId(request, "acceptForSession") ??
     selectPermissionOptionId(request, "accept")
   );
-}
-
-export type AcpPermissionDisposition = "allow" | "ask" | "deny";
-
-function resolveAcpPermissionPath(path: string, cwd: string | null): string | undefined {
-  const trimmed = path.trim();
-  if (trimmed.length === 0) return undefined;
-  if (NodePath.isAbsolute(trimmed)) return trimmed;
-  if (cwd === null || cwd.trim().length === 0) return undefined;
-  return `${cwd}${cwd.endsWith(NodePath.sep) ? "" : NodePath.sep}${trimmed}`;
-}
-
-function acpPathIsWithinRoot(path: string, root: string): boolean {
-  const relative = NodePath.relative(root, path);
-  return (
-    relative === "" ||
-    (relative !== ".." &&
-      !relative.startsWith(`..${NodePath.sep}`) &&
-      !NodePath.isAbsolute(relative))
-  );
-}
-
-/**
- * Canonicalize a path for an authorization containment check.
- *
- * `realpath` cannot resolve a file that has not been created yet, so walk up
- * to the deepest existing ancestor and append the missing suffix to that
- * ancestor's canonical path. This follows symlinked directories while still
- * allowing normal writes to new files. If an existing entry cannot be
- * canonicalized (for example, a broken symlink), fail closed.
- */
-function acpCanonicalPathForContainment(path: string): string | undefined {
-  // Do not lexically normalize before realpath. For a path such as
-  // `workspace/link/../file`, the kernel resolves `link` before `..`; an
-  // eager NodePath.resolve would erase that symlink traversal and could turn
-  // an outside target into an apparently in-workspace path.
-  let candidate = path;
-  const missingSuffix: Array<string> = [];
-
-  while (true) {
-    try {
-      return NodePath.resolve(NodeFS.realpathSync.native(candidate), ...missingSuffix);
-    } catch (cause) {
-      if ((cause as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") {
-        return undefined;
-      }
-    }
-
-    try {
-      NodeFS.lstatSync(candidate);
-      // The entry exists but realpath could not resolve it, as with a broken
-      // symlink. Treat it as untrusted rather than authorizing its lexical path.
-      return undefined;
-    } catch (cause) {
-      if ((cause as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") {
-        return undefined;
-      }
-    }
-
-    const parent = NodePath.dirname(candidate);
-    if (parent === candidate) return undefined;
-    missingSuffix.unshift(NodePath.basename(candidate));
-    candidate = parent;
-  }
-}
-
-function acpWorkspaceWriteAllowsMutation(
-  runtimePolicy: ProviderAdapterV2RuntimePolicy,
-  sandboxPolicy: Record<string, unknown>,
-  request: EffectAcpSchema.RequestPermissionRequest,
-): boolean {
-  const cwd =
-    typeof runtimePolicy.cwd === "string" && runtimePolicy.cwd.trim().length > 0
-      ? (resolveAcpPermissionPath(runtimePolicy.cwd, process.cwd()) ?? null)
-      : null;
-  const roots: Array<string> = [];
-  if (cwd !== null) {
-    const canonicalCwd = acpCanonicalPathForContainment(cwd);
-    if (canonicalCwd !== undefined) roots.push(canonicalCwd);
-  }
-  const writableRoots = sandboxPolicy.writableRoots;
-  if (Array.isArray(writableRoots)) {
-    for (const writableRoot of writableRoots) {
-      if (typeof writableRoot !== "string") continue;
-      const resolved = resolveAcpPermissionPath(writableRoot, cwd);
-      if (resolved === undefined) continue;
-      const canonicalRoot = acpCanonicalPathForContainment(resolved);
-      if (canonicalRoot !== undefined) roots.push(canonicalRoot);
-    }
-  }
-  if (roots.length === 0) return false;
-
-  const locations = request.toolCall.locations;
-  if (locations === undefined || locations === null || locations.length === 0) {
-    return false;
-  }
-  for (const location of locations) {
-    const resolved = resolveAcpPermissionPath(location.path, cwd);
-    const canonicalPath =
-      resolved === undefined ? undefined : acpCanonicalPathForContainment(resolved);
-    if (
-      canonicalPath === undefined ||
-      !roots.some((root) => acpPathIsWithinRoot(canonicalPath, root))
-    ) {
-      return false;
-    }
-  }
-  return true;
-}
-
-export function acpPermissionDisposition(
-  runtimePolicy: ProviderAdapterV2RuntimePolicy,
-  request: EffectAcpSchema.RequestPermissionRequest,
-): AcpPermissionDisposition {
-  const approvalPolicy = runtimePolicy.approvalPolicy;
-  const requiresApproval =
-    approvalPolicy === undefined
-      ? runtimePolicy.runtimeMode === "approval-required"
-      : approvalPolicy !== "never";
-  if (requiresApproval) {
-    return "ask";
-  }
-
-  const sandboxPolicy = unknownRecord(runtimePolicy.sandboxPolicy);
-  const sandboxType = sandboxPolicy?.type;
-  const toolKind = request.toolCall.kind ?? "other";
-  switch (sandboxType) {
-    case "readOnly":
-      return toolKind === "read" || toolKind === "search" || toolKind === "think"
-        ? "allow"
-        : "deny";
-    case "workspaceWrite":
-      if (toolKind === "read" || toolKind === "search" || toolKind === "think") {
-        return "allow";
-      }
-      if (toolKind === "edit" || toolKind === "delete" || toolKind === "move") {
-        return acpWorkspaceWriteAllowsMutation(runtimePolicy, sandboxPolicy ?? {}, request)
-          ? "allow"
-          : "deny";
-      }
-      return "deny";
-    case "dangerFullAccess":
-    case "externalSandbox":
-      return "allow";
-    case undefined:
-      return runtimePolicy.runtimeMode === "approval-required" ? "deny" : "allow";
-    default:
-      return "deny";
-  }
-}
-
-/** Resolve explicitly tagged MCP approvals through the thread's normal policy. */
-export function acpMcpToolApprovalElicitationDisposition(
-  runtimePolicy: ProviderAdapterV2RuntimePolicy,
-  request: EffectAcpSchema.ElicitationRequest,
-  nativeRequestId?: string,
-): AcpPermissionDisposition | undefined {
-  if (
-    request.mode !== "form" ||
-    (unknownRecord(request._meta)?.codex_approval_kind !== "mcp_tool_call" &&
-      nativeRequestId?.startsWith("mcp_tool_call_approval_") !== true)
-  ) {
-    return undefined;
-  }
-  // This request comes from T3's authenticated, scope-checked MCP endpoint,
-  // not an arbitrary provider command. Let explicit approval mode surface it
-  // to the user and otherwise allow the endpoint to enforce its own policy.
-  return runtimePolicy.runtimeMode === "approval-required" ? "ask" : "allow";
 }
 
 function elicitationContent(
@@ -1367,6 +1206,11 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
         if (clientTerminals !== undefined) {
           yield* Scope.addFinalizer(sessionScope, clientTerminals.disposeAll);
         }
+        // Client fs/terminal requests run with the T3 server's privileges, so
+        // they are policy-checked against the active turn policy; approvals the
+        // user already granted satisfy an "ask" disposition.
+        const clientPolicyGrants = makeAcpClientPolicyGrants();
+        let latestRuntimePolicy: ProviderAdapterV2RuntimePolicy = input.runtimePolicy;
         const events = yield* Queue.unbounded<ProviderAdapterV2Event>();
         const activeTurn = yield* Ref.make<ActiveAcpTurn | null>(null);
         const activeSessionId = yield* Ref.make<string | null>(null);
@@ -4295,11 +4139,64 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
             projectAcpRuntimeSessionUpdateEffect(rawNotification),
           ).pipe(Effect.asVoid);
 
+        // Falls back to the latest turn policy when no turn is active so
+        // post-settle background work stays under the policy it started with.
+        const clientPolicyContext = Effect.map(Ref.get(activeTurn), (context) => ({
+          policy: context?.input.runtimePolicy ?? latestRuntimePolicy,
+          turnKey: context === null ? null : String(context.providerTurnId),
+        }));
+
+        const denyClientRequest = (operation: string, disposition: "ask" | "deny") =>
+          Effect.logWarning("ACP client policy denied a client-mediated operation", {
+            operation,
+            disposition,
+          }).pipe(
+            Effect.andThen(
+              Effect.fail(
+                EffectAcpErrors.AcpRequestError.internalError(
+                  disposition === "ask"
+                    ? `The active T3 runtime policy requires approval for ${operation}. Request permission with session/request_permission before retrying.`
+                    : `The active T3 runtime policy does not allow ${operation}.`,
+                ),
+              ),
+            ),
+          );
+
+        const guardClientFsWrite = (path: string) =>
+          clientPolicyContext.pipe(
+            Effect.flatMap(({ policy, turnKey }) => {
+              const disposition = acpClientWriteDisposition(policy, path);
+              if (
+                disposition === "allow" ||
+                (disposition === "ask" &&
+                  clientPolicyGrants.allowsWrite({ path, cwd: policy.cwd, turnKey }))
+              ) {
+                return Effect.void;
+              }
+              return denyClientRequest(`fs/write_text_file for '${path}'`, disposition);
+            }),
+          );
+
+        const guardClientTerminalCreate = clientPolicyContext.pipe(
+          Effect.flatMap(({ policy, turnKey }) => {
+            const disposition = acpClientExecuteDisposition(policy);
+            if (
+              disposition === "allow" ||
+              (disposition === "ask" && clientPolicyGrants.allowsExecute(turnKey))
+            ) {
+              return Effect.void;
+            }
+            return denyClientRequest("terminal/create", disposition);
+          }),
+        );
+
         const wireAcpRuntimeTerminalHandlers = Effect.fnUntraced(function* (
           targetRuntime: AcpSessionRuntime.AcpSessionRuntime["Service"],
         ) {
           if (clientTerminals === undefined) return;
-          yield* targetRuntime.handleCreateTerminal(clientTerminals.create);
+          yield* targetRuntime.handleCreateTerminal((request) =>
+            guardClientTerminalCreate.pipe(Effect.andThen(clientTerminals.create(request))),
+          );
           yield* targetRuntime.handleTerminalOutput(clientTerminals.output);
           yield* targetRuntime.handleTerminalWaitForExit(clientTerminals.waitForExit);
           yield* targetRuntime.handleTerminalKill(clientTerminals.kill);
@@ -4327,7 +4224,9 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
             acpReadTextFile(options.fileSystem, request),
           );
           yield* targetRuntime.handleWriteTextFile((request) =>
-            acpWriteTextFile(options.fileSystem, request),
+            guardClientFsWrite(request.path).pipe(
+              Effect.andThen(acpWriteTextFile(options.fileSystem, request)),
+            ),
           );
           if (handlerOptions.terminals !== false) {
             yield* wireAcpRuntimeTerminalHandlers(targetRuntime);
@@ -4419,6 +4318,15 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                   ).pipe(Effect.asVoid),
                 ),
               );
+              if (decision === "accept" || decision === "acceptForSession") {
+                clientPolicyGrants.recordApproval({
+                  kind: providerRequestKind(parsePermissionRequest(params).kind),
+                  locations: (params.toolCall.locations ?? []).map((location) => location.path),
+                  cwd: context.input.runtimePolicy.cwd,
+                  scope: decision === "acceptForSession" ? "session" : "turn",
+                  turnKey: String(context.providerTurnId),
+                });
+              }
               const response = (() => {
                 if (decision === "cancel") {
                   return { outcome: { outcome: "cancelled" } } as const;
@@ -5475,6 +5383,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               }
             }
             yield* Ref.set(activeTurn, context);
+            latestRuntimePolicy = turnInput.runtimePolicy;
             // Direct Stop closes and recreates the old runtime before reaching
             // this reset. The quarantine remains session-scoped by design.
             yield* Ref.set(stoppedRunQuarantine, false);

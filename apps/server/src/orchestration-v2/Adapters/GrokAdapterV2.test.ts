@@ -3,10 +3,10 @@ import * as Effect from "effect/Effect";
 import type * as EffectAcpSchema from "effect-acp/schema";
 
 import { ProviderAdapterV2RuntimePolicy } from "../ProviderAdapter.ts";
+import { acpPermissionDisposition } from "../../provider/acp/AcpClientPolicy.ts";
 import {
   AcpProviderCapabilitiesV2,
   acpCompletedTurnShouldTerminalizeTool,
-  acpPermissionDisposition,
   acpRootSessionUpdateIngestsOutput,
   acpRootTurnCompletionDrainMs,
   acpRootTurnHasIngestedOutput,
