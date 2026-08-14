@@ -273,3 +273,49 @@ export async function runAcpMcpStdioBridge(options: AcpMcpStdioBridgeOptions): P
   });
   await Promise.allSettled(pending);
 }
+
+/**
+ * Argv runner for `t3 acp-mcp-bridge` and `t3 acp-mcp-call`, shared by the
+ * fast-path dispatch in bin.ts and the full CLI's command handlers. Kept free
+ * of heavy imports: these commands run on the ACP first-message critical path.
+ */
+export async function runAcpMcpCliFastPath(
+  command: "acp-mcp-bridge" | "acp-mcp-call",
+  args: ReadonlyArray<string>,
+): Promise<void> {
+  const endpoint = process.env.T3_ACP_MCP_ENDPOINT;
+  const authorization = process.env.T3_ACP_MCP_AUTHORIZATION;
+  if (endpoint === undefined || authorization === undefined) {
+    process.stderr.write(`${command} requires T3_ACP_MCP_ENDPOINT and T3_ACP_MCP_AUTHORIZATION.\n`);
+    process.exitCode = 2;
+    return;
+  }
+  if (command === "acp-mcp-bridge") {
+    await runAcpMcpStdioBridge({
+      endpoint,
+      authorization,
+      input: process.stdin,
+      output: process.stdout,
+    });
+    return;
+  }
+  const [tool, argumentsJson] = args;
+  if (tool === undefined || argumentsJson === undefined) {
+    process.stderr.write("acp-mcp-call requires <tool> and <arguments-json>.\n");
+    process.exitCode = 2;
+    return;
+  }
+  const parsed: unknown = JSON.parse(argumentsJson);
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    process.stderr.write("acp-mcp-call arguments must be a JSON object.\n");
+    process.exitCode = 2;
+    return;
+  }
+  const result = await callAcpMcpTool({
+    endpoint,
+    authorization,
+    tool,
+    arguments: parsed as Record<string, unknown>,
+  });
+  process.stdout.write(`${JSON.stringify(result)}\n`);
+}
