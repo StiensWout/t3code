@@ -4754,16 +4754,27 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           const configSelections = hasNativeConfigWithSyntheticModeId
             ? optionSelections
             : optionSelections.filter((selection) => selection.id !== ACP_SESSION_MODE_OPTION_ID);
+          // Probe-time descriptors are a per-model union, so a stored
+          // selection can reference an option the live session does not
+          // expose (Kilo advertises per-model "effort" descriptors while its
+          // session config omits them). Failing the open here wedges the run
+          // in a retry loop; skip like the out-of-range values below and let
+          // the agent default apply.
           const unsupportedConfigIds = configSelections
             .map((selection) => selection.id)
             .filter((id) => !availableConfigIds.has(id));
           if (unsupportedConfigIds.length > 0) {
-            return yield* new ProviderAdapterProtocolError({
-              driver,
-              detail: `ACP session ${startResult.sessionId} does not expose requested configuration option(s): ${unsupportedConfigIds.join(", ")}`,
-            });
+            yield* Effect.logWarning(
+              "ACP session does not expose requested configuration option(s)",
+              {
+                driver,
+                sessionId: startResult.sessionId,
+                optionIds: unsupportedConfigIds,
+              },
+            );
           }
           for (const selection of configSelections) {
+            if (!availableConfigIds.has(selection.id)) continue;
             // Tuning knobs degrade instead of failing the session open: agents
             // advertise the union of values across models but can reject a
             // per-model invalid one at set time (codex-acp advertises "ultra"

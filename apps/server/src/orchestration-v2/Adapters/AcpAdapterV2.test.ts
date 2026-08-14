@@ -1975,7 +1975,7 @@ describe("AcpAdapterV2", () => {
     }).pipe(Effect.provide(testLayer)),
   );
 
-  it.effect("rejects requested options that the active ACP session does not expose", () =>
+  it.effect("skips requested options that the active ACP session does not expose", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const fileSystem = yield* FileSystem.FileSystem;
@@ -2004,22 +2004,21 @@ describe("AcpAdapterV2", () => {
         interactionMode: "default",
         cwd: process.cwd(),
       });
-      const error = yield* adapter
-        .openSession({
-          threadId,
-          providerSessionId: ProviderSessionId.make("provider-session-acp-unsupported-option"),
-          modelSelection: {
-            instanceId,
-            model: "default",
-            options: [{ id: "missing-option", value: "high" }],
-          },
-          runtimePolicy,
-        })
-        .pipe(Effect.flip);
+      // A stale composer selection (probe-time union descriptor) must not wedge
+      // the session open in a retry loop; the option is skipped and the agent
+      // default applies.
+      const runtime = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("provider-session-acp-unsupported-option"),
+        modelSelection: {
+          instanceId,
+          model: "default",
+          options: [{ id: "missing-option", value: "high" }],
+        },
+        runtimePolicy,
+      });
 
-      assert.equal(error._tag, "ProviderAdapterOpenSessionError");
-      assert.include(String(error.cause), "does not expose requested configuration option(s)");
-      assert.include(String(error.cause), "missing-option");
+      assert.equal(runtime.providerSession.status, "ready");
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 
