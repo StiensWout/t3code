@@ -40,7 +40,7 @@ describe("preview IPC methods", () => {
   effectIt.effect("rejects invalid webContents ids before resolving the preview service", () =>
     Effect.map(
       PreviewIpc.registerWebview
-        .handler({ tabId: "tab-1", webContentsId: 0 })
+        .handler({ tabId: "tab-1", webContentsId: 0, initialUrl: null })
         .pipe(Effect.provideService(PreviewManager.PreviewManager, null as never), Effect.exit),
       (exit) => {
         expect(Exit.isFailure(exit)).toBe(true);

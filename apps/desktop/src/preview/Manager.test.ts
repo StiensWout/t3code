@@ -617,11 +617,31 @@ describe("PreviewManager", () => {
           loading: true,
         });
 
-        yield* manager.registerWebview("tab_pending", 42);
+        yield* manager.registerWebview("tab_pending", 42, "https://stale.example/");
         yield* Effect.yieldNow;
 
         expect(loadURL).toHaveBeenCalledOnce();
         expect(loadURL).toHaveBeenCalledWith("http://localhost:3200/");
+      }),
+    ),
+  );
+
+  effectIt.effect("starts the renderer bootstrap URL from the registered main process", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const preview = makeFaviconWebContents({ url: "about:blank" });
+        fromId.mockReturnValue(preview.webContents);
+
+        yield* manager.createTab("tab_bootstrap");
+        yield* manager.registerWebview("tab_bootstrap", 42, "https://example.com/start");
+        yield* Effect.yieldNow;
+
+        expect(preview.loadURL).toHaveBeenCalledOnce();
+        expect(preview.loadURL).toHaveBeenCalledWith("https://example.com/start");
+        expect(yield* manager.automationStatus("tab_bootstrap")).toMatchObject({
+          url: "https://example.com/start",
+          loading: true,
+        });
       }),
     ),
   );

@@ -70,9 +70,13 @@ export const registerWebview = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.PREVIEW_REGISTER_WEBVIEW_CHANNEL,
   payload: DesktopPreviewRegisterWebviewInputSchema,
   result: Schema.Void,
-  handler: Effect.fn("desktop.ipc.preview.registerWebview")(function* ({ tabId, webContentsId }) {
+  handler: Effect.fn("desktop.ipc.preview.registerWebview")(function* ({
+    tabId,
+    webContentsId,
+    initialUrl,
+  }) {
     const manager = yield* PreviewManager.PreviewManager;
-    yield* manager.registerWebview(tabId, webContentsId);
+    yield* manager.registerWebview(tabId, webContentsId, initialUrl);
   }),
 });
 

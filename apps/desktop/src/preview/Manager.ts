@@ -1728,6 +1728,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     tabId: string,
     webContentsId: number,
     expectedGeneration: number | undefined,
+    initialUrl: string | null,
   ) {
     const tab = (yield* SynchronizedRef.get(tabsRef)).get(tabId);
     if (
@@ -1811,12 +1812,20 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
             tabs,
           ] as const;
         }
-        const pendingUrl = current.navStatus.kind === "Loading" ? current.navStatus.url : null;
+        const currentUrl = current.navStatus.kind === "Idle" ? null : current.navStatus.url;
+        const pendingUrl = currentUrl ?? initialUrl;
         const { favicon: _favicon, ...currentWithoutFavicon } = current;
         const next: PreviewTabState = {
           ...currentWithoutFavicon,
           webContentsId,
-          navStatus: pendingUrl === null ? computeNavStatus(wc) : current.navStatus,
+          navStatus:
+            pendingUrl === null
+              ? computeNavStatus(wc)
+              : {
+                  kind: "Loading",
+                  url: pendingUrl,
+                  title: current.navStatus.kind === "Idle" ? "" : current.navStatus.title,
+                },
           canGoBack: wc.navigationHistory.canGoBack(),
           canGoForward: wc.navigationHistory.canGoForward(),
           zoomFactor,
@@ -1864,11 +1873,18 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   const registerWebview = Effect.fn("PreviewManager.registerWebview")(function* (
     tabId: string,
     webContentsId: number,
+    rawInitialUrl: string | null = null,
   ) {
+    const initialUrl =
+      rawInitialUrl === null
+        ? null
+        : yield* attempt({ operation: "registerWebview.normalizeInitialUrl", tabId }, () =>
+            normalizePreviewUrl(rawInitialUrl),
+          );
     const expectedGeneration = tabLifecycleGenerations.get(tabId);
     return yield* withTabLifecycleLock(
       tabId,
-      registerWebviewUnlocked(tabId, webContentsId, expectedGeneration),
+      registerWebviewUnlocked(tabId, webContentsId, expectedGeneration, initialUrl),
     );
   });
 
@@ -3801,6 +3817,7 @@ export class PreviewManager extends Context.Service<
     readonly registerWebview: (
       tabId: string,
       webContentsId: number,
+      initialUrl?: string | null,
     ) => Effect.Effect<void, PreviewManagerError>;
     readonly navigate: (tabId: string, url: string) => Effect.Effect<void, PreviewManagerError>;
     readonly goBack: (tabId: string) => Effect.Effect<void, PreviewManagerError>;

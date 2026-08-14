@@ -70,7 +70,6 @@ export function HostedBrowserWebview(props: {
   const tabLeaseRef = useRef<AcquiredDesktopTab | null>(null);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const webviewRef = useRef<ElectronWebview | null>(null);
-  const bootstrappedWebviewRef = useRef<ElectronWebview | null>(null);
   const crashRecoveryRef = useRef<WebviewCrashRecoveryState>(INITIAL_WEBVIEW_CRASH_RECOVERY_STATE);
   const [aspectRatioLocked, setAspectRatioLocked] = useState(false);
   const presentation = useBrowserSurfaceStore(
@@ -129,13 +128,11 @@ export function HostedBrowserWebview(props: {
           if (disposed || webviewRef.current !== webview) return;
           const webContentsId = webview.getWebContentsId();
           if (Number.isInteger(webContentsId) && webContentsId > 0) {
-            await bridge.registerWebview(runtimeTabId, webContentsId);
-            if (disposed || webviewRef.current !== webview) return;
-            // Navigation starts only after the main process installs the popup policy.
-            if (bootstrappedWebviewRef.current !== webview) {
-              bootstrappedWebviewRef.current = webview;
-              if (webview.src !== targetSrc) webview.src = targetSrc;
-            }
+            await bridge.registerWebview(
+              runtimeTabId,
+              webContentsId,
+              targetSrc === "about:blank" ? null : targetSrc,
+            );
           }
         } catch {
           // did-attach/dom-ready will retry if the guest was not ready yet.
