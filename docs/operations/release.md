@@ -231,11 +231,15 @@ break:
 - `resources/server.asar` is absent or does not contain the server entry.
 - Any file marked unpacked in the ASAR header is absent from
   `resources/server.asar.unpacked`.
-- The packaged Windows primary cannot load the fff native library from inside
-  `server.asar` through its `.unpacked` sibling.
+- On same-architecture Windows builds, the packaged primary cannot load the fff
+  native library from inside `server.asar` through its `.unpacked` sibling.
 - The isolated, extracted sidecar cannot load the server entry with plain Node.
 - The external Windows resource monitor is absent.
 - The unpacked Windows application contains more than 80 files.
+
+Cross-architecture Windows builds retain every structural and extracted-sidecar
+check, but skip executing the target Electron binary. A same-architecture build
+for each release target must exercise the primary native-load probe.
 
 NSIS differential packaging remains enabled. A sidecar layout transition can
 produce a larger one-time download; subsequent small releases retain their

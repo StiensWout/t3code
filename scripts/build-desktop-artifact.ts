@@ -13,7 +13,7 @@ import {
 } from "@electron/asar";
 
 import { fromYaml } from "@t3tools/shared/schemaYaml";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { clerkFrontendApiHostnameFromPublishableKey } from "@t3tools/shared/relayAuth";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import rootPackageJson from "../package.json" with { type: "json" };
@@ -2338,10 +2338,12 @@ export const verifyWindowsPrimaryFffNativeLoad = Effect.fn(
 )(function* (input: {
   readonly packagedAppDir: string;
   readonly asarPath: string;
+  readonly targetArch: typeof BuildArch.Type;
   readonly verbose: boolean;
 }) {
   const hostPlatform = yield* HostProcessPlatform;
-  if (hostPlatform !== "win32") return;
+  const hostArchitecture = yield* HostProcessArchitecture;
+  if (hostPlatform !== "win32" || hostArchitecture !== input.targetArch) return;
 
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -2428,6 +2430,7 @@ export const validateWindowsPackagedPayload = Effect.fn(
   "desktopArtifact.validateWindowsPackagedPayload",
 )(function* (input: {
   readonly stageDistDir: string;
+  readonly targetArch: typeof BuildArch.Type;
   readonly fileLimit?: number;
   readonly verbose?: boolean;
 }) {
@@ -2540,6 +2543,7 @@ export const validateWindowsPackagedPayload = Effect.fn(
   yield* verifyWindowsPrimaryFffNativeLoad({
     packagedAppDir,
     asarPath,
+    targetArch: input.targetArch,
     verbose: input.verbose ?? false,
   });
 
@@ -2991,7 +2995,11 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   // the app asar. Windows validates and executes the separately packed server
   // sidecar after electron-builder copies it into the final payload.
   if (options.platform === "win") {
-    yield* validateWindowsPackagedPayload({ stageDistDir, verbose: options.verbose });
+    yield* validateWindowsPackagedPayload({
+      stageDistDir,
+      targetArch: options.arch,
+      verbose: options.verbose,
+    });
   }
 
   const stageEntries = yield* fs.readDirectory(stageDistDir);

@@ -474,6 +474,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         const fixture = yield* makeWindowsPayloadFixture({ copyUnpackedNatives: true });
         const result = yield* validateWindowsPackagedPayload({
           stageDistDir: fixture.stageDistDir,
+          targetArch: "x64",
         });
 
         const secondAsarPath = path.join(path.dirname(fixture.generatedAsarPath), "second.asar");
@@ -517,6 +518,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         const fixture = yield* makeWindowsPayloadFixture({ copyUnpackedNatives: true });
         yield* validateWindowsPackagedPayload({
           stageDistDir: fixture.stageDistDir,
+          targetArch: "x64",
         });
 
         const primaryProbe = commands.find(
@@ -541,7 +543,59 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         assert.equal(primaryProbe.options.cwd, fixture.packagedAppDir);
         assert.equal(primaryProbe.options.env?.NODE_PATH, "");
       }),
-    ).pipe(Effect.provide(Layer.merge(spawnerLayer, Layer.succeed(HostProcessPlatform, "win32"))));
+    ).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          spawnerLayer,
+          Layer.succeed(HostProcessPlatform, "win32"),
+          Layer.succeed(HostProcessArchitecture, "x64"),
+        ),
+      ),
+    );
+  });
+
+  it.effect("skips the primary native probe for cross-architecture Windows payloads", () => {
+    const commands: Array<{
+      readonly command: string;
+      readonly options: {
+        readonly env?: Readonly<Record<string, string | undefined>>;
+      };
+    }> = [];
+    const spawnerLayer = Layer.succeed(
+      ChildProcessSpawner.ChildProcessSpawner,
+      ChildProcessSpawner.make((command) => {
+        commands.push(command as unknown as (typeof commands)[number]);
+        return Effect.succeed(mockProcess(0));
+      }),
+    );
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const fixture = yield* makeWindowsPayloadFixture({ copyUnpackedNatives: true });
+        yield* validateWindowsPackagedPayload({
+          stageDistDir: fixture.stageDistDir,
+          targetArch: "arm64",
+        });
+
+        assert.isFalse(
+          commands.some((command) => command.options.env?.ELECTRON_RUN_AS_NODE === "1"),
+        );
+        assert.isTrue(
+          commands.some(
+            (command) =>
+              command.command === process.execPath && command.options.env?.NODE_PATH === "",
+          ),
+        );
+      }),
+    ).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          spawnerLayer,
+          Layer.succeed(HostProcessPlatform, "win32"),
+          Layer.succeed(HostProcessArchitecture, "x64"),
+        ),
+      ),
+    );
   });
 
   it.effect("rejects a packaged sidecar whose ASAR-unpacked native is missing", () =>
@@ -550,6 +604,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         const fixture = yield* makeWindowsPayloadFixture({ copyUnpackedNatives: false });
         const error = yield* validateWindowsPackagedPayload({
           stageDistDir: fixture.stageDistDir,
+          targetArch: "x64",
         }).pipe(Effect.flip);
 
         assert.instanceOf(error, WindowsPackagedPayloadValidationError);
@@ -576,6 +631,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
         const nativeError = yield* validateWindowsPackagedPayload({
           stageDistDir: fixture.stageDistDir,
+          targetArch: "x64",
         }).pipe(Effect.flip);
         assert.instanceOf(nativeError, WindowsPackagedPayloadValidationError);
         assert.equal(nativeError.reason, "unpacked-native-missing");
@@ -594,6 +650,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
         const resourceMonitorError = yield* validateWindowsPackagedPayload({
           stageDistDir: fixture.stageDistDir,
+          targetArch: "x64",
         }).pipe(Effect.flip);
         assert.instanceOf(resourceMonitorError, WindowsPackagedPayloadValidationError);
         assert.equal(resourceMonitorError.reason, "resource-monitor-missing");
@@ -610,6 +667,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         const fixture = yield* makeWindowsPayloadFixture({ copyUnpackedNatives: true });
         const error = yield* validateWindowsPackagedPayload({
           stageDistDir: fixture.stageDistDir,
+          targetArch: "x64",
           fileLimit: 2,
         }).pipe(Effect.flip);
 
@@ -629,6 +687,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         });
         const error = yield* validateWindowsPackagedPayload({
           stageDistDir: fixture.stageDistDir,
+          targetArch: "x64",
         }).pipe(Effect.flip);
 
         assert.instanceOf(error, BundleNotSelfContainedError);
