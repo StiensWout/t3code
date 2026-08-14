@@ -3,6 +3,8 @@ import { describe, expect, it } from "vite-plus/test";
 import type * as EffectAcpSchema from "effect-acp/schema";
 
 import {
+  embeddedTerminalIdsFromSessionUpdate,
+  extractMcpToolCallIdentity,
   extractModelConfigId,
   mergeToolCallState,
   parsePermissionRequest,
@@ -466,5 +468,104 @@ describe("AcpRuntimeModel", () => {
         command: "cat package.json",
       },
     });
+  });
+});
+
+describe("extractMcpToolCallIdentity", () => {
+  function toolCallFromUpdate(
+    update: EffectAcpSchema.SessionNotification["update"],
+  ): NonNullable<ReturnType<typeof parsePermissionRequest>["toolCall"]> {
+    const parsed = parseSessionUpdateEvent({ sessionId: "session-1", update });
+    const event = parsed.events.find(
+      (
+        candidate,
+      ): candidate is Extract<(typeof parsed.events)[number], { _tag: "ToolCallUpdated" }> =>
+        candidate._tag === "ToolCallUpdated",
+    );
+    if (event === undefined) throw new Error("expected a tool call event");
+    return event.toolCall;
+  }
+
+  it("recovers server and tool from codex-acp tagged execute calls", () => {
+    // Captured verbatim from codex-acp 2026-08-14: MCP calls arrive as kind
+    // "execute" with the identity only in rawInput.
+    const toolCall = toolCallFromUpdate({
+      sessionUpdate: "tool_call",
+      toolCallId: "exec-f4591587-0754-4bb4-990b-f2767894ba93",
+      kind: "execute",
+      title: "mcp.t3-code.orchestrator_capabilities",
+      status: "in_progress",
+      rawInput: { server: "t3-code", tool: "orchestrator_capabilities", arguments: {} },
+      _meta: { is_mcp_tool_call: true },
+    });
+
+    expect(extractMcpToolCallIdentity(toolCall)).toEqual({
+      server: "t3-code",
+      tool: "orchestrator_capabilities",
+    });
+  });
+
+  it("recovers T3 identity from acp-mcp-call fallback commands", () => {
+    const toolCall = toolCallFromUpdate({
+      sessionUpdate: "tool_call",
+      toolCallId: "exec-1",
+      kind: "execute",
+      title: "Ran command",
+      status: "in_progress",
+    });
+
+    expect(
+      extractMcpToolCallIdentity(toolCall, {
+        embeddedTerminalCommands: [
+          '/usr/bin/node /srv/t3/bin.ts acp-mcp-call delegate_task {"task":"x"}',
+        ],
+      }),
+    ).toEqual({ server: "t3-code", tool: "delegate_task" });
+  });
+
+  it("leaves ordinary execute calls unidentified", () => {
+    const toolCall = toolCallFromUpdate({
+      sessionUpdate: "tool_call",
+      toolCallId: "exec-2",
+      kind: "execute",
+      title: "cat package.json",
+      status: "in_progress",
+      rawInput: { command: "cat package.json" },
+    });
+
+    expect(extractMcpToolCallIdentity(toolCall)).toBeUndefined();
+    expect(
+      extractMcpToolCallIdentity(toolCall, { embeddedTerminalCommands: ["bash -lc ls"] }),
+    ).toBeUndefined();
+  });
+});
+
+describe("embeddedTerminalIdsFromSessionUpdate", () => {
+  it("collects terminal ids from tool_call content before the text rewrite", () => {
+    expect(
+      embeddedTerminalIdsFromSessionUpdate({
+        sessionId: "session-1",
+        update: {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "call_1",
+          status: "in_progress",
+          content: [
+            { type: "terminal", terminalId: "t3-term-9" },
+            { type: "content", content: { type: "text", text: "noise" } },
+          ],
+        },
+      }),
+    ).toEqual({ toolCallId: "call_1", terminalIds: ["t3-term-9"] });
+    expect(
+      embeddedTerminalIdsFromSessionUpdate({
+        sessionId: "session-1",
+        update: {
+          sessionUpdate: "tool_call",
+          toolCallId: "call_2",
+          title: "Tool",
+          status: "pending",
+        },
+      }),
+    ).toBeUndefined();
   });
 });

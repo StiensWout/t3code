@@ -96,6 +96,8 @@ export interface AcpTerminalOutputSnapshot {
 interface ManagedAcpTerminal {
   readonly terminalId: string;
   readonly sessionId: string;
+  /** The spawned command with args, kept for MCP-fallback identification. */
+  readonly commandLine: string;
   readonly buffer: OutputBufferState;
   readonly exit: Deferred.Deferred<EffectAcpSchema.WaitForTerminalExitResponse>;
   readonly kill: Effect.Effect<void>;
@@ -126,6 +128,8 @@ export interface AcpClientTerminals {
     sessionId: string,
     terminalId: string,
   ) => AcpTerminalOutputSnapshot | undefined;
+  /** Command line a terminal was created with; presentation-only lookup. */
+  readonly readCommandLine: (terminalId: string) => string | undefined;
   /** Kills every terminal that is still running. Safe to call repeatedly. */
   readonly disposeAll: Effect.Effect<void>;
 }
@@ -268,6 +272,7 @@ export const makeAcpClientTerminals = (
             const record: ManagedAcpTerminal = {
               terminalId,
               sessionId: request.sessionId,
+              commandLine: [request.command, ...(request.args ?? [])].join(" "),
               buffer: {
                 chunks: [],
                 bytes: 0,
@@ -371,6 +376,9 @@ export const makeAcpClientTerminals = (
       };
     };
 
+    const readCommandLine: AcpClientTerminals["readCommandLine"] = (terminalId) =>
+      terminals.get(terminalId)?.commandLine;
+
     const disposeAll: AcpClientTerminals["disposeAll"] = Effect.uninterruptible(
       Effect.suspend(() =>
         Effect.forEach(
@@ -411,6 +419,7 @@ export const makeAcpClientTerminals = (
       kill: logged("terminal/kill", kill),
       release: logged("terminal/release", release),
       readOutputSnapshot,
+      readCommandLine,
       disposeAll,
     };
   });

@@ -52,6 +52,8 @@ import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import {
+  embeddedTerminalIdsFromSessionUpdate,
+  extractMcpToolCallIdentity,
   mergeToolCallState,
   parsePermissionRequest,
   parseSessionUpdateEvent,
@@ -590,6 +592,27 @@ function makeProviderThread(input: {
     createdAt: input.now,
     updatedAt: input.now,
   };
+}
+
+/**
+ * Unwrap a codex-acp style MCP call result (`{ result, error }` around MCP
+ * `content`/`structuredContent`) the same way the native Codex adapter does,
+ * so recovered MCP items render identical output. Unknown shapes pass through.
+ */
+function acpMcpToolCallOutput(rawOutput: unknown): unknown {
+  const record = unknownRecord(rawOutput);
+  if (record === undefined) return rawOutput;
+  if (!("result" in record) && !("error" in record)) return rawOutput;
+  const result = unknownRecord(record.result);
+  const resultOutput =
+    result === undefined ? undefined : (result.structuredContent ?? result.content ?? undefined);
+  const errorMessage = unknownRecord(record.error)?.message;
+  if (typeof errorMessage !== "string") {
+    return resultOutput ?? rawOutput;
+  }
+  return resultOutput === undefined
+    ? { error: errorMessage }
+    : { error: errorMessage, result: resultOutput };
 }
 
 function nonEmptyText(value: unknown, fallback: string): string {
@@ -1135,6 +1158,20 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
         if (clientTerminals !== undefined) {
           yield* Scope.addFinalizer(sessionScope, clientTerminals.disposeAll);
         }
+        // Terminal ids embedded in raw tool_call updates, remembered before the
+        // content rewrite so emitTool can recover MCP-fallback command lines.
+        const embeddedTerminalsByToolCallId = new Map<string, ReadonlyArray<string>>();
+        const rememberEmbeddedTerminals = (input: {
+          readonly toolCallId: string;
+          readonly terminalIds: ReadonlyArray<string>;
+        }): void => {
+          embeddedTerminalsByToolCallId.delete(input.toolCallId);
+          embeddedTerminalsByToolCallId.set(input.toolCallId, input.terminalIds);
+          for (const oldest of embeddedTerminalsByToolCallId.keys()) {
+            if (embeddedTerminalsByToolCallId.size <= 256) break;
+            embeddedTerminalsByToolCallId.delete(oldest);
+          }
+        };
         // Client fs/terminal requests run with the T3 server's privileges, so
         // they are policy-checked against the active turn policy; approvals the
         // user already granted satisfy an "ask" disposition.
@@ -2466,7 +2503,33 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           // Post-settle wake re-reports of a finished monitor carry no rawInput at
           // all, only a structured Bash result; project those as commands too.
           const projectAsCommandExecution = inputVariant === "monitor" || outputIsBashResult;
+          // ACP has no typed MCP item, so recover MCP identity from the
+          // agent-specific shape and project the same branded dynamic_tool
+          // item native providers produce (e.g. the T3 orchestration tools).
+          const mcpIdentity = extractMcpToolCallIdentity(toolCall, {
+            embeddedTerminalCommands: (
+              embeddedTerminalsByToolCallId.get(toolCall.toolCallId) ?? []
+            ).flatMap((terminalId) => {
+              const command = clientTerminals?.readCommandLine(terminalId);
+              return command === undefined ? [] : [command];
+            }),
+          });
           let turnItem: OrchestrationV2TurnItem;
+          if (mcpIdentity !== undefined) {
+            turnItem = {
+              ...base,
+              // Identity lives in toolName, like native Codex MCP items; the
+              // agent's own title (e.g. "Ran command") would shadow it.
+              title: null,
+              type: "dynamic_tool",
+              toolName: `${mcpIdentity.server}.${mcpIdentity.tool}`,
+              input: unknownRecord(rawInputRecord?.arguments) ?? rawInputRecord ?? {},
+              ...(rawOutput === undefined ? {} : { output: acpMcpToolCallOutput(rawOutput) }),
+            };
+            yield* emitProviderEvent({ type: "turn_item.updated", driver, turnItem });
+            yield* rearmDeferredFinalize(context);
+            return;
+          }
           switch (toolCall.kind) {
             case "read":
             case "search":
@@ -4027,6 +4090,10 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           rawNotification: EffectAcpSchema.SessionNotification,
         ) =>
           Effect.gen(function* () {
+            if (clientTerminals !== undefined) {
+              const embedded = embeddedTerminalIdsFromSessionUpdate(rawNotification);
+              if (embedded !== undefined) rememberEmbeddedTerminals(embedded);
+            }
             const notification =
               clientTerminals === undefined
                 ? rawNotification

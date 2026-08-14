@@ -425,6 +425,70 @@ export function mergeToolCallState(
   };
 }
 
+export interface AcpMcpToolCallIdentity {
+  readonly server: string;
+  readonly tool: string;
+}
+
+/** Matches an invocation of T3's `acp-mcp-call` bridge fallback CLI. */
+const ACP_MCP_FALLBACK_CALL = /(?:^|[\s"'=])acp-mcp-call[\s"']+([A-Za-z0-9_.-]+)/u;
+
+/**
+ * Best-effort recovery of MCP identity from a generic ACP tool call.
+ *
+ * ACP has no typed MCP tool-call item, so agents surface MCP calls in
+ * agent-specific shapes: codex-acp tags execute calls with
+ * `rawInput.server`/`rawInput.tool`, while agents on T3's terminal fallback
+ * run the `acp-mcp-call <tool>` CLI through their command or an embedded
+ * client terminal. Recovered identity lets the projection render the same
+ * branded MCP item that native providers produce.
+ */
+export function extractMcpToolCallIdentity(
+  toolCall: AcpToolCallState,
+  options?: {
+    /** Command lines of client terminals embedded in this tool call. */
+    readonly embeddedTerminalCommands?: ReadonlyArray<string>;
+  },
+): AcpMcpToolCallIdentity | undefined {
+  const rawInput = isRecord(toolCall.data.rawInput) ? toolCall.data.rawInput : undefined;
+  const server = typeof rawInput?.server === "string" ? rawInput.server.trim() : "";
+  const tool = typeof rawInput?.tool === "string" ? rawInput.tool.trim() : "";
+  if (server.length > 0 && tool.length > 0) {
+    return { server, tool };
+  }
+  const commands = [
+    ...(toolCall.command === undefined ? [] : [toolCall.command]),
+    ...(options?.embeddedTerminalCommands ?? []),
+  ];
+  for (const command of commands) {
+    const match = ACP_MCP_FALLBACK_CALL.exec(command);
+    if (match?.[1] !== undefined) {
+      // The acp-mcp-call CLI exists only as T3's bridge fallback, so the
+      // server identity is T3's by construction.
+      return { server: "t3-code", tool: match[1] };
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Terminal ids embedded in a raw tool_call update, captured before
+ * {@link resolveEmbeddedTerminalContent} rewrites them into plain text, so the
+ * projection can still resolve the terminal's command line.
+ */
+export function embeddedTerminalIdsFromSessionUpdate(
+  notification: EffectAcpSchema.SessionNotification,
+): { readonly toolCallId: string; readonly terminalIds: ReadonlyArray<string> } | undefined {
+  const update = notification.update;
+  if (update.sessionUpdate !== "tool_call" && update.sessionUpdate !== "tool_call_update") {
+    return undefined;
+  }
+  const terminalIds = (update.content ?? [])
+    .filter((entry) => entry.type === "terminal")
+    .map((entry) => entry.terminalId);
+  return terminalIds.length === 0 ? undefined : { toolCallId: update.toolCallId, terminalIds };
+}
+
 export function parsePermissionRequest(
   params: EffectAcpSchema.RequestPermissionRequest,
 ): AcpPermissionRequest {
