@@ -57,6 +57,34 @@ describe("AcpClientTerminals", () => {
     ),
   );
 
+  it.effect("resolves terminal environment from the requesting ACP session", () =>
+    Effect.gen(function* () {
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const terminals = yield* makeAcpClientTerminals({
+        spawner,
+        defaultCwd: process.cwd(),
+        environmentForSession: (sessionId) => ({
+          T3_TEST_ACP_SESSION_TOKEN: sessionId === "session-a" ? "token-a" : "token-b",
+        }),
+      });
+      yield* Effect.addFinalizer(() => terminals.disposeAll);
+
+      for (const [sessionId, expected] of [
+        ["session-a", "token-a"],
+        ["session-b", "token-b"],
+      ] as const) {
+        const created = yield* terminals.create({
+          sessionId,
+          command: process.execPath,
+          args: ["-e", "process.stdout.write(process.env.T3_TEST_ACP_SESSION_TOKEN ?? '')"],
+        });
+        yield* terminals.waitForExit({ sessionId, terminalId: created.terminalId });
+        const output = yield* terminals.output({ sessionId, terminalId: created.terminalId });
+        expect(output.output).toBe(expected);
+      }
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
   it.effect("truncates buffered output from the beginning at the byte limit", () =>
     withTerminals((terminals) =>
       Effect.gen(function* () {

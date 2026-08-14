@@ -134,6 +134,9 @@ export interface AcpClientTerminalsOptions {
   readonly spawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
   readonly defaultCwd: string;
   readonly environment?: NodeJS.ProcessEnv | undefined;
+  readonly environmentForSession?:
+    | ((sessionId: string) => NodeJS.ProcessEnv | undefined)
+    | undefined;
   readonly forceKillAfter?: Duration.Input | undefined;
 }
 
@@ -225,10 +228,13 @@ export const makeAcpClientTerminals = (
             const requestEnvironment = Object.fromEntries(
               (request.env ?? []).map((variable) => [variable.name, variable.value] as const),
             );
+            const sessionEnvironment = options.environmentForSession?.(request.sessionId);
             const environment =
-              options.environment === undefined && (request.env?.length ?? 0) === 0
+              options.environment === undefined &&
+              sessionEnvironment === undefined &&
+              (request.env?.length ?? 0) === 0
                 ? undefined
-                : { ...options.environment, ...requestEnvironment };
+                : { ...options.environment, ...sessionEnvironment, ...requestEnvironment };
             // Each terminal owns a scope so the spawned process is reliably reaped:
             // closing the scope kills a still-running command and frees the handle.
             const terminalScope = yield* Scope.make();

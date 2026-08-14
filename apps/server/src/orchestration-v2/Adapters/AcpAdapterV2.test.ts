@@ -1361,7 +1361,32 @@ describe("AcpAdapterV2", () => {
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
       const protocolEvents = yield* Queue.bounded<EffectAcpProtocol.AcpProtocolLogEvent>(256);
-      const makeRuntime = makeMockRuntime({ childProcessSpawner, mockAgentPath, protocolEvents });
+      type RuntimeService = AcpSessionRuntime.AcpSessionRuntime["Service"];
+      let createTerminal: Parameters<RuntimeService["handleCreateTerminal"]>[0] | undefined;
+      let readTerminalOutput: Parameters<RuntimeService["handleTerminalOutput"]>[0] | undefined;
+      let waitForTerminalExit:
+        | Parameters<RuntimeService["handleTerminalWaitForExit"]>[0]
+        | undefined;
+      const makeRuntime = makeMockRuntime({
+        childProcessSpawner,
+        mockAgentPath,
+        protocolEvents,
+        wrapRuntime: (runtime) => ({
+          ...runtime,
+          handleCreateTerminal: (handler) =>
+            Effect.sync(() => {
+              createTerminal = handler;
+            }).pipe(Effect.andThen(runtime.handleCreateTerminal(handler))),
+          handleTerminalOutput: (handler) =>
+            Effect.sync(() => {
+              readTerminalOutput = handler;
+            }).pipe(Effect.andThen(runtime.handleTerminalOutput(handler))),
+          handleTerminalWaitForExit: (handler) =>
+            Effect.sync(() => {
+              waitForTerminalExit = handler;
+            }).pipe(Effect.andThen(runtime.handleTerminalWaitForExit(handler))),
+        }),
+      });
 
       const instanceId = ProviderInstanceId.make("acp-test");
       const adapter = makeAcpAdapterV2({
@@ -1375,6 +1400,7 @@ describe("AcpAdapterV2", () => {
         fileSystem,
         idAllocator,
         serverConfig,
+        clientTerminals: { childProcessSpawner },
       });
       const sourceThreadId = ThreadId.make("thread-acp-native-fork-source");
       const targetThreadId = ThreadId.make("thread-acp-native-fork-target");
@@ -1453,6 +1479,36 @@ describe("AcpAdapterV2", () => {
           },
         ],
       });
+      if (
+        createTerminal === undefined ||
+        readTerminalOutput === undefined ||
+        waitForTerminalExit === undefined
+      ) {
+        return yield* Effect.die("ACP runtime must register terminal handlers");
+      }
+      const terminal = yield* createTerminal(
+        {
+          sessionId: "mock-session-1-fork",
+          command: process.execPath,
+          args: ["-e", "process.stdout.write(process.env.T3_ACP_MCP_AUTHORIZATION ?? '')"],
+        },
+        { requestId: "test-terminal-create", method: "terminal/create" },
+      );
+      yield* waitForTerminalExit(
+        {
+          sessionId: "mock-session-1-fork",
+          terminalId: terminal.terminalId,
+        },
+        { requestId: "test-terminal-wait", method: "terminal/wait_for_exit" },
+      );
+      const terminalOutput = yield* readTerminalOutput(
+        {
+          sessionId: "mock-session-1-fork",
+          terminalId: terminal.terminalId,
+        },
+        { requestId: "test-terminal-output", method: "terminal/output" },
+      );
+      assert.equal(terminalOutput.output, "Bearer target-thread-token");
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 

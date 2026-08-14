@@ -1337,17 +1337,32 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
     openSession: Effect.fn("AcpAdapterV2.openSession")(
       function* (input: ProviderAdapterV2OpenSessionInput) {
         const sessionScope = yield* Effect.scope;
-        const mcpContext = acpMcpContext(input.threadId);
+        const terminalEnvironmentBySessionId = new Map<string, NodeJS.ProcessEnv>();
+        let pendingTerminalEnvironment = acpMcpContext(input.threadId).processEnvironment;
+        const prepareTerminalEnvironment = (threadId: ThreadId | null): void => {
+          pendingTerminalEnvironment = acpMcpContext(threadId).processEnvironment;
+        };
+        const rememberTerminalEnvironment = (
+          sessionId: string,
+          threadId: ThreadId | null,
+        ): void => {
+          const environment = acpMcpContext(threadId).processEnvironment;
+          pendingTerminalEnvironment = environment;
+          if (environment === undefined) {
+            terminalEnvironmentBySessionId.delete(sessionId);
+          } else {
+            terminalEnvironmentBySessionId.set(sessionId, environment);
+          }
+        };
         const clientTerminals: AcpClientTerminals | undefined =
           options.clientTerminals === undefined
             ? undefined
             : yield* makeAcpClientTerminals({
                 spawner: options.clientTerminals.childProcessSpawner,
                 defaultCwd: input.runtimePolicy.cwd ?? process.cwd(),
-                environment: {
-                  ...options.clientTerminals.environment,
-                  ...mcpContext.processEnvironment,
-                },
+                environment: options.clientTerminals.environment,
+                environmentForSession: (sessionId) =>
+                  terminalEnvironmentBySessionId.get(sessionId) ?? pendingTerminalEnvironment,
               });
         if (clientTerminals !== undefined) {
           yield* Scope.addFinalizer(sessionScope, clientTerminals.disposeAll);
@@ -4759,6 +4774,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
             });
         yield* Ref.set(activeSessionId, started.sessionId);
         yield* Ref.set(activeSessionSetup, started);
+        rememberTerminalEnvironment(started.sessionId, input.threadId);
         const capabilities = negotiatedCapabilities(flavor.capabilities, started);
         const canLoadSession = started.initializeResult.agentCapabilities?.loadSession === true;
         const canResumeSession =
@@ -4780,16 +4796,17 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
             return yield* initialFailure;
           }
           const activationOptions = { mcpServers: acpMcpServers(threadId) };
-          if (canLoadSession) {
-            return yield* runtime.loadSession(sessionId, activationOptions);
-          }
-          if (canResumeSession) {
-            return yield* runtime.resumeSession(sessionId, activationOptions);
-          }
-          return yield* new ProviderAdapterProtocolError({
-            driver,
-            detail: `ACP driver cannot load or resume session ${sessionId}`,
-          });
+          prepareTerminalEnvironment(threadId);
+          const activated = canLoadSession
+            ? yield* runtime.loadSession(sessionId, activationOptions)
+            : canResumeSession
+              ? yield* runtime.resumeSession(sessionId, activationOptions)
+              : yield* new ProviderAdapterProtocolError({
+                  driver,
+                  detail: `ACP driver cannot load or resume session ${sessionId}`,
+                });
+          rememberTerminalEnvironment(activated.sessionId, threadId);
+          return activated;
         });
 
         const configureSession = Effect.fnUntraced(function* (
@@ -5737,6 +5754,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                   detail: "ACP runtime did not produce a session id",
                 });
               }
+              rememberTerminalEnvironment(sessionId, threadInput.threadId);
               return makeProviderThread({
                 driver,
                 providerInstanceId: options.instanceId,
@@ -6186,9 +6204,14 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                       loadingRole: null,
                       loadingIndex: 0,
                     });
+                    prepareTerminalEnvironment(snapshotInput.providerThread.appThreadId);
                     const activated = yield* runtime.loadSession(sessionId, {
                       mcpServers: acpMcpServers(snapshotInput.providerThread.appThreadId),
                     });
+                    rememberTerminalEnvironment(
+                      activated.sessionId,
+                      snapshotInput.providerThread.appThreadId,
+                    );
                     yield* Ref.set(activeSessionId, activated.sessionId);
                     yield* Ref.set(activeSessionSetup, activated);
                     yield* Ref.set(activeSelection, null);
@@ -6242,8 +6265,13 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                   // Returning its binding keeps the next turn runnable without
                   // loading any of the rolled-back conversation.
                   yield* awaitRuntimeTeardown();
+                  prepareTerminalEnvironment(rollbackInput.providerThread.appThreadId);
                   const replacement = yield* startReplacementAcpRuntime((candidate) =>
                     Effect.gen(function* () {
+                      rememberTerminalEnvironment(
+                        candidate.sessionId,
+                        rollbackInput.providerThread.appThreadId,
+                      );
                       yield* Ref.set(runtimeRestartRequired, false);
                       yield* Ref.set(activeSessionId, candidate.sessionId);
                       yield* Ref.set(activeSessionSetup, candidate);
@@ -6328,9 +6356,11 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                     driver,
                     forkInput.sourceProviderThread,
                   );
+                  prepareTerminalEnvironment(forkInput.targetThreadId);
                   const forked = yield* runtime.forkSession(sourceSessionId, {
                     mcpServers: acpMcpServers(forkInput.targetThreadId),
                   });
+                  rememberTerminalEnvironment(forked.sessionId, forkInput.targetThreadId);
                   yield* Ref.set(activeSessionId, forked.sessionId);
                   yield* Ref.set(activeSessionSetup, forked);
                   yield* Ref.set(activeSelection, null);
