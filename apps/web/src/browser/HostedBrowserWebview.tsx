@@ -70,6 +70,7 @@ export function HostedBrowserWebview(props: {
   const tabLeaseRef = useRef<AcquiredDesktopTab | null>(null);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const webviewRef = useRef<ElectronWebview | null>(null);
+  const bootstrappedWebviewRef = useRef<ElectronWebview | null>(null);
   const crashRecoveryRef = useRef<WebviewCrashRecoveryState>(INITIAL_WEBVIEW_CRASH_RECOVERY_STATE);
   const [aspectRatioLocked, setAspectRatioLocked] = useState(false);
   const presentation = useBrowserSurfaceStore(
@@ -99,6 +100,7 @@ export function HostedBrowserWebview(props: {
 
   const [webviewGeneration, setWebviewGeneration] = useState(0);
   const [recoverySrc, setRecoverySrc] = useState(initialSrc);
+  const targetSrc = webviewGeneration === 0 ? initialSrc : recoverySrc;
   const latestUrlRef = useRef(initialUrl);
 
   useEffect(() => {
@@ -128,6 +130,12 @@ export function HostedBrowserWebview(props: {
           const webContentsId = webview.getWebContentsId();
           if (Number.isInteger(webContentsId) && webContentsId > 0) {
             await bridge.registerWebview(runtimeTabId, webContentsId);
+            if (disposed || webviewRef.current !== webview) return;
+            // Navigation starts only after the main process installs the popup policy.
+            if (bootstrappedWebviewRef.current !== webview) {
+              bootstrappedWebviewRef.current = webview;
+              if (webview.src !== targetSrc) webview.src = targetSrc;
+            }
           }
         } catch {
           // did-attach/dom-ready will retry if the guest was not ready yet.
@@ -158,7 +166,7 @@ export function HostedBrowserWebview(props: {
       webview.removeEventListener("dom-ready", register);
       webview.removeEventListener("render-process-gone", recoverGuest);
     };
-  }, [config, initialSrc, runtimeTabId, webviewGeneration]);
+  }, [config, initialSrc, runtimeTabId, targetSrc, webviewGeneration]);
 
   const active = presentation.visible && presentation.rect !== null;
   const lastRect = presentation.rect;
@@ -273,7 +281,7 @@ export function HostedBrowserWebview(props: {
         <PreviewWebview
           key={webviewGeneration}
           ref={setWebviewRef}
-          src={webviewGeneration === 0 ? initialSrc : recoverySrc}
+          src="about:blank"
           partition={config.partition}
           webpreferences={config.webPreferences}
           allowpopups="true"

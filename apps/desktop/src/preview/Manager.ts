@@ -1544,6 +1544,9 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     yield* Scope.addFinalizer(
       scope,
       attempt({ operation: "detachListeners", tabId, webContentsId: wc.id }, () => {
+        if (!wc.isDestroyed()) {
+          wc.setWindowOpenHandler(() => ({ action: "deny" }));
+        }
         cancelFaviconCapture();
         wc.off("did-start-navigation", navigationStarted);
         wc.off("did-navigate", syncNavigation);

@@ -499,6 +499,10 @@ describe("PreviewManager", () => {
 
         yield* manager.closeTab("tab_popup_policy");
         expect(preview.off).toHaveBeenCalledWith("did-create-window", didCreateWindow);
+        const detachedHandler = preview.setWindowOpenHandler.mock.calls.at(-1)?.[0];
+        expect(detachedHandler?.(windowOpenDetails("https://example.com"))).toEqual({
+          action: "deny",
+        });
         expect(preview.loadURL).not.toHaveBeenCalled();
       }),
     ),
