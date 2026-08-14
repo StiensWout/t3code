@@ -26,6 +26,7 @@ export type WslServerTreeResult =
   | { readonly ok: false; readonly reason: string; readonly fatal: boolean };
 
 const MARKER_FILE_NAME = "t3code-wsl-server-tree.json";
+const COPY_CONCURRENCY = 8;
 
 const Marker = Schema.Struct({ version: Schema.String });
 const decodeMarker = Schema.decodeUnknownEffect(Schema.fromJsonString(Marker));
@@ -64,27 +65,34 @@ const copyTree = (
   join: (first: string, ...rest: string[]) => string,
   from: string,
   to: string,
+  ioSemaphore: Semaphore.Semaphore,
 ): Effect.Effect<void, PlatformError.PlatformError> =>
   Effect.gen(function* () {
-    yield* fs.makeDirectory(to, { recursive: true });
-    const entries = yield* fs.readDirectory(from);
+    yield* ioSemaphore.withPermit(fs.makeDirectory(to, { recursive: true }));
+    const entries = yield* ioSemaphore.withPermit(fs.readDirectory(from));
     yield* Effect.forEach(
       entries,
       (entry) =>
         Effect.gen(function* () {
           const sourcePath = join(from, entry);
           const targetPath = join(to, entry);
-          const info = yield* fs.stat(sourcePath);
+          const info = yield* ioSemaphore.withPermit(fs.stat(sourcePath));
           if (info.type === "Directory") {
-            yield* copyTree(fs, join, sourcePath, targetPath);
+            yield* copyTree(fs, join, sourcePath, targetPath, ioSemaphore);
           } else if (info.type === "File") {
-            const bytes = yield* fs.readFile(sourcePath);
-            yield* fs.writeFile(targetPath, bytes);
+            // Hold one permit across the read/write pair so at most eight file
+            // buffers are retained while writes wait for their turn.
+            yield* ioSemaphore.withPermit(
+              Effect.gen(function* () {
+                const bytes = yield* fs.readFile(sourcePath);
+                yield* fs.writeFile(targetPath, bytes);
+              }),
+            );
           }
         }),
-      // Bounded concurrency keeps the extraction fast on real disks without
-      // exhausting file descriptors on huge node_modules directories.
-      { concurrency: 8, discard: true },
+      // Keep local traversal bounded too; the shared semaphore caps filesystem
+      // work across every recursive directory in the tree.
+      { concurrency: COPY_CONCURRENCY, discard: true },
     );
   });
 
@@ -98,6 +106,7 @@ export const make = Effect.gen(function* () {
   const treeRoot = join(environment.stateDir, "wsl-server-tree");
   const version = environment.appVersion;
   const versionDir = join(treeRoot, version);
+  const copySemaphore = yield* Semaphore.make(COPY_CONCURRENCY);
 
   // Remove sibling trees left behind by previous app versions (and aborted
   // extractions). Best-effort: a locked file must not block the backend.
@@ -127,7 +136,7 @@ export const make = Effect.gen(function* () {
       prefix: `.${version}.extract-`,
     });
     yield* Effect.gen(function* () {
-      yield* copyTree(fs, join, serverRoot, partialDir);
+      yield* copyTree(fs, join, serverRoot, partialDir, copySemaphore);
       const markerJson = yield* encodeMarker({ version });
       yield* fs.writeFileString(join(partialDir, MARKER_FILE_NAME), `${markerJson}\n`);
       // The marker is written before the rename, so a directory named after
