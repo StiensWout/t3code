@@ -28,6 +28,33 @@ import {
   shouldShowDesktopUpdateCheckIcon,
 } from "./DesktopUpdateStatusIcon";
 
+function resolveSidebarUpdatePresentation({
+  action,
+  isDownloading,
+  showCheckIcon,
+}: {
+  readonly action: ReturnType<typeof resolveDesktopUpdateButtonAction>;
+  readonly isDownloading: boolean;
+  readonly showCheckIcon: boolean;
+}) {
+  const showUpdateDetails = action !== "none" || isDownloading;
+  const iconStatus = showCheckIcon
+    ? "checking"
+    : action === "install"
+      ? "downloaded"
+      : isDownloading
+        ? "downloading"
+        : action === "download"
+          ? "available"
+          : "idle";
+
+  return {
+    iconStatus,
+    showUpdateDetails,
+    showUpdateIconState: showUpdateDetails && !showCheckIcon,
+  } as const;
+}
+
 function keyReleaseNoteItems(items: ReadonlyArray<string>) {
   const occurrences = new Map<string, number>();
   return items.map((item) => {
@@ -130,23 +157,26 @@ function SidebarUpdateControl() {
 
   const action = state ? resolveDesktopUpdateButtonAction(state) : "none";
   const isDownloading = state?.status === "downloading";
-  const isUpdateState = action !== "none" || isDownloading;
   const showCheckIcon = shouldShowDesktopUpdateCheckIcon({
     isAnimationLatched: isCheckAnimationLatched,
     isChecking: state?.status === "checking",
     prefersReducedMotion,
   });
-  const showUpdateState = isUpdateState && !showCheckIcon;
-  const tooltip = showCheckIcon
-    ? "Checking for updates…"
-    : isUpdateState
-      ? state
-        ? getDesktopUpdateButtonTooltip(state)
-        : "Update available"
+  const { iconStatus, showUpdateDetails, showUpdateIconState } = resolveSidebarUpdatePresentation({
+    action,
+    isDownloading,
+    showCheckIcon,
+  });
+  const tooltip = showUpdateDetails
+    ? state
+      ? getDesktopUpdateButtonTooltip(state)
+      : "Update available"
+    : showCheckIcon
+      ? "Checking for updates…"
       : "Check for updates";
   const disabled = showCheckIcon
     ? true
-    : isUpdateState
+    : showUpdateDetails
       ? isDesktopUpdateButtonDisabled(state)
       : !canCheckForUpdate(state);
 
@@ -274,16 +304,6 @@ function SidebarUpdateControl() {
     );
   }, [prefersReducedMotion, state?.status]);
 
-  const iconStatus = showCheckIcon
-    ? "checking"
-    : action === "install"
-      ? "downloaded"
-      : isDownloading
-        ? "downloading"
-        : action === "download"
-          ? "available"
-          : "idle";
-
   return (
     <SidebarMenuItem className="ml-auto shrink-0">
       <Tooltip>
@@ -296,10 +316,10 @@ function SidebarUpdateControl() {
               disabled={disabled || isActionPending}
               className={cn(
                 "inline-flex size-8 items-center justify-center rounded-full outline-hidden ring-ring transition-colors enabled:cursor-pointer focus-visible:ring-2 disabled:cursor-not-allowed",
-                showUpdateState
+                showUpdateIconState
                   ? "bg-update-surface text-update-foreground enabled:hover:bg-update/12"
                   : "text-[var(--sidebar-icon-color)] enabled:hover:bg-sidebar-row-hover enabled:hover:text-sidebar-foreground",
-                disabled && !showUpdateState && "opacity-60",
+                disabled && !showUpdateIconState && "opacity-60",
               )}
               onClick={handleAction}
             >
@@ -316,7 +336,7 @@ function SidebarUpdateControl() {
         <TooltipPopup
           align="center"
           className={
-            showUpdateState && state?.channel === "nightly" && state.releaseNotes.length > 0
+            showUpdateDetails && state?.channel === "nightly" && state.releaseNotes.length > 0
               ? // pointer-events-auto overrides the positioner's pointer-events-none so the
                 // release notes stay open (and scrollable) when the cursor moves into them.
                 "pointer-events-auto max-w-none text-balance"
@@ -324,7 +344,7 @@ function SidebarUpdateControl() {
           }
           side="top"
           style={
-            showUpdateState
+            showUpdateDetails
               ? {
                   background:
                     "color-mix(in srgb, var(--update) 18%, color-mix(in srgb, var(--popover) var(--glass-opacity), transparent))",
@@ -332,9 +352,9 @@ function SidebarUpdateControl() {
                 }
               : undefined
           }
-          variant={showUpdateState ? "glass" : "default"}
+          variant={showUpdateDetails ? "glass" : "default"}
         >
-          {showUpdateState && state ? (
+          {showUpdateDetails && state ? (
             <SidebarUpdateReleaseNotesTooltip state={state} tooltip={tooltip} />
           ) : (
             tooltip
