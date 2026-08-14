@@ -15,6 +15,7 @@
 import {
   DEFAULT_MODEL_BY_PROVIDER,
   defaultInstanceIdForDriver,
+  isProviderTextGenerationCapable,
   PROVIDER_DISPLAY_NAMES,
   type ModelSelection,
   type ProviderDriverKind,
@@ -99,6 +100,15 @@ export function isProviderInstancePickerReady(entry: ProviderInstanceEntry): boo
 /** Picker rails contain configured, enabled instances only. */
 export function isProviderInstancePickerVisible(entry: ProviderInstanceEntry): boolean {
   return entry.enabled;
+}
+
+/**
+ * Whether an instance may be offered for application text generation
+ * (commit messages, PR content, branch names, thread titles). ACP Registry
+ * instances reject these operations, so their selection would only fail later.
+ */
+export function isProviderInstanceTextGenerationCapable(entry: ProviderInstanceEntry): boolean {
+  return isProviderTextGenerationCapable(entry.snapshot);
 }
 
 /**

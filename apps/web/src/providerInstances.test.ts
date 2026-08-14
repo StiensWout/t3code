@@ -6,6 +6,7 @@ import {
   getDefaultProviderInstanceModel,
   isProviderInstancePickerReady,
   isProviderInstancePickerVisible,
+  isProviderInstanceTextGenerationCapable,
   resolveDefaultProviderModelSelection,
   resolveProviderCatalogAvailability,
   resolveSelectableProviderInstance,
@@ -20,10 +21,14 @@ function provider(input: {
   displayName?: string;
   status?: ServerProvider["status"];
   models?: ServerProvider["models"];
+  supportsAppTextGeneration?: boolean;
 }): ServerProvider {
   return {
     instanceId: ProviderInstanceId.make(input.instanceId),
     driver: input.provider,
+    ...(input.supportsAppTextGeneration === undefined
+      ? {}
+      : { supportsAppTextGeneration: input.supportsAppTextGeneration }),
     ...(input.displayName ? { displayName: input.displayName } : {}),
     enabled: input.enabled ?? true,
     installed: true,
@@ -122,6 +127,22 @@ describe("isProviderInstancePickerVisible", () => {
 
     expect(enabledEntry && isProviderInstancePickerVisible(enabledEntry)).toBe(true);
     expect(disabledEntry && isProviderInstancePickerVisible(disabledEntry)).toBe(false);
+  });
+});
+
+describe("isProviderInstanceTextGenerationCapable", () => {
+  it("keeps instances that omit the flag and drops instances that declare false", () => {
+    const [legacyEntry, acpEntry] = deriveProviderInstanceEntries([
+      provider({ provider: ProviderDriverKind.make("codex"), instanceId: "codex" }),
+      provider({
+        provider: ProviderDriverKind.make("acpRegistry"),
+        instanceId: "acp_gemini",
+        supportsAppTextGeneration: false,
+      }),
+    ]);
+
+    expect(legacyEntry && isProviderInstanceTextGenerationCapable(legacyEntry)).toBe(true);
+    expect(acpEntry && isProviderInstanceTextGenerationCapable(acpEntry)).toBe(false);
   });
 });
 

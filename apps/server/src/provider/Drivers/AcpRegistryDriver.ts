@@ -187,6 +187,10 @@ function baseSnapshot(
     ...(input.displayName ? { displayName: input.displayName } : {}),
     ...(input.accentColor ? { accentColor: input.accentColor } : {}),
     continuation: { groupKey: input.continuationKey },
+    // The registry driver rejects every application text-generation operation,
+    // so selectors must not offer these instances for commit, PR, branch, or
+    // title generation.
+    supportsAppTextGeneration: false,
     enabled: input.settings.enabled,
     installed: input.installed,
     version: input.version,

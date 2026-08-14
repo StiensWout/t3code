@@ -73,6 +73,22 @@ describe("acpRegistrySnapshotReadiness", () => {
     ]);
   });
 
+  it("declares registry snapshots incapable of application text generation", () => {
+    const provider = buildCheckedAcpRegistrySnapshot({
+      ...identity,
+      settings: decodeSettings({ agentId: "test-agent" }),
+      checkedAt: "2026-08-13T10:00:00.000Z",
+      inspection: {
+        status: "ready",
+        agentId: "test-agent",
+        version: "1.0.0",
+        distribution: "npx",
+      },
+    });
+
+    expect(provider.supportsAppTextGeneration).toBe(false);
+  });
+
   it("reports prepared agents as installed with their registry version", () => {
     expect(
       acpRegistrySnapshotReadiness({
