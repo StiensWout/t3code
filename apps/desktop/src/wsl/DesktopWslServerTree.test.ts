@@ -5,6 +5,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
+import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 
 import * as DesktopConfig from "../app/DesktopConfig.ts";
@@ -72,6 +73,39 @@ const ensureWith = (input: {
   );
 
 describe("DesktopWslServerTree", () => {
+  it.effect("bounds entry work across an eight-way nested tree", () =>
+    Effect.gen(function* () {
+      const active = yield* Ref.make(0);
+      const maxActive = yield* Ref.make(0);
+      const visited = yield* Ref.make(0);
+
+      yield* DesktopWslServerTree.forEachBoundedTree([{ depth: 0, id: "root" }], (node) =>
+        Effect.acquireUseRelease(
+          Effect.gen(function* () {
+            const current = yield* Ref.updateAndGet(active, (count) => count + 1);
+            yield* Ref.update(maxActive, (maximum) => Math.max(maximum, current));
+            yield* Ref.update(visited, (count) => count + 1);
+          }),
+          () =>
+            Effect.gen(function* () {
+              // Give every task in the current batch a chance to overlap.
+              yield* Effect.yieldNow;
+              if (node.depth === 4) return [];
+              return Array.from({ length: 8 }, (_, index) => ({
+                depth: node.depth + 1,
+                id: `${node.id}.${String(index)}`,
+              }));
+            }),
+          () => Ref.update(active, (count) => count - 1),
+        ),
+      );
+
+      assert.equal(yield* Ref.get(active), 0);
+      assert.equal(yield* Ref.get(maxActive), 8);
+      assert.equal(yield* Ref.get(visited), 4_681);
+    }),
+  );
+
   it.effect("returns the server root unchanged when it is a plain directory (dev)", () =>
     withTempDir((tempDir) =>
       Effect.gen(function* () {

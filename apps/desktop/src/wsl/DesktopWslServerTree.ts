@@ -55,46 +55,63 @@ export class DesktopWslServerTree extends Context.Service<
   }
 >()("@t3tools/desktop/wsl/DesktopWslServerTree") {}
 
-// Recursively copy a directory using only readDirectory/stat/readFile/
-// writeFile, which Electron's asar-patched fs supports for paths inside an
-// archive. Symlinks are not expected (the sidecar tree is installed with a
-// hoisted, physical layout precisely so this copy stays trivial); anything
-// that is neither a file nor a directory is skipped.
+// Child scheduling stays here instead of inside `visit`, so nested directories
+// cannot create independent concurrency pools. The LIFO work list also keeps
+// traversal memory proportional to the remaining frontier rather than the
+// number of active fibers.
+export const forEachBoundedTree = <Node, E, R>(
+  roots: ReadonlyArray<Node>,
+  visit: (node: Node) => Effect.Effect<ReadonlyArray<Node>, E, R>,
+): Effect.Effect<void, E, R> =>
+  Effect.gen(function* () {
+    const pending = [...roots];
+    while (pending.length > 0) {
+      const batch = pending.splice(-COPY_CONCURRENCY);
+      const children = yield* Effect.forEach(batch, visit, {
+        concurrency: COPY_CONCURRENCY,
+      });
+      for (const entries of children) {
+        pending.push(...entries);
+      }
+    }
+  });
+
+interface CopyTreeEntry {
+  readonly sourcePath: string;
+  readonly targetPath: string;
+}
+
+// Copy using only operations supported by Electron's asar-patched fs. Symlinks
+// are not expected because the sidecar is installed with a hoisted, physical
+// layout; anything that is neither a file nor a directory is skipped.
 const copyTree = (
   fs: FileSystem.FileSystem,
   join: (first: string, ...rest: string[]) => string,
   from: string,
   to: string,
-  ioSemaphore: Semaphore.Semaphore,
 ): Effect.Effect<void, PlatformError.PlatformError> =>
-  Effect.gen(function* () {
-    yield* ioSemaphore.withPermit(fs.makeDirectory(to, { recursive: true }));
-    const entries = yield* ioSemaphore.withPermit(fs.readDirectory(from));
-    yield* Effect.forEach(
-      entries,
-      (entry) =>
-        Effect.gen(function* () {
-          const sourcePath = join(from, entry);
-          const targetPath = join(to, entry);
-          const info = yield* ioSemaphore.withPermit(fs.stat(sourcePath));
-          if (info.type === "Directory") {
-            yield* copyTree(fs, join, sourcePath, targetPath, ioSemaphore);
-          } else if (info.type === "File") {
-            // Hold one permit across the read/write pair so at most eight file
-            // buffers are retained while writes wait for their turn.
-            yield* ioSemaphore.withPermit(
-              Effect.gen(function* () {
-                const bytes = yield* fs.readFile(sourcePath);
-                yield* fs.writeFile(targetPath, bytes);
-              }),
-            );
-          }
-        }),
-      // Keep local traversal bounded too; the shared semaphore caps filesystem
-      // work across every recursive directory in the tree.
-      { concurrency: COPY_CONCURRENCY, discard: true },
-    );
-  });
+  forEachBoundedTree<CopyTreeEntry, PlatformError.PlatformError, never>(
+    [{ sourcePath: from, targetPath: to }],
+    ({ sourcePath, targetPath }) =>
+      Effect.gen(function* () {
+        const info = yield* fs.stat(sourcePath);
+        if (info.type === "Directory") {
+          yield* fs.makeDirectory(targetPath, { recursive: true });
+          const entries = yield* fs.readDirectory(sourcePath);
+          return entries.map((entry) => ({
+            sourcePath: join(sourcePath, entry),
+            targetPath: join(targetPath, entry),
+          }));
+        }
+        if (info.type === "File") {
+          // Read and write stay in the same bounded task, so at most eight file
+          // buffers can be retained while their writes complete.
+          const bytes = yield* fs.readFile(sourcePath);
+          yield* fs.writeFile(targetPath, bytes);
+        }
+        return [];
+      }),
+  );
 
 export const make = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
@@ -106,7 +123,6 @@ export const make = Effect.gen(function* () {
   const treeRoot = join(environment.stateDir, "wsl-server-tree");
   const version = environment.appVersion;
   const versionDir = join(treeRoot, version);
-  const copySemaphore = yield* Semaphore.make(COPY_CONCURRENCY);
 
   // Remove sibling trees left behind by previous app versions (and aborted
   // extractions). Best-effort: a locked file must not block the backend.
@@ -136,7 +152,7 @@ export const make = Effect.gen(function* () {
       prefix: `.${version}.extract-`,
     });
     yield* Effect.gen(function* () {
-      yield* copyTree(fs, join, serverRoot, partialDir, copySemaphore);
+      yield* copyTree(fs, join, serverRoot, partialDir);
       const markerJson = yield* encodeMarker({ version });
       yield* fs.writeFileString(join(partialDir, MARKER_FILE_NAME), `${markerJson}\n`);
       // The marker is written before the rename, so a directory named after
