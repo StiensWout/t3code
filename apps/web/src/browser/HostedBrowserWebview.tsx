@@ -2,7 +2,14 @@
 
 import type { PreviewViewportSetting, ScopedThreadRef } from "@t3tools/contracts";
 import { useShallow } from "zustand/react/shallow";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  type ComponentProps,
+  type ComponentType,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 
 import { previewBridge } from "~/components/preview/previewBridge";
 import { usePreviewBridge } from "~/components/preview/usePreviewBridge";
@@ -34,6 +41,14 @@ interface ElectronWebview extends HTMLElement {
   getWebContentsId: () => number;
   executeJavaScript: (code: string, userGesture?: boolean) => Promise<unknown>;
 }
+
+type PreviewWebviewProps = Omit<ComponentProps<"webview">, "allowpopups"> & {
+  readonly allowpopups: "true";
+};
+
+// React's Electron typing says this is boolean, but React omits unknown boolean
+// attributes. Electron needs the string attribute present before guest attach.
+const PreviewWebview = "webview" as unknown as ComponentType<PreviewWebviewProps>;
 
 declare global {
   interface HTMLElementTagNameMap {
@@ -92,7 +107,6 @@ export function HostedBrowserWebview(props: {
 
   const setWebviewRef = useCallback((node: HTMLElement | null) => {
     webviewRef.current = node as ElectronWebview | null;
-    if (node && !node.hasAttribute("allowpopups")) node.setAttribute("allowpopups", "true");
   }, []);
 
   useEffect(() => {
@@ -256,12 +270,13 @@ export function HostedBrowserWebview(props: {
             onChange={commitViewportChange}
           />
         ) : null}
-        <webview
+        <PreviewWebview
           key={webviewGeneration}
           ref={setWebviewRef}
           src={webviewGeneration === 0 ? initialSrc : recoverySrc}
           partition={config.partition}
           webpreferences={config.webPreferences}
+          allowpopups="true"
           {...(config.preloadUrl ? { preload: config.preloadUrl } : {})}
           data-preview-tab={runtimeTabId}
           data-preview-server-tab={tabId}

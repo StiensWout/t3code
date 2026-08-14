@@ -197,6 +197,16 @@ const artifactSiteSlug = (rawUrl: string): string => {
   }
 };
 
+const isAllowedPreviewPopupUrl = (rawUrl: string): boolean => {
+  if (rawUrl === "about:blank") return true;
+  try {
+    const url = new URL(rawUrl);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+};
+
 interface CdpEvaluationResult {
   readonly result?: {
     readonly value?: unknown;
@@ -1524,6 +1534,13 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       }
       runFork(forwardShortcut(event, input));
     };
+    const didCreateWindow = (popupWindow: BrowserWindow): void => {
+      if (popupWindow.isDestroyed() || popupWindow.webContents.isDestroyed()) return;
+      popupWindow.setMenuBarVisibility(false);
+      // Popup WebContents are intentionally human-only. Preview automation has one
+      // registered target per tab, and authentication windows may contain credentials.
+      popupWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+    };
     yield* Scope.addFinalizer(
       scope,
       attempt({ operation: "detachListeners", tabId, webContentsId: wc.id }, () => {
@@ -1536,6 +1553,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         wc.off("did-start-loading", sync);
         wc.off("did-stop-loading", sync);
         wc.off("did-fail-load", failed as never);
+        wc.off("did-create-window", didCreateWindow);
         wc.off("before-input-event", beforeInput);
         wc.ipc.off(HUMAN_INPUT_CHANNEL, humanInput);
       }).pipe(Effect.ignore),
@@ -1551,13 +1569,27 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         wc.on("did-stop-loading", sync);
         wc.on("did-fail-load", failed as never);
         wc.ipc.on(HUMAN_INPUT_CHANNEL, humanInput);
+        wc.on("did-create-window", didCreateWindow);
         wc.setWindowOpenHandler(({ url }) => {
-          runFork(
-            attemptPromise({ operation: "openPreviewWindow", tabId, webContentsId: wc.id }, () =>
-              wc.loadURL(url),
-            ).pipe(Effect.ignore),
-          );
-          return { action: "deny" };
+          if (!isAllowedPreviewPopupUrl(url)) return { action: "deny" };
+          const hostWebContents = wc.hostWebContents;
+          const parent = hostWebContents ? BrowserWindow.fromWebContents(hostWebContents) : null;
+          return {
+            action: "allow",
+            outlivesOpener: false,
+            overrideBrowserWindowOptions: {
+              ...(parent && !parent.isDestroyed() ? { parent } : {}),
+              autoHideMenuBar: true,
+              webPreferences: {
+                session: wc.session,
+                sandbox: true,
+                contextIsolation: true,
+                nodeIntegration: false,
+                nodeIntegrationInSubFrames: false,
+                webviewTag: false,
+              },
+            },
+          };
         });
         wc.on("before-input-event", beforeInput);
       });
