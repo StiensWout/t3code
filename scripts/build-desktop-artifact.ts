@@ -2434,6 +2434,11 @@ export const validateWindowsPackagedPayload = Effect.fn(
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const fileLimit = input.fileLimit ?? WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT;
+  const isFile = (filePath: string) =>
+    fs.stat(filePath).pipe(
+      Effect.map((stat) => stat.type === "File"),
+      Effect.orElseSucceed(() => false),
+    );
   const stageEntries = yield* fs.readDirectory(input.stageDistDir);
   let packagedAppDir: string | undefined;
 
@@ -2497,7 +2502,7 @@ export const validateWindowsPackagedPayload = Effect.fn(
       `${WINDOWS_SERVER_ASAR_RESOURCE}.unpacked`,
       ...unpackedFile.split("/"),
     );
-    if (!(yield* fs.exists(unpackedPath).pipe(Effect.orElseSucceed(() => false)))) {
+    if (!(yield* isFile(unpackedPath))) {
       missingFiles.push(`${WINDOWS_SERVER_ASAR_RESOURCE}.unpacked/${unpackedFile}`);
     }
   }
@@ -2514,7 +2519,7 @@ export const validateWindowsPackagedPayload = Effect.fn(
     "resource-monitor",
     resourceMonitorExecutableName("win"),
   );
-  if (!(yield* fs.exists(resourceMonitorPath).pipe(Effect.orElseSucceed(() => false)))) {
+  if (!(yield* isFile(resourceMonitorPath))) {
     return yield* new WindowsPackagedPayloadValidationError({
       reason: "resource-monitor-missing",
       packagedAppDir,

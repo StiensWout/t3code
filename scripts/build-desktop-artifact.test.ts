@@ -561,6 +561,49 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     ),
   );
 
+  it.effect("rejects directories in place of packaged executable files", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const fixture = yield* makeWindowsPayloadFixture({ copyUnpackedNatives: true });
+        const nativePath = path.join(
+          fixture.packagedAppDir,
+          "resources/server.asar.unpacked/node_modules/native/addon.node",
+        );
+        yield* fs.remove(nativePath);
+        yield* fs.makeDirectory(nativePath);
+
+        const nativeError = yield* validateWindowsPackagedPayload({
+          stageDistDir: fixture.stageDistDir,
+        }).pipe(Effect.flip);
+        assert.instanceOf(nativeError, WindowsPackagedPayloadValidationError);
+        assert.equal(nativeError.reason, "unpacked-native-missing");
+        assert.deepStrictEqual(nativeError.missingFiles, [
+          "server.asar.unpacked/node_modules/native/addon.node",
+        ]);
+
+        yield* fs.remove(nativePath, { recursive: true });
+        yield* fs.writeFileString(nativePath, "native-binary");
+        const resourceMonitorPath = path.join(
+          fixture.packagedAppDir,
+          "resources/resource-monitor/t3-resource-monitor.exe",
+        );
+        yield* fs.remove(resourceMonitorPath);
+        yield* fs.makeDirectory(resourceMonitorPath);
+
+        const resourceMonitorError = yield* validateWindowsPackagedPayload({
+          stageDistDir: fixture.stageDistDir,
+        }).pipe(Effect.flip);
+        assert.instanceOf(resourceMonitorError, WindowsPackagedPayloadValidationError);
+        assert.equal(resourceMonitorError.reason, "resource-monitor-missing");
+        assert.deepStrictEqual(resourceMonitorError.missingFiles, [
+          "resource-monitor/t3-resource-monitor.exe",
+        ]);
+      }),
+    ),
+  );
+
   it.effect("rejects a Windows payload that regresses above the file-count budget", () =>
     Effect.scoped(
       Effect.gen(function* () {

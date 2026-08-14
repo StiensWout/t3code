@@ -17,7 +17,7 @@ index ee181aef5007e4bf34a49479c089ca30f73a320b..327e2c55c83cc4c50d396a3109190ef1
  }
 +function resolveUnpackedAsarPath(binaryPath) {
 +    const pathSegments = binaryPath.split(sep);
-+    const asarIndex = pathSegments.findIndex((segment) => segment.endsWith(".asar"));
++    const asarIndex = pathSegments.findLastIndex((segment) => segment.endsWith(".asar"));
 +    if (asarIndex === -1) {
 +        return binaryPath;
 +    }
