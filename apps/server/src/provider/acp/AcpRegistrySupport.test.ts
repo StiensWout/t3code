@@ -9,6 +9,7 @@ import {
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -18,6 +19,7 @@ import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import * as TestClock from "effect/testing/TestClock";
 
 import {
+  acpRegistryManagedBinaryDirectories,
   makeAcpRegistryCatalog,
   resolveAcpRegistryDistribution,
   resolveAcpRegistryPlatformTarget,
@@ -241,6 +243,54 @@ describe("AcpRegistrySupport", () => {
               ? new Response(makeRegistry(agent))
               : new Response(binaryBytes.buffer as ArrayBuffer);
           return Effect.succeed(HttpClientResponse.fromWeb(request, response));
+        }),
+      ),
+    );
+  });
+
+  it.effect("detects an already-installed system binary instead of downloading", () => {
+    const agent = makeAgent({
+      binary: {
+        "linux-x86_64": {
+          archive: archiveUrl,
+          cmd: "./bin/example-agent",
+          args: ["acp"],
+        },
+      },
+    });
+    const requests: Array<string> = [];
+    return Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-acp-registry-system-",
+      });
+      const systemBinDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-acp-registry-system-bin-",
+      });
+      const systemBinary = path.join(systemBinDir, "example-agent");
+      yield* fileSystem.writeFileString(systemBinary, "#!/bin/sh\necho system\n");
+      yield* fileSystem.chmod(systemBinary, 0o755);
+      const environment = { PATH: systemBinDir };
+
+      const resolver = yield* makeAcpRegistryCatalog({ cacheDir, registryUrl });
+      const resolved = yield* resolver.resolve(settings(), "/workspace", environment);
+      expect(resolved.spawn.command).toBe(systemBinary);
+      expect(resolved.spawn.args).toEqual(["acp"]);
+
+      const inspection = yield* resolver.inspect(settings(), environment);
+      expect(inspection).toMatchObject({ status: "ready", distribution: "binary" });
+
+      // Only the registry index was fetched; no archive download happened.
+      expect(requests).toEqual([registryUrl]);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        resolverLayer((request) => {
+          requests.push(request.url);
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(request, new Response(makeRegistry(agent))),
+          );
         }),
       ),
     );
@@ -925,4 +975,46 @@ describe("AcpRegistrySupport", () => {
       ),
     );
   });
+});
+
+describe("acpRegistryManagedBinaryDirectories", () => {
+  it.effect("lists this platform's install directories, newest version first", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-acp-registry-bins-",
+      });
+      const install = (agent: string, version: string, target: string) =>
+        fileSystem.makeDirectory(
+          path.join(cacheDir, "acp-registry", "agents", agent, version, target),
+          { recursive: true },
+        );
+      yield* install("kimi", "1.49.0", "linux-x86_64");
+      yield* install("kimi", "1.50.0", "linux-x86_64");
+      yield* install("kimi", "1.50.0", "darwin-aarch64");
+      yield* install("other-agent", "0.2.0", "darwin-aarch64");
+
+      const directories = yield* acpRegistryManagedBinaryDirectories({
+        fileSystem,
+        path,
+        cacheDir,
+        platform: "linux",
+        architecture: "x64",
+      });
+      expect(directories).toEqual([
+        path.join(cacheDir, "acp-registry", "agents", "kimi", "1.50.0", "linux-x86_64"),
+        path.join(cacheDir, "acp-registry", "agents", "kimi", "1.49.0", "linux-x86_64"),
+      ]);
+
+      const missing = yield* acpRegistryManagedBinaryDirectories({
+        fileSystem,
+        path,
+        cacheDir: path.join(cacheDir, "does-not-exist"),
+        platform: "linux",
+        architecture: "x64",
+      });
+      expect(missing).toEqual([]);
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
 });

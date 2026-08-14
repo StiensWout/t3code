@@ -190,6 +190,41 @@ export function resolveAcpRegistryPlatformTarget(
   return os && arch ? (`${os}-${arch}` as AcpRegistryPlatformTarget) : undefined;
 }
 
+/**
+ * Directories containing installed ACP Registry managed binaries for one
+ * platform, newest version first per agent. The integrated terminal appends
+ * them to PATH so users can run managed agents by name (for example
+ * `kimi login`) instead of the full cache path. Best effort: unreadable
+ * directories resolve to no entries.
+ */
+export const acpRegistryManagedBinaryDirectories = (input: {
+  readonly fileSystem: FileSystem.FileSystem;
+  readonly path: Path.Path;
+  readonly cacheDir: string;
+  readonly platform: NodeJS.Platform;
+  readonly architecture: NodeJS.Architecture;
+}): Effect.Effect<ReadonlyArray<string>> =>
+  Effect.gen(function* () {
+    const target = resolveAcpRegistryPlatformTarget(input.platform, input.architecture);
+    if (target === undefined) return [];
+    const installsDirectory = input.path.join(input.cacheDir, "acp-registry", "agents");
+    const listDirectories = (directory: string) =>
+      input.fileSystem.readDirectory(directory).pipe(Effect.orElseSucceed((): Array<string> => []));
+    const directories: Array<string> = [];
+    for (const agent of (yield* listDirectories(installsDirectory)).toSorted()) {
+      const versions = (yield* listDirectories(input.path.join(installsDirectory, agent))).toSorted(
+        (left, right) => right.localeCompare(left, undefined, { numeric: true }),
+      );
+      for (const version of versions) {
+        const directory = input.path.join(installsDirectory, agent, version, target);
+        if (yield* input.fileSystem.exists(directory).pipe(Effect.orElseSucceed(() => false))) {
+          directories.push(directory);
+        }
+      }
+    }
+    return directories;
+  });
+
 export interface ResolvedAcpRegistryDistribution {
   readonly kind: AcpRegistryDistributionKind;
   readonly args: ReadonlyArray<string>;
@@ -753,6 +788,22 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
     };
   };
 
+  /**
+   * An already-installed copy of a registry agent's binary on the instance
+   * PATH (for example a package-manager installed `kimi`). Checked before
+   * downloading the managed copy so existing installs are detected for every
+   * binary-distribution agent. A present managed install still wins so
+   * prepared agents stay on their pinned, checksum-verified version.
+   */
+  const resolveSystemAgentBinary = (
+    target: typeof AcpRegistryBinaryTarget.Type,
+    environment: NodeJS.ProcessEnv,
+  ): string | undefined => {
+    const name = target.cmd.trim().split(/[\\/]/u).pop() ?? "";
+    if (name.length === 0 || name === "." || name === "..") return undefined;
+    return resolveExecutable(name, platform, environment);
+  };
+
   const installBinary = Effect.fn("AcpRegistryCatalog.installBinary")(function* (
     agent: AcpRegistryAgent,
     target: typeof AcpRegistryBinaryTarget.Type,
@@ -1012,11 +1063,15 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
       const agent = yield* findAgent(registry, input.agentId);
       const distribution = yield* compatibleDistribution(agent, "auto");
       if (distribution.kind === "binary") {
-        yield* installSemaphore.withPermits(1)(
-          installBinary(agent, distribution.binaryTarget!).pipe(
-            Effect.tap(() => reservePreparedBinary(agent.id)),
-          ),
-        );
+        // An existing system install satisfies prepare without downloading a
+        // duplicate managed copy.
+        if (resolveSystemAgentBinary(distribution.binaryTarget!, hostEnvironment) === undefined) {
+          yield* installSemaphore.withPermits(1)(
+            installBinary(agent, distribution.binaryTarget!).pipe(
+              Effect.tap(() => reservePreparedBinary(agent.id)),
+            ),
+          );
+        }
       } else {
         const runner = runnerFor(distribution.kind)!;
         const available = resolveExecutable(runner, platform, hostEnvironment) !== undefined;
@@ -1084,6 +1139,19 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
               .exists(paths.executablePath)
               .pipe(Effect.orElseSucceed(() => false));
             if (!exists) {
+              if (
+                resolveSystemAgentBinary(
+                  distribution.binaryTarget!,
+                  environment ?? hostEnvironment,
+                ) !== undefined
+              ) {
+                return {
+                  status: "ready",
+                  agentId,
+                  version: agent.version,
+                  distribution: "binary",
+                } as const;
+              }
               return {
                 status: "unprepared",
                 agentId,
@@ -1182,11 +1250,23 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
         args = [distribution.packageName!, ...distribution.args];
         runnerBinDirectory = yield* packageRunnerBinDirectory(runner);
       } else {
-        command = yield* installSemaphore.withPermits(1)(
-          installBinary(agent, distribution.binaryTarget!).pipe(
-            Effect.tap(() => consumePreparedBinaryReservation(agent.id)),
-          ),
-        );
+        const target = distribution.binaryTarget!;
+        const paths = binaryPaths(agent, target);
+        const managedInstalled =
+          paths !== undefined &&
+          (yield* fileSystem.exists(paths.executablePath).pipe(Effect.orElseSucceed(() => false)));
+        const systemExecutable = managedInstalled
+          ? undefined
+          : resolveSystemAgentBinary(target, effectiveEnvironment);
+        if (systemExecutable !== undefined) {
+          command = systemExecutable;
+        } else {
+          command = yield* installSemaphore.withPermits(1)(
+            installBinary(agent, target).pipe(
+              Effect.tap(() => consumePreparedBinaryReservation(agent.id)),
+            ),
+          );
+        }
         args = distribution.args;
       }
 
