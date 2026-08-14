@@ -1661,6 +1661,7 @@ describe("AcpAdapterV2", () => {
       const backgroundMutationHandlers: Array<
         AcpAdapterV2ExtensionContext["applyBackgroundTaskMutation"] | undefined
       > = [];
+      const availableCommandUpdates: Array<ReadonlyArray<EffectAcpSchema.AvailableCommand>> = [];
       let registeredExtensionOrdinal = 0;
       let runtimeOrdinalSeen = 0;
       const makeRuntime = makeMockRuntime({
@@ -1684,7 +1685,29 @@ describe("AcpAdapterV2", () => {
                       }),
                     ),
                 }
-              : {}),
+              : runtimeOrdinal === 3
+                ? {
+                    start: () =>
+                      Effect.suspend(() => {
+                        const stagedSessionUpdate = sessionUpdateHandlers[2];
+                        if (stagedSessionUpdate === undefined) {
+                          return Effect.die("replacement startup must buffer session updates");
+                        }
+                        return stagedSessionUpdate({
+                          sessionId: "mock-session-3",
+                          update: {
+                            sessionUpdate: "available_commands_update",
+                            availableCommands: [
+                              {
+                                name: "staged-command",
+                                description: "published while the replacement starts",
+                              },
+                            ],
+                          },
+                        }).pipe(Effect.andThen(runtime.start()));
+                      }),
+                  }
+                : {}),
           };
         },
       });
@@ -1696,6 +1719,10 @@ describe("AcpAdapterV2", () => {
           driver: ACP_TEST_DRIVER,
           capabilities: AcpProviderCapabilitiesV2,
           enablePostSettleContinuation: true,
+          onAvailableCommandsUpdate: (commands) =>
+            Effect.sync(() => {
+              availableCommandUpdates.push(commands);
+            }),
           registerExtensions: (context) =>
             Effect.sync(() => {
               backgroundMutationHandlers[registeredExtensionOrdinal] =
@@ -1748,6 +1775,10 @@ describe("AcpAdapterV2", () => {
       });
 
       assert.equal(runtimeOrdinalSeen, 3);
+      assert.deepEqual(
+        availableCommandUpdates.map((commands) => commands.map((command) => command.name)),
+        [["staged-command"]],
+      );
       const failedReplacementHandler = sessionUpdateHandlers[1];
       const failedBackgroundMutationHandler = backgroundMutationHandlers[1];
       assert.isDefined(failedReplacementHandler);
@@ -1772,7 +1803,7 @@ describe("AcpAdapterV2", () => {
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 
-  it.effect("keeps the original ACP session usable when rollback replacement fails", () =>
+  it.effect("keeps the original ACP session usable when a staged replacement terminates", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const fileSystem = yield* FileSystem.FileSystem;
@@ -1782,24 +1813,32 @@ describe("AcpAdapterV2", () => {
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
-      const makeRuntime = makeMockRuntime({
+      let runtimeOrdinal = 0;
+      const makeBaseRuntime = makeMockRuntime({
         childProcessSpawner,
         mockAgentPath,
-        wrapRuntime: (runtime, runtimeOrdinal) => ({
-          ...runtime,
-          ...(runtimeOrdinal > 1
-            ? {
-                start: () =>
-                  Effect.fail(
+      });
+      const makeRuntime: AcpAdapterV2Flavor["makeRuntime"] = (runtimeInput) =>
+        Effect.gen(function* () {
+          const currentOrdinal = runtimeOrdinal + 1;
+          runtimeOrdinal = currentOrdinal;
+          const currentRuntime = yield* makeBaseRuntime(runtimeInput);
+          if (currentOrdinal === 1) return currentRuntime;
+          return {
+            ...currentRuntime,
+            start: () =>
+              currentRuntime.start().pipe(
+                Effect.tap(() =>
+                  runtimeInput.onTermination(
                     new EffectAcpErrors.AcpTransportError({
-                      detail: "Forced rollback replacement failure",
+                      detail: "Forced staged rollback replacement termination",
                       cause: "test",
                     }),
                   ),
-              }
-            : {}),
-        }),
-      });
+                ),
+              ),
+          };
+        });
       const instanceId = ProviderInstanceId.make("acp-test-rollback-failure-compensation");
       const adapter = makeAcpAdapterV2({
         crypto: yield* Crypto.Crypto,

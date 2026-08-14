@@ -1723,9 +1723,16 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           Effect.void;
 
         const nativeLogging = options.nativeLogging?.(input.threadId);
+        const handleRuntimeTerminationAtGeneration = (runtimeGeneration: number) =>
+          runRuntimeCallbackAtGeneration(
+            runtimeGeneration,
+            Ref.set(runtimeRestartRequired, true),
+          ).pipe(Effect.asVoid);
         const makeRuntimeInput = (
           runtimeGeneration: number,
           resumeSessionId?: string,
+          onTermination: AcpAdapterV2RuntimeInput["onTermination"] = () =>
+            handleRuntimeTerminationAtGeneration(runtimeGeneration),
         ): AcpAdapterV2RuntimeInput => {
           const mcpContext = acpMcpContext(input.threadId);
           return {
@@ -1742,11 +1749,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               elicitation: { form: {} },
             },
             clientInfo: { name: "t3-code", version: "0.0.0" },
-            onTermination: () =>
-              runRuntimeCallbackAtGeneration(
-                runtimeGeneration,
-                Ref.set(runtimeRestartRequired, true),
-              ).pipe(Effect.asVoid),
+            onTermination,
             onOutgoingResponseFailure: (requestId, error) =>
               Ref.modify(nativeResponseAcknowledgements, (current) => {
                 const entry = current.get(requestId);
@@ -4240,6 +4243,42 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           }
         });
 
+        const projectAcpRuntimeSessionUpdateEffect = (
+          rawNotification: EffectAcpSchema.SessionNotification,
+        ) =>
+          Effect.gen(function* () {
+            const notification =
+              clientTerminals === undefined
+                ? rawNotification
+                : resolveEmbeddedTerminalContent(
+                    rawNotification,
+                    clientTerminals.readOutputSnapshot,
+                  );
+            if (notification.update.sessionUpdate === "available_commands_update") {
+              yield* (
+                flavor.onAvailableCommandsUpdate?.(notification.update.availableCommands) ??
+                  Effect.void
+              );
+            }
+            yield* handleSessionUpdate(notification);
+          }).pipe(
+            Effect.mapError(
+              (cause) =>
+                new EffectAcpErrors.AcpTransportError({
+                  detail: "Failed to project an ACP session update",
+                  cause,
+                }),
+            ),
+          );
+        const projectAcpRuntimeSessionUpdate = (
+          handlerGeneration: number,
+          rawNotification: EffectAcpSchema.SessionNotification,
+        ) =>
+          runRuntimeCallbackAtGeneration(
+            handlerGeneration,
+            projectAcpRuntimeSessionUpdateEffect(rawNotification),
+          ).pipe(Effect.asVoid);
+
         const wireAcpRuntimeTerminalHandlers = Effect.fnUntraced(function* (
           targetRuntime: AcpSessionRuntime.AcpSessionRuntime["Service"],
         ) {
@@ -4254,7 +4293,10 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
         const wireAcpRuntimeHandlers = Effect.fnUntraced(function* (
           targetRuntime: AcpSessionRuntime.AcpSessionRuntime["Service"],
           handlerGeneration: number,
-          wireTerminalHandlers = true,
+          handlerOptions: {
+            readonly sessionUpdates?: boolean;
+            readonly terminals?: boolean;
+          } = {},
         ) {
           const requestUserInput = (
             request: AcpAdapterV2UserInputRequest,
@@ -4271,37 +4313,14 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           yield* targetRuntime.handleWriteTextFile((request) =>
             acpWriteTextFile(options.fileSystem, request),
           );
-          if (wireTerminalHandlers) yield* wireAcpRuntimeTerminalHandlers(targetRuntime);
-          yield* targetRuntime.handleSessionUpdate((rawNotification) =>
-            runRuntimeCallbackAtGeneration(
-              handlerGeneration,
-              Effect.gen(function* () {
-                const notification =
-                  clientTerminals === undefined
-                    ? rawNotification
-                    : resolveEmbeddedTerminalContent(
-                        rawNotification,
-                        clientTerminals.readOutputSnapshot,
-                      );
-                if (notification.update.sessionUpdate === "available_commands_update") {
-                  yield* (
-                    flavor.onAvailableCommandsUpdate?.(notification.update.availableCommands) ??
-                      Effect.void
-                  );
-                }
-                yield* handleSessionUpdate(notification);
-              }),
-            ).pipe(
-              Effect.asVoid,
-              Effect.mapError(
-                (cause) =>
-                  new EffectAcpErrors.AcpTransportError({
-                    detail: "Failed to project an ACP session update",
-                    cause,
-                  }),
-              ),
-            ),
-          );
+          if (handlerOptions.terminals !== false) {
+            yield* wireAcpRuntimeTerminalHandlers(targetRuntime);
+          }
+          if (handlerOptions.sessionUpdates !== false) {
+            yield* targetRuntime.handleSessionUpdate((rawNotification) =>
+              projectAcpRuntimeSessionUpdate(handlerGeneration, rawNotification),
+            );
+          }
           yield* targetRuntime.handleRequestPermission((params, requestContext) =>
             Effect.gen(function* () {
               const transportRequestId = requestContext.requestId;
@@ -4571,7 +4590,9 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           yield* wireAcpRuntimeHandlers(runtime, yield* Ref.get(runtimeCallbackGeneration));
         });
 
-        const startReplacementAcpRuntime = Effect.fnUntraced(function* () {
+        const startReplacementAcpRuntime = Effect.fnUntraced(function* (
+          commitSessionState: (replacement: AcpSessionRuntimeStartResult) => Effect.Effect<void>,
+        ) {
           const previousScope = runtimeScope;
           const previousGeneration = yield* Ref.get(runtimeCallbackGeneration);
           yield* runtimeCallbackPermit.withPermit(awaitAdmittedNativeResponses);
@@ -4581,17 +4602,48 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           // suppress termination or background callbacks from the live session.
           const replacementGeneration = yield* allocateRuntimeCallbackGeneration;
           const replacementScope = yield* Scope.make();
+          type CandidateLifecycle =
+            | { readonly _tag: "Starting" }
+            | { readonly _tag: "Terminated"; readonly error: EffectAcpErrors.AcpError }
+            | { readonly _tag: "Committed" };
+          const candidateLifecycle = yield* Ref.make<CandidateLifecycle>({ _tag: "Starting" });
+          const handleCandidateTermination: AcpAdapterV2RuntimeInput["onTermination"] = (error) =>
+            Ref.modify(
+              candidateLifecycle,
+              (current): readonly [Effect.Effect<void>, CandidateLifecycle] => {
+                if (current._tag === "Committed") {
+                  return [handleRuntimeTerminationAtGeneration(replacementGeneration), current];
+                }
+                return [
+                  Effect.void,
+                  current._tag === "Terminated"
+                    ? current
+                    : ({ _tag: "Terminated", error } as const),
+                ];
+              },
+            ).pipe(Effect.flatten);
+          const stagedSessionUpdates: Array<EffectAcpSchema.SessionNotification> = [];
+          let handleCandidateSessionUpdate: (
+            notification: EffectAcpSchema.SessionNotification,
+          ) => Effect.Effect<void, EffectAcpErrors.AcpError> = (notification) =>
+            Effect.sync(() => {
+              stagedSessionUpdates.push(notification);
+            });
           const startup = Effect.gen(function* () {
             const replacementRuntime = yield* flavor
-              .makeRuntime(makeRuntimeInput(replacementGeneration))
+              .makeRuntime(
+                makeRuntimeInput(replacementGeneration, undefined, handleCandidateTermination),
+              )
               .pipe(
                 Effect.provideService(Scope.Scope, replacementScope),
                 Effect.provideService(Crypto.Crypto, options.crypto),
               );
-            // Candidate startup may fail. Defer terminal handlers until it has
-            // succeeded so the candidate cannot create session-global handles
-            // that outlive its replacement scope.
-            yield* wireAcpRuntimeHandlers(replacementRuntime, replacementGeneration, false);
+            // Session setup may publish commands before it returns. Buffer those
+            // notifications, but do not expose request or extension handlers
+            // until the candidate generation has committed.
+            yield* replacementRuntime.handleSessionUpdate((notification) =>
+              Effect.suspend(() => handleCandidateSessionUpdate(notification)),
+            );
             const started = yield* replacementRuntime.start();
             return { replacementRuntime, started };
           });
@@ -4615,30 +4667,75 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               Effect.uninterruptible(
                 Effect.gen(function* () {
                   yield* awaitAdmittedNativeResponses;
+                  yield* wireAcpRuntimeHandlers(
+                    replacementExit.value.replacementRuntime,
+                    replacementGeneration,
+                    { sessionUpdates: false, terminals: false },
+                  );
+                  const lifecycle = yield* Ref.modify(
+                    candidateLifecycle,
+                    (current): readonly [CandidateLifecycle, CandidateLifecycle] =>
+                      current._tag === "Terminated"
+                        ? [current, current]
+                        : [{ _tag: "Committed" }, { _tag: "Committed" }],
+                  );
+                  if (lifecycle._tag === "Terminated") {
+                    return yield* lifecycle.error;
+                  }
                   yield* quarantineNativeTransportAtGeneration(previousGeneration);
                   runtime = replacementExit.value.replacementRuntime;
                   runtimeScope = replacementScope;
                   yield* Ref.set(runtimeCallbackGeneration, replacementGeneration);
                   yield* wireAcpRuntimeTerminalHandlers(replacementExit.value.replacementRuntime);
+                  yield* commitSessionState(replacementExit.value.started);
+                  while (true) {
+                    const buffered = stagedSessionUpdates.splice(0, stagedSessionUpdates.length);
+                    if (buffered.length === 0) {
+                      handleCandidateSessionUpdate = (notification) =>
+                        projectAcpRuntimeSessionUpdate(replacementGeneration, notification);
+                      break;
+                    }
+                    yield* Effect.forEach(
+                      buffered,
+                      (notification) =>
+                        projectAcpRuntimeSessionUpdateEffect(notification).pipe(
+                          Effect.catchCause((cause) =>
+                            Effect.logError("failed to replay staged ACP session update", {
+                              driver,
+                              cause,
+                            }),
+                          ),
+                        ),
+                      { discard: true },
+                    );
+                  }
+                  yield* cancelPendingRuntimeRequests();
+                  if (previousScope !== undefined) {
+                    yield* Scope.close(previousScope, Exit.void).pipe(
+                      Effect.catchCause((cause) =>
+                        Effect.logError("failed to close replaced ACP runtime scope", {
+                          driver,
+                          cause,
+                        }),
+                      ),
+                    );
+                  }
                 }),
               ),
             )
             .pipe(
-              Effect.onInterrupt(() =>
-                Scope.close(replacementScope, Exit.void).pipe(Effect.ignore),
+              Effect.onExit((exit) =>
+                Exit.isFailure(exit)
+                  ? Ref.get(candidateLifecycle).pipe(
+                      Effect.flatMap((lifecycle) =>
+                        lifecycle._tag === "Committed"
+                          ? Effect.void
+                          : Scope.close(replacementScope, Exit.void).pipe(Effect.ignore),
+                      ),
+                    )
+                  : Effect.void,
               ),
             );
-          yield* cancelPendingRuntimeRequests();
-          if (previousScope !== undefined) {
-            yield* Scope.close(previousScope, Exit.void).pipe(
-              Effect.catchCause((cause) =>
-                Effect.logError("failed to close replaced ACP runtime scope", {
-                  driver,
-                  cause,
-                }),
-              ),
-            );
-          }
           return replacementExit.value.started;
         });
 
@@ -6145,39 +6242,40 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                   // Returning its binding keeps the next turn runnable without
                   // loading any of the rolled-back conversation.
                   yield* awaitRuntimeTeardown();
-                  const replacement = yield* startReplacementAcpRuntime().pipe(
-                    Effect.retry({ times: 1 }),
-                  );
-                  yield* Ref.set(runtimeRestartRequired, false);
-                  yield* Ref.set(activeSessionId, replacement.sessionId);
-                  yield* Ref.set(activeSessionSetup, replacement);
-                  yield* Ref.set(activeSelection, null);
-                  yield* Ref.set(activeInteractionMode, null);
-                  yield* Ref.set(promptInstructionStates, new Map());
-                  yield* Ref.set(itemOrdinals, new Map());
-                  yield* Ref.set(nextItemOrdinalsByTurn, new Map());
-                  yield* Ref.set(providerTurns, new Map());
-                  yield* Ref.set(snapshot, {
-                    order: [],
-                    messages: new Map(),
-                    loadingRole: null,
-                    loadingIndex: 0,
-                  });
-                  yield* continuationPermit.withPermit(
+                  const replacement = yield* startReplacementAcpRuntime((candidate) =>
                     Effect.gen(function* () {
-                      yield* Ref.update(continuationGeneration, (value) => value + 1);
-                      yield* Ref.set(stoppedRunQuarantine, false);
-                      yield* Ref.set(wakeBuffer, []);
-                      yield* Ref.set(continuationRequested, false);
-                      yield* Ref.set(runningBackgroundTaskIds, new Set());
-                      yield* Ref.set(endedBackgroundTaskIds, new Set());
-                      yield* Ref.set(midTurnUnreportedCompletedTaskIds, new Set());
-                      yield* Ref.set(handledBackgroundTaskIdsInActiveTurn, new Set());
-                      yield* Ref.set(carryoverSubagents, null);
-                      yield* Ref.set(suppressPostSettleMonitorPrompt, false);
-                      yield* Ref.set(lastTurnRoute, null);
+                      yield* Ref.set(runtimeRestartRequired, false);
+                      yield* Ref.set(activeSessionId, candidate.sessionId);
+                      yield* Ref.set(activeSessionSetup, candidate);
+                      yield* Ref.set(activeSelection, null);
+                      yield* Ref.set(activeInteractionMode, null);
+                      yield* Ref.set(promptInstructionStates, new Map());
+                      yield* Ref.set(itemOrdinals, new Map());
+                      yield* Ref.set(nextItemOrdinalsByTurn, new Map());
+                      yield* Ref.set(providerTurns, new Map());
+                      yield* Ref.set(snapshot, {
+                        order: [],
+                        messages: new Map(),
+                        loadingRole: null,
+                        loadingIndex: 0,
+                      });
+                      yield* continuationPermit.withPermit(
+                        Effect.gen(function* () {
+                          yield* Ref.update(continuationGeneration, (value) => value + 1);
+                          yield* Ref.set(stoppedRunQuarantine, false);
+                          yield* Ref.set(wakeBuffer, []);
+                          yield* Ref.set(continuationRequested, false);
+                          yield* Ref.set(runningBackgroundTaskIds, new Set());
+                          yield* Ref.set(endedBackgroundTaskIds, new Set());
+                          yield* Ref.set(midTurnUnreportedCompletedTaskIds, new Set());
+                          yield* Ref.set(handledBackgroundTaskIdsInActiveTurn, new Set());
+                          yield* Ref.set(carryoverSubagents, null);
+                          yield* Ref.set(suppressPostSettleMonitorPrompt, false);
+                          yield* Ref.set(lastTurnRoute, null);
+                        }),
+                      );
                     }),
-                  );
+                  ).pipe(Effect.retry({ times: 1 }));
                   const now = yield* DateTime.now;
                   return {
                     providerThread: {

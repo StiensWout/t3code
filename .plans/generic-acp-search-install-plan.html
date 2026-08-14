@@ -1467,7 +1467,7 @@
               <li>Numeric and string JSON-RPC request IDs remain distinct across protocol, client, agent, and adapter boundaries.</li>
               <li>The stdio MCP bridge orders session setup, then forwards independent requests and cancellation concurrently while streaming SSE events incrementally.</li>
               <li>ACP terminal creation is concurrency-safe, interruption-safe, and session-scoped, waits for output drains, reports exit signals, force-kills uncooperative children, and bounds retained output without invalidating live handles.</li>
-              <li>Rollback stages a replacement ACP session before closing the original, defers candidate terminal access until startup succeeds, quarantines every failed replacement generation, and clears session-scoped turn, item, and continuation state only after the replacement is ready.</li>
+              <li>Rollback stages a replacement ACP session before closing the original, buffers startup notifications and termination state until its callback generation commits, defers candidate terminal access until then, quarantines failed generations, and clears session-scoped state only after the replacement is ready.</li>
               <li>Opaque model, auth, and option IDs are preserved exactly or omitted when unsafe; current-model references always point into the published bounded inventory.</li>
             </ul>
           </div>
