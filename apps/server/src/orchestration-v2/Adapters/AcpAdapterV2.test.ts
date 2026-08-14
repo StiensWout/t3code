@@ -1479,6 +1479,13 @@ describe("AcpAdapterV2", () => {
           },
         ],
       });
+      // Re-reading another binding must not reassign the forked native
+      // session's credential scope.
+      yield* runtime.ensureThread({
+        threadId: sourceThreadId,
+        modelSelection,
+        runtimePolicy,
+      });
       if (
         createTerminal === undefined ||
         readTerminalOutput === undefined ||
@@ -1583,17 +1590,34 @@ describe("AcpAdapterV2", () => {
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
       const instanceId = ProviderInstanceId.make("acp-test-rollback-session");
+      const rollbackThreadId = ThreadId.make("thread-acp-rollback-session-target");
+      McpProviderSession.setMcpProviderSession({
+        environmentId: EnvironmentId.make("environment-acp-rollback-session-target"),
+        threadId: rollbackThreadId,
+        providerSessionId: "mcp-session-acp-rollback-session-target",
+        providerInstanceId: instanceId,
+        endpoint: "http://127.0.0.1:43124/mcp",
+        authorizationHeader: "Bearer rollback-target-token",
+      });
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => McpProviderSession.clearMcpProviderSession(rollbackThreadId)),
+      );
+      const runtimeInputs: Array<AcpAdapterV2RuntimeInput> = [];
+      const makeRuntime = makeMockRuntime({
+        childProcessSpawner,
+        mockAgentPath,
+        environment: { T3_ACP_PROMPT_DELAY_MS: "100" },
+      });
       const adapter = makeAcpAdapterV2({
         crypto: yield* Crypto.Crypto,
         instanceId,
         flavor: {
           driver: ACP_TEST_DRIVER,
           capabilities: AcpProviderCapabilitiesV2,
-          makeRuntime: makeMockRuntime({
-            childProcessSpawner,
-            mockAgentPath,
-            environment: { T3_ACP_PROMPT_DELAY_MS: "100" },
-          }),
+          makeRuntime: (runtimeInput) =>
+            Effect.sync(() => runtimeInputs.push(runtimeInput)).pipe(
+              Effect.andThen(makeRuntime(runtimeInput)),
+            ),
         },
         fileSystem,
         idAllocator,
@@ -1659,7 +1683,7 @@ describe("AcpAdapterV2", () => {
       const snapshotBeforeRollback = yield* runtime.readThreadSnapshot({ providerThread });
 
       const rolledBack = yield* runtime.rollbackThread({
-        providerThread,
+        providerThread: { ...providerThread, appThreadId: rollbackThreadId },
         providerThreadTurns: snapshotBeforeRollback.providerTurns,
         target: {
           type: "thread_start",
@@ -1669,6 +1693,19 @@ describe("AcpAdapterV2", () => {
       });
       assert.isString(rolledBack.providerThread.nativeThreadRef?.nativeId);
       assert.deepEqual(rolledBack.providerTurns, []);
+      assert.equal(
+        runtimeInputs[1]?.processEnvironment?.T3_ACP_MCP_AUTHORIZATION,
+        "Bearer rollback-target-token",
+      );
+      const replacementMcpServer = runtimeInputs[1]?.mcpServers[0];
+      assert.equal(
+        replacementMcpServer !== undefined && "env" in replacementMcpServer
+          ? replacementMcpServer.env?.find(
+              (variable) => variable.name === "T3_ACP_MCP_AUTHORIZATION",
+            )?.value
+          : undefined,
+        "Bearer rollback-target-token",
+      );
       const snapshotAfterRollback = yield* runtime.readThreadSnapshot({
         providerThread: rolledBack.providerThread,
       });
@@ -1677,7 +1714,7 @@ describe("AcpAdapterV2", () => {
 
       yield* runtime.startTurn(
         makeTurnInput({
-          threadId,
+          threadId: rollbackThreadId,
           providerThread: rolledBack.providerThread,
           instanceId,
           runtimePolicy,

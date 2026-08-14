@@ -1347,7 +1347,7 @@
 
         <p class="muted small" style="margin-top: 18px">
           Verification at handoff: server, web, contracts, client-runtime, and effect-acp typechecks
-          pass. The latest focused run covers 228 tests across ACP protocol identity, registry,
+          pass. The latest focused run covers 250 tests across ACP protocol identity, registry,
           probe, terminal, session configuration, MCP bridge, settings, icon, and adapter behavior.
           The isolated dev environment served the final worktree edits for both live parent proofs.
         </p>
@@ -1455,7 +1455,7 @@
           </table>
           <p class="muted small" style="margin-top: 16px">
             Final focused verification: server, web, contracts, client-runtime, and effect-acp
-            typechecks pass. 228 focused tests pass, including the selected ACP adapter lifecycle scenarios;
+            typechecks pass. 250 focused tests pass, including the selected ACP adapter lifecycle scenarios;
             current flat and legacy nested elicitation responses have explicit wire-shape coverage.
           </p>
         </div>
@@ -1466,8 +1466,9 @@
             <ul class="muted small">
               <li>Numeric and string JSON-RPC request IDs remain distinct across protocol, client, agent, and adapter boundaries.</li>
               <li>The stdio MCP bridge orders session setup, then forwards independent requests and cancellation concurrently while streaming SSE events incrementally.</li>
-              <li>ACP terminal creation is concurrency-safe, interruption-safe, and session-scoped, resolves MCP credentials from the requesting native session, waits for output drains, reports exit signals, force-kills uncooperative children, and bounds retained output without invalidating live handles.</li>
-              <li>Rollback stages a replacement ACP session before closing the original, buffers startup notifications and termination state until its callback generation commits, defers candidate terminal access until then, quarantines failed generations, and clears session-scoped state only after the replacement is ready.</li>
+              <li>All ACP replay fixtures negotiate the standardized client capabilities and require the first-prompt T3 instruction envelope while preserving the recorded user request exactly; all 12 ACP replay routes and 8 fixture contract checks pass.</li>
+              <li>ACP terminal creation is concurrency-safe, interruption-safe, and session-scoped, resolves MCP credentials from the requesting native session without letting a later thread binding reassign them, waits for output drains, reports exit signals, force-kills uncooperative children, and bounds retained output without invalidating live handles.</li>
+              <li>Rollback stages a replacement ACP session with the target thread's MCP context before closing the original, buffers startup notifications and termination state until its callback generation commits, defers candidate terminal access until then, quarantines failed generations, and clears session-scoped state only after the replacement is ready.</li>
               <li>Opaque model, auth, and option IDs are preserved exactly or omitted when unsafe; current-model references always point into the published bounded inventory.</li>
             </ul>
           </div>
