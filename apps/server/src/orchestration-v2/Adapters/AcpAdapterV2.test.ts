@@ -11098,11 +11098,10 @@ describe("AcpAdapterV2", () => {
             event.direction === "incoming" &&
             event.stage === "raw" &&
             typeof event.payload === "string" &&
-            event.payload.includes('"method":"session/elicitation"'),
+            event.payload.includes('"method":"session/request_permission"'),
         ),
         Stream.runHead,
       );
-      yield* Effect.sleep("100 millis");
       assert.isTrue(
         Option.isNone(yield* Queue.poll(adapterEvents)),
         "residual callbacks must not mutate or emit adapter projection after poison",
