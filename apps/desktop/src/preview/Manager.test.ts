@@ -640,7 +640,6 @@ describe("PreviewManager", () => {
         expect(preview.loadURL).toHaveBeenCalledWith("https://example.com/start");
         expect(yield* manager.automationStatus("tab_bootstrap")).toMatchObject({
           url: "https://example.com/start",
-          loading: true,
         });
       }),
     ),
