@@ -494,6 +494,56 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     ),
   );
 
+  it.effect("probes fff through the packaged Windows primary from inside server.asar", () => {
+    const commands: Array<{
+      readonly command: string;
+      readonly args: ReadonlyArray<string>;
+      readonly options: {
+        readonly cwd?: string;
+        readonly env?: Readonly<Record<string, string | undefined>>;
+      };
+    }> = [];
+    const spawnerLayer = Layer.succeed(
+      ChildProcessSpawner.ChildProcessSpawner,
+      ChildProcessSpawner.make((command) => {
+        commands.push(command as unknown as (typeof commands)[number]);
+        return Effect.succeed(mockProcess(0));
+      }),
+    );
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const fixture = yield* makeWindowsPayloadFixture({ copyUnpackedNatives: true });
+        yield* validateWindowsPackagedPayload({
+          stageDistDir: fixture.stageDistDir,
+        });
+
+        const primaryProbe = commands.find(
+          (command) => command.options.env?.ELECTRON_RUN_AS_NODE === "1",
+        );
+        if (primaryProbe === undefined) return assert.fail("Windows primary probe was not spawned");
+
+        assert.equal(primaryProbe.command, path.join(fixture.packagedAppDir, "T3 Code.exe"));
+        assert.deepStrictEqual(primaryProbe.args.slice(0, 3), [
+          "--no-global-search-paths",
+          "--input-type=module",
+          "--eval",
+        ]);
+        assert.include(primaryProbe.args[3], "FileFinder.create");
+        assert.equal(
+          primaryProbe.args[4],
+          path.join(
+            fixture.packagedAppDir,
+            "resources/server.asar/node_modules/@ff-labs/fff-node/dist/src/index.js",
+          ),
+        );
+        assert.equal(primaryProbe.options.cwd, fixture.packagedAppDir);
+        assert.equal(primaryProbe.options.env?.NODE_PATH, "");
+      }),
+    ).pipe(Effect.provide(Layer.merge(spawnerLayer, Layer.succeed(HostProcessPlatform, "win32"))));
+  });
+
   it.effect("rejects a packaged sidecar whose ASAR-unpacked native is missing", () =>
     Effect.scoped(
       Effect.gen(function* () {

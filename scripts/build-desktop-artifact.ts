@@ -400,6 +400,24 @@ const desktopBuildInputArtifactNames = {
 const BUNDLE_SELF_CONTAINED_SENTINEL = "effect";
 
 const BUNDLE_SELF_CHECK_TIMEOUT = Duration.seconds(120);
+const WINDOWS_PRIMARY_NATIVE_PROBE_TIMEOUT = Duration.seconds(30);
+
+const WINDOWS_PRIMARY_FFF_PROBE_SOURCE = `
+const { join } = await import("node:path");
+const { pathToFileURL } = await import("node:url");
+const { FileFinder } = await import(pathToFileURL(process.argv[1]).href);
+const probeRoot = process.argv[2];
+const result = FileFinder.create({
+  basePath: probeRoot,
+  frecencyDbPath: join(probeRoot, "frecency.mdb"),
+  historyDbPath: join(probeRoot, "history.mdb"),
+  disableWatch: true,
+  disableMmapCache: true,
+  disableContentIndexing: true,
+});
+if (!result.ok) throw new Error(result.error);
+result.value.destroy();
+`;
 
 export class ExternalizedBundleError extends Schema.TaggedErrorClass<ExternalizedBundleError>()(
   "ExternalizedBundleError",
@@ -508,6 +526,19 @@ export class WindowsServerSidecarPackError extends Schema.TaggedErrorClass<Windo
 ) {
   override get message(): string {
     return `Failed to pack the Windows server sidecar at ${this.asarPath}.`;
+  }
+}
+
+export class WindowsPrimaryNativeProbeError extends Schema.TaggedErrorClass<WindowsPrimaryNativeProbeError>()(
+  "WindowsPrimaryNativeProbeError",
+  {
+    executablePath: Schema.String,
+    exitCode: Schema.Number,
+    output: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `The packaged Windows primary could not load fff from server.asar (exit ${this.exitCode}). Output:\n${this.output}`;
   }
 }
 
@@ -2302,6 +2333,97 @@ const countPayloadFiles = Effect.fn("desktopArtifact.countPayloadFiles")(functio
   return count;
 });
 
+export const verifyWindowsPrimaryFffNativeLoad = Effect.fn(
+  "desktopArtifact.verifyWindowsPrimaryFffNativeLoad",
+)(function* (input: {
+  readonly packagedAppDir: string;
+  readonly asarPath: string;
+  readonly verbose: boolean;
+}) {
+  const hostPlatform = yield* HostProcessPlatform;
+  if (hostPlatform !== "win32") return;
+
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  let executablePath: string | undefined;
+  for (const entry of (yield* fs.readDirectory(input.packagedAppDir)).sort()) {
+    if (!entry.toLowerCase().endsWith(".exe")) continue;
+    const candidate = path.join(input.packagedAppDir, entry);
+    const stat = yield* fs.stat(candidate).pipe(Effect.orElseSucceed(() => null));
+    if (stat?.type === "File") {
+      executablePath = candidate;
+      break;
+    }
+  }
+
+  if (executablePath === undefined) {
+    return yield* new WindowsPrimaryNativeProbeError({
+      executablePath: input.packagedAppDir,
+      exitCode: -1,
+      output: "The unpacked application does not contain a primary .exe.",
+    });
+  }
+
+  const probeRoot = yield* fs.makeTempDirectoryScoped({
+    prefix: "t3code-windows-primary-native-probe-",
+  });
+  const fffEntryPath = path.join(
+    input.asarPath,
+    "node_modules/@ff-labs/fff-node/dist/src/index.js",
+  );
+  const probeEnv = { ...process.env };
+  delete probeEnv.ELECTRON_NO_ASAR;
+  delete probeEnv.NODE_OPTIONS;
+
+  yield* runCommand(
+    ChildProcess.make(
+      executablePath,
+      [
+        "--no-global-search-paths",
+        "--input-type=module",
+        "--eval",
+        WINDOWS_PRIMARY_FFF_PROBE_SOURCE,
+        fffEntryPath,
+        probeRoot,
+      ],
+      {
+        cwd: input.packagedAppDir,
+        stdout: "pipe",
+        stderr: "pipe",
+        env: {
+          ...probeEnv,
+          ELECTRON_RUN_AS_NODE: "1",
+          NODE_PATH: "",
+        },
+      },
+    ),
+    {
+      label: "Windows primary fff native-load probe",
+      verbose: input.verbose,
+    },
+  ).pipe(
+    Effect.timeout(WINDOWS_PRIMARY_NATIVE_PROBE_TIMEOUT),
+    Effect.catchTags({
+      TimeoutError: () =>
+        Effect.fail(
+          new WindowsPrimaryNativeProbeError({
+            executablePath,
+            exitCode: -1,
+            output: `The native-load probe did not finish within ${Duration.toSeconds(WINDOWS_PRIMARY_NATIVE_PROBE_TIMEOUT)}s.`,
+          }),
+        ),
+      BuildCommandFailedError: (error) =>
+        Effect.fail(
+          new WindowsPrimaryNativeProbeError({
+            executablePath,
+            exitCode: error.exitCode,
+            output: `${error.stderrTail ?? ""}${error.stdoutTail ?? ""}`.trim(),
+          }),
+        ),
+    }),
+  );
+});
+
 export const validateWindowsPackagedPayload = Effect.fn(
   "desktopArtifact.validateWindowsPackagedPayload",
 )(function* (input: {
@@ -2409,6 +2531,12 @@ export const validateWindowsPackagedPayload = Effect.fn(
       fileLimit,
     });
   }
+
+  yield* verifyWindowsPrimaryFffNativeLoad({
+    packagedAppDir,
+    asarPath,
+    verbose: input.verbose ?? false,
+  });
 
   yield* verifyPackagedBundleIsSelfContained({
     asarPath,

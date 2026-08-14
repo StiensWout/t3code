@@ -231,6 +231,8 @@ break:
 - `resources/server.asar` is absent or does not contain the server entry.
 - Any file marked unpacked in the ASAR header is absent from
   `resources/server.asar.unpacked`.
+- The packaged Windows primary cannot load the fff native library from inside
+  `server.asar` through its `.unpacked` sibling.
 - The isolated, extracted sidecar cannot load the server entry with plain Node.
 - The external Windows resource monitor is absent.
 - The unpacked Windows application contains more than 80 files.
