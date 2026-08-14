@@ -168,54 +168,6 @@ export interface AcpAdapterV2ExtensionContext {
   >;
 }
 
-export interface AcpRootTurnIdleSnapshot {
-  readonly finalized: boolean;
-  readonly interrupted: boolean;
-  readonly assistantStreamOpen: boolean;
-  readonly reasoningStreamOpen: boolean;
-  readonly hasRunningTool: boolean;
-  readonly hasPendingRuntimeRequest: boolean;
-  readonly hasToolHistory: boolean;
-  readonly hasActiveSubagent: boolean;
-  readonly hasOutput: boolean;
-}
-
-/**
- * Debounce used if a flavor re-enables speculative idle settlement.
- * Kept for tests and future root-matched recovery; Grok no longer idle-settles.
- */
-export const acpRootTurnSettleDebounceMs = 2_000;
-
-/** Let trailing root session chunks land before terminalizing a settled turn. */
-export const acpRootTurnCompletionDrainMs = 100;
-
-/**
- * True when root-session streaming is quiescent enough for speculative settle.
- *
- * Always false today: settling on "assistant text then quiet" over-settles Grok
- * preamble-before-tools turns, and settling after tools drops later tool waves
- * while `session/prompt` is still open. Terminalize from the prompt RPC (or a
- * future root-matched completion signal), not from local silence.
- */
-export function acpRootTurnIsIdle(snapshot: AcpRootTurnIdleSnapshot): boolean {
-  if (snapshot.finalized || snapshot.interrupted) return false;
-  if (snapshot.assistantStreamOpen || snapshot.reasoningStreamOpen) return false;
-  if (snapshot.hasRunningTool || snapshot.hasPendingRuntimeRequest) return false;
-  if (snapshot.hasActiveSubagent) return false;
-  if (!snapshot.hasOutput) return false;
-  // Structural gates above stay for unit tests / future re-enable. Speculative
-  // idle completion is intentionally disabled.
-  return false;
-}
-
-/** True when idle settle should be (re-)scheduled after pending runtime work clears. */
-export function acpRootTurnShouldRearmRecoveryTimers(context: {
-  readonly finalized: boolean;
-  readonly interrupted: boolean;
-}): boolean {
-  return !context.finalized && !context.interrupted;
-}
-
 export interface AcpAdapterV2Flavor {
   readonly driver: ProviderDriverKind;
   readonly capabilities: OrchestrationV2ProviderCapabilities;
@@ -291,14 +243,6 @@ export interface AcpAdapterV2Flavor {
    */
   readonly deferFinalizeForBackgroundWork?: boolean;
   readonly assertComplete?: Effect.Effect<void, EffectAcpErrors.AcpError>;
-  /**
-   * When true, schedule speculative local settlement after root session
-   * quiet. Disabled for Grok: short idle windows over-settle preamble-before-
-   * tools turns and `session/cancel` from that path freezes projection while
-   * the agent keeps working. Prefer `session/prompt` return (or a future
-   * root-matched terminal signal).
-   */
-  readonly settleRootTurnWhenIdle?: boolean;
   /** Interrupt the local prompt fiber before `session/cancel` (Grok wedged prompts). */
   readonly interruptPromptOnCancel?: boolean;
   /**
@@ -899,7 +843,6 @@ interface ActiveAcpTurn {
   interrupted: boolean;
   finalized: boolean;
   finalizedStatus: "completed" | "interrupted" | "failed" | "cancelled" | null;
-  settleScheduleGeneration: number;
   /** session/prompt already returned; finalize deferred for background work. */
   promptSettled: boolean;
   promptSettledStatus: "completed" | "interrupted" | "failed" | "cancelled" | null;
@@ -919,20 +862,6 @@ type AcpRuntimeTeardownState =
       readonly completed: Deferred.Deferred<void, ProviderAdapterProtocolError>;
     }
   | { readonly _tag: "Failed"; readonly error: ProviderAdapterProtocolError };
-
-export function acpRootTurnHasIngestedOutput(context: {
-  readonly assistant: ActiveTextStream;
-  readonly reasoning: ActiveTextStream;
-  readonly tools: ReadonlyMap<string, AcpToolCallState>;
-  readonly plan: unknown;
-}): boolean {
-  return (
-    context.assistant.nextSegment > 0 ||
-    context.reasoning.nextSegment > 0 ||
-    context.tools.size > 0 ||
-    context.plan !== null
-  );
-}
 
 /** True when a root session/update carries ingestible turn output, not keepalive noise. */
 export function acpRootSessionUpdateIngestsOutput(
@@ -1576,8 +1505,6 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
 
         const emitProviderEvent = (event: ProviderAdapterV2Event) =>
           Queue.offer(events, event).pipe(Effect.asVoid);
-        let scheduleSettleRootTurnWhenIdle = (_context: ActiveAcpTurn) => Effect.void;
-        let rearmRootTurnRecoveryTimers = (_context: ActiveAcpTurn) => Effect.void;
         let scheduleDeferredFinalize: (context: ActiveAcpTurn) => Effect.Effect<void> = () =>
           Effect.void;
 
@@ -1844,9 +1771,6 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           if (stream.current === null) return;
           yield* emitTextSegment(context, kind, true);
           stream.current = null;
-          if (kind === "assistant") {
-            yield* scheduleSettleRootTurnWhenIdle(context);
-          }
         });
 
         const closeTextStreams = Effect.fnUntraced(function* (context: ActiveAcpTurn) {
@@ -3422,9 +3346,6 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               }
             }
           }
-          if (acpRootSessionUpdateIngestsOutput(notification)) {
-            yield* scheduleSettleRootTurnWhenIdle(context);
-          }
           // Keep deferred finalize quiet-window fresh while wake traffic lands.
           yield* rearmDeferredFinalize(context);
         });
@@ -3735,7 +3656,6 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                         updated.delete(String(requestId));
                         return updated;
                       });
-                      yield* rearmRootTurnRecoveryTimers(context);
                     }),
                   ).pipe(Effect.asVoid),
                 ),
@@ -4313,7 +4233,6 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                         updated.delete(String(requestId));
                         return updated;
                       });
-                      yield* rearmRootTurnRecoveryTimers(context);
                     }),
                   ).pipe(Effect.asVoid),
                 ),
@@ -4885,14 +4804,6 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           completedAt,
         });
 
-        const drainTrailingRootTurnChunks = Effect.fnUntraced(function* () {
-          if (!flavor.settleRootTurnWhenIdle) return;
-          // Projected via handleSessionUpdate, not getEvents(). Cooperative yield
-          // only — replay uses TestClock; Effect.sleep here would stall settlement.
-          yield* Effect.yieldNow;
-          yield* Effect.yieldNow;
-        });
-
         const terminalizeOpenRunOwnedItems = Effect.fnUntraced(function* (
           context: ActiveAcpTurn,
           options: { readonly terminalizeSubagents: boolean },
@@ -4949,15 +4860,11 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           context: ActiveAcpTurn,
           status: "completed" | "interrupted" | "failed" | "cancelled",
           failure?: OrchestrationV2ProviderFailure,
-          options?: { readonly drainTrailingChunks?: boolean },
         ) {
           if (context.finalized) return;
           const settledStatus = context.interrupted ? "interrupted" : status;
           context.finalizedStatus = settledStatus;
           context.finalized = true;
-          if (options?.drainTrailingChunks === true) {
-            yield* drainTrailingRootTurnChunks();
-          }
           const directStopQuarantine = yield* Ref.get(stoppedRunQuarantine);
           if (settledStatus === "completed") {
             yield* terminalizeOpenForegroundTools(context);
@@ -5071,41 +4978,6 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           yield* Deferred.succeed(context.completed, undefined).pipe(Effect.ignore);
         });
 
-        const trySettleRootTurnWhenIdle = Effect.fnUntraced(function* (context: ActiveAcpTurn) {
-          const pending = yield* Ref.get(pendingRuntimeRequests);
-          const hasPendingRuntimeRequest = acpTurnHasPendingRuntimeRequest(
-            context.providerTurnId,
-            pending,
-          );
-          const hasRunningTool = [...context.tools.values()].some((tool) => {
-            const status = toolStatus(tool.status);
-            return status === "pending" || status === "running";
-          });
-          // Debounce already proved root-session quiescence; open segment handles
-          // without an explicit close should not block settlement.
-          const hasActiveSubagent = [...context.subagents.values()].some((subagent) =>
-            acpSubagentStatusBlocksTurnSettlement(subagent.task.status),
-          );
-          if (
-            !acpRootTurnIsIdle({
-              finalized: context.finalized,
-              interrupted: context.interrupted,
-              assistantStreamOpen: false,
-              reasoningStreamOpen: false,
-              hasRunningTool,
-              hasPendingRuntimeRequest,
-              hasToolHistory: context.tools.size > 0,
-              hasActiveSubagent,
-              hasOutput: context.assistant.nextSegment > 0,
-            })
-          ) {
-            return;
-          }
-          // Never session/cancel here. Speculative settle must not kill in-flight
-          // Grok work; late tools would arrive with activeTurn null and drop.
-          yield* finalizeTurn(context, "completed", undefined, { drainTrailingChunks: true });
-        });
-
         scheduleDeferredFinalize = (context) =>
           Effect.gen(function* () {
             if (!flavor.deferFinalizeForBackgroundWork) return;
@@ -5131,29 +5003,8 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               }
               if (hasDeferredBackgroundWork(context)) return;
               const status = context.promptSettledStatus ?? "completed";
-              yield* finalizeTurn(context, status, undefined, { drainTrailingChunks: true });
+              yield* finalizeTurn(context, status);
             }).pipe(Effect.forkIn(sessionScope), Effect.asVoid);
-          });
-
-        scheduleSettleRootTurnWhenIdle = (context) =>
-          Effect.gen(function* () {
-            if (!flavor.settleRootTurnWhenIdle) return;
-            context.settleScheduleGeneration += 1;
-            const generation = context.settleScheduleGeneration;
-            yield* Effect.gen(function* () {
-              yield* Effect.sleep(`${acpRootTurnSettleDebounceMs} millis`);
-              if (context.finalized || context.interrupted) return;
-              if (context.settleScheduleGeneration !== generation) return;
-              const active = yield* Ref.get(activeTurn);
-              if (active !== context) return;
-              yield* trySettleRootTurnWhenIdle(context);
-            }).pipe(Effect.forkIn(sessionScope), Effect.asVoid);
-          });
-
-        rearmRootTurnRecoveryTimers = (context) =>
-          Effect.gen(function* () {
-            if (!acpRootTurnShouldRearmRecoveryTimers(context)) return;
-            yield* scheduleSettleRootTurnWhenIdle(context);
           });
 
         const resolvePromptParts = Effect.fnUntraced(function* (
@@ -5362,7 +5213,6 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               interrupted: false,
               finalized: false,
               finalizedStatus: null,
-              settleScheduleGeneration: 0,
               promptSettled: false,
               promptSettledStatus: null,
               promptWireSettled,
@@ -5465,9 +5315,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                     yield* scheduleDeferredFinalize(context);
                   }
                 } else {
-                  yield* finalizeTurn(context, "completed", undefined, {
-                    drainTrailingChunks: true,
-                  });
+                  yield* finalizeTurn(context, "completed");
                 }
                 return;
               }
@@ -5521,11 +5369,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                       context.promptSettledStatus = status;
                       return;
                     }
-                    // Only completed turns drain trailing chunks. Interrupted turns
-                    // must not wait for residual output from a stopped prompt.
-                    yield* finalizeTurn(context, status, undefined, {
-                      drainTrailingChunks: status === "completed",
-                    });
+                    yield* finalizeTurn(context, status);
                   }),
                 ).pipe(Effect.asVoid),
               ),

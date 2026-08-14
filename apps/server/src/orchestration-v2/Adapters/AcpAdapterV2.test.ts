@@ -4454,7 +4454,6 @@ describe("AcpAdapterV2", () => {
               capabilities: AcpProviderCapabilitiesV2,
               deferFinalizeForBackgroundWork: true,
               enablePostSettleContinuation: true,
-              settleRootTurnWhenIdle: true,
               extractSubagentUpdate: (toolCall) => {
                 if (toolCall.toolCallId === "tool-call-generic-1") {
                   return {
