@@ -2344,8 +2344,6 @@ export const verifyWindowsPrimaryFffNativeLoad = Effect.fn(
 }) {
   const hostPlatform = yield* HostProcessPlatform;
   const hostArchitecture = yield* HostProcessArchitecture;
-  if (hostPlatform !== "win32" || hostArchitecture !== input.targetArch) return;
-
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const executablePath = path.join(input.packagedAppDir, input.appExecutableName);
@@ -2357,6 +2355,7 @@ export const verifyWindowsPrimaryFffNativeLoad = Effect.fn(
       output: "The unpacked application does not contain its expected primary executable.",
     });
   }
+  if (hostPlatform !== "win32" || hostArchitecture !== input.targetArch) return;
 
   const probeRoot = yield* fs.makeTempDirectoryScoped({
     prefix: "t3code-windows-primary-native-probe-",

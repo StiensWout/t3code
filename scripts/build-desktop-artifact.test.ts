@@ -49,6 +49,7 @@ import {
   ancestorNodeModulesPaths,
   copyDirectoryPreservingSymlinks,
   validateWindowsPackagedPayload,
+  WindowsPrimaryNativeProbeError,
   WindowsPackagedPayloadValidationError,
   WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT,
   WINDOWS_SERVER_ASAR_IGNORE_GLOBS,
@@ -611,6 +612,34 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       ),
     );
   });
+
+  it.effect("rejects a cross-architecture Windows payload without its primary executable", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const fixture = yield* makeWindowsPayloadFixture({ copyUnpackedNatives: true });
+        const executablePath = path.join(fixture.packagedAppDir, fixture.appExecutableName);
+        yield* fs.remove(executablePath);
+
+        const error = yield* validateWindowsPackagedPayload({
+          stageDistDir: fixture.stageDistDir,
+          appExecutableName: fixture.appExecutableName,
+          targetArch: "arm64",
+        }).pipe(Effect.flip);
+
+        assert.instanceOf(error, WindowsPrimaryNativeProbeError);
+        assert.equal(error.executablePath, executablePath);
+      }),
+    ).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          Layer.succeed(HostProcessPlatform, "win32"),
+          Layer.succeed(HostProcessArchitecture, "x64"),
+        ),
+      ),
+    ),
+  );
 
   it.effect("rejects a packaged sidecar whose ASAR-unpacked native is missing", () =>
     Effect.scoped(
