@@ -283,6 +283,7 @@ describe("AcpRuntimeModel", () => {
           data: {
             toolCallId: "tool-1",
             kind: "execute",
+            title: "Terminal",
             command: "bun run typecheck",
             rawInput: {
               executable: "bun",
@@ -521,6 +522,33 @@ describe("extractMcpToolCallIdentity", () => {
         ],
       }),
     ).toEqual({ server: "t3-code", tool: "delegate_task" });
+  });
+
+  it("recovers T3 identity from pi-acp title-only fallback execs", () => {
+    // Captured verbatim from pi-acp 0.0.33 2026-08-14: rawInput is null and
+    // the command line only appears as the verbatim title, which the
+    // presentation layer summarizes into "Ran command".
+    const toolCall = toolCallFromUpdate({
+      sessionUpdate: "tool_call",
+      toolCallId: "call_JdxnvzjHHrbvyASTLVekLYWV|fc_08f5a805a7159aa6016a7ec4afad548191",
+      kind: "execute",
+      title:
+        '"$T3_ACP_MCP_NODE" "$T3_ACP_MCP_ENTRYPOINT" acp-mcp-call orchestrator_capabilities \'{}\'',
+      status: "in_progress",
+      rawInput: null,
+      content: [
+        {
+          type: "terminal",
+          terminalId: "call_JdxnvzjHHrbvyASTLVekLYWV|fc_08f5a805a7159aa6016a7ec4afad548191",
+        },
+      ],
+    });
+
+    expect(toolCall.title).toBe("Ran command");
+    expect(extractMcpToolCallIdentity(toolCall)).toEqual({
+      server: "t3-code",
+      tool: "orchestrator_capabilities",
+    });
   });
 
   it("leaves ordinary execute calls unidentified", () => {

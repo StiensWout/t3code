@@ -337,6 +337,12 @@ function makeToolCallState(
   if (kind) {
     data.kind = kind;
   }
+  if (title) {
+    // The agent's verbatim title. Presentation summarizes `title` on the
+    // state (e.g. a command line becomes "Ran command"), so identity checks
+    // such as MCP-fallback detection need the raw value preserved here.
+    data.title = title;
+  }
   if (command) {
     data.command = command;
   }
@@ -458,6 +464,8 @@ export function extractMcpToolCallIdentity(
   }
   const commands = [
     ...(toolCall.command === undefined ? [] : [toolCall.command]),
+    // pi-acp reports the exec command line only as the verbatim title.
+    ...(typeof toolCall.data.title === "string" ? [toolCall.data.title] : []),
     ...(options?.embeddedTerminalCommands ?? []),
   ];
   for (const command of commands) {
