@@ -195,7 +195,7 @@ export const layerTest = (stub: DesktopWslServerTreeTestStub = {}) =>
     Effect.gen(function* () {
       const environment = yield* DesktopEnvironment.DesktopEnvironment;
       return DesktopWslServerTree.of({
-        ensure: Effect.succeed(stub.result ?? { ok: true, root: environment.appRoot }),
+        ensure: Effect.succeed(stub.result ?? { ok: true, root: environment.serverRoot }),
       });
     }),
   );

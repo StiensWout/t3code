@@ -6,6 +6,7 @@ import * as NodeModule from "node:module";
 
 import {
   createPackageWithOptions,
+  extractAll,
   getRawHeader,
   statFile,
   type DirectoryRecord,
@@ -27,8 +28,8 @@ import {
 } from "./lib/brand-assets.ts";
 import { getDefaultBuildArch } from "./lib/build-target-arch.ts";
 import {
-  CLI_EXTERNAL_PACKAGE_UNPACK_GLOBS,
   findInlinedExternalPackages,
+  selectCliRuntimeExternalDependencies,
 } from "./lib/cli-external-packages.ts";
 import { loadRepoEnv } from "./lib/public-config.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
@@ -394,7 +395,7 @@ const desktopBuildInputArtifactNames = {
 /**
  * Imported by every server module, so it is inlined in any correctly bundled
  * build. Its absence means the bundle went back to externalizing its
- * dependencies, which the unpack globs do not cover.
+ * dependencies, which the sidecar's selected runtime closure does not cover.
  */
 const BUNDLE_SELF_CONTAINED_SENTINEL = "effect";
 
@@ -405,7 +406,7 @@ export class ExternalizedBundleError extends Schema.TaggedErrorClass<Externalize
   { sentinel: Schema.String, inlinedPackageCount: Schema.Number },
 ) {
   override get message(): string {
-    return `The server bundle did not inline "${this.sentinel}" (${this.inlinedPackageCount} packages inlined). The bundle is meant to be self-contained apart from the native externals; if its dependencies are external again they will not be unpacked, and the WSL backend will fail with ERR_MODULE_NOT_FOUND. Check the deps.alwaysBundle wiring in apps/server/vite.config.ts.`;
+    return `The server bundle did not inline "${this.sentinel}" (${this.inlinedPackageCount} packages inlined). The bundle is meant to be self-contained apart from the runtime externals; if its dependencies are external again they will be absent from the sidecar, and the backend will fail with ERR_MODULE_NOT_FOUND. Check the deps.alwaysBundle wiring in apps/server/vite.config.ts.`;
   }
 }
 
@@ -414,7 +415,7 @@ export class BundleNotSelfContainedError extends Schema.TaggedErrorClass<BundleN
   { exitCode: Schema.Number, output: Schema.String },
 ) {
   override get message(): string {
-    return `The packaged server bundle could not load with only its unpacked dependencies present (exit ${this.exitCode}). Anything it imports that is neither a Node built-in nor an unpacked external is unreachable to the WSL backend, which runs plain node and cannot read app.asar. Output:
+    return `The packaged server bundle could not load from the isolated, extracted sidecar (exit ${this.exitCode}). Anything it imports that is neither a Node built-in nor in the selected runtime-external closure is unavailable to both backends. Output:
 ${this.output}`;
   }
 }
@@ -424,7 +425,7 @@ export class InlinedNativePackageError extends Schema.TaggedErrorClass<InlinedNa
   { packages: Schema.Array(Schema.String) },
 ) {
   override get message(): string {
-    return `The server bundle inlined packages that load native binaries: ${this.packages.join(", ")}. A node-gyp-build style loader resolves prebuilds relative to its own file, so inlined into a chunk it finds none and the importer quietly falls back to a slower JS path. Add them to CLI_RUNTIME_EXTERNAL_PREFIXES in scripts/lib/cli-external-packages.ts so they stay external and get unpacked.`;
+    return `The server bundle inlined packages that load native binaries: ${this.packages.join(", ")}. A node-gyp-build style loader resolves prebuilds relative to its own file, so inlined into a chunk it finds none and the importer quietly falls back to a slower JS path. Add them to CLI_RUNTIME_EXTERNAL_PREFIXES in scripts/lib/cli-external-packages.ts so they stay external and are staged in the sidecar.`;
   }
 }
 
@@ -775,7 +776,7 @@ export const WINDOWS_SERVER_ASAR_IGNORE_GLOBS = [
   "**/node_modules/.bin",
   "**/node_modules/.bin/**",
 ] as const;
-export const WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT = 100;
+export const WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT = 80;
 export const WINDOWS_SERVER_RESOURCE_SOURCE_DIR = "apps/desktop/prod-resources/windows-server";
 export const WINDOWS_SERVER_EXTRA_RESOURCES = [
   {
@@ -787,21 +788,6 @@ export const WINDOWS_SERVER_EXTRA_RESOURCES = [
     to: ".",
     filter: [WINDOWS_SERVER_ASAR_RESOURCE, `${WINDOWS_SERVER_ASAR_RESOURCE}.unpacked/**/*`],
   },
-] as const;
-// The WSL backend launches the server with plain `wsl.exe -- node`, which cannot
-// read inside an asar archive, so everything it loads must be on the real
-// filesystem. This used to unpack `**\/node_modules\/**` wholesale, because the
-// server bundle externalized its runtime deps and the Linux Node would fail with
-// ERR_MODULE_NOT_FOUND ("Cannot find package 'effect'") before it even reached
-// node-pty.
-//
-// The CLI bundle now inlines its JS dependencies, so the only things that still
-// have to be loose are the server bundle itself and the packages the bundle
-// leaves external — derived from the same list the bundler uses, so the two
-// cannot drift apart.
-export const WINDOWS_ASAR_UNPACK = [
-  "apps/server/dist/**",
-  ...CLI_EXTERNAL_PACKAGE_UNPACK_GLOBS,
 ] as const;
 export const DESKTOP_EXTRA_RESOURCES = [
   {
@@ -1519,36 +1505,27 @@ export const copyDirectoryPreservingSymlinks = Effect.fn("copyDirectoryPreservin
 );
 
 const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBundleIsSelfContained")(
-  function* (input: { readonly stageDistDir: string; readonly verbose: boolean }) {
+  function* (input: { readonly asarPath: string; readonly verbose: boolean }) {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-
-    // electron-builder names this win-unpacked, win-arm64-unpacked, and so on.
-    const distEntries = yield* fs
-      .readDirectory(input.stageDistDir)
-      .pipe(Effect.orElseSucceed(() => [] as Array<string>));
-    let unpackedRoot: string | null = null;
-    for (const entry of distEntries) {
-      const candidate = path.join(input.stageDistDir, entry, "resources/app.asar.unpacked");
-      if (yield* fs.exists(candidate).pipe(Effect.orElseSucceed(() => false))) {
-        unpackedRoot = candidate;
-        break;
-      }
-    }
-    // Nothing to verify rather than silently passing: a packaging layout change
-    // should surface here instead of turning the check into a no-op.
-    if (unpackedRoot === null) {
-      return yield* new BundleNotSelfContainedError({
-        exitCode: -1,
-        output: `No */resources/app.asar.unpacked directory under ${input.stageDistDir}; the bundle self-containment check found nothing to verify.`,
-      });
-    }
 
     const probeRoot = yield* fs.makeTempDirectoryScoped({
       prefix: "t3code-bundle-selfcheck-",
     });
+    const extractedApp = path.join(probeRoot, "extracted");
     const probeApp = path.join(probeRoot, "app");
-    yield* copyDirectoryPreservingSymlinks(unpackedRoot, probeApp);
+    yield* Effect.try({
+      try: () => extractAll(input.asarPath, extractedApp),
+      catch: (cause) =>
+        new BundleNotSelfContainedError({
+          exitCode: -1,
+          output: `Could not extract ${input.asarPath} for the bundle self-containment check: ${String(cause)}`,
+        }),
+    });
+    // Keep the existing symlink isolation guard even though the sidecar stage
+    // is hoisted and should be physical. A future package-manager layout change
+    // must not let the probe resolve through the build tree.
+    yield* copyDirectoryPreservingSymlinks(extractedApp, probeApp);
 
     // Guard the guard: if anything above the probe provides a node_modules, a
     // missing dependency would resolve there and the check would pass while the
@@ -1574,8 +1551,8 @@ const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBundleIsSel
     // missing dependency shows up, without starting a server or touching disk
     // state. It does not cover lazily imported externals: node-pty is checked
     // by the WSL preflight probe at runtime, while ffi-rs, @ff-labs/fff-node
-    // and the bun adapters are only covered by the unpack globs and the
-    // inlined-native check below.
+    // and the bun adapters are covered by the shared runtime-external closure
+    // and emitted-bundle checks.
     yield* runCommand(
       ChildProcess.make(
         process.execPath,
@@ -1594,7 +1571,10 @@ const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBundleIsSel
           env: { ...process.env, NODE_PATH: "" },
         },
       ),
-      { label: "bundle self-containment check (node bin.mjs --version)", verbose: input.verbose },
+      {
+        label: "server sidecar self-containment check (node bin.mjs --version)",
+        verbose: input.verbose,
+      },
     ).pipe(
       // Printing a version should be immediate. A regression that blocks (on
       // stdin, a port, a lock) would otherwise hang release CI until the job
@@ -2165,13 +2145,12 @@ const stageWslNodePtyPrebuild = Effect.fn("stageWslNodePtyPrebuild")(function* (
   );
 });
 
-// Stage and pack the Windows server sidecar: a self-contained server tree
-// (bundle + hoisted production node_modules with win32 AND linux natives)
-// packed into server.asar next to the app stage. The Windows primary runs the
-// server from inside the archive via the asar-aware ELECTRON_RUN_AS_NODE
-// runtime; enabling the WSL backend extracts it to a real directory at
-// runtime. Shipping one packed archive instead of thousands of loose files is
-// what makes the NSIS install/update fast.
+// Stage and pack the Windows server sidecar: the bundled server plus a hoisted
+// install of only its runtime-external/native dependency closure for win32 and
+// WSL Linux. The Windows primary runs from the archive through the asar-aware
+// ELECTRON_RUN_AS_NODE runtime; enabling WSL extracts it to a real directory.
+// Shipping one packed archive instead of thousands of loose files is what
+// makes the NSIS install/update fast.
 export const packWindowsServerAsar = Effect.fn("packWindowsServerAsar")(function* (input: {
   readonly sourceDir: string;
   readonly asarPath: string;
@@ -2201,7 +2180,7 @@ export const stageWindowsServerSidecar = Effect.fn("stageWindowsServerSidecar")(
   readonly serverDistDir: string;
   readonly arch: typeof BuildArch.Type;
   readonly appVersion: string;
-  readonly serverDependencies: Record<string, string>;
+  readonly runtimeExternalDependencies: Record<string, string>;
   readonly fffNodeVersion: string;
   readonly allowBuilds: Record<string, boolean>;
   readonly patchedDependencies: Record<string, string>;
@@ -2218,7 +2197,7 @@ export const stageWindowsServerSidecar = Effect.fn("stageWindowsServerSidecar")(
   yield* fs.copy(input.serverDistDir, path.join(serverStageDir, "apps/server/dist"));
 
   const sidecarDependencies = {
-    ...input.serverDependencies,
+    ...input.runtimeExternalDependencies,
     // The sidecar serves two processes: the Windows primary loads win32
     // natives, and the WSL backend loads the matching Linux natives (fff via
     // ffi-rs) from the extracted copy of this same tree.
@@ -2258,7 +2237,7 @@ export const stageWindowsServerSidecar = Effect.fn("stageWindowsServerSidecar")(
     yield* fs.copy(path.join(input.repoRoot, "patches"), path.join(serverStageDir, "patches"));
   }
 
-  yield* Effect.log("[desktop-artifact] Installing server sidecar production dependencies...");
+  yield* Effect.log("[desktop-artifact] Installing server sidecar runtime externals...");
   const installCommand = yield* resolveSpawnCommand("vp", [...STAGE_INSTALL_ARGS]);
   yield* runCommand(
     ChildProcess.make(installCommand.command, installCommand.args, {
@@ -2325,7 +2304,11 @@ const countPayloadFiles = Effect.fn("desktopArtifact.countPayloadFiles")(functio
 
 export const validateWindowsPackagedPayload = Effect.fn(
   "desktopArtifact.validateWindowsPackagedPayload",
-)(function* (input: { readonly stageDistDir: string; readonly fileLimit?: number }) {
+)(function* (input: {
+  readonly stageDistDir: string;
+  readonly fileLimit?: number;
+  readonly verbose?: boolean;
+}) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const fileLimit = input.fileLimit ?? WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT;
@@ -2427,6 +2410,11 @@ export const validateWindowsPackagedPayload = Effect.fn(
     });
   }
 
+  yield* verifyPackagedBundleIsSelfContained({
+    asarPath,
+    verbose: input.verbose ?? false,
+  });
+
   yield* Effect.log(
     `[desktop-artifact] Validated Windows payload (${String(fileCount)} files, ${String(unpackedFiles.length)} sidecar natives).`,
   );
@@ -2481,6 +2469,9 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
         cause,
       }),
   });
+  const resolvedServerRuntimeExternalDependencies = selectCliRuntimeExternalDependencies(
+    resolvedServerDependencies,
+  );
   const resolvedDesktopRuntimeDependencies = yield* Effect.try({
     try: () => resolveDesktopRuntimeDependencies(desktopPackageJson.dependencies, workspaceCatalog),
     catch: (cause) =>
@@ -2571,7 +2562,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     // inlined. A regression to externalizing everything would also pass it,
     // since source-file regions still exist -- and that is the failure this
     // whole change exists to prevent, because those packages are not in the
-    // unpack globs and the WSL backend would die on ERR_MODULE_NOT_FOUND.
+    // selected sidecar closure and both backends would die on ERR_MODULE_NOT_FOUND.
     // `effect` is imported by every server module, so it is inlined in any
     // correctly bundled build.
     // The list-based check above only sees packages someone already thought to
@@ -2768,7 +2759,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       serverDistDir: distDirs.serverDist,
       arch: options.arch,
       appVersion,
-      serverDependencies: resolvedServerDependencies,
+      runtimeExternalDependencies: resolvedServerRuntimeExternalDependencies,
       fffNodeVersion: serverPackageJson.dependencies["@ff-labs/fff-node"],
       allowBuilds: workspaceAllowBuilds,
       patchedDependencies: workspacePatchedDependencies,
@@ -2864,10 +2855,10 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   // resolver has no such ambiguity: it either finds every import or it does not.
   //
   // Only Windows unpacks anything; macOS and Linux keep the whole tree inside
-  // the asar, where this check has nothing to look at.
+  // the app asar. Windows validates and executes the separately packed server
+  // sidecar after electron-builder copies it into the final payload.
   if (options.platform === "win") {
-    yield* verifyPackagedBundleIsSelfContained({ stageDistDir, verbose: options.verbose });
-    yield* validateWindowsPackagedPayload({ stageDistDir });
+    yield* validateWindowsPackagedPayload({ stageDistDir, verbose: options.verbose });
   }
 
   const stageEntries = yield* fs.readDirectory(stageDistDir);

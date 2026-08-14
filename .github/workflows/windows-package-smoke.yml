@@ -5,11 +5,18 @@ on:
     paths:
       - ".github/workflows/windows-package-smoke.yml"
       - "apps/desktop/package.json"
+      - "apps/desktop/src/app/DesktopEnvironment.ts"
+      - "apps/desktop/src/backend/DesktopBackendConfiguration.ts"
+      - "apps/desktop/src/main.ts"
+      - "apps/desktop/src/wsl/DesktopWslEnvironment.ts"
+      - "apps/desktop/src/wsl/DesktopWslServerTree.ts"
       - "apps/server/package.json"
+      - "apps/server/vite.config.ts"
       - "patches/**"
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
       - "scripts/build-desktop-artifact.ts"
+      - "scripts/lib/cli-external-packages.ts"
       - "scripts/package.json"
 
 concurrency:
@@ -18,7 +25,9 @@ concurrency:
 
 jobs:
   package:
-    name: Package unsigned x64 NSIS artifact
+    # The release workflow supplies a Linux node-pty prebuild and exercises the
+    # WSL backend. This focused PR check validates the Windows-primary package.
+    name: Package unsigned x64 NSIS artifact (primary)
     runs-on: blacksmith-32vcpu-windows-2025
     timeout-minutes: 15
     steps:

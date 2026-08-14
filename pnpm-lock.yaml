@@ -473,6 +473,9 @@ importers:
       effect:
         specifier: 4.0.0-beta.103
         version: 4.0.0-beta.103(patch_hash=af36b7948b6f9c56623074662b51dade5699880c1a7c71245de73e13c3185fb6)
+      msgpackr-extract:
+        specifier: 3.0.4
+        version: 3.0.4
       node-pty:
         specifier: ^1.1.0
         version: 1.1.0
@@ -19146,7 +19149,6 @@ snapshots:
       '@msgpackr-extract/msgpackr-extract-linux-arm64': 3.0.4
       '@msgpackr-extract/msgpackr-extract-linux-x64': 3.0.4
       '@msgpackr-extract/msgpackr-extract-win32-x64': 3.0.4
-    optional: true
 
   msgpackr@2.0.4:
     optionalDependencies:
@@ -19240,7 +19242,6 @@ snapshots:
   node-gyp-build-optional-packages@5.2.2:
     dependencies:
       detect-libc: 2.1.2
-    optional: true
 
   node-gyp-build@4.8.4:
     optional: true

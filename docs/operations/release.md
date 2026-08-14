@@ -216,14 +216,14 @@ desktop-managed guidance when those environments are available.
 
 ### Windows payload topology and update validation
 
-Windows packages the server bundle and its production dependencies in
-`resources/server.asar`. Native modules and helper executables declared as
-unpacked by that archive must be present at the matching paths below
-`resources/server.asar.unpacked`. The Windows-native backend reads the archive
-in place through Electron. WSL cannot read ASAR files, so enabling the WSL
-backend extracts the server tree once into the desktop state directory under
-`wsl-server-tree/<version>` and reuses the completed version until the app is
-updated.
+Windows packages the bundled server and only its runtime-external/native
+dependency closure in `resources/server.asar`. Native modules and helper
+executables declared as unpacked by that archive must be present at the matching
+paths below `resources/server.asar.unpacked`. The Windows-native backend reads
+the archive in place through Electron. WSL cannot read ASAR files, so enabling
+the WSL backend extracts the server tree once into the desktop state directory
+under `wsl-server-tree/<version>` and reuses the completed version until the app
+is updated.
 
 The artifact builder rejects a Windows package when any of these invariants
 break:
@@ -231,8 +231,9 @@ break:
 - `resources/server.asar` is absent or does not contain the server entry.
 - Any file marked unpacked in the ASAR header is absent from
   `resources/server.asar.unpacked`.
+- The isolated, extracted sidecar cannot load the server entry with plain Node.
 - The external Windows resource monitor is absent.
-- The unpacked Windows application contains more than 100 files.
+- The unpacked Windows application contains more than 80 files.
 
 NSIS differential packaging remains enabled. A sidecar layout transition can
 produce a larger one-time download; subsequent small releases retain their
