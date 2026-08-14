@@ -298,7 +298,11 @@ export const OrchestrationV2ProviderCapabilities = Schema.Struct({
   context: OrchestrationV2ContextCapabilities,
   checkpointing: OrchestrationV2CheckpointCapabilities,
   identity: OrchestrationV2IdentityCapabilities,
-  runtimePolicy: OrchestrationV2RuntimePolicyCapabilities,
+  // Events persisted before this field existed decode to the weaker
+  // client-boundary guarantee so replay never overclaims enforcement.
+  runtimePolicy: OrchestrationV2RuntimePolicyCapabilities.pipe(
+    Schema.withDecodingDefault(Effect.succeed({ enforcement: "client-boundary" as const })),
+  ),
 });
 export type OrchestrationV2ProviderCapabilities = typeof OrchestrationV2ProviderCapabilities.Type;
 
