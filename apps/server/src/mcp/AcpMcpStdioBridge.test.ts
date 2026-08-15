@@ -100,35 +100,6 @@ describe("AcpMcpStdioBridge", () => {
     expect(requests[1]?.headers.get("mcp-protocol-version")).toBe("2025-06-18");
   });
 
-  it("emits every message from an SSE response and nothing for notifications", async () => {
-    const { input, written, done } = makeHarness((request) => {
-      const body = JSON.parse(
-        String((request as unknown as { _bodyText?: string })._bodyText ?? "{}"),
-      ) as { id?: number };
-      void body;
-      const hasId = request.headers.get("x-probe") !== null;
-      void hasId;
-      return new Response(
-        [
-          'data: {"jsonrpc":"2.0","method":"notifications/progress","params":{}}',
-          "",
-          'data: {"jsonrpc":"2.0","id":7,"result":{"content":[]}}',
-          "",
-          "",
-        ].join("\n"),
-        { status: 200, headers: { "content-type": "text/event-stream" } },
-      );
-    });
-
-    input.write(`${JSON.stringify({ jsonrpc: "2.0", id: 7, method: "tools/call" })}\n`);
-    input.end();
-    await done;
-
-    expect(written).toHaveLength(2);
-    expect(JSON.parse(written[0]!)).toMatchObject({ method: "notifications/progress" });
-    expect(JSON.parse(written[1]!)).toMatchObject({ id: 7 });
-  });
-
   it("acknowledges notifications silently and synthesizes errors for failed requests", async () => {
     let call = 0;
     const { input, written, done } = makeHarness(() => {

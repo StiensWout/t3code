@@ -178,7 +178,7 @@ describe("ACP Registry probe", () => {
       sessionSetupResult: {
         sessionId: "probe-session",
         models: {
-          currentModelId: "valid",
+          currentModelId: "x".repeat(129),
           availableModels: [
             { modelId: "x".repeat(129), name: "Too long" },
             { modelId: "valid", name: "Valid" },
@@ -189,19 +189,6 @@ describe("ACP Registry probe", () => {
     } satisfies AcpSessionRuntimeStartResult);
 
     expect(result.models).toEqual([{ id: "valid", name: "Valid", description: null }]);
-  });
-
-  it("omits an overlong opaque current model id instead of mutating it", () => {
-    const result = acpRegistryProbeResult(instanceId, {
-      sessionId: "probe-session",
-      initializeResult: { protocolVersion: 1 },
-      sessionSetupResult: {
-        sessionId: "probe-session",
-        models: { currentModelId: "x".repeat(129), availableModels: [] },
-      },
-      modelConfigId: undefined,
-    } satisfies AcpSessionRuntimeStartResult);
-
     expect(result.currentModelId).toBeNull();
   });
 

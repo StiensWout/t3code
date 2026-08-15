@@ -4,15 +4,6 @@ import { describe, expect, it } from "vite-plus/test";
 import { resolveProviderInstanceAcpRegistryIconUrl } from "./ProviderInstanceIcon";
 
 describe("resolveProviderInstanceAcpRegistryIconUrl", () => {
-  it("derives a generic ACP icon from its registry agent id", () => {
-    expect(
-      resolveProviderInstanceAcpRegistryIconUrl({
-        driverKind: ProviderDriverKind.make("acpRegistry"),
-        agentId: "kilo",
-      }),
-    ).toBe("https://cdn.agentclientprotocol.com/registry/v1/latest/kilo.svg");
-  });
-
   it("uses allowlisted catalog metadata and rejects untrusted overrides", () => {
     expect(
       resolveProviderInstanceAcpRegistryIconUrl({

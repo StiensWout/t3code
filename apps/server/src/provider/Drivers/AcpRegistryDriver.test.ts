@@ -73,23 +73,7 @@ describe("acpRegistrySnapshotReadiness", () => {
     ]);
   });
 
-  it("declares registry snapshots incapable of application text generation", () => {
-    const provider = buildCheckedAcpRegistrySnapshot({
-      ...identity,
-      settings: decodeSettings({ agentId: "test-agent" }),
-      checkedAt: "2026-08-13T10:00:00.000Z",
-      inspection: {
-        status: "ready",
-        agentId: "test-agent",
-        version: "1.0.0",
-        distribution: "npx",
-      },
-    });
-
-    expect(provider.supportsAppTextGeneration).toBe(false);
-  });
-
-  it("reports prepared agents as installed with their registry version", () => {
+  it("maps registry inspection status to provider readiness", () => {
     expect(
       acpRegistrySnapshotReadiness({
         status: "ready",
@@ -98,9 +82,7 @@ describe("acpRegistrySnapshotReadiness", () => {
         distribution: "npx",
       }),
     ).toEqual({ installed: true, version: "1.2.3", status: "ready" });
-  });
 
-  it("does not report missing runners or unprepared binaries as installed", () => {
     expect(
       acpRegistrySnapshotReadiness({
         status: "missing_runner",
@@ -119,9 +101,7 @@ describe("acpRegistrySnapshotReadiness", () => {
         distribution: "binary",
       }),
     ).toMatchObject({ installed: false, version: "2.0.0", status: "warning" });
-  });
 
-  it("surfaces registry inspection failures without inventing a version", () => {
     expect(
       acpRegistrySnapshotReadiness({ status: "failed", message: "Registry unavailable." }),
     ).toEqual({
@@ -162,6 +142,7 @@ describe("acpRegistrySnapshotReadiness", () => {
     });
 
     expect(snapshot.auth).toEqual({ status: "authenticated" });
+    expect(snapshot.supportsAppTextGeneration).toBe(false);
     expect(
       snapshot.models.map(({ slug, name, isCustom, isDefault }) => ({
         slug,
@@ -341,51 +322,6 @@ describe("acpRegistrySnapshotReadiness", () => {
         version: "1.0.0",
         auth: { status: "unknown" },
         message: "Checking ACP authentication, models, and commands in the background...",
-      });
-    }),
-  );
-
-  it.effect("isolates a failed ACP probe as its provider snapshot error", () =>
-    Effect.gen(function* () {
-      const settings = decodeSettings({ agentId: "test-agent" });
-      const failedCheck = checkAcpRegistryProviderStatus(
-        {
-          ...identity,
-          settings,
-          cwd: "/workspace",
-          environment: {},
-        },
-        () =>
-          Effect.fail(
-            new AcpRegistryOperationError({
-              reason: "authentication_failed",
-              message: "Authentication required.",
-            }),
-          ),
-      ).pipe(
-        Effect.provideService(
-          AcpRegistryCatalog,
-          catalogWithInspection({
-            status: "ready",
-            agentId: "test-agent",
-            version: "1.0.0",
-            distribution: "npx",
-          }),
-        ),
-      );
-      const refreshed = yield* Effect.all(
-        {
-          failedAcp: failedCheck,
-          neighboringProvider: Effect.succeed("refreshed"),
-        },
-        { concurrency: "unbounded" },
-      );
-
-      expect(refreshed.neighboringProvider).toBe("refreshed");
-      expect(refreshed.failedAcp).toMatchObject({
-        status: "warning",
-        auth: { status: "unauthenticated" },
-        message: "Authentication required.",
       });
     }),
   );

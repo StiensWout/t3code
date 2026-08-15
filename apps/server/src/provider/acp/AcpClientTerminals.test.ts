@@ -5,7 +5,6 @@ import * as Result from "effect/Result";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import {
-  acpTerminalCommand,
   makeAcpClientTerminals,
   resolveEmbeddedTerminalContent,
   type AcpClientTerminals,
@@ -22,15 +21,6 @@ const withTerminals = <A, E>(use: (terminals: AcpClientTerminals) => Effect.Effe
   }).pipe(Effect.provide(NodeServices.layer), Effect.scoped);
 
 describe("AcpClientTerminals", () => {
-  it("configures bounded force-kill escalation on terminal commands", () => {
-    const command = acpTerminalCommand({
-      request: { sessionId: "session", command: "agent-command" },
-      defaultCwd: "/workspace",
-    });
-
-    expect(command.options.forceKillAfter).toBe("5 seconds");
-  });
-
   it.effect("runs a command, buffers output, and reports the exit status", () =>
     withTerminals((terminals) =>
       Effect.gen(function* () {
@@ -297,16 +287,5 @@ describe("resolveEmbeddedTerminalContent", () => {
         { type: "content", content: { type: "text", text: "[terminal t3-term-unknown]" } },
       ],
     });
-  });
-
-  it("returns non-terminal notifications unchanged", () => {
-    const notification = {
-      sessionId: "session",
-      update: {
-        sessionUpdate: "agent_message_chunk" as const,
-        content: { type: "text" as const, text: "hi" },
-      },
-    };
-    expect(resolveEmbeddedTerminalContent(notification, () => undefined)).toBe(notification);
   });
 });

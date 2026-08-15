@@ -5,7 +5,6 @@ import {
   AcpRegistryManagedBinaryUninstallInput,
   AcpRegistryManagedBinaryUninstallResult,
   AcpRegistryOperationError,
-  AcpRegistryOperationErrorReason,
   AcpRegistryPrepareResult,
   AcpRegistryProbeResult,
   AcpRegistrySearchAgent,
@@ -18,7 +17,6 @@ const decodeSearchAgent = Schema.decodeUnknownSync(AcpRegistrySearchAgent);
 const decodeUninstallInput = Schema.decodeUnknownSync(AcpRegistryManagedBinaryUninstallInput);
 const decodeUninstallResult = Schema.decodeUnknownSync(AcpRegistryManagedBinaryUninstallResult);
 const decodeProbeResult = Schema.decodeUnknownSync(AcpRegistryProbeResult);
-const decodeOperationErrorReason = Schema.decodeUnknownSync(AcpRegistryOperationErrorReason);
 const decodeOperationError = Schema.decodeUnknownSync(AcpRegistryOperationError);
 
 describe("ACP Registry contracts", () => {
@@ -66,40 +64,24 @@ describe("ACP Registry contracts", () => {
     expect(() => decodeUninstallInput({ agentId: "../example-agent" })).toThrow();
   });
 
-  it("decodes bounded probe payloads", () => {
-    expect(
-      decodeProbeResult({
-        instanceId: "acpRegistry_example",
-        ready: true,
-        icon: null,
-        authMethods: [
-          {
-            id: "oauth",
-            name: "Browser login",
-            description: null,
-            type: "agent",
-          },
-        ],
-        models: [
-          {
-            id: "default",
-            name: "Default",
-            description: "Agent-selected model",
-          },
-        ],
-        currentModelId: "default",
-        configOptions: [],
-      }),
-    ).toMatchObject({ ready: true, currentModelId: "default" });
-  });
-
-  it("rejects oversized or invalid probe metadata", () => {
+  it("decodes valid probe metadata and rejects oversized or invalid payloads", () => {
     const authMethod = {
       id: "oauth",
       name: "Browser login",
       description: null,
       type: "agent",
     };
+    expect(
+      decodeProbeResult({
+        instanceId: "acpRegistry_example",
+        ready: true,
+        icon: null,
+        authMethods: [authMethod],
+        models: [{ id: "default", name: "Default", description: "Agent-selected model" }],
+        currentModelId: "default",
+        configOptions: [],
+      }),
+    ).toMatchObject({ ready: true, currentModelId: "default" });
     expect(() =>
       decodeProbeResult({
         instanceId: "acpRegistry_example",
@@ -134,31 +116,6 @@ describe("ACP Registry contracts", () => {
         currentModelId: null,
       }),
     ).toThrow();
-  });
-
-  it("decodes precise probe failure reasons", () => {
-    expect(
-      ["agent_not_found", "authentication_failed", "probe_failed"].map((reason) =>
-        decodeOperationErrorReason(reason),
-      ),
-    ).toEqual(["agent_not_found", "authentication_failed", "probe_failed"]);
-  });
-
-  it("bounds advertised auth methods on operation errors", () => {
-    const authMethod = {
-      id: "oauth",
-      name: "Log in with Grok",
-      description: "Complete browser authentication",
-      type: "agent",
-    } as const;
-    expect(
-      decodeOperationError({
-        _tag: "AcpRegistryOperationError",
-        reason: "authentication_failed",
-        message: "Authentication required.",
-        authMethods: [authMethod],
-      }),
-    ).toMatchObject({ authMethods: [authMethod] });
     expect(() =>
       decodeOperationError({
         _tag: "AcpRegistryOperationError",

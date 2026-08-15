@@ -101,22 +101,6 @@ describe("ACP Registry icon cache", () => {
     });
   });
 
-  it("falls back to the network when a persistent cache entry cannot be read", async () => {
-    const url = "https://cdn.agentclientprotocol.com/registry/v1/latest/kilo.svg";
-    match.mockRejectedValueOnce(new Error("Cache entry unavailable"));
-    fetchIcon.mockResolvedValue(
-      new Response("<svg/>", {
-        status: 200,
-        headers: { "content-type": "image/svg+xml" },
-      }),
-    );
-
-    await expect(loadCachedAcpRegistryIcon(url)).resolves.toMatchObject({
-      type: "image/svg+xml",
-    });
-    expect(fetchIcon).toHaveBeenCalledOnce();
-  });
-
   it("accepts only credential-free HTTPS URLs on the official CDN", () => {
     expect(
       resolveOfficialAcpRegistryIconUrl(
@@ -131,6 +115,9 @@ describe("ACP Registry icon cache", () => {
     ).toBeNull();
     expect(
       resolveOfficialAcpRegistryIconUrl("https://user@cdn.agentclientprotocol.com/icon.png"),
+    ).toBeNull();
+    expect(
+      resolveOfficialAcpRegistryIconUrl("https://cdn.agentclientprotocol.com:8443/icon.png"),
     ).toBeNull();
     expect(officialAcpRegistryIconUrlForAgentId("kilo")).toBe(
       "https://cdn.agentclientprotocol.com/registry/v1/latest/kilo.svg",

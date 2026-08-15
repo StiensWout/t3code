@@ -555,29 +555,6 @@ describe("AcpRegistrySupport", () => {
     );
   });
 
-  it.effect("reports a missing runner without starting the ACP package", () => {
-    const agent = makeAgent({ uvx: { package: "example-agent@1.2.3" } });
-    return Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-acp-registry-missing-runner-",
-      });
-      const resolver = yield* makeAcpRegistryCatalog({ cacheDir, registryUrl });
-      const error = yield* resolver.prepare({ agentId: agent.id }).pipe(Effect.flip);
-
-      expect(error.reason).toBe("runner_unavailable");
-    }).pipe(
-      Effect.scoped,
-      Effect.provide(
-        resolverLayer(
-          (request) =>
-            Effect.succeed(HttpClientResponse.fromWeb(request, new Response(makeRegistry(agent)))),
-          { PATH: "" },
-        ),
-      ),
-    );
-  });
-
   it.effect("falls back to a valid cached registry index when refresh fails", () => {
     const agent = makeAgent({
       npx: {

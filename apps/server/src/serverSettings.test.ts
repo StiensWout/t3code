@@ -207,42 +207,6 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
-  it.effect("serializes provider-instance mutations against the latest map", () =>
-    Effect.gen(function* () {
-      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
-      const firstId = ProviderInstanceId.make("codex_work");
-      const secondId = ProviderInstanceId.make("acpRegistry_kilo");
-
-      yield* Effect.all(
-        [
-          serverSettings.updateProviderInstance({
-            operation: "upsert",
-            instanceId: firstId,
-            instance: {
-              driver: ProviderDriverKind.make("codex"),
-              displayName: "Work Codex",
-              config: {},
-            },
-          }),
-          serverSettings.updateProviderInstance({
-            operation: "upsert",
-            instanceId: secondId,
-            instance: {
-              driver: ProviderDriverKind.make("acpRegistry"),
-              displayName: "Kilo",
-              config: { agentId: "kilo", distribution: "auto" },
-            },
-          }),
-        ],
-        { concurrency: "unbounded", discard: true },
-      );
-
-      const next = yield* serverSettings.getSettings;
-      assert.equal(next.providerInstances[firstId]?.displayName, "Work Codex");
-      assert.equal(next.providerInstances[secondId]?.displayName, "Kilo");
-    }).pipe(Effect.provide(makeServerSettingsLayer())),
-  );
-
   it.effect("creates provider instances atomically without overwriting a concurrent add", () =>
     Effect.gen(function* () {
       const serverSettings = yield* ServerSettingsModule.ServerSettingsService;

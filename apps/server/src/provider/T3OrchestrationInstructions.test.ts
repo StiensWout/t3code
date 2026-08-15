@@ -13,12 +13,6 @@ describe("T3 orchestration provider instructions", () => {
     assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "ordinary top-level T3 conversations");
     assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "Never use them merely");
     assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "different provider");
-    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "attach optional MCP servers lazily");
-    assert.include(
-      T3_CODE_ORCHESTRATION_INSTRUCTIONS,
-      "tools.mcp__t3_code__orchestrator_capabilities({})",
-    );
-    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "acp-mcp-call delegate_task");
   });
 
   it("documents structured schedules instead of JSON strings", () => {

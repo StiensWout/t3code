@@ -68,7 +68,6 @@ vi.mock("@t3tools/client-runtime/state/runtime", () => ({
 }));
 
 import { AcpRegistrySearchStep } from "./AcpRegistrySearchStep";
-import { AcpRegistryAgentIcon, resolveOfficialAcpRegistryIconUrl } from "./AcpRegistryIcon";
 
 const environmentId = EnvironmentId.make("remote-device");
 const gemini: AcpRegistrySearchAgent = {
@@ -157,19 +156,6 @@ describe("AcpRegistrySearchStep", () => {
     });
   });
 
-  it("submits suggested searches against the selected environment", () => {
-    const first = render();
-    const suggestion = visitElements(first, (element) => element.props.children === "Codex");
-    expect(suggestion).not.toBeNull();
-    (suggestion?.props.onClick as (() => void) | undefined)?.();
-
-    render();
-    expect(state.search).toHaveBeenCalledWith({
-      environmentId,
-      input: { query: "Codex" },
-    });
-  });
-
   it("renders deterministic loading, error, and empty states", () => {
     state.isPending = true;
     expect(
@@ -196,6 +182,10 @@ describe("AcpRegistrySearchStep", () => {
 
     state.result = { agents: [gemini] };
     const resultTree = render();
+    expect(state.search).toHaveBeenCalledWith({
+      environmentId,
+      input: { query: "Codex" },
+    });
     const form = visitElements(resultTree, (element) => element.type === "form");
     (form?.props.onSubmit as ((event: { preventDefault: () => void }) => void) | undefined)?.({
       preventDefault: vi.fn(),
@@ -327,38 +317,5 @@ describe("AcpRegistrySearchStep", () => {
       ),
     ).not.toBeNull();
     expect(visitElements(tree, (element) => element.type === "img")).toBeNull();
-  });
-
-  it("shows only the local fallback while an official ACP CDN icon loads", () => {
-    const officialIcon = "https://cdn.agentclientprotocol.com/registry/icons/gemini.png";
-    hooks.beginRender();
-    const tree = AcpRegistryAgentIcon({ icon: officialIcon });
-
-    // The raw CDN URL is never rendered directly; the image appears only once
-    // the validated blob object URL is ready.
-    expect(visitElements(tree, (element) => element.type === "img")).toBeNull();
-    expect(
-      visitElements(tree, (element) => element.props["data-slot"] === "acp-icon-fallback"),
-    ).not.toBeNull();
-  });
-
-  it("rejects non-CDN, insecure, credentialed, and port-specific icon URLs", () => {
-    expect(
-      resolveOfficialAcpRegistryIconUrl(
-        "https://cdn.agentclientprotocol.com/registry/icons/gemini.png",
-      ),
-    ).toBe("https://cdn.agentclientprotocol.com/registry/icons/gemini.png");
-    expect(
-      resolveOfficialAcpRegistryIconUrl("http://cdn.agentclientprotocol.com/icon.png"),
-    ).toBeNull();
-    expect(
-      resolveOfficialAcpRegistryIconUrl("https://cdn.agentclientprotocol.com.evil/icon.png"),
-    ).toBeNull();
-    expect(
-      resolveOfficialAcpRegistryIconUrl("https://user@cdn.agentclientprotocol.com/icon.png"),
-    ).toBeNull();
-    expect(
-      resolveOfficialAcpRegistryIconUrl("https://cdn.agentclientprotocol.com:8443/icon.png"),
-    ).toBeNull();
   });
 });

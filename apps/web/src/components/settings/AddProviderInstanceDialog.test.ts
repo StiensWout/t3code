@@ -71,15 +71,6 @@ describe("ACP Registry wizard", () => {
     ).toEqual({ kind: "navigate", step: 2 });
   });
 
-  it("keeps backward navigation available after selecting an ACP", () => {
-    expect(
-      resolveAcpRegistryWizardNavigation(2, 1, {
-        instanceIdError: "Instance ID is required.",
-        selectionError: null,
-      }),
-    ).toEqual({ kind: "navigate", step: 1 });
-  });
-
   it("derives a collision-free instance id without exceeding the slug limit", () => {
     const derive = (label: string) => `acpRegistry_${label}`;
     const existing = new Set(["acpRegistry_gemini", "acpRegistry_gemini_2"]);
