@@ -140,10 +140,9 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
         setOpenMobile(false);
       }
       const targetId = item.targetId ?? item.id;
-      if (pathname === item.to) {
+      if (pathname === item.to && scrollToSettingsTarget(targetId)) {
         // Target hashes are transient and cleared after navigation. Scroll directly on the current
-        // page so selecting a result cannot become a no-op while the route stays unchanged.
-        scrollToSettingsTarget(targetId);
+        // page when mounted; otherwise preserve the hash so deferred targets can handle it later.
         return;
       }
       void navigate({ to: item.to, hash: targetId, replace: true, hashScrollIntoView: false });
