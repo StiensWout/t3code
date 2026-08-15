@@ -673,7 +673,9 @@ export class ServerSettingsError extends Schema.TaggedErrorClass<ServerSettingsE
     operation: ServerSettingsOperation,
     providerInstanceId: Schema.optional(Schema.String),
     environmentVariable: Schema.optional(Schema.String),
-    cause: Schema.Defect(),
+    // Validation failures (e.g. a create colliding with an existing
+    // instance) originate without an upstream defect.
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {

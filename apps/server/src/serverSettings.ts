@@ -140,7 +140,6 @@ function ensureProviderInstanceMutationAllowed(
         settingsPath,
         operation: "create-provider-instance",
         providerInstanceId: mutation.instanceId,
-        cause: new Error(`Provider instance '${mutation.instanceId}' already exists.`),
       }),
     );
   }

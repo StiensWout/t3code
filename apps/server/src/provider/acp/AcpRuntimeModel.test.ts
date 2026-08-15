@@ -575,12 +575,18 @@ describe("extractMcpToolCallIdentity", () => {
     // One representative per surveyed convention (2026-08 registry builds):
     // droid triple underscore, Copilot hyphen, Amp mangled server + detail
     // tail, cline args tail, Auggie tool-first suffix.
+    // One representative per surveyed convention (2026-08 registry builds):
+    // droid triple underscore, Copilot hyphen, Amp mangled server + detail
+    // tail, cline args tail, Auggie tool-first suffix, fast-agent slash,
+    // Kimi bare name with args tail.
     for (const title of [
       "t3-code___delegate_task",
       "t3-code-delegate_task",
       'mcp__t3_code__delegate_task: {"mode":"async"}',
       't3-code__delegate_task: {"mode":"async"}',
       "delegate_task_t3-code",
+      "t3-code/delegate_task",
+      'delegate_task: {"mode":"async"}',
     ]) {
       const toolCall = toolCallFromUpdate({
         sessionUpdate: "tool_call",
