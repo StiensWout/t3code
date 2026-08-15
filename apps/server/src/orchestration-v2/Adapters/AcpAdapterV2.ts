@@ -185,14 +185,6 @@ export interface AcpAdapterV2Flavor {
     Crypto.Crypto | Scope.Scope
   >;
   readonly resolveModelId?: (selection: ModelSelection) => string | undefined;
-  /**
-   * Opts into the nonstandard `session/set_model` fallback for agents that
-   * advertise session models without a model config option. The current ACP
-   * spec has no such method, so only flavors whose agent is known to ship it
-   * (Grok Build) may enable this; calling it on a spec-compliant agent fails
-   * the session configure.
-   */
-  readonly supportsNonstandardSetSessionModel?: boolean;
   readonly registerExtensions?: (
     context: AcpAdapterV2ExtensionContext,
   ) => Effect.Effect<void, EffectAcpErrors.AcpError>;
@@ -471,7 +463,6 @@ export const AcpProviderCapabilitiesV2 = {
 function negotiatedCapabilities(
   base: OrchestrationV2ProviderCapabilities,
   started: AcpSessionRuntimeStartResult,
-  supportsNonstandardSetSessionModel: boolean,
 ): OrchestrationV2ProviderCapabilities {
   const agent = started.initializeResult.agentCapabilities ?? {};
   const session = agent.sessionCapabilities;
@@ -484,7 +475,7 @@ function negotiatedCapabilities(
     ...base,
     sessions: {
       ...base.sessions,
-      supportsModelSwitchInSession: hasModelConfig || supportsNonstandardSetSessionModel,
+      supportsModelSwitchInSession: hasModelConfig,
     },
     threads: {
       ...base.threads,
@@ -4701,11 +4692,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
         yield* Ref.set(activeSessionId, started.sessionId);
         yield* Ref.set(activeSessionSetup, started);
         rememberTerminalEnvironment(started.sessionId, input.threadId);
-        const capabilities = negotiatedCapabilities(
-          flavor.capabilities,
-          started,
-          flavor.supportsNonstandardSetSessionModel === true,
-        );
+        const capabilities = negotiatedCapabilities(flavor.capabilities, started);
         const canLoadSession = started.initializeResult.agentCapabilities?.loadSession === true;
         const canResumeSession =
           started.initializeResult.agentCapabilities?.sessionCapabilities?.resume != null;
@@ -4756,8 +4743,6 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               ) === true;
             if (hasModelConfig) {
               yield* runtime.setModel(requestedModel);
-            } else if (flavor.supportsNonstandardSetSessionModel === true) {
-              yield* runtime.setSessionModel(requestedModel);
             }
           }
           const optionSelections = modelSelection.options ?? [];

@@ -2048,58 +2048,6 @@ describe("AcpAdapterV2", () => {
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 
-  it.effect("sends nonstandard session/set_model only for flavors that opt in", () =>
-    Effect.gen(function* () {
-      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const fileSystem = yield* FileSystem.FileSystem;
-      const idAllocator = yield* IdAllocatorV2;
-      const path = yield* Path.Path;
-      const serverConfig = yield* ServerConfig;
-      const mockAgentPath = yield* path.fromFileUrl(
-        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-      );
-      const protocolEvents = yield* Queue.bounded<EffectAcpProtocol.AcpProtocolLogEvent>(64);
-      const instanceId = ProviderInstanceId.make("acp-test");
-      const adapter = makeAcpAdapterV2({
-        crypto: yield* Crypto.Crypto,
-        instanceId,
-        flavor: {
-          driver: ACP_TEST_DRIVER,
-          capabilities: AcpProviderCapabilitiesV2,
-          supportsNonstandardSetSessionModel: true,
-          makeRuntime: makeMockRuntime({
-            childProcessSpawner,
-            mockAgentPath,
-            protocolEvents,
-            environment: { T3_ACP_OMIT_MODEL_CONFIG_OPTION: "1" },
-          }),
-        },
-        fileSystem,
-        idAllocator,
-        serverConfig,
-      });
-      const threadId = ThreadId.make("thread-acp-model-method-fallback");
-      const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        cwd: process.cwd(),
-      });
-
-      yield* adapter.openSession({
-        threadId,
-        providerSessionId: ProviderSessionId.make("provider-session-acp-model-method-fallback"),
-        modelSelection: { instanceId, model: "grok-mock-alt" },
-        runtimePolicy,
-      });
-
-      const outgoingMethods = Array.from(yield* Queue.takeAll(protocolEvents))
-        .filter((event) => event.direction === "outgoing")
-        .map(rawProtocolMethod);
-      assert.include(outgoingMethods, "session/set_model");
-      assert.notInclude(outgoingMethods, "session/set_config_option");
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
-  );
-
   it.live("terminalizes an empty successful foreground Bash tool when the turn completes", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;

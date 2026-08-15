@@ -35,15 +35,12 @@ describe.runIf(process.env.T3_GROK_ACP_PROBE === "1")("Grok ACP CLI probe", () =
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("selects the base model over session/set_model and completes a prompt", () =>
+  it.effect("completes a prompt on the agent's default model", () =>
     Effect.gen(function* () {
       const runtime = yield* makeProbeRuntime;
       const started = yield* runtime.start();
       expect(typeof started.sessionId).toBe("string");
 
-      // The session models state left the ACP schema, so the base model is
-      // selected blind over the nonstandard extension method Grok ships.
-      yield* runtime.setSessionModel("grok-build").pipe(Effect.timeout("20 seconds"));
       const result = yield* runtime
         .prompt({ prompt: [{ type: "text", text: "Respond with exactly: grok switch ok" }] })
         .pipe(Effect.timeout("60 seconds"));

@@ -105,18 +105,3 @@ export function resolveGrokAcpBaseModelId(model: string | null | undefined): str
   const base = trimmed && trimmed.length > 0 ? trimmed : "grok-build";
   return normalizeModelSlug(base, GROK_DRIVER_KIND) ?? "grok-build";
 }
-
-// The session models state left the ACP schema, so the current model is no
-// longer observable; setting the requested model is idempotent on Grok.
-export function applyGrokAcpModelSelection<E>(input: {
-  readonly runtime: Pick<AcpSessionRuntime.AcpSessionRuntime["Service"], "setSessionModel">;
-  readonly requestedModelId: string | undefined;
-  readonly mapError: (cause: EffectAcpErrors.AcpError) => E;
-}): Effect.Effect<string | undefined, E> {
-  if (input.requestedModelId === undefined) {
-    return Effect.succeed(undefined);
-  }
-  return input.runtime
-    .setSessionModel(input.requestedModelId)
-    .pipe(Effect.mapError(input.mapError), Effect.as(input.requestedModelId));
-}

@@ -4,7 +4,6 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 
 import * as Effect from "effect/Effect";
-import * as Schema from "effect/Schema";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
@@ -294,18 +293,6 @@ function modeState(): AcpSchema.SessionModeState {
   };
 }
 
-// Grok Build's nonstandard pre-1.0 session/set_model surface, kept on the
-// mock so Grok-flavor tests can exercise the extension-channel fallback.
-const grokAcpModels: ReadonlyArray<{ readonly modelId: string; readonly name: string }> = [
-  { modelId: "grok-build", name: "Grok Build" },
-  { modelId: "grok-mock-alt", name: "Grok Mock Alt" },
-];
-
-const SetSessionModelRequest = Schema.Struct({
-  sessionId: Schema.String,
-  modelId: Schema.String,
-});
-
 const program = Effect.gen(function* () {
   const agent = yield* EffectAcpAgent.AcpAgent;
 
@@ -496,22 +483,6 @@ const program = Effect.gen(function* () {
   yield* agent.handleCloseSession(() =>
     Effect.gen(function* () {
       yield* requireAuthentication();
-      return {};
-    }),
-  );
-
-  yield* agent.handleExtRequest("session/set_model", SetSessionModelRequest, (request) =>
-    Effect.gen(function* () {
-      if (!grokAcpModels.some((model) => model.modelId === request.modelId)) {
-        return yield* AcpError.AcpRequestError.invalidParams(
-          `Unknown mock model id: ${request.modelId}`,
-          {
-            method: "session/set_model",
-            params: request,
-          },
-        );
-      }
-      currentModelId = request.modelId;
       return {};
     }),
   );

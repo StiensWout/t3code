@@ -1,9 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
-import * as Effect from "effect/Effect";
-import * as EffectAcpErrors from "effect-acp/errors";
 
 import {
-  applyGrokAcpModelSelection,
   buildGrokAcpSpawnInput,
   grokAcpRuntimeProcessOwnership,
   resolveGrokAcpBaseModelId,
@@ -57,59 +54,4 @@ describe("buildGrokAcpSpawnInput", () => {
       },
     });
   });
-});
-
-describe("applyGrokAcpModelSelection", () => {
-  const makeRecordingRuntime = (failure?: EffectAcpErrors.AcpError) => {
-    const modelCalls: Array<string> = [];
-    const runtime = {
-      setSessionModel: (modelId: string) =>
-        Effect.gen(function* () {
-          modelCalls.push(modelId);
-          if (failure) return yield* failure;
-        }),
-    };
-    return { runtime, modelCalls };
-  };
-
-  it.effect("calls session/set_model when a model is requested", () =>
-    Effect.gen(function* () {
-      const { runtime, modelCalls } = makeRecordingRuntime();
-      const result = yield* applyGrokAcpModelSelection({
-        runtime,
-        requestedModelId: "grok-mock-alt",
-        mapError: (cause) => cause.message,
-      });
-      expect(modelCalls).toEqual(["grok-mock-alt"]);
-      expect(result).toBe("grok-mock-alt");
-    }),
-  );
-
-  it.effect("skips set_model when no model is requested", () =>
-    Effect.gen(function* () {
-      const { runtime, modelCalls } = makeRecordingRuntime();
-      const result = yield* applyGrokAcpModelSelection({
-        runtime,
-        requestedModelId: undefined,
-        mapError: (cause) => cause.message,
-      });
-      expect(modelCalls).toEqual([]);
-      expect(result).toBeUndefined();
-    }),
-  );
-
-  it.effect("propagates session/set_model failures via mapError", () =>
-    Effect.gen(function* () {
-      const failure = EffectAcpErrors.AcpRequestError.invalidParams("session id not known");
-      const { runtime } = makeRecordingRuntime(failure);
-      const error = yield* Effect.flip(
-        applyGrokAcpModelSelection({
-          runtime,
-          requestedModelId: "grok-mock-alt",
-          mapError: (cause) => cause.message,
-        }),
-      );
-      expect(error).toBe(failure.message);
-    }),
-  );
 });

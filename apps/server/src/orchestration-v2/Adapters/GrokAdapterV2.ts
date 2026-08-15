@@ -177,9 +177,6 @@ export function makeGrokAcpAdapterFlavor(options: GrokAdapterV2Options): AcpAdap
     // still accepts image content blocks (verified with real screenshots).
     supportsImagePrompts: true,
     resolveModelId: (selection) => resolveGrokAcpBaseModelId(selection.model),
-    // Grok Build still ships the pre-1.0 session/set_model method and does not
-    // advertise a model config option.
-    supportsNonstandardSetSessionModel: true,
     makeRuntime:
       options.makeRuntime ??
       ((input) =>
