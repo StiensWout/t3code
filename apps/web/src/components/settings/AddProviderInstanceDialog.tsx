@@ -25,6 +25,7 @@ import {
   DialogDescription,
   DialogFooter,
   DialogHeader,
+  DialogPanel,
   DialogPopup,
   DialogTitle,
 } from "../ui/dialog";
@@ -347,10 +348,7 @@ export function AddProviderInstanceDialog({
             )}
           </DialogHeader>
 
-          <div
-            data-slot="dialog-panel"
-            className="space-y-4 bg-zinc-25/80 px-6 py-5 ring-1 ring-black/5 dark:bg-white/2 dark:ring-white/5"
-          >
+          <DialogPanel className="space-y-4 bg-zinc-25/80 px-6 py-5 ring-1 ring-black/5 dark:bg-white/2 dark:ring-white/5">
             <AnimatedHeight>
               <div className={cn("grid gap-2", wizardStep !== 0 && "hidden")}>
                 <div id="add-instance-driver-label" className="text-sm font-medium text-foreground">
@@ -604,7 +602,7 @@ export function AddProviderInstanceDialog({
                 </div>
               ) : null}
             </AnimatedHeight>
-          </div>
+          </DialogPanel>
 
           <DialogFooter variant="bare">
             <Button
