@@ -216,7 +216,7 @@ export function AcpRegistrySearchStep({
             <p className="mt-1 text-xs text-muted-foreground">Try a broader search.</p>
           </div>
         ) : (
-          <ScrollArea scrollFade className="max-h-72 border-t border-border/70">
+          <ScrollArea scrollFade scrollbarGutter className="max-h-72 border-t border-border/70">
             <div className="divide-y divide-border/70">
               {results.map((agent) => {
                 const alreadyAdded = isConfiguredAcpRegistryAgent(providerInstances, agent.id);
@@ -292,7 +292,9 @@ export function AcpRegistrySearchStep({
         )
       ) : null}
 
-      <div className="flex items-center justify-between gap-3 border-t border-border/70 pt-3">
+      {/* DialogPanel collapses its own bottom padding when the dialog footer
+          is bare, so this row carries the breathing room itself. */}
+      <div className="flex items-center justify-between gap-3 border-t border-border/70 py-3">
         <p className="text-[11px] text-muted-foreground">
           Authentication is completed separately with the selected agent.
         </p>
