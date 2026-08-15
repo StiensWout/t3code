@@ -238,7 +238,7 @@ function SoftGroupedPanel({ model }: { readonly model: NotificationSettingsModel
             {EVENT_OPTIONS.map((option) => (
               <label
                 key={option.event}
-                className="flex cursor-pointer items-center justify-between gap-4 rounded-lg px-2 py-2 hover:bg-muted/35"
+                className="flex cursor-pointer items-center justify-between gap-4 rounded-lg py-2 hover:bg-muted/35"
               >
                 <span>
                   <span className="block text-sm font-medium tracking-[-0.005em] text-foreground">
@@ -255,7 +255,7 @@ function SoftGroupedPanel({ model }: { readonly model: NotificationSettingsModel
                 />
               </label>
             ))}
-            <div className="mt-2 flex flex-wrap gap-x-6 gap-y-2 border-t border-border/50 px-2 pt-3 pb-1">
+            <div className="mt-2 flex flex-wrap gap-x-6 gap-y-2 border-t border-border/50 pt-3 pb-1">
               <label className="flex cursor-pointer items-center gap-2 text-sm">
                 <Switch
                   checked={model.settings.soundEnabled}
