@@ -1225,12 +1225,12 @@ export class AcpSessionRuntime extends Context.Service<
      */
     readonly setModel: (model: string) => Effect.Effect<void, EffectAcpErrors.AcpError>;
     /**
-     * Selects the active model through the unstable ACP `session/set_model` capability.
-     * @see https://agentclientprotocol.com/protocol/schema#session/set_model
+     * Selects the active model through the nonstandard `session/set_model`
+     * method. The current ACP spec routes model selection through config
+     * options; Grok Build still ships the pre-1.0 method, so it is sent over
+     * the extension request channel for flavors that opt in.
      */
-    readonly setSessionModel: (
-      modelId: string,
-    ) => Effect.Effect<EffectAcpSchema.SetSessionModelResponse, EffectAcpErrors.AcpError>;
+    readonly setSessionModel: (modelId: string) => Effect.Effect<void, EffectAcpErrors.AcpError>;
     /**
      * Sends a generic ACP extension request and records it through the request logger.
      * @see https://agentclientprotocol.com/protocol/extensibility
@@ -2227,16 +2227,14 @@ export const make = (
       setSessionModel: (modelId) =>
         getStartedState.pipe(
           Effect.flatMap((started) => {
-            const requestPayload = {
-              sessionId: started.sessionId,
-              modelId,
-            } satisfies EffectAcpSchema.SetSessionModelRequest;
+            const requestPayload = { sessionId: started.sessionId, modelId };
             return runLoggedRequest(
               "session/set_model",
               requestPayload,
-              acp.agent.setSessionModel(requestPayload),
+              acp.raw.request("session/set_model", requestPayload),
             );
           }),
+          Effect.asVoid,
         ),
       request: (method, payload) =>
         runLoggedRequest(method, payload, acp.raw.request(method, payload)),

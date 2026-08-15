@@ -15,7 +15,6 @@ import * as AcpProtocol from "./protocol.ts";
 import * as AcpRpcs from "./rpc.ts";
 import * as AcpSchema from "./schema.ts";
 import { AGENT_METHODS, CLIENT_METHODS } from "./_generated/meta.gen.ts";
-import * as AcpCompat from "./compat.ts";
 import {
   callRpc,
   decodeExtNotificationRegistration,
@@ -111,13 +110,6 @@ export class AcpClient extends Context.Service<
         payload: AcpSchema.CloseSessionRequest,
       ) => Effect.Effect<AcpSchema.CloseSessionResponse, AcpError.AcpError>;
       /**
-       * Selects the active model for a session.
-       * @see https://agentclientprotocol.com/protocol/schema#session/set_model
-       */
-      readonly setSessionModel: (
-        payload: AcpSchema.SetSessionModelRequest,
-      ) => Effect.Effect<AcpSchema.SetSessionModelResponse, AcpError.AcpError>;
-      /**
        * Updates a session configuration option.
        * @see https://agentclientprotocol.com/protocol/schema#session/set_config_option
        */
@@ -150,13 +142,13 @@ export class AcpClient extends Context.Service<
       >,
     ) => Effect.Effect<void>;
     /**
-     * Registers a handler for current and legacy ACP elicitation requests.
+     * Registers a handler for `elicitation/create` requests.
      * @see https://agentclientprotocol.com/protocol/schema#elicitation/create
      */
     readonly handleElicitation: (
       handler: AcpRequestHandler<
-        AcpSchema.ElicitationRequest,
-        AcpCompat.NormalizedElicitationResponse
+        AcpSchema.CreateElicitationRequest,
+        AcpSchema.CreateElicitationResponse
       >,
     ) => Effect.Effect<void>;
     /**
@@ -230,12 +222,12 @@ export class AcpClient extends Context.Service<
       ) => Effect.Effect<void, AcpError.AcpError>,
     ) => Effect.Effect<void>;
     /**
-     * Registers a handler for `session/elicitation/complete`.
-     * @see https://agentclientprotocol.com/protocol/schema#session/elicitation/complete
+     * Registers a handler for `elicitation/complete`.
+     * @see https://agentclientprotocol.com/protocol/schema#elicitation/complete
      */
     readonly handleElicitationComplete: (
       handler: (
-        notification: AcpSchema.ElicitationCompleteNotification,
+        notification: AcpSchema.CompleteElicitationNotification,
       ) => Effect.Effect<void, AcpError.AcpError>,
     ) => Effect.Effect<void>;
     /**
@@ -283,8 +275,8 @@ interface AcpCoreRequestHandlers {
     AcpSchema.RequestPermissionResponse
   >;
   elicitation?: AcpRequestHandler<
-    AcpSchema.ElicitationRequest,
-    AcpCompat.NormalizedElicitationResponse
+    AcpSchema.CreateElicitationRequest,
+    AcpSchema.CreateElicitationResponse
   >;
   readTextFile?: AcpRequestHandler<AcpSchema.ReadTextFileRequest, AcpSchema.ReadTextFileResponse>;
   writeTextFile?: AcpRequestHandler<
@@ -315,7 +307,7 @@ interface AcpCoreRequestHandlers {
 
 interface AcpNotificationHandlers {
   readonly sessionUpdate: BufferedNotificationHandler<AcpSchema.SessionNotification>;
-  readonly elicitationComplete: BufferedNotificationHandler<AcpSchema.ElicitationCompleteNotification>;
+  readonly elicitationComplete: BufferedNotificationHandler<AcpSchema.CompleteElicitationNotification>;
 }
 
 interface BufferedNotificationHandler<A> {
@@ -453,20 +445,13 @@ export const make = Effect.fn("effect-acp/AcpClient.make")(function* (
           CLIENT_METHODS.session_request_permission,
           requestContext(requestId, CLIENT_METHODS.session_request_permission),
         ),
-      [AcpCompat.CURRENT_CLIENT_METHODS.elicitation_create]: (payload, { requestId }) =>
+      [CLIENT_METHODS.elicitation_create]: (payload, { requestId }) =>
         runHandler(
           coreHandlers.elicitation,
           payload,
-          AcpCompat.CURRENT_CLIENT_METHODS.elicitation_create,
-          requestContext(requestId, AcpCompat.CURRENT_CLIENT_METHODS.elicitation_create),
+          CLIENT_METHODS.elicitation_create,
+          requestContext(requestId, CLIENT_METHODS.elicitation_create),
         ),
-      [CLIENT_METHODS.session_elicitation]: (payload, { requestId }) =>
-        runHandler(
-          coreHandlers.elicitation,
-          payload,
-          CLIENT_METHODS.session_elicitation,
-          requestContext(requestId, CLIENT_METHODS.session_elicitation),
-        ).pipe(Effect.map(AcpCompat.toLegacyElicitationResponse)),
       [CLIENT_METHODS.fs_read_text_file]: (payload, { requestId }) =>
         runHandler(
           coreHandlers.readTextFile,
@@ -554,8 +539,6 @@ export const make = Effect.fn("effect-acp/AcpClient.make")(function* (
         callRpc(AGENT_METHODS.session_resume, rpc[AGENT_METHODS.session_resume](payload)),
       closeSession: (payload) =>
         callRpc(AGENT_METHODS.session_close, rpc[AGENT_METHODS.session_close](payload)),
-      setSessionModel: (payload) =>
-        callRpc(AGENT_METHODS.session_set_model, rpc[AGENT_METHODS.session_set_model](payload)),
       setSessionConfigOption: (payload) =>
         callRpc(
           AGENT_METHODS.session_set_config_option,

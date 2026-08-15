@@ -11,24 +11,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isSessionModelState(value: unknown): value is EffectAcpSchema.SessionModelState {
-  if (!isRecord(value) || typeof value.currentModelId !== "string") {
-    return false;
-  }
-  if (!Array.isArray(value.availableModels)) {
-    return false;
-  }
-  return value.availableModels.every(
-    (model) =>
-      isRecord(model) &&
-      typeof model.modelId === "string" &&
-      typeof model.name === "string" &&
-      (model.description === undefined ||
-        model.description === null ||
-        typeof model.description === "string"),
-  );
-}
-
 function isSessionModeState(value: unknown): value is EffectAcpSchema.SessionModeState {
   if (!isRecord(value) || typeof value.currentModeId !== "string") {
     return false;
@@ -594,13 +576,10 @@ export function syntheticLoadSessionResponseFromInitialize(
   initializeResult: EffectAcpSchema.InitializeResponse,
 ): EffectAcpSchema.LoadSessionResponse {
   const meta = initializeResult._meta;
-  const modelState = isRecord(meta) ? meta.modelState : undefined;
   const modeState = isRecord(meta) ? meta.modeState : undefined;
-  const models = isSessionModelState(modelState) ? modelState : undefined;
   const modes = isSessionModeState(modeState) ? modeState : undefined;
 
   return {
-    ...(models ? { models } : {}),
     ...(modes ? { modes } : {}),
     _meta: {
       t3SessionLoadReady: "replay_idle",

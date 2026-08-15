@@ -25,7 +25,7 @@ const mockAgentPath = NodePath.join(__dirname, "../../../scripts/acp-mock-agent.
 const decodeSettings = Schema.decodeSync(AcpRegistrySettings);
 
 describe("ACP Registry probe", () => {
-  it("returns advertised auth methods and de-duplicated session models", () => {
+  it("returns advertised auth methods and de-duplicated models", () => {
     const result = acpRegistryProbeResult(instanceId, {
       sessionId: "probe-session",
       initializeResult: {
@@ -43,15 +43,21 @@ describe("ACP Registry probe", () => {
       },
       sessionSetupResult: {
         sessionId: "probe-session",
-        models: {
-          currentModelId: "gpt-5.4",
-          availableModels: [
-            { modelId: "gpt-5.4", name: "GPT-5.4" },
-            { modelId: "gpt-5.4", name: "Duplicate" },
-          ],
-        },
+        configOptions: [
+          {
+            id: "model",
+            name: "Model",
+            category: "model",
+            type: "select",
+            currentValue: "gpt-5.4",
+            options: [
+              { value: "gpt-5.4", name: "GPT-5.4" },
+              { value: "gpt-5.4", name: "Duplicate" },
+            ],
+          },
+        ],
       },
-      modelConfigId: undefined,
+      modelConfigId: "model",
     } satisfies AcpSessionRuntimeStartResult);
 
     expect(result).toEqual({
@@ -177,15 +183,21 @@ describe("ACP Registry probe", () => {
       initializeResult: { protocolVersion: 1 },
       sessionSetupResult: {
         sessionId: "probe-session",
-        models: {
-          currentModelId: "x".repeat(129),
-          availableModels: [
-            { modelId: "x".repeat(129), name: "Too long" },
-            { modelId: "valid", name: "Valid" },
-          ],
-        },
+        configOptions: [
+          {
+            id: "model",
+            name: "Model",
+            category: "model",
+            type: "select",
+            currentValue: "x".repeat(129),
+            options: [
+              { value: "x".repeat(129), name: "Too long" },
+              { value: "valid", name: "Valid" },
+            ],
+          },
+        ],
       },
-      modelConfigId: undefined,
+      modelConfigId: "model",
     } satisfies AcpSessionRuntimeStartResult);
 
     expect(result.models).toEqual([{ id: "valid", name: "Valid", description: null }]);
@@ -198,15 +210,21 @@ describe("ACP Registry probe", () => {
       initializeResult: { protocolVersion: 1 },
       sessionSetupResult: {
         sessionId: "probe-session",
-        models: {
-          currentModelId: "model-256",
-          availableModels: Array.from({ length: 257 }, (_, index) => ({
-            modelId: `model-${index}`,
-            name: `Model ${index}`,
-          })),
-        },
+        configOptions: [
+          {
+            id: "model",
+            name: "Model",
+            category: "model",
+            type: "select",
+            currentValue: "model-256",
+            options: Array.from({ length: 257 }, (_, index) => ({
+              value: `model-${index}`,
+              name: `Model ${index}`,
+            })),
+          },
+        ],
       },
-      modelConfigId: undefined,
+      modelConfigId: "model",
     } satisfies AcpSessionRuntimeStartResult);
 
     expect(result.models).toHaveLength(256);

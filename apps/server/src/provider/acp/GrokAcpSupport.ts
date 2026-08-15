@@ -106,25 +106,15 @@ export function resolveGrokAcpBaseModelId(model: string | null | undefined): str
   return normalizeModelSlug(base, GROK_DRIVER_KIND) ?? "grok-build";
 }
 
-export function currentGrokModelIdFromSessionSetup(
-  sessionSetupResult:
-    | EffectAcpSchema.LoadSessionResponse
-    | EffectAcpSchema.NewSessionResponse
-    | EffectAcpSchema.ResumeSessionResponse,
-): string | undefined {
-  return sessionSetupResult.models?.currentModelId?.trim() || undefined;
-}
-
+// The session models state left the ACP schema, so the current model is no
+// longer observable; setting the requested model is idempotent on Grok.
 export function applyGrokAcpModelSelection<E>(input: {
   readonly runtime: Pick<AcpSessionRuntime.AcpSessionRuntime["Service"], "setSessionModel">;
-  readonly currentModelId: string | undefined;
   readonly requestedModelId: string | undefined;
   readonly mapError: (cause: EffectAcpErrors.AcpError) => E;
 }): Effect.Effect<string | undefined, E> {
-  const shouldSwitchModel =
-    input.requestedModelId !== undefined && input.requestedModelId !== input.currentModelId;
-  if (!shouldSwitchModel) {
-    return Effect.succeed(input.currentModelId);
+  if (input.requestedModelId === undefined) {
+    return Effect.succeed(undefined);
   }
   return input.runtime
     .setSessionModel(input.requestedModelId)

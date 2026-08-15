@@ -214,69 +214,68 @@ export function AcpRegistrySearchStep({
             <p className="mt-1 text-xs text-muted-foreground">Try a broader search.</p>
           </div>
         ) : (
-          <ScrollArea
-            scrollFade
-            className="max-h-72 divide-y divide-border/70 border-y border-border/70"
-          >
-            {results.map((agent) => {
-              const alreadyAdded = isConfiguredAcpRegistryAgent(providerInstances, agent.id);
-              const isPreparing = preparingId === agent.id;
-              const progressLabel = agent.distribution === "binary" ? "Downloading" : "Preparing";
-              return (
-                <article className="grid min-w-0 gap-2 py-3 first:pt-2 last:pb-2" key={agent.id}>
-                  <div className="flex min-w-0 items-start justify-between gap-3">
-                    <div className="flex min-w-0 flex-1 items-start gap-3">
-                      <AcpRegistryAgentIcon icon={agent.icon} />
-                      <div className="min-w-0 flex-1">
-                        <h4 className="truncate text-sm font-medium text-foreground">
-                          {agent.name}
-                        </h4>
-                        <p className="mt-0.5 line-clamp-2 text-xs leading-4 text-muted-foreground">
-                          {agent.description ||
-                            "An agent available through the official ACP Registry."}
-                        </p>
+          <ScrollArea scrollFade className="max-h-72 border-y border-border/70">
+            <div className="divide-y divide-border/70">
+              {results.map((agent) => {
+                const alreadyAdded = isConfiguredAcpRegistryAgent(providerInstances, agent.id);
+                const isPreparing = preparingId === agent.id;
+                const progressLabel = agent.distribution === "binary" ? "Downloading" : "Preparing";
+                return (
+                  <article className="grid min-w-0 gap-2 py-3 first:pt-2 last:pb-2" key={agent.id}>
+                    <div className="flex min-w-0 items-start justify-between gap-3">
+                      <div className="flex min-w-0 flex-1 items-start gap-3">
+                        <AcpRegistryAgentIcon icon={agent.icon} />
+                        <div className="min-w-0 flex-1">
+                          <h4 className="truncate text-sm font-medium text-foreground">
+                            {agent.name}
+                          </h4>
+                          <p className="mt-0.5 line-clamp-2 text-xs leading-4 text-muted-foreground">
+                            {agent.description ||
+                              "An agent available through the official ACP Registry."}
+                          </p>
+                        </div>
                       </div>
+                      <Button
+                        aria-label={`${alreadyAdded ? "Already added" : isPreparing ? progressLabel : "Add"} ${agent.name}`}
+                        disabled={alreadyAdded || preparingId !== null}
+                        onClick={() => void handlePrepare(agent)}
+                        size="xs"
+                        variant={isPreparing ? "secondary" : "outline"}
+                      >
+                        {alreadyAdded ? "Added" : isPreparing ? progressLabel : "Add"}
+                      </Button>
                     </div>
-                    <Button
-                      aria-label={`${alreadyAdded ? "Already added" : isPreparing ? progressLabel : "Add"} ${agent.name}`}
-                      disabled={alreadyAdded || preparingId !== null}
-                      onClick={() => void handlePrepare(agent)}
-                      size="xs"
-                      variant={isPreparing ? "secondary" : "outline"}
-                    >
-                      {alreadyAdded ? "Added" : isPreparing ? progressLabel : "Add"}
-                    </Button>
-                  </div>
-                  <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
-                    {metadata(agent).map((item) => (
-                      <span key={item}>{item}</span>
-                    ))}
-                    {agent.website ? (
-                      <a
-                        aria-label={`Open documentation for ${agent.name} (${agent.id})`}
-                        className="inline-flex items-center gap-1 hover:text-foreground"
-                        href={agent.website}
-                        rel="noreferrer"
-                        target="_blank"
-                      >
-                        Docs <ExternalLinkIcon className="size-3" />
-                      </a>
-                    ) : null}
-                    {agent.repository ? (
-                      <a
-                        aria-label={`Open source for ${agent.name} (${agent.id})`}
-                        className="inline-flex items-center gap-1 hover:text-foreground"
-                        href={agent.repository}
-                        rel="noreferrer"
-                        target="_blank"
-                      >
-                        Source <ExternalLinkIcon className="size-3" />
-                      </a>
-                    ) : null}
-                  </div>
-                </article>
-              );
-            })}
+                    <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
+                      {metadata(agent).map((item) => (
+                        <span key={item}>{item}</span>
+                      ))}
+                      {agent.website ? (
+                        <a
+                          aria-label={`Open documentation for ${agent.name} (${agent.id})`}
+                          className="inline-flex items-center gap-1 hover:text-foreground"
+                          href={agent.website}
+                          rel="noreferrer"
+                          target="_blank"
+                        >
+                          Docs <ExternalLinkIcon className="size-3" />
+                        </a>
+                      ) : null}
+                      {agent.repository ? (
+                        <a
+                          aria-label={`Open source for ${agent.name} (${agent.id})`}
+                          className="inline-flex items-center gap-1 hover:text-foreground"
+                          href={agent.repository}
+                          rel="noreferrer"
+                          target="_blank"
+                        >
+                          Source <ExternalLinkIcon className="size-3" />
+                        </a>
+                      ) : null}
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
           </ScrollArea>
         )
       ) : null}

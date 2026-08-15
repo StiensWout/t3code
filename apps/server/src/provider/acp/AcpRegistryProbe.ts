@@ -56,24 +56,13 @@ function modelConfigOptions(
 function normalizeModels(
   setup: AcpSessionRuntime.AcpSessionRuntimeStartResult["sessionSetupResult"],
 ): ReadonlyArray<AcpRegistryProbeModel> {
-  const configModels = modelConfigOptions(setup).map((model) => ({
+  // Model discovery is the model config option's base models; ACP has no
+  // other portable model inventory.
+  const candidates = modelConfigOptions(setup).map((model) => ({
     id: model.value,
     name: model.name,
     description: model.description ?? null,
   }));
-  // Agents with a model config option often also enumerate legacy
-  // model-times-option combinations through the session models API
-  // (codex-acp lists "gpt-5.6-sol[low]" variants). Prefer the config
-  // option's base models so those variants collapse onto the separate
-  // option descriptors instead of flooding the model picker.
-  const candidates =
-    configModels.length > 0
-      ? configModels
-      : (setup.models?.availableModels.map((model) => ({
-          id: model.modelId,
-          name: model.name,
-          description: model.description ?? null,
-        })) ?? []);
   const seen = new Set<string>();
   const models: Array<AcpRegistryProbeModel> = [];
   for (const candidate of candidates) {
@@ -217,10 +206,7 @@ export function acpRegistryProbeResult(
   const configModelId = modelOption?.type === "select" ? modelOption.currentValue : null;
   // Bound the agent-reported current model the same way normalizeModels bounds
   // model IDs, so it stays wire-encodable and matches a normalized model row.
-  // Mirror normalizeModels: when a model config option exists its base models
-  // are the catalog, so its current value is the current model.
-  const rawCurrentModelId =
-    configModelId ?? started.sessionSetupResult.models?.currentModelId ?? null;
+  const rawCurrentModelId = configModelId ?? null;
   const boundedCurrentModelId =
     rawCurrentModelId == null
       ? null

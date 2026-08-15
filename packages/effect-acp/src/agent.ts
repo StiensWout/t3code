@@ -11,7 +11,6 @@ import * as RpcServer from "effect/unstable/rpc/RpcServer";
 
 import * as AcpSchema from "./schema.ts";
 import { AGENT_METHODS, CLIENT_METHODS } from "./_generated/meta.gen.ts";
-import * as AcpCompat from "./compat.ts";
 import * as AcpError from "./errors.ts";
 import * as AcpProtocol from "./protocol.ts";
 import * as AcpRpcs from "./rpc.ts";
@@ -66,8 +65,8 @@ export class AcpAgent extends Context.Service<
        * @see https://agentclientprotocol.com/protocol/schema#elicitation/create
        */
       readonly elicit: (
-        payload: AcpSchema.ElicitationRequest,
-      ) => Effect.Effect<AcpCompat.NormalizedElicitationResponse, AcpError.AcpError>;
+        payload: AcpSchema.CreateElicitationRequest,
+      ) => Effect.Effect<AcpSchema.CreateElicitationResponse, AcpError.AcpError>;
       /**
        * Requests file contents from the client.
        * @see https://agentclientprotocol.com/protocol/schema#fs/read_text_file
@@ -101,7 +100,7 @@ export class AcpAgent extends Context.Service<
        * @see https://agentclientprotocol.com/protocol/schema#elicitation/complete
        */
       readonly elicitationComplete: (
-        payload: AcpSchema.ElicitationCompleteNotification,
+        payload: AcpSchema.CompleteElicitationNotification,
       ) => Effect.Effect<void, AcpError.AcpError>;
       /**
        * Sends an ACP extension request to the client.
@@ -154,12 +153,6 @@ export class AcpAgent extends Context.Service<
     ) => Effect.Effect<void>;
     readonly handleCloseSession: (
       handler: AcpRequestHandler<AcpSchema.CloseSessionRequest, AcpSchema.CloseSessionResponse>,
-    ) => Effect.Effect<void>;
-    readonly handleSetSessionModel: (
-      handler: AcpRequestHandler<
-        AcpSchema.SetSessionModelRequest,
-        AcpSchema.SetSessionModelResponse
-      >,
     ) => Effect.Effect<void>;
     readonly handleSetSessionConfigOption: (
       handler: AcpRequestHandler<
@@ -215,10 +208,6 @@ interface AcpCoreAgentRequestHandlers {
     AcpSchema.ResumeSessionResponse
   >;
   closeSession?: AcpRequestHandler<AcpSchema.CloseSessionRequest, AcpSchema.CloseSessionResponse>;
-  setSessionModel?: AcpRequestHandler<
-    AcpSchema.SetSessionModelRequest,
-    AcpSchema.SetSessionModelResponse
-  >;
   setSessionConfigOption?: AcpRequestHandler<
     AcpSchema.SetSessionConfigOptionRequest,
     AcpSchema.SetSessionConfigOptionResponse
@@ -373,13 +362,6 @@ export const make = Effect.fn("effect-acp/AcpAgent.make")(function* (
           AGENT_METHODS.session_close,
           requestContext(requestId, AGENT_METHODS.session_close),
         ),
-      [AGENT_METHODS.session_set_model]: (payload, { requestId }) =>
-        runHandler(
-          coreHandlers.setSessionModel,
-          payload,
-          AGENT_METHODS.session_set_model,
-          requestContext(requestId, AGENT_METHODS.session_set_model),
-        ),
       [AGENT_METHODS.session_set_config_option]: (payload, { requestId }) =>
         runHandler(
           coreHandlers.setSessionConfigOption,
@@ -421,10 +403,7 @@ export const make = Effect.fn("effect-acp/AcpAgent.make")(function* (
           rpc[CLIENT_METHODS.session_request_permission](payload),
         ),
       elicit: (payload) =>
-        callRpc(
-          AcpCompat.CURRENT_CLIENT_METHODS.elicitation_create,
-          rpc[AcpCompat.CURRENT_CLIENT_METHODS.elicitation_create](payload),
-        ),
+        callRpc(CLIENT_METHODS.elicitation_create, rpc[CLIENT_METHODS.elicitation_create](payload)),
       readTextFile: (payload) =>
         callRpc(CLIENT_METHODS.fs_read_text_file, rpc[CLIENT_METHODS.fs_read_text_file](payload)),
       writeTextFile: (payload) =>
@@ -469,7 +448,7 @@ export const make = Effect.fn("effect-acp/AcpAgent.make")(function* (
         ),
       sessionUpdate: (payload) => transport.notify(CLIENT_METHODS.session_update, payload),
       elicitationComplete: (payload) =>
-        transport.notify(AcpCompat.CURRENT_CLIENT_METHODS.elicitation_complete, payload),
+        transport.notify(CLIENT_METHODS.elicitation_complete, payload),
       extRequest: transport.request,
       extNotification: transport.notify,
     },
@@ -516,11 +495,6 @@ export const make = Effect.fn("effect-acp/AcpAgent.make")(function* (
     handleCloseSession: (handler) =>
       Effect.suspend(() => {
         coreHandlers.closeSession = handler;
-        return Effect.void;
-      }),
-    handleSetSessionModel: (handler) =>
-      Effect.suspend(() => {
-        coreHandlers.setSessionModel = handler;
         return Effect.void;
       }),
     handleSetSessionConfigOption: (handler) =>

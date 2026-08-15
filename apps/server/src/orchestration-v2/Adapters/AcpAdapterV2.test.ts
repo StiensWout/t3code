@@ -2048,7 +2048,7 @@ describe("AcpAdapterV2", () => {
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 
-  it.effect("falls back to unstable model switching when no model config is advertised", () =>
+  it.effect("sends nonstandard session/set_model only for flavors that opt in", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const fileSystem = yield* FileSystem.FileSystem;
@@ -2066,6 +2066,7 @@ describe("AcpAdapterV2", () => {
         flavor: {
           driver: ACP_TEST_DRIVER,
           capabilities: AcpProviderCapabilitiesV2,
+          supportsNonstandardSetSessionModel: true,
           makeRuntime: makeMockRuntime({
             childProcessSpawner,
             mockAgentPath,

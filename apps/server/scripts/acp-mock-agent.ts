@@ -4,6 +4,7 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
@@ -293,20 +294,17 @@ function modeState(): AcpSchema.SessionModeState {
   };
 }
 
-const grokAcpModels: ReadonlyArray<AcpSchema.ModelInfo> = [
+// Grok Build's nonstandard pre-1.0 session/set_model surface, kept on the
+// mock so Grok-flavor tests can exercise the extension-channel fallback.
+const grokAcpModels: ReadonlyArray<{ readonly modelId: string; readonly name: string }> = [
   { modelId: "grok-build", name: "Grok Build" },
   { modelId: "grok-mock-alt", name: "Grok Mock Alt" },
 ];
 
-function modelState(): AcpSchema.SessionModelState {
-  const modelId = grokAcpModels.some((model) => model.modelId === currentModelId)
-    ? currentModelId
-    : "grok-build";
-  return {
-    currentModelId: modelId,
-    availableModels: grokAcpModels,
-  };
-}
+const SetSessionModelRequest = Schema.Struct({
+  sessionId: Schema.String,
+  modelId: Schema.String,
+});
 
 const program = Effect.gen(function* () {
   const agent = yield* EffectAcpAgent.AcpAgent;
@@ -393,7 +391,6 @@ const program = Effect.gen(function* () {
       return {
         sessionId,
         modes: modeState(),
-        models: modelState(),
         configOptions: configOptions(),
       };
     }),
@@ -439,7 +436,6 @@ const program = Effect.gen(function* () {
         yield* Effect.sleep(loadSessionDelayMs);
         return {
           modes: modeState(),
-          models: modelState(),
           configOptions: configOptions(),
         };
       }
@@ -455,7 +451,6 @@ const program = Effect.gen(function* () {
       });
       return {
         modes: modeState(),
-        models: modelState(),
         configOptions: configOptions(),
       };
     }),
@@ -483,7 +478,6 @@ const program = Effect.gen(function* () {
       return {
         sessionId: `${request.sessionId}-fork`,
         modes: modeState(),
-        models: modelState(),
         configOptions: configOptions(),
       };
     }),
@@ -494,7 +488,6 @@ const program = Effect.gen(function* () {
       yield* requireAuthentication();
       return {
         modes: modeState(),
-        models: modelState(),
         configOptions: configOptions(),
       };
     }),
@@ -507,7 +500,7 @@ const program = Effect.gen(function* () {
     }),
   );
 
-  yield* agent.handleSetSessionModel((request) =>
+  yield* agent.handleExtRequest("session/set_model", SetSessionModelRequest, (request) =>
     Effect.gen(function* () {
       if (!grokAcpModels.some((model) => model.modelId === request.modelId)) {
         return yield* AcpError.AcpRequestError.invalidParams(

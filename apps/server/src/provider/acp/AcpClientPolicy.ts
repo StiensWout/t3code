@@ -204,7 +204,7 @@ export function acpPermissionDisposition(
 /** Resolve explicitly tagged MCP approvals through the thread's normal policy. */
 export function acpMcpToolApprovalElicitationDisposition(
   runtimePolicy: AcpRuntimePolicy,
-  request: EffectAcpSchema.ElicitationRequest,
+  request: EffectAcpSchema.CreateElicitationRequest,
   nativeRequestId?: string,
 ): AcpPermissionDisposition | undefined {
   if (

@@ -185,6 +185,14 @@ export interface AcpAdapterV2Flavor {
     Crypto.Crypto | Scope.Scope
   >;
   readonly resolveModelId?: (selection: ModelSelection) => string | undefined;
+  /**
+   * Opts into the nonstandard `session/set_model` fallback for agents that
+   * advertise session models without a model config option. The current ACP
+   * spec has no such method, so only flavors whose agent is known to ship it
+   * (Grok Build) may enable this; calling it on a spec-compliant agent fails
+   * the session configure.
+   */
+  readonly supportsNonstandardSetSessionModel?: boolean;
   readonly registerExtensions?: (
     context: AcpAdapterV2ExtensionContext,
   ) => Effect.Effect<void, EffectAcpErrors.AcpError>;
@@ -463,6 +471,7 @@ export const AcpProviderCapabilitiesV2 = {
 function negotiatedCapabilities(
   base: OrchestrationV2ProviderCapabilities,
   started: AcpSessionRuntimeStartResult,
+  supportsNonstandardSetSessionModel: boolean,
 ): OrchestrationV2ProviderCapabilities {
   const agent = started.initializeResult.agentCapabilities ?? {};
   const session = agent.sessionCapabilities;
@@ -475,7 +484,7 @@ function negotiatedCapabilities(
     ...base,
     sessions: {
       ...base.sessions,
-      supportsModelSwitchInSession: setup.models != null || hasModelConfig,
+      supportsModelSwitchInSession: hasModelConfig || supportsNonstandardSetSessionModel,
     },
     threads: {
       ...base.threads,
@@ -4398,7 +4407,15 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                 if (Option.isNone(admitted)) return yield* Effect.never;
                 return admitted.value;
               }
-              const questions = Object.entries(params.requestedSchema.properties ?? {}).map(
+              if (!("requestedSchema" in params)) {
+                // Future elicitation modes beyond form and url decline rather
+                // than guessing at their semantics.
+                return { action: "decline" } as const;
+              }
+              const requestedSchema = params.requestedSchema;
+              const elicitationScopeId =
+                "sessionId" in params ? params.sessionId : `request:${params.requestId}`;
+              const questions = Object.entries(requestedSchema.properties ?? {}).map(
                 ([id, property], index): OrchestrationV2UserInputQuestion => {
                   const record = unknownRecord(property);
                   const enumValues = Array.isArray(record?.enum)
@@ -4428,7 +4445,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                     nextElicitationOrdinal,
                     (current) => current + 1,
                   );
-                  const nativeRequestId = `${params.sessionId}:elicitation:${ordinal}`;
+                  const nativeRequestId = `${elicitationScopeId}:elicitation:${ordinal}`;
                   return {
                     nativeItemId: nativeRequestId,
                     nativeRequestId,
@@ -4444,7 +4461,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                       action: "accept",
                       content: elicitationContent(
                         userInput.answers,
-                        new Set(Object.keys(params.requestedSchema.properties ?? {})),
+                        new Set(Object.keys(requestedSchema.properties ?? {})),
                       ),
                     } as const);
               yield* userInput.acknowledgeNativeResponse;
@@ -4684,7 +4701,11 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
         yield* Ref.set(activeSessionId, started.sessionId);
         yield* Ref.set(activeSessionSetup, started);
         rememberTerminalEnvironment(started.sessionId, input.threadId);
-        const capabilities = negotiatedCapabilities(flavor.capabilities, started);
+        const capabilities = negotiatedCapabilities(
+          flavor.capabilities,
+          started,
+          flavor.supportsNonstandardSetSessionModel === true,
+        );
         const canLoadSession = started.initializeResult.agentCapabilities?.loadSession === true;
         const canResumeSession =
           started.initializeResult.agentCapabilities?.sessionCapabilities?.resume != null;
@@ -4735,10 +4756,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               ) === true;
             if (hasModelConfig) {
               yield* runtime.setModel(requestedModel);
-            } else if (
-              startResult.sessionSetupResult.models != null &&
-              startResult.sessionSetupResult.models.currentModelId !== requestedModel
-            ) {
+            } else if (flavor.supportsNonstandardSetSessionModel === true) {
               yield* runtime.setSessionModel(requestedModel);
             }
           }

@@ -203,7 +203,7 @@ describe("acpMcpToolApprovalElicitationDisposition", () => {
       mode: "form",
       requestedSchema: { type: "object", properties: {} },
       _meta: { codex_approval_kind: "mcp_tool_call" },
-    } satisfies EffectAcpSchema.ElicitationRequest;
+    } satisfies EffectAcpSchema.CreateElicitationRequest;
 
     assert.equal(acpMcpToolApprovalElicitationDisposition(fullAccess, tagged), "allow");
     assert.equal(acpMcpToolApprovalElicitationDisposition(approvalRequired, tagged), "ask");

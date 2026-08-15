@@ -16,7 +16,6 @@ import * as RpcServer from "effect/unstable/rpc/RpcServer";
 
 import * as AcpSchema from "./schema.ts";
 import { CLIENT_METHODS } from "./_generated/meta.gen.ts";
-import * as AcpCompat from "./compat.ts";
 import * as AcpError from "./errors.ts";
 const isAcpError = Schema.is(AcpError.AcpError);
 
@@ -52,10 +51,8 @@ export type AcpIncomingNotification =
     }
   | {
       readonly _tag: "ElicitationComplete";
-      readonly method:
-        | typeof AcpCompat.CURRENT_CLIENT_METHODS.elicitation_complete
-        | typeof CLIENT_METHODS.session_elicitation_complete;
-      readonly params: AcpSchema.ElicitationCompleteNotification;
+      readonly method: typeof CLIENT_METHODS.elicitation_complete;
+      readonly params: AcpSchema.CompleteElicitationNotification;
     }
   | {
       readonly _tag: "ExtNotification";
@@ -124,7 +121,7 @@ interface AcpOutgoingWriterState {
 
 const decodeSessionUpdate = Schema.decodeUnknownEffect(AcpSchema.SessionNotification);
 const decodeElicitationComplete = Schema.decodeUnknownEffect(
-  AcpSchema.ElicitationCompleteNotification,
+  AcpSchema.CompleteElicitationNotification,
 );
 const parserFactory = RpcSerialization.ndJsonRpc();
 
@@ -432,10 +429,7 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
           Effect.flatMap(dispatchNotification),
         );
       }
-      if (
-        message.tag === AcpCompat.CURRENT_CLIENT_METHODS.elicitation_complete ||
-        message.tag === CLIENT_METHODS.session_elicitation_complete
-      ) {
+      if (message.tag === CLIENT_METHODS.elicitation_complete) {
         const method = message.tag;
         return decodeElicitationComplete(message.payload).pipe(
           Effect.map(

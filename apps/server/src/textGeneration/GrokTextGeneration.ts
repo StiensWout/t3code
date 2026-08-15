@@ -25,7 +25,6 @@ import {
 } from "./TextGenerationUtils.ts";
 import {
   applyGrokAcpModelSelection,
-  currentGrokModelIdFromSessionSetup,
   makeGrokAcpRuntime,
   resolveGrokAcpBaseModelId,
 } from "../provider/acp/GrokAcpSupport.ts";
@@ -82,10 +81,9 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
       });
 
       const promptResult = yield* Effect.gen(function* () {
-        const started = yield* runtime.start();
+        yield* runtime.start();
         yield* applyGrokAcpModelSelection({
           runtime,
-          currentModelId: currentGrokModelIdFromSessionSetup(started.sessionSetupResult),
           requestedModelId: resolvedModel,
           mapError: (cause) =>
             new TextGenerationError({

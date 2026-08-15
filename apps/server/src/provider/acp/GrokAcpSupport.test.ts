@@ -67,18 +67,16 @@ describe("applyGrokAcpModelSelection", () => {
         Effect.gen(function* () {
           modelCalls.push(modelId);
           if (failure) return yield* failure;
-          return {};
         }),
     };
     return { runtime, modelCalls };
   };
 
-  it.effect("calls session/set_model when the requested model differs from current", () =>
+  it.effect("calls session/set_model when a model is requested", () =>
     Effect.gen(function* () {
       const { runtime, modelCalls } = makeRecordingRuntime();
       const result = yield* applyGrokAcpModelSelection({
         runtime,
-        currentModelId: "grok-build",
         requestedModelId: "grok-mock-alt",
         mapError: (cause) => cause.message,
       });
@@ -87,31 +85,16 @@ describe("applyGrokAcpModelSelection", () => {
     }),
   );
 
-  it.effect("skips set_model when requested matches current", () =>
-    Effect.gen(function* () {
-      const { runtime, modelCalls } = makeRecordingRuntime();
-      const result = yield* applyGrokAcpModelSelection({
-        runtime,
-        currentModelId: "grok-build",
-        requestedModelId: "grok-build",
-        mapError: (cause) => cause.message,
-      });
-      expect(modelCalls).toEqual([]);
-      expect(result).toBe("grok-build");
-    }),
-  );
-
   it.effect("skips set_model when no model is requested", () =>
     Effect.gen(function* () {
       const { runtime, modelCalls } = makeRecordingRuntime();
       const result = yield* applyGrokAcpModelSelection({
         runtime,
-        currentModelId: "grok-build",
         requestedModelId: undefined,
         mapError: (cause) => cause.message,
       });
       expect(modelCalls).toEqual([]);
-      expect(result).toBe("grok-build");
+      expect(result).toBeUndefined();
     }),
   );
 
@@ -122,7 +105,6 @@ describe("applyGrokAcpModelSelection", () => {
       const error = yield* Effect.flip(
         applyGrokAcpModelSelection({
           runtime,
-          currentModelId: "grok-build",
           requestedModelId: "grok-mock-alt",
           mapError: (cause) => cause.message,
         }),

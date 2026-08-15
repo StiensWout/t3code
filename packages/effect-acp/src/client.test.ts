@@ -16,7 +16,6 @@ import { it, assert } from "@effect/vitest";
 
 import * as AcpClient from "./client.ts";
 import * as AcpSchema from "./_generated/schema.gen.ts";
-import * as AcpCompat from "./compat.ts";
 import * as AcpError from "./errors.ts";
 import type * as AcpProtocol from "./protocol.ts";
 import {
@@ -38,16 +37,8 @@ const PermissionRequest = jsonRpcRequest(
   AcpSchema.RequestPermissionRequest,
 );
 const PermissionResponse = jsonRpcResponse(AcpSchema.RequestPermissionResponse);
-const CurrentElicitationRequest = jsonRpcRequest(
-  AcpCompat.CURRENT_CLIENT_METHODS.elicitation_create,
-  AcpSchema.ElicitationRequest,
-);
-const CurrentElicitationResponse = jsonRpcResponse(AcpCompat.NormalizedElicitationResponse);
-const LegacyElicitationRequest = jsonRpcRequest(
-  "session/elicitation",
-  AcpSchema.ElicitationRequest,
-);
-const LegacyElicitationResponse = jsonRpcResponse(AcpSchema.ElicitationResponse);
+const ElicitationRequest = jsonRpcRequest("elicitation/create", AcpSchema.CreateElicitationRequest);
+const ElicitationResponse = jsonRpcResponse(AcpSchema.CreateElicitationResponse);
 const decodePromptRequestLine = Schema.decodeEffect(Schema.fromJsonString(PromptRequest));
 const XAiPromptCompleteNotification = jsonRpcNotification(
   "_x.ai/session/prompt_complete",
@@ -569,60 +560,39 @@ it.layer(NodeServices.layer)("effect-acp client", (it) => {
     }),
   );
 
-  it.effect("normalizes current and legacy elicitation response shapes", () =>
+  it.effect("answers elicitation/create with the flat action shape", () =>
     Effect.gen(function* () {
       const { stdio, input, output } = yield* makeInMemoryStdio();
       const scope = yield* Scope.make();
       const acp = yield* AcpClient.make(stdio).pipe(Effect.provideService(Scope.Scope, scope));
       yield* acp.handleElicitation(() =>
-        Effect.succeed({ action: "accept", content: { approved: true } }),
+        Effect.succeed({ action: "accept" as const, content: { approved: true } }),
       );
-      const params = {
-        sessionId: "session-1",
-        mode: "form" as const,
-        message: "Approve this call?",
-        requestedSchema: {
-          type: "object" as const,
-          properties: { approved: { type: "boolean" as const } },
-        },
-      };
 
       yield* Queue.offer(
         input,
-        yield* encodeJsonl(CurrentElicitationRequest, {
+        yield* encodeJsonl(ElicitationRequest, {
           jsonrpc: "2.0",
-          id: "current-elicitation",
-          method: AcpCompat.CURRENT_CLIENT_METHODS.elicitation_create,
-          params,
+          id: "elicitation",
+          method: "elicitation/create",
+          params: {
+            sessionId: "session-1",
+            mode: "form" as const,
+            message: "Approve this call?",
+            requestedSchema: {
+              type: "object" as const,
+              properties: { approved: { type: "boolean" as const } },
+            },
+          },
           headers: [],
         }),
       );
-      const current = yield* Queue.take(output).pipe(
-        Effect.flatMap(Schema.decodeEffect(Schema.fromJsonString(CurrentElicitationResponse))),
+      const response = yield* Queue.take(output).pipe(
+        Effect.flatMap(Schema.decodeEffect(Schema.fromJsonString(ElicitationResponse))),
       );
-      assert.deepEqual(current.result, {
+      assert.deepEqual(response.result, {
         action: "accept",
         content: { approved: true },
-      });
-
-      yield* Queue.offer(
-        input,
-        yield* encodeJsonl(LegacyElicitationRequest, {
-          jsonrpc: "2.0",
-          id: "legacy-elicitation",
-          method: "session/elicitation",
-          params,
-          headers: [],
-        }),
-      );
-      const legacy = yield* Queue.take(output).pipe(
-        Effect.flatMap(Schema.decodeEffect(Schema.fromJsonString(LegacyElicitationResponse))),
-      );
-      assert.deepEqual(legacy.result, {
-        action: {
-          action: "accept",
-          content: { approved: true },
-        },
       });
       yield* Scope.close(scope, Exit.void);
     }),

@@ -178,43 +178,10 @@ describe("AcpRuntimeModel", () => {
     ).toBe(true);
   });
 
-  it("builds a synthetic load response from initialize model state", () => {
+  it("ignores malformed initialize mode state in synthetic load responses", () => {
     const response = syntheticLoadSessionResponseFromInitialize({
       protocolVersion: 1,
       _meta: {
-        modelState: {
-          currentModelId: "grok-build",
-          availableModels: [{ modelId: "grok-build", name: "Grok Build" }],
-        },
-      },
-    } satisfies EffectAcpSchema.InitializeResponse);
-
-    expect(response.models?.currentModelId).toBe("grok-build");
-    expect(response._meta).toMatchObject({ t3SessionLoadReady: "replay_idle" });
-  });
-
-  it("accepts initialize model descriptions with null", () => {
-    const response = syntheticLoadSessionResponseFromInitialize({
-      protocolVersion: 1,
-      _meta: {
-        modelState: {
-          currentModelId: "grok-build",
-          availableModels: [{ modelId: "grok-build", name: "Grok Build", description: null }],
-        },
-      },
-    } satisfies EffectAcpSchema.InitializeResponse);
-
-    expect(response.models?.availableModels[0]?.description).toBeNull();
-  });
-
-  it("ignores malformed initialize model state in synthetic load responses", () => {
-    const response = syntheticLoadSessionResponseFromInitialize({
-      protocolVersion: 1,
-      _meta: {
-        modelState: {
-          currentModelId: "grok-build",
-          availableModels: [null],
-        },
         modeState: {
           currentModeId: "code",
           availableModes: [{ id: "code", name: 12 }],
@@ -222,7 +189,6 @@ describe("AcpRuntimeModel", () => {
       },
     } as EffectAcpSchema.InitializeResponse);
 
-    expect(response.models).toBeUndefined();
     expect(response.modes).toBeUndefined();
     expect(response._meta).toMatchObject({ t3SessionLoadReady: "replay_idle" });
   });
