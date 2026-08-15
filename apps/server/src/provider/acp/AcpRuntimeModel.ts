@@ -5,6 +5,7 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import type * as EffectAcpSchema from "effect-acp/schema";
 import { deriveToolActivityPresentation } from "@t3tools/shared/toolActivity";
+import { T3_MCP_TOOL_NAMES } from "@t3tools/shared/t3McpToolPresentation";
 import type { ToolLifecycleItemType } from "@t3tools/contracts";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -298,6 +299,7 @@ function makeToolCallState(
     readonly rawOutput?: unknown;
     readonly content?: ReadonlyArray<EffectAcpSchema.ToolCallContent> | null | undefined;
     readonly locations?: ReadonlyArray<EffectAcpSchema.ToolCallLocation> | null | undefined;
+    readonly _meta?: unknown;
   },
   options?: {
     readonly fallbackStatus?: "pending" | "inProgress" | "completed" | "failed";
@@ -330,6 +332,11 @@ function makeToolCallState(
   }
   if (input.rawInput !== undefined) {
     data.rawInput = input.rawInput;
+  }
+  if (isRecord(input._meta)) {
+    // Some agents identify MCP calls only here (goose `goose.toolCall`,
+    // qwen `toolName`/`serverId`, claude-acp `claudeCode.toolName`).
+    data.meta = input._meta;
   }
   if (input.rawOutput !== undefined) {
     data.rawOutput = input.rawOutput;
@@ -384,6 +391,7 @@ function parseTypedToolCallState(
       rawOutput: event.rawOutput,
       content: event.content,
       locations: event.locations,
+      _meta: event._meta,
     },
     options,
   );
@@ -422,13 +430,24 @@ export interface AcpMcpToolCallIdentity {
 const ACP_MCP_FALLBACK_CALL = /(?:^|[\s"'=])acp-mcp-call[\s"']+([A-Za-z0-9_.-]+)/u;
 
 /**
- * Agents that flatten injected MCP tools into model-facing function names
- * title the call `<server><separator><tool>` (Kilo emits
- * "t3-code_orchestrator_capabilities", captured live 2026-08-15). T3 always
- * injects its server as "t3-code", so a title with that prefix identifies a
- * T3 MCP call regardless of the separator the agent picked.
+ * Agents flatten injected MCP tools into model-facing function names with no
+ * shared convention (survey of the 2026-08 registry builds): Kilo and
+ * opencode use `t3-code_<tool>`, claude-acp and qwen `mcp__t3-code__<tool>`,
+ * Amp `mcp__t3_code__<tool>` (hyphens mangled), droid `t3-code___<tool>`,
+ * Copilot `t3-code-<tool>`, cline appends `: <args json>`. T3 always injects
+ * its server as "t3-code", and matches are additionally gated on the known
+ * T3 tool inventory, so the separator match can stay loose.
  */
-const T3_MCP_TITLE_CALL = /^(?:mcp[-_]{1,2})?t3[-_ ]?code(?:__|[-_.:/ ])(?<tool>[A-Za-z0-9_.-]+)$/i;
+const T3_MCP_TITLE_CALL =
+  /^(?:mcp[-_]{1,2})?t3[-_ ]?code[-_.:/ ]{1,3}(?<tool>[A-Za-z0-9][A-Za-z0-9_.-]*)(?::.*)?$/i;
+
+/**
+ * Gemini CLI titles injected MCP calls "<tool> (<server> MCP Server)" and
+ * qwen-code appends ": <args json>" to the same template; Auggie namespaces
+ * tool-first as "<tool>_t3-code".
+ */
+const T3_MCP_TITLE_SUFFIX_CALL =
+  /^(?<tool>[A-Za-z0-9][A-Za-z0-9_.-]*?)(?: \(t3[-_ ]?code MCP Server\)(?::|$)|[-_.]t3[-_ ]?code$)/i;
 
 /**
  * Best-effort recovery of MCP identity from a generic ACP tool call.
@@ -453,13 +472,33 @@ export function extractMcpToolCallIdentity(
   if (server.length > 0 && tool.length > 0) {
     return { server, tool };
   }
-  // The verbatim wire title survives merges even when a later titleless
-  // update replaces the presentation title, so match it rather than the
-  // summarized state title.
-  const verbatimTitle = typeof toolCall.data.title === "string" ? toolCall.data.title.trim() : "";
-  const titleMatch = T3_MCP_TITLE_CALL.exec(verbatimTitle);
-  if (titleMatch?.groups?.tool !== undefined) {
-    return { server: "t3-code", tool: titleMatch.groups.tool };
+  // Agents without tagged rawInput identify their MCP calls through _meta
+  // (goose, qwen, claude-acp) or only through the namespaced function name
+  // in the title. The verbatim wire title survives merges even when a later
+  // titleless or LLM-enriched update replaces the presentation title, so
+  // match those rather than the summarized state title. Name-derived matches
+  // are gated on the known T3 tool inventory so path-like titles (for
+  // example "t3-code/README.md") never brand.
+  const meta = isRecord(toolCall.data.meta) ? toolCall.data.meta : undefined;
+  const claudeCode = isRecord(meta?.claudeCode) ? meta.claudeCode : undefined;
+  const gooseToolCall = isRecord(meta?.goose)
+    ? isRecord(meta.goose.toolCall)
+      ? meta.goose.toolCall
+      : undefined
+    : undefined;
+  const candidates = [
+    meta?.toolName,
+    claudeCode?.toolName,
+    gooseToolCall?.toolName,
+    toolCall.data.title,
+  ].filter((value): value is string => typeof value === "string");
+  for (const candidate of candidates) {
+    const trimmed = candidate.trim();
+    const match = T3_MCP_TITLE_CALL.exec(trimmed) ?? T3_MCP_TITLE_SUFFIX_CALL.exec(trimmed);
+    const candidateTool = match?.groups?.tool;
+    if (candidateTool !== undefined && T3_MCP_TOOL_NAMES.has(candidateTool)) {
+      return { server: "t3-code", tool: candidateTool };
+    }
   }
   const commands = [
     ...(toolCall.command === undefined ? [] : [toolCall.command]),

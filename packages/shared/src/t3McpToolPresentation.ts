@@ -39,6 +39,14 @@ const T3_MCP_TOOL_DISPLAY_NAMES: Record<string, string> = {
   preview_recording_stop: "Stop recording the preview browser",
 };
 
+/**
+ * The T3 orchestration tool inventory, used to gate loose name matching on
+ * both the server (ACP MCP identity recovery) and the client (logo branding).
+ */
+export const T3_MCP_TOOL_NAMES: ReadonlySet<string> = new Set(
+  Object.keys(T3_MCP_TOOL_DISPLAY_NAMES),
+);
+
 function normalizeT3McpToolLabel(value: string): string {
   return value.replace(/\s+(?:complete|completed)\s*$/i, "").trim();
 }

@@ -545,6 +545,92 @@ describe("extractMcpToolCallIdentity", () => {
     });
   });
 
+  it("recovers T3 identity from Gemini and qwen MCP-server title templates", () => {
+    // Gemini CLI 0.55.1: "<tool> (<server> MCP Server)"; qwen-code 0.21.12
+    // appends ": <args json>" to the same template.
+    const gemini = toolCallFromUpdate({
+      sessionUpdate: "tool_call",
+      toolCallId: "gemini-1",
+      kind: "other",
+      title: "delegate_task (t3-code MCP Server)",
+      status: "in_progress",
+    });
+    const qwen = toolCallFromUpdate({
+      sessionUpdate: "tool_call",
+      toolCallId: "qwen-1",
+      kind: "other",
+      title: 'task_status (t3-code MCP Server): {"taskId":"node:delegated-task:1"}',
+      status: "pending",
+      rawInput: { taskId: "node:delegated-task:1" },
+    });
+
+    expect(extractMcpToolCallIdentity(gemini)).toEqual({
+      server: "t3-code",
+      tool: "delegate_task",
+    });
+    expect(extractMcpToolCallIdentity(qwen)).toEqual({ server: "t3-code", tool: "task_status" });
+  });
+
+  it("recovers T3 identity across the registry agents' naming conventions", () => {
+    // One representative per surveyed convention (2026-08 registry builds):
+    // droid triple underscore, Copilot hyphen, Amp mangled server + detail
+    // tail, cline args tail, Auggie tool-first suffix.
+    for (const title of [
+      "t3-code___delegate_task",
+      "t3-code-delegate_task",
+      'mcp__t3_code__delegate_task: {"mode":"async"}',
+      't3-code__delegate_task: {"mode":"async"}',
+      "delegate_task_t3-code",
+    ]) {
+      const toolCall = toolCallFromUpdate({
+        sessionUpdate: "tool_call",
+        toolCallId: "convention-1",
+        kind: "other",
+        title,
+        status: "pending",
+      });
+      expect(extractMcpToolCallIdentity(toolCall), title).toEqual({
+        server: "t3-code",
+        tool: "delegate_task",
+      });
+    }
+  });
+
+  it("recovers T3 identity from goose _meta despite LLM-rewritten titles", () => {
+    // goose enriches titles asynchronously, so only _meta.goose.toolCall is
+    // stable; shape from crates/goose/src/acp/server/tool_calls/conversion.rs.
+    const toolCall = toolCallFromUpdate({
+      sessionUpdate: "tool_call",
+      toolCallId: "goose-1",
+      title: "Checking on the delegated task",
+      status: "in_progress",
+      _meta: {
+        goose: {
+          toolCall: { toolName: "t3-code__task_status", extensionName: "t3-code" },
+          messageId: "message-1",
+        },
+      },
+    });
+
+    expect(extractMcpToolCallIdentity(toolCall)).toEqual({
+      server: "t3-code",
+      tool: "task_status",
+    });
+  });
+
+  it("does not brand path-like or unknown-tool titles", () => {
+    for (const title of ["t3-code/README.md", "t3-code_not_a_real_tool"]) {
+      const toolCall = toolCallFromUpdate({
+        sessionUpdate: "tool_call",
+        toolCallId: "path-1",
+        kind: "other",
+        title,
+        status: "pending",
+      });
+      expect(extractMcpToolCallIdentity(toolCall), title).toBeUndefined();
+    }
+  });
+
   it("leaves ordinary execute calls unidentified", () => {
     const toolCall = toolCallFromUpdate({
       sessionUpdate: "tool_call",
