@@ -92,6 +92,7 @@ const THEME_EDITOR_ROLE_GROUPS: ReadonlyArray<{
         label: "Muted text",
         role: "mutedForeground",
         roles: [
+          "textMuted",
           "mutedForeground",
           "placeholder",
           "secondaryLabel",
@@ -128,7 +129,15 @@ const THEME_EDITOR_ROLE_GROUPS: ReadonlyArray<{
         id: "accent",
         label: "Accent",
         role: "accent",
-        roles: ["accent", "focus", "update", "updateForeground", "updateSurface", "terminalCursor"],
+        roles: [
+          "accent",
+          "accentForeground",
+          "focus",
+          "update",
+          "updateForeground",
+          "updateSurface",
+          "terminalCursor",
+        ],
       },
       {
         id: "action",
@@ -176,7 +185,13 @@ const THEME_EDITOR_ROLE_GROUPS: ReadonlyArray<{
         id: "terminal-background",
         label: "Terminal background",
         role: "terminalBackground",
-        roles: ["terminalBackground", "terminalForeground", "terminalSelection"],
+        roles: [
+          "terminalBackground",
+          "terminalForeground",
+          "terminalSelection",
+          "terminalScrollbar",
+          "terminalScrollbarHover",
+        ],
       },
     ],
   },
@@ -482,7 +497,7 @@ export function ThemeEditorPanel({
   const selectThemeRole = useCallback((role: ThemeColorRole, reveal = false) => {
     const visibleRole = getThemeEditorColorFamily(role)?.role ?? role;
     setSelectedRole(visibleRole);
-    if (!THEME_EDITOR_SIMPLE_ROLES.includes(role)) {
+    if (!THEME_EDITOR_SIMPLE_ROLES.includes(visibleRole)) {
       setIsAdvanced(true);
       setRoleQuery("");
     }

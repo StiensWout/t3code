@@ -1526,6 +1526,7 @@ export function updateThemeColorFamily(
     case "mutedForeground":
       return {
         ...colors,
+        textMuted: normalized,
         mutedForeground: normalized,
         placeholder: normalized,
         secondaryLabel: normalized,
@@ -1559,6 +1560,7 @@ export function updateThemeColorFamily(
       return {
         ...colors,
         accent: normalized,
+        accentForeground: foregroundOn(selected),
         focus: normalized,
         update: normalized,
         updateForeground: foregroundOn(updateSurface),
@@ -1595,15 +1597,23 @@ export function updateThemeColorFamily(
         sidebarRowSelected: normalized,
       };
     }
-    case "terminalBackground":
+    case "terminalBackground": {
+      const terminalForeground = readableThemeForeground(selected);
       return {
         ...colors,
         terminalBackground: normalized,
-        terminalForeground: foregroundOn(selected),
+        terminalForeground: colorOf(terminalForeground),
         terminalSelection: colorOf(
           mixThemeRgbColors(selected, accent, terminalIsDark ? 0.35 : 0.18),
         ),
+        terminalScrollbar: colorOf(
+          mixThemeRgbColors(selected, terminalForeground, terminalIsDark ? 0.42 : 0.22),
+        ),
+        terminalScrollbarHover: colorOf(
+          mixThemeRgbColors(selected, terminalForeground, terminalIsDark ? 0.55 : 0.32),
+        ),
       };
+    }
     case "error": {
       const status = statusColors();
       return {
