@@ -632,6 +632,7 @@ export function ProviderInstanceCard({
       displayName={displayName}
       accentColor={accentColor}
       acpRegistryAgentId={readConfigString(instance.config, "agentId") ?? undefined}
+      acpRegistryIconUrl={readConfigString(instance.config, "registryIconUrl") ?? undefined}
       showBadge={Boolean(accentColor)}
       statusDotClassName={statusStyle.dot}
       indicatorBackground="var(--card)"
