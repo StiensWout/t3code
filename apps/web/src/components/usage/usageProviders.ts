@@ -14,18 +14,18 @@ export const PROVIDER_LABEL: Record<UsageProviderKind, string> = {
   codex: "Codex",
 };
 
-/** Claude's brand orange against a neutral white for Codex. */
+/** Claude keeps its brand orange; Codex follows the theme's neutral foreground. */
 export const PROVIDER_COLOR: Record<UsageProviderKind, string> = {
   claude: "#d97757",
-  codex: "#e6e6e6",
+  codex: "var(--foreground)",
 };
 
 /**
  * Brand marks, reused from the provider picker.
  *
- * These ship their own fills (`#d97757` for Claude, white on dark for OpenAI),
- * which are the same colours as the chart bands, so swapping a colour dot for a
- * mark keeps the series association intact rather than trading it away.
+ * These ship their own fills (`#d97757` for Claude, neutral for OpenAI), which
+ * match the chart bands, so swapping a colour dot for a mark keeps the series
+ * association intact rather than trading it away.
  */
 export const PROVIDER_MARK: Record<UsageProviderKind, Icon> = {
   claude: ClaudeAI,
