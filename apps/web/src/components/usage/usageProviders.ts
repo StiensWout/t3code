@@ -1,6 +1,14 @@
 import type { UsageProviderKind } from "@t3tools/contracts";
 
-import { ClaudeAI, type Icon, OpenAI } from "../Icons";
+import { ClaudeAI, CursorIcon, GrokIcon, type Icon, OpenAI } from "../Icons";
+
+type UsageProviderPresentationKind = UsageProviderKind | "cursor" | "grok";
+
+type UsageProviderPresentation = {
+  readonly label: string;
+  readonly color: string;
+  readonly mark: Icon;
+};
 
 /**
  * Series and table order. The chart layers both providers from a shared zero
@@ -9,25 +17,30 @@ import { ClaudeAI, type Icon, OpenAI } from "../Icons";
  */
 export const PROVIDER_ORDER: readonly UsageProviderKind[] = ["codex", "claude"];
 
-export const PROVIDER_LABEL: Record<UsageProviderKind, string> = {
-  claude: "Claude Code",
-  codex: "Codex",
-};
-
-/** Claude keeps its brand orange; Codex follows the theme's neutral foreground. */
-export const PROVIDER_COLOR: Record<UsageProviderKind, string> = {
-  claude: "#d97757",
-  codex: "var(--foreground)",
-};
-
 /**
- * Brand marks, reused from the provider picker.
- *
- * These ship their own fills (`#d97757` for Claude, neutral for OpenAI), which
- * match the chart bands, so swapping a colour dot for a mark keeps the series
- * association intact rather than trading it away.
+ * Usage-series presentation, including planned Cursor and Grok support. Their
+ * monochrome marks stay on-brand while distinct mode-aware series colors keep
+ * a future four-provider chart readable.
  */
-export const PROVIDER_MARK: Record<UsageProviderKind, Icon> = {
-  claude: ClaudeAI,
-  codex: OpenAI,
-};
+export const PROVIDER_PRESENTATION = {
+  claude: {
+    label: "Claude Code",
+    color: "#d97757",
+    mark: ClaudeAI,
+  },
+  codex: {
+    label: "Codex",
+    color: "var(--foreground)",
+    mark: OpenAI,
+  },
+  cursor: {
+    label: "Cursor",
+    color: "light-dark(var(--color-blue-700), var(--color-blue-300))",
+    mark: CursorIcon,
+  },
+  grok: {
+    label: "Grok",
+    color: "light-dark(var(--color-violet-700), var(--color-violet-300))",
+    mark: GrokIcon,
+  },
+} satisfies Record<UsageProviderPresentationKind, UsageProviderPresentation>;
