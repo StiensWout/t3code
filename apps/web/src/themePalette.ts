@@ -1468,6 +1468,165 @@ function themeActionColors(
   };
 }
 
+/**
+ * Update one Advanced-editor color family without normalizing the rest of an
+ * imported or hand-tuned palette. The editor exposes a representative role
+ * for each family; paired foregrounds and nearby states are derived only when
+ * that representative is changed.
+ */
+export function updateThemeColorFamily(
+  appearance: ThemeAppearance,
+  colors: ThemeColors,
+  role: ThemeColorRole,
+  value: string,
+): ThemeColors {
+  const normalized = toCanonicalThemeColor(value);
+  if (!normalized) return { ...colors, [role]: value };
+
+  const canvas = parseThemeRgbColor(
+    colors.canvas,
+    appearance === "dark" ? { r: 24, g: 15, b: 27 } : { r: 250, g: 245, b: 250 },
+  );
+  const selected = parseThemeRgbColor(normalized, canvas);
+  const accent = parseThemeRgbColor(colors.accent, { r: 168, g: 67, b: 112 });
+  const canvasIsDark = themeRelativeLuminance(canvas) < 0.179;
+  const terminalIsDark = themeRelativeLuminance(selected) < 0.179;
+  const colorOf = (color: ThemeRgbColor) => themeRgbToThemeColor(color);
+  const foregroundOn = (background: ThemeRgbColor) => colorOf(readableThemeForeground(background));
+  const statusColors = () => {
+    const surface = mixThemeRgbColors(canvas, selected, canvasIsDark ? 0.16 : 0.08);
+    const foreground = solveOklchLightness(
+      themeRgbToOklch(selected),
+      surface,
+      4.6,
+      canvasIsDark ? "lighter" : "darker",
+    );
+    return {
+      foreground: themeOklchToThemeColor(foreground),
+      surface: colorOf(surface),
+    };
+  };
+
+  switch (role) {
+    case "canvas":
+      return { ...colors, canvas: normalized, chrome: normalized, toolbar: normalized };
+    case "surface":
+    case "surfaceRaised":
+    case "surfaceOverlay":
+    case "input":
+    case "sidebarControlSurface":
+      return { ...colors, [role]: normalized };
+    case "text":
+      return {
+        ...colors,
+        text: normalized,
+        toolbarForeground: normalized,
+        toolbarControlForeground: normalized,
+      };
+    case "mutedForeground":
+      return {
+        ...colors,
+        mutedForeground: normalized,
+        placeholder: normalized,
+        secondaryLabel: normalized,
+        iconMuted: normalized,
+        sidebarMutedForeground: normalized,
+      };
+    case "border":
+      return {
+        ...colors,
+        border: normalized,
+        toolbarBorder: normalized,
+        sidebarBorder: normalized,
+      };
+    case "secondary":
+      return {
+        ...colors,
+        secondary: normalized,
+        secondaryForeground: foregroundOn(selected),
+        muted: normalized,
+        toolbarControl: normalized,
+      };
+    case "accentSurface":
+      return {
+        ...colors,
+        accentSurface: normalized,
+        accentSurfaceForeground: foregroundOn(selected),
+        toolbarControlHover: normalized,
+      };
+    case "accent": {
+      const updateSurface = mixThemeRgbColors(canvas, selected, canvasIsDark ? 0.32 : 0.16);
+      return {
+        ...colors,
+        accent: normalized,
+        focus: normalized,
+        update: normalized,
+        updateForeground: foregroundOn(updateSurface),
+        updateSurface: colorOf(updateSurface),
+        terminalCursor: normalized,
+      };
+    }
+    case "messageAction":
+      return { ...colors, ...themeActionColors(normalized) };
+    case "messageSurface":
+      return {
+        ...colors,
+        messageSurface: normalized,
+        messageForeground: foregroundOn(selected),
+      };
+    case "codeBackground":
+      return {
+        ...colors,
+        codeBackground: normalized,
+        codeForeground: foregroundOn(selected),
+      };
+    case "sidebar":
+      return {
+        ...colors,
+        sidebar: normalized,
+        sidebarForeground: foregroundOn(selected),
+      };
+    case "sidebarRowSelected": {
+      const sidebar = parseThemeRgbColor(colors.sidebar, canvas);
+      return {
+        ...colors,
+        sidebarRowHover: colorOf(mixThemeRgbColors(sidebar, selected, 0.5)),
+        sidebarRowActive: colorOf(mixThemeRgbColors(sidebar, selected, 0.8)),
+        sidebarRowSelected: normalized,
+      };
+    }
+    case "terminalBackground":
+      return {
+        ...colors,
+        terminalBackground: normalized,
+        terminalForeground: foregroundOn(selected),
+        terminalSelection: colorOf(
+          mixThemeRgbColors(selected, accent, terminalIsDark ? 0.35 : 0.18),
+        ),
+      };
+    case "error": {
+      const status = statusColors();
+      return {
+        ...colors,
+        error: normalized,
+        errorForeground: status.foreground,
+        errorSurface: status.surface,
+      };
+    }
+    case "warning": {
+      const status = statusColors();
+      return {
+        ...colors,
+        warning: normalized,
+        warningForeground: status.foreground,
+        warningSurface: status.surface,
+      };
+    }
+    default:
+      return { ...colors, [role]: normalized };
+  }
+}
+
 export const GROVE_THEME: ThemeDefinition = {
   id: GROVE_THEME_ID,
   label: GROVE_THEME_LABEL,
