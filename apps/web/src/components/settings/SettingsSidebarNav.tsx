@@ -35,7 +35,6 @@ import {
 } from "../ui/sidebar";
 import { T3ConnectSidebarAvatar, T3ConnectSidebarSignIn } from "../clerk/T3ConnectSidebarSignIn";
 import { scrollToSettingsTarget } from "./settingsLayout";
-import { isElectron } from "../../env";
 import {
   searchSettings,
   SETTINGS_SECTION_LABELS,
@@ -77,10 +76,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
   const [activeResultIndex, setActiveResultIndex] = useState(0);
-  const results = useMemo(
-    () => searchSettings(query).filter((item) => !item.desktopOnly || isElectron),
-    [query],
-  );
+  const results = useMemo(() => searchSettings(query), [query]);
   const isSearching = query.trim().length > 0;
   const hasResults = results.length > 0;
 

@@ -216,7 +216,7 @@ function EnabledOptions({
     <div
       inert={!enabled}
       className={cn(
-        "grid transition-[grid-template-rows,opacity] duration-200 ease-out",
+        "grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none",
         enabled ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
       )}
     >
@@ -241,8 +241,12 @@ function SoftGroupedPanel({ model }: { readonly model: NotificationSettingsModel
                 className="flex cursor-pointer items-center justify-between gap-4 rounded-lg px-2 py-2 hover:bg-muted/35"
               >
                 <span>
-                  <span className="block text-sm font-medium">{option.title}</span>
-                  <span className="block text-xs text-muted-foreground">{option.description}</span>
+                  <span className="block text-sm font-medium tracking-[-0.005em] text-foreground">
+                    {option.title}
+                  </span>
+                  <span className="block text-[13px] leading-[1.45] text-muted-foreground/80">
+                    {option.description}
+                  </span>
                 </span>
                 <Switch
                   checked={model.settings.events[option.event]}
