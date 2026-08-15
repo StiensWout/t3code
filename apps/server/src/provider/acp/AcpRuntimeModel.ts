@@ -422,6 +422,15 @@ export interface AcpMcpToolCallIdentity {
 const ACP_MCP_FALLBACK_CALL = /(?:^|[\s"'=])acp-mcp-call[\s"']+([A-Za-z0-9_.-]+)/u;
 
 /**
+ * Agents that flatten injected MCP tools into model-facing function names
+ * title the call `<server><separator><tool>` (Kilo emits
+ * "t3-code_orchestrator_capabilities", captured live 2026-08-15). T3 always
+ * injects its server as "t3-code", so a title with that prefix identifies a
+ * T3 MCP call regardless of the separator the agent picked.
+ */
+const T3_MCP_TITLE_CALL = /^(?:mcp[-_]{1,2})?t3[-_ ]?code(?:__|[-_.:/ ])(?<tool>[A-Za-z0-9_.-]+)$/i;
+
+/**
  * Best-effort recovery of MCP identity from a generic ACP tool call.
  *
  * ACP has no typed MCP tool-call item, so agents surface MCP calls in
@@ -443,6 +452,14 @@ export function extractMcpToolCallIdentity(
   const tool = typeof rawInput?.tool === "string" ? rawInput.tool.trim() : "";
   if (server.length > 0 && tool.length > 0) {
     return { server, tool };
+  }
+  // The verbatim wire title survives merges even when a later titleless
+  // update replaces the presentation title, so match it rather than the
+  // summarized state title.
+  const verbatimTitle = typeof toolCall.data.title === "string" ? toolCall.data.title.trim() : "";
+  const titleMatch = T3_MCP_TITLE_CALL.exec(verbatimTitle);
+  if (titleMatch?.groups?.tool !== undefined) {
+    return { server: "t3-code", tool: titleMatch.groups.tool };
   }
   const commands = [
     ...(toolCall.command === undefined ? [] : [toolCall.command]),

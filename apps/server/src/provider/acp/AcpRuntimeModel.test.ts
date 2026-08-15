@@ -517,6 +517,34 @@ describe("extractMcpToolCallIdentity", () => {
     });
   });
 
+  it("recovers T3 identity from server-namespaced titles across titleless updates", () => {
+    // Captured verbatim from Kilo 7.4.22 2026-08-15: the initial tool_call
+    // titles the MCP function "<server>_<tool>" with kind "other", and the
+    // completed update carries no title at all, so the merged presentation
+    // title regresses to "Tool" while data.title keeps the wire value.
+    const created = toolCallFromUpdate({
+      sessionUpdate: "tool_call",
+      toolCallId: "chatcmpl-tool-b2a6142ee1a510a5",
+      kind: "other",
+      title: "t3-code_orchestrator_capabilities",
+      status: "pending",
+      locations: [],
+      rawInput: {},
+    });
+    const completed = toolCallFromUpdate({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "chatcmpl-tool-b2a6142ee1a510a5",
+      status: "completed",
+      content: [{ type: "content", content: { type: "text", text: '{"ok":true}' } }],
+    });
+    const merged = mergeToolCallState(created, completed);
+
+    expect(extractMcpToolCallIdentity(merged)).toEqual({
+      server: "t3-code",
+      tool: "orchestrator_capabilities",
+    });
+  });
+
   it("leaves ordinary execute calls unidentified", () => {
     const toolCall = toolCallFromUpdate({
       sessionUpdate: "tool_call",
