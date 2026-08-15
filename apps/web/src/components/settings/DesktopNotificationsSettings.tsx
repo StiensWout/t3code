@@ -227,8 +227,8 @@ function EnabledOptions({
 
 function SoftGroupedPanel({ model }: { readonly model: NotificationSettingsModel }) {
   return (
-    <div className="mx-3 rounded-2xl bg-muted/25 p-1 sm:mx-4">
-      <div className="rounded-xl bg-background/80">
+    <div className="rounded-2xl bg-muted/25">
+      <div className="rounded-2xl bg-background/80">
         <MasterRow model={model} />
         <EnabledOptions enabled={model.settings.enabled}>
           <div className="border-t border-border/50 px-3 pt-3 pb-2 sm:px-4">
