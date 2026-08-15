@@ -212,8 +212,3 @@ const platformLayer = Layer.succeed(
 );
 
 export const layer = Layer.effect(DesktopNotifications, make).pipe(Layer.provide(platformLayer));
-
-export const layerTest = (platform: DesktopNotificationPlatformService["Service"]) =>
-  Layer.effect(DesktopNotifications, make).pipe(
-    Layer.provide(Layer.succeed(DesktopNotificationPlatformService, platform)),
-  );

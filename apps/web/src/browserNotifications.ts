@@ -11,7 +11,6 @@ import {
 const DELIVERY_STORAGE_KEY = "t3code:browser-notification-deliveries:v1";
 const DELIVERY_LOCK_NAME = "t3code:browser-notification-delivery";
 const DELIVERY_RECORD_TTL_MS = 5 * 60_000;
-const MAX_DELIVERY_RECORDS = 100;
 
 export type BrowserNotificationPermission = NotificationPermission | "unsupported";
 
@@ -78,10 +77,9 @@ function readDeliveryRecords(storage: Pick<Storage, "getItem">): Record<string, 
 
 function trimDeliveryRecords(records: Record<string, number>, now: number): Record<string, number> {
   return Object.fromEntries(
-    Object.entries(records)
-      .filter(([, deliveredAt]) => now - deliveredAt <= DELIVERY_RECORD_TTL_MS)
-      .toSorted((left, right) => right[1] - left[1])
-      .slice(0, MAX_DELIVERY_RECORDS),
+    Object.entries(records).filter(
+      ([, deliveredAt]) => now - deliveredAt <= DELIVERY_RECORD_TTL_MS,
+    ),
   );
 }
 
@@ -96,8 +94,8 @@ export function browserNotificationDeliveryKey(
 export async function deliverBrowserNotificationOnce(
   key: string,
   deliver: () => DesktopNotificationShowResult,
-  dependencies: DeliveryClaimDependencies | null = deliveryClaimDependencies(),
 ): Promise<DesktopNotificationShowResult> {
+  const dependencies = deliveryClaimDependencies();
   if (dependencies === null) {
     return "unsupported";
   }

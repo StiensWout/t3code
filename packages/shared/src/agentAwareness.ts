@@ -181,14 +181,13 @@ export function projectThreadAwareness(
   }
 
   const detail = detailForPhase(phase, thread);
-  const notificationVersion =
-    thread.latestTurn !== null
+  const notificationVersion = thread.session?.activeTurnId
+    ? `turn:${thread.session.activeTurnId}`
+    : thread.latestTurn !== null
       ? `turn:${thread.latestTurn.turnId}`
-      : thread.session?.activeTurnId
-        ? `turn:${thread.session.activeTurnId}`
-        : thread.latestUserMessageAt !== null
-          ? `prompt:${thread.latestUserMessageAt}`
-          : "legacy";
+      : thread.latestUserMessageAt !== null
+        ? `prompt:${thread.latestUserMessageAt}`
+        : "legacy";
   return {
     environmentId,
     threadId: thread.id,

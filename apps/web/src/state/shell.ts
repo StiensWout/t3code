@@ -44,7 +44,7 @@ function environmentIdSetsEqual(
 
 let authoritativeConnectionGenerations = new Map<EnvironmentId, number>();
 
-export function shellEnvironmentRetainsAuthority(input: {
+function shellEnvironmentRetainsAuthority(input: {
   readonly shellStatus: EnvironmentShellStatus;
   readonly connectionPhase: ConnectionProjectionPhase;
   readonly connectionGeneration: number;
