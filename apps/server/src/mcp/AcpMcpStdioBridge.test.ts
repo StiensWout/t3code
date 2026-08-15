@@ -1,4 +1,6 @@
-// @effect-diagnostics nodeBuiltinImport:off globalTimers:off
+// The harness asserts raw JSON-RPC wire strings, mirroring the bridge's
+// schema-free passthrough.
+// @effect-diagnostics nodeBuiltinImport:off globalTimers:off preferSchemaOverJson:off
 import * as NodeStream from "node:stream";
 
 import { describe, expect, it } from "@effect/vitest";
