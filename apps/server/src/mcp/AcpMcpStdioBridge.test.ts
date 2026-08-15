@@ -2,6 +2,7 @@
 import * as NodeStream from "node:stream";
 
 import { describe, expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
 
 import { callAcpMcpTool, runAcpMcpStdioBridge } from "./AcpMcpStdioBridge.ts";
 
@@ -9,55 +10,59 @@ function makeHarness(responder: (request: Request) => Promise<Response> | Respon
   const input = new NodeStream.PassThrough();
   const written: Array<string> = [];
   const requests: Array<{ readonly headers: Headers; readonly body: string }> = [];
-  const done = runAcpMcpStdioBridge({
-    endpoint: "http://127.0.0.1:1/mcp",
-    authorization: "Bearer bridge-test",
-    input,
-    output: {
-      write: (chunk: string) => {
-        written.push(chunk);
+  const done = Effect.runPromise(
+    runAcpMcpStdioBridge({
+      endpoint: "http://127.0.0.1:1/mcp",
+      authorization: "Bearer bridge-test",
+      input,
+      output: {
+        write: (chunk: string) => {
+          written.push(chunk);
+        },
       },
-    },
-    fetchImplementation: async (_url, init) => {
-      const request = new Request("http://127.0.0.1:1/mcp", init);
-      requests.push({ headers: request.headers, body: String(init?.body ?? "") });
-      return responder(request);
-    },
-  });
+      fetchImplementation: async (_url, init) => {
+        const request = new Request("http://127.0.0.1:1/mcp", init);
+        requests.push({ headers: request.headers, body: String(init?.body ?? "") });
+        return responder(request);
+      },
+    }),
+  );
   return { input, written, requests, done };
 }
 
 describe("AcpMcpStdioBridge", () => {
   it("calls one tool through a fresh authenticated MCP session", async () => {
     const requests: Array<{ readonly body: unknown; readonly headers: Headers }> = [];
-    const result = await callAcpMcpTool({
-      endpoint: "http://127.0.0.1:1/mcp",
-      authorization: "Bearer bridge-test",
-      tool: "orchestrator_capabilities",
-      arguments: {},
-      fetchImplementation: async (_url, init) => {
-        const headers = new Headers(init?.headers);
-        const body: unknown = JSON.parse(String(init?.body ?? "{}"));
-        requests.push({ body, headers });
-        const request = body as { readonly id?: unknown; readonly method?: unknown };
-        if (request.method === "notifications/initialized") {
-          return new Response(null, { status: 202 });
-        }
-        return new Response(
-          JSON.stringify({
-            jsonrpc: "2.0",
-            id: request.id,
-            result:
-              request.method === "initialize"
-                ? { protocolVersion: "2025-06-18", capabilities: {}, serverInfo: {} }
-                : { structuredContent: { providers: ["codex"] } },
-          }),
-          {
-            headers: { "content-type": "application/json", "mcp-session-id": "session-42" },
-          },
-        );
-      },
-    });
+    const result = await Effect.runPromise(
+      callAcpMcpTool({
+        endpoint: "http://127.0.0.1:1/mcp",
+        authorization: "Bearer bridge-test",
+        tool: "orchestrator_capabilities",
+        arguments: {},
+        fetchImplementation: async (_url, init) => {
+          const headers = new Headers(init?.headers);
+          const body: unknown = JSON.parse(String(init?.body ?? "{}"));
+          requests.push({ body, headers });
+          const request = body as { readonly id?: unknown; readonly method?: unknown };
+          if (request.method === "notifications/initialized") {
+            return new Response(null, { status: 202 });
+          }
+          return new Response(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: request.id,
+              result:
+                request.method === "initialize"
+                  ? { protocolVersion: "2025-06-18", capabilities: {}, serverInfo: {} }
+                  : { structuredContent: { providers: ["codex"] } },
+            }),
+            {
+              headers: { "content-type": "application/json", "mcp-session-id": "session-42" },
+            },
+          );
+        },
+      }),
+    );
 
     expect(result).toEqual({ structuredContent: { providers: ["codex"] } });
     expect(requests).toHaveLength(3);
@@ -152,26 +157,28 @@ describe("AcpMcpStdioBridge", () => {
     });
     const input = new NodeStream.PassThrough();
     const written: Array<string> = [];
-    const done = runAcpMcpStdioBridge({
-      endpoint: "http://127.0.0.1:1/mcp",
-      authorization: "Bearer bridge-test",
-      input,
-      output: {
-        write: (chunk) => {
-          written.push(chunk);
-          firstWrite?.();
+    const done = Effect.runPromise(
+      runAcpMcpStdioBridge({
+        endpoint: "http://127.0.0.1:1/mcp",
+        authorization: "Bearer bridge-test",
+        input,
+        output: {
+          write: (chunk) => {
+            written.push(chunk);
+            firstWrite?.();
+          },
         },
-      },
-      fetchImplementation: async () =>
-        new Response(
-          new ReadableStream<Uint8Array>({
-            start: (controller) => {
-              resolveResponseController(controller);
-            },
-          }),
-          { headers: { "content-type": "text/event-stream" } },
-        ),
-    });
+        fetchImplementation: async () =>
+          new Response(
+            new ReadableStream<Uint8Array>({
+              start: (controller) => {
+                resolveResponseController(controller);
+              },
+            }),
+            { headers: { "content-type": "text/event-stream" } },
+          ),
+      }),
+    );
 
     input.write(`${JSON.stringify({ jsonrpc: "2.0", id: 7, method: "tools/call" })}\n`);
     const responseController = await responseControllerReady;
@@ -200,45 +207,47 @@ describe("AcpMcpStdioBridge", () => {
     });
     const input = new NodeStream.PassThrough();
     const written: Array<string> = [];
-    const done = runAcpMcpStdioBridge({
-      endpoint: "http://127.0.0.1:1/mcp",
-      authorization: "Bearer bridge-test",
-      input,
-      output: {
-        write: (chunk) => {
-          written.push(chunk);
-          if (JSON.parse(chunk).id === "server-request-1") serverRequestWritten?.();
+    const done = Effect.runPromise(
+      runAcpMcpStdioBridge({
+        endpoint: "http://127.0.0.1:1/mcp",
+        authorization: "Bearer bridge-test",
+        input,
+        output: {
+          write: (chunk) => {
+            written.push(chunk);
+            if (JSON.parse(chunk).id === "server-request-1") serverRequestWritten?.();
+          },
         },
-      },
-      fetchImplementation: async (_url, init) => {
-        const body = JSON.parse(String(init?.body ?? "{}")) as {
-          readonly id?: unknown;
-          readonly method?: unknown;
-          readonly result?: unknown;
-        };
-        if (body.method === "tools/call") {
-          return new Response(
-            new ReadableStream<Uint8Array>({
-              start: (controller) => {
-                responseController = controller;
-                controller.enqueue(
-                  new TextEncoder().encode(
-                    'data: {"jsonrpc":"2.0","id":"server-request-1","method":"elicitation/create","params":{}}\n\n',
-                  ),
-                );
-              },
-            }),
-            { headers: { "content-type": "text/event-stream" } },
+        fetchImplementation: async (_url, init) => {
+          const body = JSON.parse(String(init?.body ?? "{}")) as {
+            readonly id?: unknown;
+            readonly method?: unknown;
+            readonly result?: unknown;
+          };
+          if (body.method === "tools/call") {
+            return new Response(
+              new ReadableStream<Uint8Array>({
+                start: (controller) => {
+                  responseController = controller;
+                  controller.enqueue(
+                    new TextEncoder().encode(
+                      'data: {"jsonrpc":"2.0","id":"server-request-1","method":"elicitation/create","params":{}}\n\n',
+                    ),
+                  );
+                },
+              }),
+              { headers: { "content-type": "text/event-stream" } },
+            );
+          }
+          expect(body).toMatchObject({ id: "server-request-1", result: { action: "accept" } });
+          responseController?.enqueue(
+            new TextEncoder().encode('data: {"jsonrpc":"2.0","id":7,"result":{}}\n\n'),
           );
-        }
-        expect(body).toMatchObject({ id: "server-request-1", result: { action: "accept" } });
-        responseController?.enqueue(
-          new TextEncoder().encode('data: {"jsonrpc":"2.0","id":7,"result":{}}\n\n'),
-        );
-        responseController?.close();
-        return new Response(null, { status: 202 });
-      },
-    });
+          responseController?.close();
+          return new Response(null, { status: 202 });
+        },
+      }),
+    );
 
     input.write(`${JSON.stringify({ jsonrpc: "2.0", id: 7, method: "tools/call" })}\n`);
     await serverRequestReachedClient;
@@ -263,32 +272,34 @@ describe("AcpMcpStdioBridge", () => {
     const methods: Array<string> = [];
     const input = new NodeStream.PassThrough();
     const written: Array<string> = [];
-    const done = runAcpMcpStdioBridge({
-      endpoint: "http://127.0.0.1:1/mcp",
-      authorization: "Bearer bridge-test",
-      input,
-      output: { write: (chunk) => written.push(chunk) },
-      fetchImplementation: async (_url, init) => {
-        const body = JSON.parse(String(init?.body ?? "{}")) as {
-          readonly method?: string;
-        };
-        methods.push(body.method ?? "");
-        if (body.method === "tools/call") {
-          return new Response(
-            new ReadableStream<Uint8Array>({
-              start: resolveResponseController,
-            }),
-            { headers: { "content-type": "text/event-stream" } },
+    const done = Effect.runPromise(
+      runAcpMcpStdioBridge({
+        endpoint: "http://127.0.0.1:1/mcp",
+        authorization: "Bearer bridge-test",
+        input,
+        output: { write: (chunk) => written.push(chunk) },
+        fetchImplementation: async (_url, init) => {
+          const body = JSON.parse(String(init?.body ?? "{}")) as {
+            readonly method?: string;
+          };
+          methods.push(body.method ?? "");
+          if (body.method === "tools/call") {
+            return new Response(
+              new ReadableStream<Uint8Array>({
+                start: resolveResponseController,
+              }),
+              { headers: { "content-type": "text/event-stream" } },
+            );
+          }
+          const controller = await responseControllerReady;
+          controller.enqueue(
+            new TextEncoder().encode('data: {"jsonrpc":"2.0","id":7,"result":{}}\n\n'),
           );
-        }
-        const controller = await responseControllerReady;
-        controller.enqueue(
-          new TextEncoder().encode('data: {"jsonrpc":"2.0","id":7,"result":{}}\n\n'),
-        );
-        controller.close();
-        return new Response(null, { status: 202 });
-      },
-    });
+          controller.close();
+          return new Response(null, { status: 202 });
+        },
+      }),
+    );
 
     input.write(`${JSON.stringify({ jsonrpc: "2.0", id: 7, method: "tools/call" })}\n`);
     await responseControllerReady;
