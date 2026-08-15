@@ -643,6 +643,19 @@ describe("extractMcpToolCallIdentity", () => {
     });
   });
 
+  it("does not brand tools whose meta asserts a foreign server", () => {
+    const toolCall = toolCallFromUpdate({
+      sessionUpdate: "tool_call",
+      toolCallId: "foreign-1",
+      kind: "other",
+      title: "unrelated display title",
+      status: "pending",
+      _meta: { toolName: "delegate_task", serverId: "other-orchestrator" },
+    });
+
+    expect(extractMcpToolCallIdentity(toolCall)).toBeUndefined();
+  });
+
   it("does not brand path-like or unknown-tool titles", () => {
     for (const title of ["t3-code/README.md", "t3-code_not_a_real_tool"]) {
       const toolCall = toolCallFromUpdate({

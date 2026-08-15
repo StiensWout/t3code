@@ -510,10 +510,16 @@ export function extractMcpToolCallIdentity(
       }
     }
   }
+  // A present-but-foreign origin assertion excludes that source outright;
+  // its toolName must not fall through to the loose name matching.
+  const gooseExtension =
+    typeof gooseToolCall?.extensionName === "string" ? gooseToolCall.extensionName.trim() : "";
   const candidates = [
-    meta?.toolName,
+    metaServerId.length === 0 || /^t3[-_ ]?code$/i.test(metaServerId) ? meta?.toolName : undefined,
     claudeCode?.toolName,
-    gooseToolCall?.toolName,
+    gooseExtension.length === 0 || /^t3[-_ ]?code$/i.test(gooseExtension)
+      ? gooseToolCall?.toolName
+      : undefined,
     toolCall.data.title,
   ].filter((value): value is string => typeof value === "string");
   for (const candidate of candidates) {
