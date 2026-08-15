@@ -216,8 +216,10 @@ export function AcpRegistrySearchStep({
             <p className="mt-1 text-xs text-muted-foreground">Try a broader search.</p>
           </div>
         ) : (
-          <ScrollArea scrollFade scrollbarGutter className="max-h-72 border-t border-border/70">
-            <div className="divide-y divide-border/70">
+          <ScrollArea scrollFade className="max-h-72 border-t border-border/70">
+            {/* The overlay scrollbar takes no layout space, so the rows
+                reserve its lane explicitly. */}
+            <div className="divide-y divide-border/70 pr-2.5">
               {results.map((agent) => {
                 const alreadyAdded = isConfiguredAcpRegistryAgent(providerInstances, agent.id);
                 const isPreparing = preparingId === agent.id;
