@@ -27,20 +27,22 @@ function errorMessage(error: unknown): string {
     : "The ACP could not be prepared.";
 }
 
+function authorDisplayName(author: string): string {
+  // Registry authors may be "Name <email>" package-style strings.
+  return author.replace(/<[^>]*>/g, "").trim();
+}
+
 function authorSummary(authors: ReadonlyArray<string>): string | null {
-  const first = authors[0];
+  const names = authors.map(authorDisplayName).filter((name) => name.length > 0);
+  const first = names[0];
   if (!first) return null;
-  return authors.length === 1 ? first : `${first} +${authors.length - 1}`;
+  return names.length === 1 ? first : `${first} +${names.length - 1}`;
 }
 
 function metadata(entry: AcpRegistrySearchAgent): ReadonlyArray<string> {
-  return [
-    authorSummary(entry.authors),
-    `v${entry.version}`,
-    entry.distribution,
-    entry.license,
-    entry.integrity === "sha256" ? "SHA-256" : "Registry",
-  ].filter((value): value is string => Boolean(value));
+  return [authorSummary(entry.authors), entry.distribution, entry.license].filter(
+    (value): value is string => Boolean(value),
+  );
 }
 
 interface AcpRegistrySearchStepProps {
@@ -214,7 +216,7 @@ export function AcpRegistrySearchStep({
             <p className="mt-1 text-xs text-muted-foreground">Try a broader search.</p>
           </div>
         ) : (
-          <ScrollArea scrollFade className="max-h-72 border-y border-border/70">
+          <ScrollArea scrollFade className="max-h-72 border-t border-border/70">
             <div className="divide-y divide-border/70">
               {results.map((agent) => {
                 const alreadyAdded = isConfiguredAcpRegistryAgent(providerInstances, agent.id);
@@ -226,9 +228,14 @@ export function AcpRegistrySearchStep({
                       <div className="flex min-w-0 flex-1 items-start gap-3">
                         <AcpRegistryAgentIcon icon={agent.icon} />
                         <div className="min-w-0 flex-1">
-                          <h4 className="truncate text-sm font-medium text-foreground">
-                            {agent.name}
-                          </h4>
+                          <div className="flex min-w-0 items-baseline gap-2">
+                            <h4 className="truncate text-sm font-medium text-foreground">
+                              {agent.name}
+                            </h4>
+                            <span className="shrink-0 text-[11px] text-muted-foreground">
+                              {`v${agent.version}`}
+                            </span>
+                          </div>
                           <p className="mt-0.5 line-clamp-2 text-xs leading-4 text-muted-foreground">
                             {agent.description ||
                               "An agent available through the official ACP Registry."}
@@ -245,10 +252,15 @@ export function AcpRegistrySearchStep({
                         {alreadyAdded ? "Added" : isPreparing ? progressLabel : "Add"}
                       </Button>
                     </div>
-                    <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
+                    <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] text-muted-foreground [&>*+*]:before:mr-1.5 [&>*+*]:before:content-['·']">
                       {metadata(agent).map((item) => (
                         <span key={item}>{item}</span>
                       ))}
+                      {agent.integrity === "sha256" ? (
+                        <span title="Binary checksum is verified against the registry">
+                          ✓ checksum
+                        </span>
+                      ) : null}
                       {agent.website ? (
                         <a
                           aria-label={`Open documentation for ${agent.name} (${agent.id})`}

@@ -75,7 +75,7 @@ const gemini: AcpRegistrySearchAgent = {
   name: "Gemini CLI",
   version: "1.2.3",
   description: "Google's agent",
-  authors: ["Google", "Contributor"],
+  authors: ["Google <gemini-cli@google.com>", "Contributor"],
   license: "Apache-2.0",
   website: "https://example.com/docs",
   repository: "https://example.com/source",
@@ -301,8 +301,13 @@ describe("AcpRegistrySearchStep", () => {
     state.result = { agents: [gemini] };
     const tree = render();
 
-    for (const item of ["Google +1", "v1.2.3", "npx", "Apache-2.0", "Registry"]) {
+    // Author emails are stripped, registry-integrity gets no marker, and the
+    // version renders beside the name instead of inside the meta line.
+    for (const item of ["Google +1", "v1.2.3", "npx", "Apache-2.0"]) {
       expect(visitElements(tree, (element) => element.props.children === item)).not.toBeNull();
+    }
+    for (const absent of ["Registry", "✓ checksum"]) {
+      expect(visitElements(tree, (element) => element.props.children === absent)).toBeNull();
     }
     expect(
       visitElements(
