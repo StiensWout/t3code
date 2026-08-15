@@ -16,6 +16,7 @@ import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { ScrollArea } from "../ui/scroll-area";
 import { isConfiguredAcpRegistryAgent } from "./AddProviderInstanceDialog.logic";
 import { AcpRegistryAgentIcon } from "./AcpRegistryIcon";
 
@@ -190,7 +191,7 @@ export function AcpRegistrySearchStep({
       {search.error || prepareError ? (
         <div
           aria-live="polite"
-          className="border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive"
+          className="rounded-xl border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive"
         >
           {prepareError ?? search.error}
         </div>
@@ -208,12 +209,15 @@ export function AcpRegistrySearchStep({
 
       {results ? (
         results.length === 0 ? (
-          <div className="flex min-h-28 flex-col items-center justify-center border border-dashed px-4 text-center">
+          <div className="flex min-h-28 flex-col items-center justify-center rounded-2xl border border-dashed px-4 text-center">
             <p className="text-sm font-medium">No compatible agents found</p>
             <p className="mt-1 text-xs text-muted-foreground">Try a broader search.</p>
           </div>
         ) : (
-          <div className="scrollbar-gutter-stable max-h-72 divide-y divide-border/70 overflow-y-auto border-y border-border/70 pr-2">
+          <ScrollArea
+            scrollFade
+            className="max-h-72 divide-y divide-border/70 border-y border-border/70"
+          >
             {results.map((agent) => {
               const alreadyAdded = isConfiguredAcpRegistryAgent(providerInstances, agent.id);
               const isPreparing = preparingId === agent.id;
@@ -273,7 +277,7 @@ export function AcpRegistrySearchStep({
                 </article>
               );
             })}
-          </div>
+          </ScrollArea>
         )
       ) : null}
 

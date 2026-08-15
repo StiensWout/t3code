@@ -143,7 +143,7 @@ export function AcpRegistryAgentIcon({
     <span
       aria-hidden
       className={cn(
-        "relative flex size-8 shrink-0 items-center justify-center overflow-hidden bg-muted text-muted-foreground",
+        "relative flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted text-muted-foreground",
         className,
       )}
     >
