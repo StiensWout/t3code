@@ -644,11 +644,13 @@ describe("extractMcpToolCallIdentity", () => {
   });
 
   it("does not brand tools whose meta asserts a foreign server", () => {
+    // The foreign assertion vetoes every loose source, including a title
+    // that would otherwise match a T3 convention.
     const toolCall = toolCallFromUpdate({
       sessionUpdate: "tool_call",
       toolCallId: "foreign-1",
       kind: "other",
-      title: "unrelated display title",
+      title: "t3-code_delegate_task",
       status: "pending",
       _meta: { toolName: "delegate_task", serverId: "other-orchestrator" },
     });
