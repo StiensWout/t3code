@@ -1575,8 +1575,23 @@ export function updateThemeColorFamily(
         terminalCursor: normalized,
       };
     }
-    case "messageAction":
-      return { ...colors, ...themeActionColors(normalized) };
+    case "messageAction": {
+      const actionForeground = readableThemeForeground(selectedOnCanvas);
+      const towardOpposite =
+        actionForeground === THEME_LIGHT_FOREGROUND || actionForeground === THEME_WHITE_FOREGROUND
+          ? THEME_BLACK_FOREGROUND
+          : THEME_WHITE_FOREGROUND;
+      const actionHover = mixThemeRgbColors(selected, towardOpposite, 0.12);
+      return {
+        ...colors,
+        messageAction: normalized,
+        messageActionForeground: colorOf(actionForeground),
+        messageActionHover: formatOklchThemeColor(
+          themeRgbToOklch(actionHover),
+          parsedSelected.alpha,
+        ),
+      };
+    }
     case "messageSurface":
       return {
         ...colors,
