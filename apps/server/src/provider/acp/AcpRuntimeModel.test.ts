@@ -624,6 +624,25 @@ describe("extractMcpToolCallIdentity", () => {
     });
   });
 
+  it("recovers T3 identity from qwen serverId meta regardless of prefix format", () => {
+    // qwen-code 0.21.12 emits _meta.serverId + _meta.toolName; serverId is an
+    // explicit origin assertion, so a known tool suffix suffices even if the
+    // prefix format changes.
+    const toolCall = toolCallFromUpdate({
+      sessionUpdate: "tool_call",
+      toolCallId: "qwen-meta-1",
+      kind: "other",
+      title: "unrelated display title",
+      status: "pending",
+      _meta: { toolName: "mcp::t3-code::t3_thread_send", serverId: "t3-code", provenance: "mcp" },
+    });
+
+    expect(extractMcpToolCallIdentity(toolCall)).toEqual({
+      server: "t3-code",
+      tool: "t3_thread_send",
+    });
+  });
+
   it("does not brand path-like or unknown-tool titles", () => {
     for (const title of ["t3-code/README.md", "t3-code_not_a_real_tool"]) {
       const toolCall = toolCallFromUpdate({

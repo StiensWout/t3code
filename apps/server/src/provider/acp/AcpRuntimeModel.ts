@@ -493,6 +493,23 @@ export function extractMcpToolCallIdentity(
       ? meta.goose.toolCall
       : undefined
     : undefined;
+  // qwen asserts the origin server explicitly, so any known tool suffix in
+  // its toolName identifies the call even under future prefix formats.
+  const metaServerId = typeof meta?.serverId === "string" ? meta.serverId.trim() : "";
+  const metaToolName = typeof meta?.toolName === "string" ? meta.toolName.trim() : "";
+  if (/^t3[-_ ]?code$/i.test(metaServerId) && metaToolName.length > 0) {
+    for (const knownTool of T3_MCP_TOOL_NAMES) {
+      const boundary = metaToolName.length - knownTool.length - 1;
+      if (
+        metaToolName === knownTool ||
+        (metaToolName.endsWith(knownTool) &&
+          boundary >= 0 &&
+          !/[A-Za-z0-9]/.test(metaToolName.charAt(boundary)))
+      ) {
+        return { server: "t3-code", tool: knownTool };
+      }
+    }
+  }
   const candidates = [
     meta?.toolName,
     claudeCode?.toolName,
