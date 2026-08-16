@@ -173,9 +173,12 @@ export const PiProviderCapabilitiesV2 = {
     planDeltasHaveItemIds: false,
   },
   subagents: {
-    supportsSubagents: false,
+    // Pi has no core subagents; the official subagent extension delegates to
+    // separate pi processes through a tool, and the adapter projects its
+    // per-task progress into native subagent lifecycle events when present.
+    supportsSubagents: true,
     exposesSubagentThreadIds: false,
-    emitsSubagentLifecycle: false,
+    emitsSubagentLifecycle: true,
     canWaitForSubagents: false,
     canCloseSubagents: false,
     canForkSubagentThread: false,
@@ -693,6 +696,101 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
             ...(outputText.length > 0 ? { output: outputText } : {}),
           },
         });
+        if (toolName === "subagent") {
+          yield* emitSubagentTasks(turn, toolCallId, resultRecord, completed);
+        }
+      });
+
+      /**
+       * Project the official pi subagent extension's per-task progress into
+       * v2's native subagent surface. The extension reports
+       * `details: { results: [{agent, task, exitCode, stopReason, messages,
+       * step?, model?}] }` on every tool update, so each delegated task
+       * becomes a first-class subagent card with live progress. Tolerant by
+       * design: any other tool named `subagent` without that shape is simply
+       * ignored.
+       */
+      const emitSubagentTasks = Effect.fnUntraced(function* (
+        turn: ActivePiTurn,
+        toolCallId: string,
+        resultRecord: unknown,
+        completed: boolean,
+      ) {
+        const results = recordField(recordField(resultRecord, "details"), "results");
+        if (!Array.isArray(results)) return;
+        const emittedAt = yield* DateTime.now;
+        for (const [index, result] of results.entries()) {
+          const agent = recordString(result, "agent");
+          const task = recordString(result, "task");
+          if (agent === undefined || task === undefined) continue;
+          const nativeTaskId = `${toolCallId}:subagent:${recordNumber(result, "step") ?? index}`;
+          const subagentId = idAllocator.derive.nodeFromProviderItem({
+            driver: PI_PROVIDER,
+            nativeItemId: nativeTaskId,
+          });
+          const startedAt = turn.toolStartedAt.get(nativeTaskId) ?? emittedAt;
+          turn.toolStartedAt.set(nativeTaskId, startedAt);
+          const stopReason = recordString(result, "stopReason");
+          const exitCode = recordNumber(result, "exitCode") ?? 0;
+          const failed =
+            (completed && exitCode !== 0) || stopReason === "error" || stopReason === "aborted";
+          const finished = completed || failed || stopReason !== undefined;
+          const status = failed ? "failed" : finished ? "completed" : "running";
+          const outputText = piSubagentOutput(result);
+          const title = recordString(result, "step") === undefined ? agent : `${agent}`;
+          yield* emit({
+            type: "subagent.updated",
+            driver: PI_PROVIDER,
+            subagent: {
+              id: subagentId,
+              threadId: turn.turnInput.threadId,
+              runId: turn.turnInput.runId,
+              parentNodeId: idAllocator.derive.nodeFromProviderItem({
+                driver: PI_PROVIDER,
+                nativeItemId: toolCallId,
+              }),
+              origin: "provider_native",
+              createdBy: "agent",
+              driver: PI_PROVIDER,
+              providerInstanceId: options.instanceId,
+              providerThreadId: turn.turnInput.providerThread.id,
+              childThreadId: null,
+              nativeTaskRef: providerRef(nativeTaskId),
+              prompt: task,
+              title,
+              model: recordString(result, "model") ?? null,
+              status,
+              ...(finished || outputText.length === 0
+                ? {}
+                : { progress: outputText.slice(0, 200) }),
+              result: finished && outputText.length > 0 ? outputText.slice(0, 10_000) : null,
+              startedAt,
+              completedAt: finished ? emittedAt : null,
+              updatedAt: emittedAt,
+            },
+          });
+          yield* emit({
+            type: "turn_item.updated",
+            driver: PI_PROVIDER,
+            turnItem: {
+              ...baseItemFields(turn, nativeTaskId, startedAt, emittedAt),
+              status,
+              title,
+              completedAt: finished ? emittedAt : null,
+              type: "subagent",
+              subagentId,
+              origin: "provider_native",
+              driver: PI_PROVIDER,
+              providerInstanceId: options.instanceId,
+              childThreadId: null,
+              prompt: task,
+              ...(finished || outputText.length === 0
+                ? {}
+                : { progress: outputText.slice(0, 200) }),
+              result: finished && outputText.length > 0 ? outputText.slice(0, 10_000) : null,
+            },
+          });
+        }
       });
 
       // ── extension UI prompts ──────────────────────────────
@@ -1737,6 +1835,31 @@ export function piRollbackForkEntry(input: {
   const ref = boundary.nativeTurnRef;
   if (ref === null || ref.strength !== "strong" || ref.nativeId === null) return undefined;
   return ref.nativeId;
+}
+
+/**
+ * Human-readable output for one subagent-extension task result: the last
+ * assistant text from its transcript, or the error/stderr when it failed.
+ */
+function piSubagentOutput(result: unknown): string {
+  const stopReason = recordString(result, "stopReason");
+  const failed =
+    (recordNumber(result, "exitCode") ?? 0) !== 0 ||
+    stopReason === "error" ||
+    stopReason === "aborted";
+  if (failed) {
+    const failure = recordString(result, "errorMessage") ?? recordString(result, "stderr");
+    if (failure !== undefined && failure.length > 0) return failure;
+  }
+  const messages = recordField(result, "messages");
+  if (!Array.isArray(messages)) return "";
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (recordString(message, "role") !== "assistant") continue;
+    const text = contentText(recordField(message, "content"));
+    if (text.length > 0) return text;
+  }
+  return "";
 }
 
 function piThreadSnapshot(
