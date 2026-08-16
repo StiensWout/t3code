@@ -124,11 +124,19 @@ function parsePiRecord(line: string): PiRpcRecord | undefined {
   }
 }
 
-/** Kill the pi process group: SIGTERM, short grace, then SIGKILL. */
-const terminatePiProcess = (pid: number, kill: (signal: NodeJS.Signals) => boolean) =>
+/**
+ * Kill the pi process group: SIGTERM, short grace, then SIGKILL.
+ *
+ * `hasExited` is consulted before each signal. Once the original child is
+ * gone its pid/pgid can be recycled by the OS, so escalating blindly could
+ * deliver SIGKILL to an unrelated process.
+ */
+const terminatePiProcess = (kill: (signal: NodeJS.Signals) => boolean, hasExited: () => boolean) =>
   Effect.gen(function* () {
+    if (hasExited()) return;
     if (!kill("SIGTERM")) return;
     yield* Effect.sleep(TERMINATION_GRACE);
+    if (hasExited()) return;
     kill("SIGKILL");
   });
 
@@ -152,6 +160,8 @@ export const makePiRpcConnection = Effect.fnUntraced(function* (options: PiRpcSp
     )
     .pipe(Effect.mapError((cause) => new PiRpcError({ operation: "spawn", cause })));
 
+  let childExited = false;
+
   const killProcessGroup = (signal: NodeJS.Signals): boolean => {
     try {
       if (platform === "win32") {
@@ -165,15 +175,39 @@ export const makePiRpcConnection = Effect.fnUntraced(function* (options: PiRpcSp
     }
   };
 
+  /** Signal 0 probes liveness without delivering anything. */
+  const hasExited = (): boolean => {
+    if (childExited) return true;
+    try {
+      process.kill(platform === "win32" ? Number(child.pid) : -Number(child.pid), 0);
+      return false;
+    } catch {
+      return true;
+    }
+  };
+
+  /**
+   * Windows has no process groups, so `process.kill` reaches only pi itself
+   * and leaves extension subprocesses running with inherited stdio handles.
+   * `taskkill /T` reaps the whole tree.
+   */
+  const terminateWindowsTree = Effect.gen(function* () {
+    if (hasExited()) return;
+    const taskkill = yield* spawner.spawn(
+      ChildProcess.make("taskkill", ["/PID", String(child.pid), "/T", "/F"]),
+    );
+    yield* taskkill.exitCode;
+  }).pipe(Effect.scoped, Effect.ignore);
+
   // Registered before any further setup: an interrupt or failure between the
   // spawn and the rest of this constructor would otherwise leak a detached
   // pi process with no finalizer to reap it.
   yield* Scope.addFinalizer(
     scope,
-    terminatePiProcess(Number(child.pid), killProcessGroup).pipe(
-      Effect.ignore,
-      Effect.uninterruptible,
-    ),
+    (platform === "win32"
+      ? terminateWindowsTree
+      : terminatePiProcess(killProcessGroup, hasExited)
+    ).pipe(Effect.ignore, Effect.uninterruptible),
   );
 
   const pendingRequests = new Map<string, PendingPiRequest>();
@@ -282,7 +316,11 @@ export const makePiRpcConnection = Effect.fnUntraced(function* (options: PiRpcSp
     Effect.matchEffect({
       onFailure: (cause) =>
         Deferred.fail(exitDeferred, new PiRpcError({ operation: "exit", cause })),
-      onSuccess: (code) => Deferred.succeed(exitDeferred, Number(code)),
+      onSuccess: (code) =>
+        Effect.suspend(() => {
+          childExited = true;
+          return Deferred.succeed(exitDeferred, Number(code));
+        }),
     }),
     Effect.forkIn(scope),
   );

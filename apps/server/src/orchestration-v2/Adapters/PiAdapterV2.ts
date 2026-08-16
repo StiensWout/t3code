@@ -1235,7 +1235,13 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
           }
           case "auto_retry_end": {
             if (turn === null) return;
-            if (event["success"] === true) return;
+            if (event["success"] === true) {
+              // The retry recovered. Pi emits the erroring `message_end`
+              // before retrying, so leaving that failure in place would make
+              // `agent_settled` terminalize a successful turn as failed.
+              turn.failure = null;
+              return;
+            }
             turn.failure = makeProviderFailure({
               message: recordString(event, "finalError") ?? "Pi auto-retry failed.",
               class: "provider_error",
@@ -1398,6 +1404,11 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
           appliedModel = null;
           appliedThinking = null;
           appliedSessionName = null;
+          // The baselines describe the session we just left too. Dropping them
+          // lets the `get_state` below re-capture this session's own defaults,
+          // so "Pi default"/"inherit" cannot replay the previous session's.
+          baselineModel = null;
+          baselineThinking = null;
         }
         const stateData = yield* request({ type: "get_state" });
         // Each baseline is captured independently, and only while nothing has
@@ -1666,12 +1677,31 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
             // dialogs indefinitely, so turn start must never await the ack.
             // Rejections come back as an id-less response record and are
             // handled by the event pump.
-            yield* connection.send({
-              type: "prompt",
-              message: payload.message,
-              ...(payload.images.length === 0 ? {} : { images: payload.images }),
-            });
+            yield* connection
+              .send({
+                type: "prompt",
+                message: payload.message,
+                ...(payload.images.length === 0 ? {} : { images: payload.images }),
+              })
+              .pipe(
+                // The turn is already installed and published, so a failed send
+                // has to finalize it here. Otherwise `activeTurn` stays set and
+                // every later turn is rejected as already active.
+                Effect.tapError(() =>
+                  Effect.gen(function* () {
+                    const current = threadState;
+                    if (current?.activeTurn?.providerTurn.id === providerTurn.id) {
+                      current.activeTurn.failure = makeProviderFailure({
+                        message: "Pi rejected the prompt.",
+                        class: "provider_error",
+                      });
+                      yield* finalizeTurn(current);
+                    }
+                  }),
+                ),
+              );
           }).pipe(
+            sessionEventPermit.withPermits(1),
             Effect.mapError(
               (cause) =>
                 new ProviderAdapterTurnStartError({
