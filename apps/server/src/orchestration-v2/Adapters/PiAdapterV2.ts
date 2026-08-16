@@ -1188,7 +1188,27 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
             if (turn === null) return;
             const emittedAt = yield* DateTime.now;
             const result = event["result"];
-            if (result === null || result === undefined) return;
+            if (result === null || result === undefined) {
+              // Aborted compactions vanish silently; failed ones carry an
+              // errorMessage and deserve a visible failed compaction item.
+              const errorMessage = recordString(event, "errorMessage");
+              if (event["aborted"] === true || errorMessage === undefined) return;
+              const failedItemId = `compaction:${turn.nextItemOrdinal}`;
+              yield* emit({
+                type: "turn_item.updated",
+                driver: PI_PROVIDER,
+                turnItem: {
+                  ...baseItemFields(turn, failedItemId, emittedAt, emittedAt),
+                  status: "failed",
+                  title: null,
+                  completedAt: emittedAt,
+                  type: "compaction",
+                  driver: PI_PROVIDER,
+                  summary: errorMessage.slice(0, 1_000),
+                },
+              });
+              return;
+            }
             const nativeItemId = `compaction:${turn.nextItemOrdinal}`;
             yield* emit({
               type: "turn_item.updated",
@@ -1362,10 +1382,16 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
       ) {
         const existing = threadInput.existingProviderThread;
         if (existing?.nativeThreadRef?.nativeId != null) {
-          yield* request({
+          const switchData = yield* request({
             type: "switch_session",
             sessionPath: existing.nativeThreadRef.nativeId,
           });
+          // A session_before_switch extension handler can veto the switch.
+          // Proceeding would silently adopt whatever session is active and
+          // write the wrong thread's turns into it.
+          if (recordField(switchData, "cancelled") === true) {
+            return yield* protocolError("A Pi extension cancelled the session switch");
+          }
           // These caches describe the session we just left. Clearing them
           // stops the next turn from treating this session as already
           // configured and skipping set_model or set_session_name.
@@ -1903,10 +1929,18 @@ function piQuestion(
           .filter((option): option is string => typeof option === "string")
           .map((option) => ({ label: option, description: option }))
       : [];
+  // The user-input contract has no prefill field, so an editor dialog's
+  // prefill is surfaced inside the question text; without it the user would
+  // edit blind against content they cannot see.
+  const prefill = method === "editor" ? recordString(event, "prefill") : undefined;
+  const question = recordString(event, "message") ?? recordString(event, "placeholder") ?? title;
   return {
     id: questionId,
     header: title,
-    question: recordString(event, "message") ?? recordString(event, "placeholder") ?? title,
+    question:
+      prefill === undefined || prefill.length === 0
+        ? question
+        : `${question}\n\nCurrent value:\n${prefill.slice(0, 2_000)}`,
     options,
   };
 }
@@ -1922,7 +1956,9 @@ function piUiResponse(
     return { cancelled: true };
   }
   const answer = answers?.[pending.questionId];
-  if (typeof answer === "string" && answer.length > 0) return { value: answer };
+  // An empty string is a valid dialog value per the RPC spec (the extension
+  // receives ""), distinct from cancelling (the extension receives undefined).
+  if (typeof answer === "string") return { value: answer };
   return { cancelled: true };
 }
 
