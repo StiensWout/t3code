@@ -637,7 +637,15 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
         const isError = event["isError"] === true;
         const resultRecord = completed ? event["result"] : event["partialResult"];
         const outputText = contentText(recordField(resultRecord, "content"));
-        const status = completed ? (isError ? "failed" : "completed") : "running";
+        // A Stop aborts in-flight tools, and pi reports those as error ends.
+        // Present them as interrupted (matching the run) rather than failed.
+        const status = completed
+          ? isError
+            ? turn.interrupted
+              ? "interrupted"
+              : "failed"
+            : "completed"
+          : "running";
         const base = baseItemFields(turn, toolCallId, startedAt, emittedAt);
         yield* emitItemNode(
           turn,
@@ -735,10 +743,18 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
           // A non-zero exit code is a failure whether or not the parent tool
           // has ended, matching `piSubagentOutput`. Gating it on `completed`
           // let a finished child report "completed" while its result text was
-          // the stderr of a failure.
-          const failed = exitCode !== 0 || stopReason === "error" || stopReason === "aborted";
-          const finished = completed || failed || stopReason !== undefined;
-          const status = failed ? "failed" : finished ? "completed" : "running";
+          // the stderr of a failure. An aborted child (user Stop) presents as
+          // interrupted, matching the run and tool cards.
+          const interrupted = stopReason === "aborted";
+          const failed = !interrupted && (exitCode !== 0 || stopReason === "error");
+          const finished = completed || interrupted || failed || stopReason !== undefined;
+          const status = interrupted
+            ? "interrupted"
+            : failed
+              ? "failed"
+              : finished
+                ? "completed"
+                : "running";
           const outputText = piSubagentOutput(result);
           const title = recordString(result, "step") === undefined ? agent : `${agent}`;
           yield* emit({
