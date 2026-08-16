@@ -1027,6 +1027,24 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
             if (state !== null) yield* finalizeTurn(state);
             return;
           }
+          case "response": {
+            // Correlated responses never reach the pump; an id-less response
+            // is the deferred ack of a fire-and-forget prompt/steer. A
+            // rejection here means the turn never started on the Pi side.
+            const command = recordString(event, "command");
+            if (
+              turn !== null &&
+              event["success"] === false &&
+              (command === "prompt" || command === "steer" || command === "parse")
+            ) {
+              turn.failure = makeProviderFailure({
+                message: recordString(event, "error") ?? "Pi rejected the prompt.",
+                class: "provider_error",
+              });
+              if (state !== null) yield* finalizeTurn(state);
+            }
+            return;
+          }
           default:
             return;
         }
@@ -1075,15 +1093,25 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
             type: "switch_session",
             sessionPath: existing.nativeThreadRef.nativeId,
           });
+          // The applied-selection cache describes the session we just left.
+          // Clearing it stops the next `applySelection` from treating this
+          // session as already configured and skipping set_model.
+          appliedModel = null;
+          appliedThinking = null;
         }
         const stateData = yield* request({ type: "get_state" });
-        if (baselineModel === null && baselineThinking === null) {
+        // Each baseline is captured independently, and only while nothing has
+        // been applied yet, so a `get_state` that omits one field still lets
+        // the other be picked up later without recording our own selection.
+        if (baselineModel === null && appliedModel === null) {
           const stateModel = recordField(stateData, "model");
           const provider = recordString(stateModel, "provider");
           const modelId = recordString(stateModel, "id");
           if (provider !== undefined && modelId !== undefined) {
             baselineModel = { provider, modelId };
           }
+        }
+        if (baselineThinking === null && appliedThinking === null) {
           baselineThinking = recordString(stateData, "thinkingLevel") ?? null;
         }
         const nativeId =
@@ -1307,24 +1335,16 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
               lastRunOrdinal: turnInput.runOrdinal,
             });
             yield* updateProviderSession("running", null);
-            yield* request({
+            // Fire-and-forget: pi acks `prompt` only after slash-command
+            // expansion completes, and extension commands may block on user
+            // dialogs indefinitely, so turn start must never await the ack.
+            // Rejections come back as an id-less response record and are
+            // handled by the event pump.
+            yield* connection.send({
               type: "prompt",
               message: payload.message,
               ...(payload.images.length === 0 ? {} : { images: payload.images }),
-            }).pipe(
-              Effect.tapError(() =>
-                Effect.gen(function* () {
-                  const current = threadState;
-                  if (current?.activeTurn?.providerTurn.id === providerTurn.id) {
-                    current.activeTurn.failure = makeProviderFailure({
-                      message: "Pi rejected the prompt.",
-                      class: "provider_error",
-                    });
-                    yield* finalizeTurn(current);
-                  }
-                }),
-              ),
-            );
+            });
           }).pipe(
             Effect.mapError(
               (cause) =>
@@ -1347,7 +1367,9 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
               steerInput.message.text,
               steerInput.message.attachments,
             );
-            yield* request({
+            // Same fire-and-forget contract as `prompt`: a steer that expands
+            // a slash command must not block on the ack.
+            yield* connection.send({
               type: "steer",
               message: payload.message,
               ...(payload.images.length === 0 ? {} : { images: payload.images }),
