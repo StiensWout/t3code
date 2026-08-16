@@ -1225,11 +1225,12 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
             type: "switch_session",
             sessionPath: existing.nativeThreadRef.nativeId,
           });
-          // The applied-selection cache describes the session we just left.
-          // Clearing it stops the next `applySelection` from treating this
-          // session as already configured and skipping set_model.
+          // These caches describe the session we just left. Clearing them
+          // stops the next turn from treating this session as already
+          // configured and skipping set_model or set_session_name.
           appliedModel = null;
           appliedThinking = null;
+          appliedSessionName = null;
         }
         const stateData = yield* request({ type: "get_state" });
         // Each baseline is captured independently, and only while nothing has
