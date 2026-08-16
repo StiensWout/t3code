@@ -275,6 +275,13 @@ interface ActivePiTurn {
   readonly streamItems: Map<string, PiStreamItemState>;
   readonly toolArgs: Map<string, unknown>;
   interrupted: boolean;
+  /**
+   * Whether any agent run activity was observed. Command-only prompts (pure
+   * extension slash commands) never start an agent run and never emit
+   * `agent_settled`; their deferred prompt ack plus an idle probe settles
+   * the turn instead.
+   */
+  sawAgentActivity: boolean;
   failure: ReturnType<typeof makeProviderFailure> | null;
 }
 
@@ -915,14 +922,20 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
         const state = threadState;
         const turn = state?.activeTurn ?? null;
         switch (event["type"]) {
+          case "agent_start": {
+            if (turn !== null) turn.sawAgentActivity = true;
+            return;
+          }
           case "message_start": {
             if (turn !== null && recordString(event["message"], "role") === "assistant") {
+              turn.sawAgentActivity = true;
               turn.messageOrdinal += 1;
             }
             return;
           }
           case "message_update": {
             if (turn === null) return;
+            turn.sawAgentActivity = true;
             const delta = event["assistantMessageEvent"];
             const deltaType = recordString(delta, "type");
             const contentIndex = recordNumber(delta, "contentIndex") ?? 0;
@@ -965,7 +978,10 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
             return;
           }
           case "tool_execution_start":
-            if (turn !== null) yield* emitToolItem(turn, event, "start");
+            if (turn !== null) {
+              turn.sawAgentActivity = true;
+              yield* emitToolItem(turn, event, "start");
+            }
             return;
           case "tool_execution_update":
             if (turn !== null) yield* emitToolItem(turn, event, "update");
@@ -1032,15 +1048,60 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
             // is the deferred ack of a fire-and-forget prompt/steer. A
             // rejection here means the turn never started on the Pi side.
             const command = recordString(event, "command");
-            if (
-              turn !== null &&
-              event["success"] === false &&
-              (command === "prompt" || command === "steer" || command === "parse")
-            ) {
+            if (event["success"] === true) {
+              // Deferred success ack. Command-only prompts (pure extension
+              // slash commands) never start an agent run and never emit
+              // `agent_settled`, so probe for idleness. The probe result is
+              // re-queued behind any events Pi emitted before answering
+              // get_state, which keeps the check stream-ordered.
+              if (command === "prompt" && turn !== null && !turn.sawAgentActivity) {
+                const providerTurnId = turn.providerTurn.id;
+                yield* request({ type: "get_state" }).pipe(
+                  Effect.flatMap((data) =>
+                    Queue.offer(connection.events, {
+                      type: "t3.settle_probe",
+                      providerTurnId,
+                      data,
+                    }),
+                  ),
+                  Effect.ignore,
+                  Effect.forkIn(scope),
+                );
+              }
+              return;
+            }
+            if (event["success"] !== false) return;
+            if (command === "steer") {
+              // A rejected steer only means that one message was refused. The
+              // turn it was aimed at is still running on Pi, so terminalizing
+              // here would report a failure while output keeps streaming.
+              yield* Effect.logWarning("Pi rejected a steer message.", {
+                error: recordString(event, "error"),
+              });
+              return;
+            }
+            if (turn !== null && (command === "prompt" || command === "parse")) {
               turn.failure = makeProviderFailure({
                 message: recordString(event, "error") ?? "Pi rejected the prompt.",
                 class: "provider_error",
               });
+              if (state !== null) yield* finalizeTurn(state);
+            }
+            return;
+          }
+          case "t3.settle_probe": {
+            // Synthetic idle probe queued after a command-only prompt ack.
+            // Any agent activity Pi emitted before answering get_state has
+            // already been processed, so an untouched turn that reports
+            // no streaming and no pending messages is genuinely done.
+            const data = event["data"];
+            if (
+              turn !== null &&
+              turn.providerTurn.id === event["providerTurnId"] &&
+              !turn.sawAgentActivity &&
+              recordField(data, "isStreaming") !== true &&
+              (recordNumber(data, "pendingMessageCount") ?? 0) === 0
+            ) {
               if (state !== null) yield* finalizeTurn(state);
             }
             return;
@@ -1321,6 +1382,7 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
               streamItems: new Map(),
               toolArgs: new Map(),
               interrupted: false,
+              sawAgentActivity: false,
               failure: null,
             };
             yield* emit({
@@ -1367,6 +1429,12 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
               steerInput.message.text,
               steerInput.message.attachments,
             );
+            // Reading attachments suspends, so the turn is revalidated here:
+            // without this a steer resolved after the turn ended would be
+            // accepted by an idle session or by the next turn.
+            if (threadState?.activeTurn !== turn) {
+              return yield* protocolError(`Pi turn ${steerInput.providerTurnId} is not active`);
+            }
             // Same fire-and-forget contract as `prompt`: a steer that expands
             // a slash command must not block on the ack.
             yield* connection.send({
