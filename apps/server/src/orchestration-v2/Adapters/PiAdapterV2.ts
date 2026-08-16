@@ -23,7 +23,6 @@
  * are dropped until a dedicated Pi panel exists.
  */
 import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
-import { tokenizeCliArgs } from "@t3tools/shared/cliArgs";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import {
   defaultInstanceIdForDriver,
@@ -56,6 +55,8 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import { t3OrchestrationPromptForFirstRun } from "../../provider/T3OrchestrationInstructions.ts";
 import { mergeProviderInstanceEnvironment } from "../../provider/ProviderInstanceEnvironment.ts";
 import { IdAllocatorV2 } from "../IdAllocator.ts";
 import {
@@ -95,6 +96,7 @@ import {
   type PiRpcConnection,
   type PiRpcRecord,
 } from "./PiRpc.ts";
+import { buildPiRpcLaunch, materializePiT3McpExtension } from "./piT3McpInjection.ts";
 
 export const PI_PROVIDER = ProviderDriverKind.make("pi");
 export const PI_DRIVER_KIND = PI_PROVIDER;
@@ -151,7 +153,7 @@ export const PiProviderCapabilitiesV2 = {
     emitsToolStarted: true,
     emitsToolCompleted: true,
     emitsToolOutput: true,
-    supportsMcpTools: false,
+    supportsMcpTools: true,
     supportsDynamicToolCallbacks: false,
   },
   approvals: {
@@ -332,11 +334,33 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
     ) {
       const scope = yield* Effect.scope;
       const cwd = input.runtimePolicy.cwd ?? options.serverConfig.cwd;
+      const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
+      const extensionPath =
+        mcpSession === undefined
+          ? undefined
+          : yield* materializePiT3McpExtension(options.serverConfig.providerStatusCacheDir).pipe(
+              Effect.provideService(FileSystem.FileSystem, options.fileSystem),
+              Effect.mapError(
+                (cause) =>
+                  new ProviderAdapterOpenSessionError({
+                    driver: PI_PROVIDER,
+                    providerSessionId: input.providerSessionId,
+                    cause,
+                  }),
+              ),
+            );
+      const launch = buildPiRpcLaunch({
+        launchArgs: options.settings.launchArgs,
+        environment: options.environment,
+        mcpSession,
+        extensionPath,
+      });
+      const hasT3Mcp = launch.hasT3Mcp;
       const connection: PiRpcConnection = yield* makePiRpcConnection({
         command: options.settings.binaryPath || "pi",
-        args: ["--mode", "rpc", ...tokenizeCliArgs(options.settings.launchArgs)],
+        args: launch.args,
         cwd,
-        env: options.environment,
+        env: launch.env,
       }).pipe(
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, options.spawner),
         Effect.mapError(
@@ -1627,7 +1651,11 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
             // unreadable attachment) must not leave `activeTurn` set, which
             // would reject every later turn as already active.
             const payload = yield* resolvePromptPayload(
-              turnInput.message.text,
+              t3OrchestrationPromptForFirstRun({
+                prompt: turnInput.message.text,
+                runOrdinal: turnInput.runOrdinal,
+                hasT3Mcp,
+              }),
               turnInput.message.attachments,
             );
             const startedAt = yield* DateTime.now;
