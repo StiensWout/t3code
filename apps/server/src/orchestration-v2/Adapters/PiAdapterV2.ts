@@ -732,8 +732,11 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
           turn.toolStartedAt.set(nativeTaskId, startedAt);
           const stopReason = recordString(result, "stopReason");
           const exitCode = recordNumber(result, "exitCode") ?? 0;
-          const failed =
-            (completed && exitCode !== 0) || stopReason === "error" || stopReason === "aborted";
+          // A non-zero exit code is a failure whether or not the parent tool
+          // has ended, matching `piSubagentOutput`. Gating it on `completed`
+          // let a finished child report "completed" while its result text was
+          // the stderr of a failure.
+          const failed = exitCode !== 0 || stopReason === "error" || stopReason === "aborted";
           const finished = completed || failed || stopReason !== undefined;
           const status = failed ? "failed" : finished ? "completed" : "running";
           const outputText = piSubagentOutput(result);
@@ -1208,10 +1211,12 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
             yield* handleExtensionUiRequest(event);
             return;
           case "extension_error": {
+            // Length only: extension errors are unbounded remote output and
+            // can carry prompt text or credentials.
             yield* Effect.logWarning("Pi extension error.", {
               extensionPath: recordString(event, "extensionPath"),
               event: recordString(event, "event"),
-              error: recordString(event, "error"),
+              errorLength: recordString(event, "error")?.length,
             });
             return;
           }
@@ -1262,7 +1267,7 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
               // turn it was aimed at is still running on Pi, so terminalizing
               // here would report a failure while output keeps streaming.
               yield* Effect.logWarning("Pi rejected a steer message.", {
-                error: recordString(event, "error"),
+                errorLength: recordString(event, "error")?.length,
               });
               return;
             }
@@ -1848,7 +1853,9 @@ function piSubagentOutput(result: unknown): string {
     stopReason === "error" ||
     stopReason === "aborted";
   if (failed) {
-    const failure = recordString(result, "errorMessage") ?? recordString(result, "stderr");
+    // Falsy fallback, not `??`: an empty `errorMessage` must not suppress a
+    // non-empty `stderr`, which is often the only description of the failure.
+    const failure = recordString(result, "errorMessage") || recordString(result, "stderr");
     if (failure !== undefined && failure.length > 0) return failure;
   }
   const messages = recordField(result, "messages");
