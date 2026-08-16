@@ -1099,6 +1099,7 @@ type WorktreeEnvironmentTarget = {
   readonly environmentId: EnvironmentId;
   readonly label: string;
   readonly isPrimary: boolean;
+  readonly isConnected: boolean;
 };
 
 /** Worktree inventory and cleanup policy for one environment. Mounted per
@@ -1144,8 +1145,8 @@ function WorktreeEnvironmentGroup({
   }, [inventory.refresh, refreshToken]);
 
   useEffect(() => {
-    onPendingChange(environmentId, inventory.isPending);
-  }, [environmentId, inventory.isPending, onPendingChange]);
+    onPendingChange(environmentId, target.isConnected && inventory.isPending);
+  }, [environmentId, inventory.isPending, onPendingChange, target.isConnected]);
 
   useEffect(
     () => () => {
@@ -1251,6 +1252,7 @@ function WorktreeManagementSection() {
       environmentId: environment.environmentId,
       label: environment.label,
       isPrimary: environment.environmentId === primaryEnvironmentId,
+      isConnected: environment.connection.phase === "connected",
     }))
     .sort((a, b) => Number(b.isPrimary) - Number(a.isPrimary) || a.label.localeCompare(b.label));
 
@@ -1272,7 +1274,7 @@ function WorktreeManagementSection() {
                   isPending ? "Refreshing worktree inventory" : "Refresh worktree inventory"
                 }
               >
-                <RefreshCwIcon className="size-3" />
+                <RefreshCwIcon className={cn("size-3", isPending && "rotate-45")} />
               </Button>
             }
           />
