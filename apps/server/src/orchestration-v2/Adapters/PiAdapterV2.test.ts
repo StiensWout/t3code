@@ -266,6 +266,14 @@ const startTurn = Effect.fnUntraced(function* (
 });
 
 describe("PiAdapterV2", () => {
+  it("keeps the rollback capability triple consistent with CommandPolicy", () => {
+    // ensureRollback rejects rollback commands unless all three hold, so a
+    // partially-enabled combination is user-visibly broken, not conservative.
+    assert.isTrue(PiProviderCapabilitiesV2.threads.canRollbackThread);
+    assert.isTrue(PiProviderCapabilitiesV2.checkpointing.providerCanRollbackConversation);
+    assert.isTrue(PiProviderCapabilitiesV2.checkpointing.providerRollbackReturnsSnapshot);
+  });
+
   it("declares Pi-honest capabilities", () => {
     assert.isTrue(PiProviderCapabilitiesV2.turns.supportsActiveSteering);
     assert.isFalse(PiProviderCapabilitiesV2.turns.supportsSteeringByInterruptRestart);

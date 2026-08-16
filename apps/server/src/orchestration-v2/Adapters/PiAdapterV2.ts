@@ -194,7 +194,9 @@ export const PiProviderCapabilitiesV2 = {
     appCanCheckpointFilesystem: true,
     supportsNestedCheckpointScopes: false,
     providerCanRollbackConversation: true,
-    providerRollbackReturnsSnapshot: false,
+    // CommandPolicy.ensureRollback requires the snapshot whenever provider
+    // rollback is enabled; rollbackThread returns the updated provider thread.
+    providerRollbackReturnsSnapshot: true,
     providerCanReadConversationSnapshot: false,
   },
   identity: {
