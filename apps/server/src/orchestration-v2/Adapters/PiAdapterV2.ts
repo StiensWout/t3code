@@ -1309,11 +1309,14 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
         threadState = { providerThread, activeTurn: null };
         // Baseline the session-tree leaf so the first turn's user entry can
         // be located with a `since` cursor instead of a full entry scan.
-        lastKnownLeaf =
-          recordString(
-            yield* request({ type: "get_entries" }).pipe(Effect.orElseSucceed(() => undefined)),
-            "leafId",
-          ) ?? null;
+        const baselineEntries = yield* request({ type: "get_entries" }).pipe(
+          Effect.orElseSucceed(() => undefined),
+        );
+        lastKnownLeaf = recordString(baselineEntries, "leafId") ?? null;
+        // A successful full baseline makes the cursor trustworthy again. Only
+        // a failed one leaves it stale, so a recovered session does not keep
+        // skipping turn refs. An empty tree is a success with no leafId.
+        leafCursorStale = baselineEntries === undefined;
         yield* emit({
           type: "provider_thread.updated",
           driver: PI_PROVIDER,
@@ -1679,6 +1682,9 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
             );
             const leafId = recordString(entriesData, "leafId") ?? null;
             lastKnownLeaf = leafId;
+            // The fork re-baselined the tree, so the cursor is trustworthy
+            // again unless this listing itself failed.
+            leafCursorStale = entriesData === undefined;
             yield* updateProviderThread(state, {
               nativeConversationHeadRef: leafId === null ? null : providerRef(leafId),
             });
