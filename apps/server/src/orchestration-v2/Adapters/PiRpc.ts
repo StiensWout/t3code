@@ -270,7 +270,9 @@ export const makePiRpcConnection = Effect.fnUntraced(function* (options: PiRpcSp
     Stream.runForEach((chunk) =>
       chunk.trim().length === 0
         ? Effect.void
-        : Effect.logDebug("pi stderr", { chunk: chunk.slice(0, 2_000) }),
+        : // Length only: pi's stderr is unbounded remote output and can carry
+          // credentials or prompt text, so it never enters a log annotation.
+          Effect.logDebug("pi stderr", { stderrLength: chunk.length }),
     ),
     Effect.ignore,
     Effect.forkIn(scope),

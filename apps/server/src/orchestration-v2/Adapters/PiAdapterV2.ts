@@ -375,6 +375,12 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
        * provider turn a durable native ref for session-tree rollback.
        */
       let lastKnownLeaf: string | null = null;
+      /**
+       * Set when a `get_entries` capture failed. Pi may have advanced past
+       * `lastKnownLeaf` since, so the cursor no longer bounds a single turn
+       * and the next capture re-syncs it instead of trusting it.
+       */
+      let leafCursorStale = false;
       // Pi's own configured defaults, captured from the first `get_state` so
       // that selecting "Pi default"/"inherit" again can restore them. Pi has no
       // "unset model" command, so the baseline has to be replayed explicitly.
@@ -880,24 +886,38 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
        * Pure bookkeeping: failures degrade to the synthetic refs.
        */
       const captureTurnTreeRefs = Effect.fnUntraced(function* () {
+        const cursorWasStale = leafCursorStale;
+        const cursor = cursorWasStale ? null : lastKnownLeaf;
         const data = yield* request({
           type: "get_entries",
-          ...(lastKnownLeaf === null ? {} : { since: lastKnownLeaf }),
+          ...(cursor === null ? {} : { since: cursor }),
         }).pipe(Effect.orElseSucceed(() => undefined));
-        if (data === undefined) return null;
+        if (data === undefined) {
+          // Pi may have advanced past `lastKnownLeaf` while this failed, so the
+          // cursor can no longer be trusted to bound a single turn.
+          leafCursorStale = true;
+          return null;
+        }
         const entries = recordField(data, "entries");
         const leafId = recordString(data, "leafId");
         if (leafId !== undefined) lastKnownLeaf = leafId;
-        const firstUserEntryId = Array.isArray(entries)
-          ? entries
-              .filter(
-                (entry) =>
-                  recordField(entry, "type") === "message" &&
-                  recordString(recordField(entry, "message"), "role") === "user",
-              )
-              .map((entry) => recordString(entry, "id"))
-              .find((id) => id !== undefined)
-          : undefined;
+        // Without a trustworthy cursor this window spans more than one turn, so
+        // its first user entry belongs to an earlier turn. Re-sync the cursor
+        // and skip the turn-start ref rather than pointing rollback too far
+        // back; the next turn gets an accurate ref again.
+        leafCursorStale = false;
+        const firstUserEntryId = cursorWasStale
+          ? undefined
+          : Array.isArray(entries)
+            ? entries
+                .filter(
+                  (entry) =>
+                    recordField(entry, "type") === "message" &&
+                    recordString(recordField(entry, "message"), "role") === "user",
+                )
+                .map((entry) => recordString(entry, "id"))
+                .find((id) => id !== undefined)
+            : undefined;
         return {
           turnStartEntryId: firstUserEntryId ?? null,
           leafId: leafId ?? null,
