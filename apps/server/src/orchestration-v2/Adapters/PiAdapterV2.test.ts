@@ -2,6 +2,7 @@ import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   CheckpointId,
+  EnvironmentId,
   NodeId,
   ProviderInstanceId,
   ProviderSessionId,
@@ -23,9 +24,10 @@ import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { ServerConfig } from "../../config.ts";
+import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { IdAllocatorV2, layer as idAllocatorLayer } from "../IdAllocator.ts";
 import {
   ProviderAdapterV2RuntimePolicy,
@@ -75,6 +77,10 @@ interface FakePi {
   readonly queueEntries: (data: unknown) => void;
   /** Make the next `switch_session` ack report an extension veto. */
   readonly vetoNextSwitch: () => void;
+  readonly lastSpawn: () => {
+    readonly args: ReadonlyArray<string>;
+    readonly env: NodeJS.ProcessEnv;
+  };
 }
 
 /**
@@ -144,9 +150,19 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
       }
     });
 
-  const spawner = ChildProcessSpawner.make(() =>
-    Effect.succeed(
-      ChildProcessSpawner.makeHandle({
+  let lastSpawn: { readonly args: ReadonlyArray<string>; readonly env: NodeJS.ProcessEnv } = {
+    args: [],
+    env: {},
+  };
+  const spawner = ChildProcessSpawner.make((command) =>
+    Effect.sync(() => {
+      if (ChildProcess.isStandardCommand(command)) {
+        lastSpawn = {
+          args: command.args,
+          env: command.options.env ?? {},
+        };
+      }
+      return ChildProcessSpawner.makeHandle({
         pid: ChildProcessSpawner.ProcessId(FAKE_PID),
         exitCode: Effect.never,
         isRunning: Effect.succeed(true),
@@ -158,8 +174,8 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
         all: Stream.empty,
         getInputFd: () => Sink.drain,
         getOutputFd: () => Stream.empty,
-      }),
-    ),
+      });
+    }),
   );
 
   const takeRequest = (type: string): Effect.Effect<PiRpcRecord> =>
@@ -178,6 +194,7 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
     vetoNextSwitch: () => {
       vetoSwitch = true;
     },
+    lastSpawn: () => lastSpawn,
   } satisfies FakePi;
 });
 
@@ -288,9 +305,34 @@ describe("PiAdapterV2", () => {
     assert.isFalse(PiProviderCapabilitiesV2.turns.supportsSteeringByInterruptRestart);
     assert.equal(PiProviderCapabilitiesV2.turns.terminalStatusQuality, "strong");
     assert.isFalse(PiProviderCapabilitiesV2.approvals.supportsCommandApproval);
-    assert.isFalse(PiProviderCapabilitiesV2.tools.supportsMcpTools);
+    assert.isTrue(PiProviderCapabilitiesV2.tools.supportsMcpTools);
     assert.equal(PiProviderCapabilitiesV2.identity.nativeThreadIds, "strong");
   });
+
+  it.effect("injects the T3 MCP extension and bearer when a session exists", () =>
+    Effect.gen(function* () {
+      McpProviderSession.setMcpProviderSession({
+        environmentId: EnvironmentId.make("environment-pi-mcp"),
+        threadId: THREAD_ID,
+        providerSessionId: "mcp-session-pi",
+        providerInstanceId: PI_INSTANCE_ID,
+        endpoint: "http://127.0.0.1:43123/mcp",
+        authorizationHeader: "Bearer secret-pi-token",
+      });
+      const fake = yield* makeFakePi;
+      yield* openRuntime(fake);
+      const spawn = fake.lastSpawn();
+      assert.isTrue(spawn.args.includes("--extension"));
+      const extension = spawn.args[spawn.args.indexOf("--extension") + 1];
+      assert.isTrue(extension?.endsWith("pi-t3-mcp-extension.ts"));
+      assert.equal(spawn.env.T3_MCP_URL, "http://127.0.0.1:43123/mcp");
+      assert.equal(spawn.env.T3_MCP_BEARER_TOKEN, "secret-pi-token");
+    }).pipe(
+      Effect.ensuring(Effect.sync(() => McpProviderSession.clearMcpProviderSession(THREAD_ID))),
+      Effect.scoped,
+      Effect.provide(testLayer),
+    ),
+  );
 
   it.effect("registers the thread from get_state and resumes via switch_session", () =>
     Effect.gen(function* () {
