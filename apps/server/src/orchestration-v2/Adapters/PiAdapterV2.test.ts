@@ -357,6 +357,34 @@ describe("PiAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
+  it.effect("settles a command-only prompt from its deferred ack and idle probe", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, providerThread);
+      yield* fake.takeRequest("prompt");
+      // A pure extension command: dialog + notify, then the deferred ack —
+      // pi emits no agent_start/agent_settled at all.
+      yield* fake.emit({
+        type: "extension_ui_request",
+        id: "ui-cmd",
+        method: "notify",
+        message: "done",
+        notifyType: "info",
+      });
+      yield* fake.emit({ type: "response", command: "prompt", success: true });
+      // The adapter probes get_state (auto-acked idle by the fake), then
+      // settles the turn as completed.
+      const terminal = yield* takeEvent((event) => event.type === "turn.terminal");
+      assert.isTrue(terminal.type === "turn.terminal" && terminal.status === "completed");
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
   it.effect("fails the turn when pi rejects a fire-and-forget prompt", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakePi;

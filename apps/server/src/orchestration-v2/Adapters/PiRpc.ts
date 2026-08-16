@@ -66,8 +66,12 @@ export interface PiRpcConnection {
    * Fails on `success: false`, transport death, or timeout.
    */
   readonly request: (record: PiRpcRecord, timeoutMs?: number) => Effect.Effect<unknown, PiRpcError>;
-  /** Session events (every non-response stdout record) in arrival order. */
-  readonly events: Queue.Dequeue<PiRpcRecord, PiRpcError>;
+  /**
+   * Session events (every non-response stdout record) in arrival order. The
+   * full queue is exposed so consumers can append order-preserving synthetic
+   * records of their own (see PiAdapterV2's settle probe).
+   */
+  readonly events: Queue.Queue<PiRpcRecord, PiRpcError>;
   /** Resolves when the process has exited, with its exit code. */
   readonly exited: Effect.Effect<number, PiRpcError>;
 }
@@ -174,7 +178,7 @@ export const makePiRpcConnection = Effect.fnUntraced(function* (options: PiRpcSp
 
   const pendingRequests = new Map<string, PendingPiRequest>();
   const events = yield* Queue.unbounded<PiRpcRecord, PiRpcError>();
-  const outgoing = yield* Queue.unbounded<Uint8Array>();
+  const outgoing = yield* Queue.unbounded<Uint8Array, PiRpcError>();
   const transportDown = yield* Deferred.make<never, PiRpcError>();
   const exitDeferred = yield* Deferred.make<number, PiRpcError>();
   let nextRequestId = 0;
@@ -186,6 +190,9 @@ export const makePiRpcConnection = Effect.fnUntraced(function* (options: PiRpcSp
         pendingRequests.delete(key);
         yield* Deferred.fail(pending.deferred, error);
       }
+      // Closing `outgoing` is what makes `send` non-racy: once the writer is
+      // gone every later offer is refused rather than silently buffered.
+      yield* Queue.fail(outgoing, error);
       yield* Queue.fail(events, error);
     });
 
@@ -280,11 +287,16 @@ export const makePiRpcConnection = Effect.fnUntraced(function* (options: PiRpcSp
 
   const send = (record: PiRpcRecord): Effect.Effect<void, PiRpcError> =>
     Effect.gen(function* () {
-      const down = yield* Deferred.isDone(transportDown);
-      if (down) {
+      const accepted = yield* Queue.offer(
+        outgoing,
+        new TextEncoder().encode(`${encodeJsonLine(record)}\n`),
+      );
+      // A refused offer means `failTransport` already closed the queue, so the
+      // write can never land; surface the transport error instead of
+      // reporting a success the caller cannot rely on.
+      if (!accepted) {
         return yield* Deferred.await(transportDown);
       }
-      yield* Queue.offer(outgoing, new TextEncoder().encode(`${encodeJsonLine(record)}\n`));
     });
 
   const request = (
