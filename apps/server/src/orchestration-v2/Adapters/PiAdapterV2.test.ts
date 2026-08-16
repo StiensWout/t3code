@@ -1,9 +1,11 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  CheckpointId,
   NodeId,
   ProviderInstanceId,
   ProviderSessionId,
+  ProviderTurnId,
   RunAttemptId,
   RunId,
   ThreadId,
@@ -11,6 +13,7 @@ import {
   type ModelSelection,
   type OrchestrationV2AppThread,
   type OrchestrationV2ProviderThread,
+  type OrchestrationV2ProviderTurn,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -29,7 +32,12 @@ import {
   type ProviderAdapterV2Event,
   type ProviderAdapterV2SessionRuntime,
 } from "../ProviderAdapter.ts";
-import { makePiAdapterV2, PiProviderCapabilitiesV2, PI_PROVIDER } from "./PiAdapterV2.ts";
+import {
+  makePiAdapterV2,
+  piRollbackForkEntry,
+  PiProviderCapabilitiesV2,
+  PI_PROVIDER,
+} from "./PiAdapterV2.ts";
 import { makePiRpcConnection, type PiRpcRecord } from "./PiRpc.ts";
 
 const serverConfigLayer = ServerConfig.layerTest(process.cwd(), {
@@ -63,6 +71,8 @@ interface FakePi {
   readonly spawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
   readonly emit: (record: PiRpcRecord) => Effect.Effect<void>;
   readonly takeRequest: (type: string) => Effect.Effect<PiRpcRecord>;
+  /** Data returned by the next `get_entries` acks, consumed in order. */
+  readonly queueEntries: (data: unknown) => void;
 }
 
 /**
@@ -72,6 +82,7 @@ interface FakePi {
 const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
   const stdout = yield* Queue.unbounded<Uint8Array>();
   const requests = yield* Queue.unbounded<PiRpcRecord>();
+  const entriesQueue: Array<unknown> = [];
   let stdinBuffer = "";
 
   const emit = (record: PiRpcRecord) =>
@@ -102,6 +113,10 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
         };
       case "switch_session":
         return { ...base, data: { cancelled: false } };
+      case "get_entries":
+        return { ...base, data: entriesQueue.shift() ?? { entries: [], leafId: null } };
+      case "fork":
+        return { ...base, data: { cancelled: false, message: "forked" } };
       default:
         return base;
     }
@@ -149,7 +164,12 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
       }
     });
 
-  return { spawner, emit, takeRequest } satisfies FakePi;
+  return {
+    spawner,
+    emit,
+    takeRequest,
+    queueEntries: (data) => entriesQueue.push(data),
+  } satisfies FakePi;
 });
 
 const makeAdapter = Effect.fnUntraced(function* (fake: FakePi) {
@@ -356,6 +376,111 @@ describe("PiAdapterV2", () => {
       assert.isTrue(terminal.type === "turn.terminal" && terminal.status === "completed");
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
+
+  it.effect("syncs the thread title into pi's session name before prompting", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, providerThread);
+      // takeRequest discards preceding records, so this also proves ordering.
+      const setName = yield* fake.takeRequest("set_session_name");
+      assert.equal(setName["name"], "Pi test thread");
+      yield* fake.takeRequest("prompt");
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("captures session-tree refs at turn boundaries and rolls back via fork", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      // First get_entries ack baselines the leaf during ensureThread; the
+      // second answers the finalize capture with this turn's user entry.
+      fake.queueEntries({ entries: [], leafId: "leaf-0" });
+      fake.queueEntries({
+        entries: [{ type: "message", id: "u1", message: { role: "user" } }],
+        leafId: "a1",
+      });
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, providerThread);
+      yield* fake.takeRequest("prompt");
+      yield* fake.emit({ type: "agent_start" });
+      yield* fake.emit({ type: "agent_settled" });
+      const finalTurn = yield* takeEvent(
+        (event) =>
+          event.type === "provider_turn.updated" && event.providerTurn.status === "completed",
+      );
+      yield* takeEvent((event) => event.type === "turn.terminal");
+      assert.isTrue(
+        finalTurn.type === "provider_turn.updated" &&
+          finalTurn.providerTurn.nativeTurnRef?.nativeId === "u1" &&
+          finalTurn.providerTurn.nativeTurnRef.strength === "strong",
+      );
+
+      const turnRef = (ordinal: number, nativeId: string): OrchestrationV2ProviderTurn => ({
+        id: ProviderTurnId.make(`provider-turn:test:${ordinal}`),
+        providerThreadId: providerThread.id,
+        nodeId: NodeId.make(`node:test:${ordinal}`),
+        runAttemptId: null,
+        nativeTurnRef: { driver: PI_PROVIDER, nativeId, strength: "strong" },
+        ordinal,
+        status: "completed",
+        startedAt: null,
+        completedAt: null,
+      });
+      yield* runtime.rollbackThread({
+        providerThread,
+        target: {
+          type: "provider_turn",
+          checkpointId: CheckpointId.make("checkpoint:test:1"),
+          appRunOrdinal: 1,
+          providerTurn: turnRef(1, "u1"),
+        },
+        providerThreadTurns: [turnRef(1, "u1"), turnRef(2, "u2")],
+      });
+      const fork = yield* fake.takeRequest("fork");
+      assert.equal(fork["entryId"], "u2");
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it("resolves rollback fork entries from captured turn refs", () => {
+    const turn = (ordinal: number, ref: OrchestrationV2ProviderTurn["nativeTurnRef"]) =>
+      ({ ordinal, nativeTurnRef: ref }) as OrchestrationV2ProviderTurn;
+    const strong = (nativeId: string) =>
+      ({ driver: PI_PROVIDER, nativeId, strength: "strong" }) as const;
+    const weak = (nativeId: string) =>
+      ({ driver: PI_PROVIDER, nativeId, strength: "weak" }) as const;
+    // No turns after the target: nothing to discard.
+    assert.isNull(
+      piRollbackForkEntry({
+        target: { type: "provider_turn", providerTurn: turn(2, strong("u2")) },
+        providerThreadTurns: [turn(1, strong("u1")), turn(2, strong("u2"))],
+      }),
+    );
+    // Boundary turn without a captured (strong) entry ref cannot roll back.
+    assert.isUndefined(
+      piRollbackForkEntry({
+        target: { type: "provider_turn", providerTurn: turn(1, strong("u1")) },
+        providerThreadTurns: [turn(1, strong("u1")), turn(2, weak("synthetic"))],
+      }),
+    );
+    // thread_start discards everything from the first captured turn.
+    assert.equal(
+      piRollbackForkEntry({
+        target: { type: "thread_start" },
+        providerThreadTurns: [turn(2, strong("u2")), turn(1, strong("u1"))],
+      }),
+      "u1",
+    );
+  });
 
   it.effect("settles a command-only prompt from its deferred ack and idle probe", () =>
     Effect.gen(function* () {
