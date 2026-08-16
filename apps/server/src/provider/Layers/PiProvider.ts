@@ -59,6 +59,11 @@ const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({
 /**
  * Reasoning-capable Pi models expose Pi's thinking levels. "Inherit" leaves
  * the user's settings.json `defaultThinkingLevel` untouched.
+ *
+ * Only the levels every reasoning model accepts are advertised. Pi exposes
+ * `xhigh` and `max` per model (see `get_available_thinking_levels`), and
+ * offering them globally makes `set_thinking_level` fail on models that lack
+ * them, which blocks the turn from starting.
  */
 const THINKING_CAPABILITIES: ModelCapabilities = createModelCapabilities({
   optionDescriptors: [
@@ -73,8 +78,6 @@ const THINKING_CAPABILITIES: ModelCapabilities = createModelCapabilities({
         { id: "low", label: "Low" },
         { id: "medium", label: "Medium" },
         { id: "high", label: "High" },
-        { id: "xhigh", label: "Extra high" },
-        { id: "max", label: "Max" },
       ],
     },
   ],

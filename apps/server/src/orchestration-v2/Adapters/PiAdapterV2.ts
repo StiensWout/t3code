@@ -50,6 +50,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
@@ -87,7 +88,12 @@ import {
 } from "../ProviderAdapterDriver.ts";
 import { makeProviderFailure } from "../ProviderFailure.ts";
 import { turnScopedSelectionTransition } from "../ProviderSelectionTransition.ts";
-import { makePiRpcConnection, type PiRpcConnection, type PiRpcRecord } from "./PiRpc.ts";
+import {
+  makePiRpcConnection,
+  parsePiModelSlug,
+  type PiRpcConnection,
+  type PiRpcRecord,
+} from "./PiRpc.ts";
 
 export const PI_PROVIDER = ProviderDriverKind.make("pi");
 export const PI_DRIVER_KIND = PI_PROVIDER;
@@ -238,12 +244,6 @@ function contentText(content: unknown): string {
     .join("");
 }
 
-function parsePiModelSlug(slug: string): { provider: string; modelId: string } | null {
-  const separator = slug.indexOf("/");
-  if (separator <= 0 || separator === slug.length - 1) return null;
-  return { provider: slug.slice(0, separator), modelId: slug.slice(separator + 1) };
-}
-
 function providerRef(
   nativeId: string,
   strength: "strong" | "weak" = "strong",
@@ -346,9 +346,19 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
       };
       const events = yield* Queue.unbounded<ProviderAdapterV2Event, ProviderAdapterV2Error>();
       const pendingPrompts = new Map<string, PendingPiPrompt>();
+      // Answering a dialog and terminalizing a turn both publish lifecycle
+      // events. Pi can settle immediately after `extension_ui_response`, so
+      // serialize the two paths to stop `turn.terminal` from overtaking the
+      // dialog's own resolution updates.
+      const sessionEventPermit = yield* Semaphore.make(1);
       let threadState: PiThreadState | null = null;
       let appliedModel: string | null = null;
       let appliedThinking: string | null = null;
+      // Pi's own configured defaults, captured from the first `get_state` so
+      // that selecting "Pi default"/"inherit" again can restore them. Pi has no
+      // "unset model" command, so the baseline has to be replayed explicitly.
+      let baselineModel: { provider: string; modelId: string } | null = null;
+      let baselineThinking: string | null = null;
 
       const emit = (event: ProviderAdapterV2Event) =>
         Queue.offer(events, event).pipe(Effect.asVoid);
@@ -1025,7 +1035,7 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
       yield* Effect.gen(function* () {
         while (true) {
           const event = yield* Queue.take(connection.events);
-          yield* handleSessionEvent(event);
+          yield* sessionEventPermit.withPermits(1)(handleSessionEvent(event));
         }
       }).pipe(
         Effect.catchCause((cause) =>
@@ -1067,6 +1077,15 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
           });
         }
         const stateData = yield* request({ type: "get_state" });
+        if (baselineModel === null && baselineThinking === null) {
+          const stateModel = recordField(stateData, "model");
+          const provider = recordString(stateModel, "provider");
+          const modelId = recordString(stateModel, "id");
+          if (provider !== undefined && modelId !== undefined) {
+            baselineModel = { provider, modelId };
+          }
+          baselineThinking = recordString(stateData, "thinkingLevel") ?? null;
+        }
         const nativeId =
           recordString(stateData, "sessionFile") ?? recordString(stateData, "sessionId");
         if (nativeId === undefined) {
@@ -1116,10 +1135,21 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
       });
 
       const applySelection = Effect.fnUntraced(function* (modelSelection: ModelSelection) {
-        if (
-          modelSelection.model !== PI_INHERIT_MODEL_SLUG &&
-          modelSelection.model !== appliedModel
-        ) {
+        if (modelSelection.model === PI_INHERIT_MODEL_SLUG) {
+          // Returning to "Pi default" after an explicit pick has to replay the
+          // captured baseline, otherwise Pi stays on the last model applied.
+          if (appliedModel !== null && baselineModel !== null) {
+            yield* request({ type: "set_model", ...baselineModel });
+            appliedModel = null;
+            const updatedAt = yield* DateTime.now;
+            sessionEntity = { ...sessionEntity, model: PI_INHERIT_MODEL_SLUG, updatedAt };
+            yield* emit({
+              type: "provider_session.updated",
+              driver: PI_PROVIDER,
+              providerSession: sessionEntity,
+            });
+          }
+        } else if (modelSelection.model !== appliedModel) {
           const parsed = parsePiModelSlug(modelSelection.model);
           if (parsed === null) {
             return yield* protocolError(
@@ -1141,9 +1171,13 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
           });
         }
         const thinking = getModelSelectionStringOptionValue(modelSelection, "thinking");
-        if (
+        if (thinking === PI_INHERIT_THINKING_VALUE) {
+          if (appliedThinking !== null && baselineThinking !== null) {
+            yield* request({ type: "set_thinking_level", level: baselineThinking });
+            appliedThinking = null;
+          }
+        } else if (
           thinking !== undefined &&
-          thinking !== PI_INHERIT_THINKING_VALUE &&
           thinking !== appliedThinking &&
           PI_THINKING_LEVELS.has(thinking)
         ) {
@@ -1226,6 +1260,13 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
               );
             }
             yield* applySelection(turnInput.modelSelection);
+            // Resolved before the turn is installed: a failure here (an
+            // unreadable attachment) must not leave `activeTurn` set, which
+            // would reject every later turn as already active.
+            const payload = yield* resolvePromptPayload(
+              turnInput.message.text,
+              turnInput.message.attachments,
+            );
             const startedAt = yield* DateTime.now;
             const syntheticNativeTurnId = `${state.providerThread.id}:attempt:${turnInput.attemptId}`;
             const providerTurn: OrchestrationV2ProviderTurn = {
@@ -1266,10 +1307,6 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
               lastRunOrdinal: turnInput.runOrdinal,
             });
             yield* updateProviderSession("running", null);
-            const payload = yield* resolvePromptPayload(
-              turnInput.message.text,
-              turnInput.message.attachments,
-            );
             yield* request({
               type: "prompt",
               message: payload.message,
@@ -1355,13 +1392,15 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
                 `No pending Pi extension request ${requestInput.requestId}`,
               );
             }
-            pendingPrompts.delete(String(requestInput.requestId));
             const response = piUiResponse(pending, requestInput.decision, requestInput.answers);
             yield* connection.send({
               type: "extension_ui_response",
               id: pending.nativeRequestId,
               ...response,
             });
+            // Dropped only once Pi has the answer, so a failed send leaves the
+            // request retryable and still cancellable during teardown.
+            pendingPrompts.delete(String(requestInput.requestId));
             const resolvedAt = yield* DateTime.now;
             pending.runtimeRequest = {
               ...pending.runtimeRequest,
@@ -1390,6 +1429,7 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
               },
             });
           }).pipe(
+            sessionEventPermit.withPermits(1),
             Effect.mapError(
               (cause) =>
                 new ProviderAdapterRuntimeRequestResponseError({
