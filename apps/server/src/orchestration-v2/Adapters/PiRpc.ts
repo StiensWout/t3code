@@ -39,6 +39,17 @@ export class PiRpcError extends Schema.TaggedErrorClass<PiRpcError>()("PiRpcErro
 
 export type PiRpcRecord = Record<string, unknown>;
 
+/**
+ * Splits a `provider/model` slug into the two fields `set_model` expects.
+ * Returns null for slugs without a usable separator so callers can reject the
+ * selection instead of silently leaving Pi on its configured default.
+ */
+export function parsePiModelSlug(slug: string): { provider: string; modelId: string } | null {
+  const separator = slug.indexOf("/");
+  if (separator <= 0 || separator === slug.length - 1) return null;
+  return { provider: slug.slice(0, separator), modelId: slug.slice(separator + 1) };
+}
+
 export interface PiRpcSpawnOptions {
   readonly command: string;
   readonly args: ReadonlyArray<string>;
@@ -174,7 +185,7 @@ export const makePiRpcConnection = Effect.fnUntraced(function* (options: PiRpcSp
               pending.deferred,
               new PiRpcError({
                 operation: String(record["command"] ?? "request"),
-                detail: String(record["error"] ?? "unknown error"),
+                ...(record["error"] === undefined ? {} : { cause: record["error"] }),
               }),
             );
           }

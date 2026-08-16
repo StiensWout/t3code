@@ -15,7 +15,7 @@ import { tokenizeCliArgs } from "@t3tools/shared/cliArgs";
 import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@t3tools/shared/git";
 import { extractJsonObject } from "@t3tools/shared/schemaJson";
 
-import { makePiRpcConnection } from "../orchestration-v2/Adapters/PiRpc.ts";
+import { makePiRpcConnection, parsePiModelSlug } from "../orchestration-v2/Adapters/PiRpc.ts";
 import * as TextGeneration from "./TextGeneration.ts";
 import {
   buildBranchNamePrompt,
@@ -65,14 +65,21 @@ export const makePiTextGeneration = Effect.fn("makePiTextGeneration")(function* 
       }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
 
       if (modelSelection.model !== "default") {
-        const separator = modelSelection.model.indexOf("/");
-        if (separator > 0 && separator < modelSelection.model.length - 1) {
-          yield* connection.request({
-            type: "set_model",
-            provider: modelSelection.model.slice(0, separator),
-            modelId: modelSelection.model.slice(separator + 1),
+        // `customModels` accepts arbitrary strings, so an unusable slug is
+        // rejected rather than skipped: running Pi's default model here would
+        // report success for a model the caller never asked for.
+        const parsed = parsePiModelSlug(modelSelection.model);
+        if (parsed === null) {
+          return yield* new TextGenerationError({
+            operation,
+            detail: `Pi model '${modelSelection.model}' must use provider/model format.`,
           });
         }
+        yield* connection.request({
+          type: "set_model",
+          provider: parsed.provider,
+          modelId: parsed.modelId,
+        });
       }
 
       yield* connection.request({ type: "prompt", message: prompt });
