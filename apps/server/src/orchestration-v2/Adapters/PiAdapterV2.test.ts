@@ -490,6 +490,57 @@ describe("PiAdapterV2", () => {
     );
   });
 
+  it.effect("presents tools aborted by Stop as interrupted, not failed", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, providerThread);
+      yield* fake.takeRequest("prompt");
+      yield* fake.emit({ type: "agent_start" });
+      yield* fake.emit({
+        type: "tool_execution_start",
+        toolCallId: "call_sleep",
+        toolName: "bash",
+        args: { command: "sleep 30" },
+      });
+      const running = yield* takeEvent(
+        (event) =>
+          event.type === "provider_turn.updated" && event.providerTurn.status === "running",
+      );
+      const providerTurnId =
+        running.type === "provider_turn.updated" ? running.providerTurn.id : undefined;
+
+      yield* runtime.interruptTurn({ providerThread, providerTurnId: providerTurnId! });
+      yield* fake.takeRequest("abort");
+      // Pi reports the aborted tool as an error end before settling.
+      yield* fake.emit({
+        type: "tool_execution_end",
+        toolCallId: "call_sleep",
+        toolName: "bash",
+        isError: true,
+        result: { content: [{ type: "text", text: "Command aborted" }] },
+      });
+      yield* fake.emit({ type: "agent_settled" });
+
+      const toolItem = yield* takeEvent(
+        (event) =>
+          event.type === "turn_item.updated" &&
+          event.turnItem.type === "command_execution" &&
+          event.turnItem.status !== "running",
+      );
+      assert.isTrue(
+        toolItem.type === "turn_item.updated" && toolItem.turnItem.status === "interrupted",
+      );
+      const terminal = yield* takeEvent((event) => event.type === "turn.terminal");
+      assert.isTrue(terminal.type === "turn.terminal" && terminal.status === "interrupted");
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
   it.effect("projects the subagent extension's tasks as native subagents", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakePi;
