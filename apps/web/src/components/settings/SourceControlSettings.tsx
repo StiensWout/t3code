@@ -1,9 +1,9 @@
 import {
   ArrowUpRightIcon,
   ChevronDownIcon,
+  Clock3Icon,
   GitBranchIcon,
   GitPullRequestIcon,
-  LoaderCircleIcon,
   RefreshCwIcon,
 } from "lucide-react";
 import { Link } from "@tanstack/react-router";
@@ -1276,7 +1276,7 @@ function WorktreeManagementSection() {
                 }
               >
                 {isPending ? (
-                  <LoaderCircleIcon className="size-3" />
+                  <Clock3Icon className="size-3" />
                 ) : (
                   <RefreshCwIcon className="size-3" />
                 )}
