@@ -53,7 +53,7 @@ export function ProviderIcon(props: ProviderIconProps) {
   if (props.provider === "pi") {
     const foreground = isDarkMode ? "#F5F5F5" : "#0F0F0F";
     return (
-      <Svg width={size} height={size} viewBox="0 0 800 800" fill="none">
+      <Svg width={size} height={size} viewBox="165.29 165.29 469.43 469.43" fill="none">
         <Path
           fill={foreground}
           fillRule="evenodd"

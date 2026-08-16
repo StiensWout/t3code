@@ -7,6 +7,7 @@ import {
   RunAttemptId,
   RunId,
   ThreadId,
+  type ChatAttachment,
   type ModelSelection,
   type OrchestrationV2AppThread,
   type OrchestrationV2ProviderThread,
@@ -220,6 +221,7 @@ const startTurn = Effect.fnUntraced(function* (
   runtime: ProviderAdapterV2SessionRuntime,
   providerThread: OrchestrationV2ProviderThread,
   model = "default",
+  attachments: ReadonlyArray<ChatAttachment> = [],
 ) {
   const appThread = yield* makeAppThread(model);
   yield* runtime.startTurn({
@@ -234,7 +236,7 @@ const startTurn = Effect.fnUntraced(function* (
     message: {
       messageId: "message:thread-pi-test:1" as never,
       text: "Hello pi",
-      attachments: [],
+      attachments,
       createdBy: "user",
       creationSource: "web",
     },
@@ -271,6 +273,33 @@ describe("PiAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
+  it.effect("keeps the thread usable when an attachment cannot be read", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+
+      yield* startTurn(runtime, providerThread, "default", [
+        {
+          type: "image",
+          id: "missingpiattachment",
+          name: "missing.png",
+          mimeType: "image/png",
+          sizeBytes: 1,
+        },
+      ]).pipe(Effect.flip);
+
+      // The failed turn was never installed, so the next one still starts.
+      yield* startTurn(runtime, providerThread);
+      const prompt = yield* fake.takeRequest("prompt");
+      assert.equal(prompt["message"], "Hello pi");
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
   it.effect("streams assistant text and settles a completed turn on agent_settled", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakePi;
@@ -283,6 +312,9 @@ describe("PiAdapterV2", () => {
       yield* startTurn(runtime, providerThread);
       const prompt = yield* fake.takeRequest("prompt");
       assert.equal(prompt["message"], "Hello pi");
+      // Fire-and-forget: extension slash commands can hold the ack open on a
+      // user dialog, so the prompt must carry no correlation id to await.
+      assert.equal(prompt["id"], undefined);
 
       yield* fake.emit({ type: "agent_start" });
       yield* fake.emit({ type: "message_start", message: { role: "assistant" } });
@@ -322,6 +354,29 @@ describe("PiAdapterV2", () => {
       );
       const terminal = yield* takeEvent((event) => event.type === "turn.terminal");
       assert.isTrue(terminal.type === "turn.terminal" && terminal.status === "completed");
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("fails the turn when pi rejects a fire-and-forget prompt", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, providerThread);
+      yield* fake.takeRequest("prompt");
+      yield* fake.emit({ type: "response", command: "prompt", success: false, error: "boom" });
+
+      const terminal = yield* takeEvent((event) => event.type === "turn.terminal");
+      assert.isTrue(terminal.type === "turn.terminal" && terminal.status === "failed");
+      assert.isTrue(
+        terminal.type === "turn.terminal" &&
+          terminal.status === "failed" &&
+          terminal.failure.message === "boom",
+      );
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
