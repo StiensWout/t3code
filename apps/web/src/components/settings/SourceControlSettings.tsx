@@ -804,7 +804,7 @@ function WorktreeRemoveButton({ worktree, onPrune, pendingPath }: WorktreeRowPro
     <Button
       size="xs"
       variant="ghost"
-      className="h-6 px-1.5 text-[11px] text-muted-foreground hover:text-destructive"
+      className="text-muted-foreground hover:text-destructive"
       onClick={() => onPrune(worktree)}
       disabled={pendingPath !== null}
       aria-label={`Remove worktree ${worktree.branch ?? worktree.path}`}
@@ -1274,12 +1274,7 @@ function WorktreeManagementSection() {
                   isPending ? "Refreshing worktree inventory" : "Refresh worktree inventory"
                 }
               >
-                <RefreshCwIcon
-                  className={cn(
-                    "size-3",
-                    isPending && "animate-spin [animation-iteration-count:1]",
-                  )}
-                />
+                <RefreshCwIcon className={cn("size-3", isPending && "animate-spin")} />
               </Button>
             }
           />
