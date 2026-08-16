@@ -1064,13 +1064,23 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
               if (command === "prompt" && turn !== null && !turn.sawAgentActivity) {
                 const providerTurnId = turn.providerTurn.id;
                 yield* request({ type: "get_state" }).pipe(
-                  Effect.flatMap((data) =>
-                    Queue.offer(connection.events, {
-                      type: "t3.settle_probe",
-                      providerTurnId,
-                      data,
-                    }),
-                  ),
+                  Effect.matchEffect({
+                    onSuccess: (data) =>
+                      Queue.offer(connection.events, {
+                        type: "t3.settle_probe",
+                        providerTurnId,
+                        data,
+                      }),
+                    // A failed probe still has to reach the pump. Dropping it
+                    // would leave a command-only turn active forever, because
+                    // Pi never emits agent events for one.
+                    onFailure: () =>
+                      Queue.offer(connection.events, {
+                        type: "t3.settle_probe",
+                        providerTurnId,
+                        probeFailed: true,
+                      }),
+                  }),
                   Effect.ignore,
                   Effect.forkIn(scope),
                 );
@@ -1102,12 +1112,17 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
             // already been processed, so an untouched turn that reports
             // no streaming and no pending messages is genuinely done.
             const data = event["data"];
+            // A probe that could not be answered settles the turn too: the
+            // prompt was acked, and the no-agent-activity guard below still
+            // keeps a genuinely running turn open.
+            const probeFailed = event["probeFailed"] === true;
             if (
               turn !== null &&
               turn.providerTurn.id === event["providerTurnId"] &&
               !turn.sawAgentActivity &&
-              recordField(data, "isStreaming") !== true &&
-              (recordNumber(data, "pendingMessageCount") ?? 0) === 0
+              (probeFailed ||
+                (recordField(data, "isStreaming") !== true &&
+                  (recordNumber(data, "pendingMessageCount") ?? 0) === 0))
             ) {
               if (state !== null) yield* finalizeTurn(state);
             }
