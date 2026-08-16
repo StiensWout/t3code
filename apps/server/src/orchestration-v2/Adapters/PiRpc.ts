@@ -93,6 +93,21 @@ const UnknownFromJsonString = Schema.fromJsonString(Schema.Unknown);
 const decodeJsonLine = Schema.decodeSync(UnknownFromJsonString);
 const encodeJsonLine = Schema.encodeSync(UnknownFromJsonString);
 
+const PI_ERROR_DETAIL_MAX_CHARS = 200;
+
+/**
+ * Bounded, human-readable summary of a failed response's `error` payload.
+ * The untruncated value stays on the error's `cause`, so `message` never
+ * carries unbounded remote text while logs keep something diagnostic.
+ */
+function summarizePiError(error: unknown): string {
+  const text = typeof error === "string" ? error : JSON.stringify(error);
+  if (text === undefined) return "unknown error";
+  return text.length > PI_ERROR_DETAIL_MAX_CHARS
+    ? `${text.slice(0, PI_ERROR_DETAIL_MAX_CHARS)}…`
+    : text;
+}
+
 function parsePiRecord(line: string): PiRpcRecord | undefined {
   try {
     const parsed: unknown = decodeJsonLine(line);
@@ -146,6 +161,17 @@ export const makePiRpcConnection = Effect.fnUntraced(function* (options: PiRpcSp
     }
   };
 
+  // Registered before any further setup: an interrupt or failure between the
+  // spawn and the rest of this constructor would otherwise leak a detached
+  // pi process with no finalizer to reap it.
+  yield* Scope.addFinalizer(
+    scope,
+    terminatePiProcess(Number(child.pid), killProcessGroup).pipe(
+      Effect.ignore,
+      Effect.uninterruptible,
+    ),
+  );
+
   const pendingRequests = new Map<string, PendingPiRequest>();
   const events = yield* Queue.unbounded<PiRpcRecord, PiRpcError>();
   const outgoing = yield* Queue.unbounded<Uint8Array>();
@@ -185,6 +211,7 @@ export const makePiRpcConnection = Effect.fnUntraced(function* (options: PiRpcSp
               pending.deferred,
               new PiRpcError({
                 operation: String(record["command"] ?? "request"),
+                detail: summarizePiError(record["error"]),
                 ...(record["error"] === undefined ? {} : { cause: record["error"] }),
               }),
             );
@@ -251,14 +278,6 @@ export const makePiRpcConnection = Effect.fnUntraced(function* (options: PiRpcSp
     Effect.forkIn(scope),
   );
 
-  yield* Scope.addFinalizer(
-    scope,
-    terminatePiProcess(Number(child.pid), killProcessGroup).pipe(
-      Effect.ignore,
-      Effect.uninterruptible,
-    ),
-  );
-
   const send = (record: PiRpcRecord): Effect.Effect<void, PiRpcError> =>
     Effect.gen(function* () {
       const down = yield* Deferred.isDone(transportDown);
@@ -279,7 +298,11 @@ export const makePiRpcConnection = Effect.fnUntraced(function* (options: PiRpcSp
       yield* send({ ...record, id }).pipe(
         Effect.tapError(() => Effect.sync(() => pendingRequests.delete(id))),
       );
-      return yield* Deferred.await(deferred).pipe(
+      // Raced against the transport: a death that lands after this request was
+      // registered (or between `send`'s check and its enqueue) would otherwise
+      // leave the caller waiting out the full timeout for a reply that is
+      // never coming.
+      return yield* Effect.raceFirst(Deferred.await(deferred), Deferred.await(transportDown)).pipe(
         Effect.timeoutOrElse({
           duration: Duration.millis(timeoutMs),
           orElse: () =>

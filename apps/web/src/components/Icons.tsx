@@ -688,7 +688,7 @@ export const ACPRegistryIcon: Icon = ({ className, ...props }) => (
 export const PiAgentIcon: Icon = ({ className, ...props }) => (
   <svg
     {...props}
-    viewBox="0 0 800 800"
+    viewBox="165.29 165.29 469.43 469.43"
     fill="none"
     className={cn("fill-[#0F0F0F] dark:fill-[#F5F5F5]", className)}
   >
