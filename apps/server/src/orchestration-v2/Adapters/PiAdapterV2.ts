@@ -274,6 +274,11 @@ interface ActivePiTurn {
   messageOrdinal: number;
   readonly streamItems: Map<string, PiStreamItemState>;
   readonly toolArgs: Map<string, unknown>;
+  /**
+   * First-seen time per `toolCallId`. Later update/end events reuse it so a
+   * tool keeps one start timestamp and reports a real duration.
+   */
+  readonly toolStartedAt: Map<string, DateTime.Utc>;
   interrupted: boolean;
   /**
    * Whether any agent run activity was observed. Command-only prompts (pure
@@ -606,18 +611,20 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
         }
         const args = event["args"] ?? turn.toolArgs.get(toolCallId);
         const emittedAt = yield* DateTime.now;
+        const startedAt = turn.toolStartedAt.get(toolCallId) ?? emittedAt;
+        turn.toolStartedAt.set(toolCallId, startedAt);
         const completed = phase === "end";
         const isError = event["isError"] === true;
         const resultRecord = completed ? event["result"] : event["partialResult"];
         const outputText = contentText(recordField(resultRecord, "content"));
         const status = completed ? (isError ? "failed" : "completed") : "running";
-        const base = baseItemFields(turn, toolCallId, emittedAt, emittedAt);
+        const base = baseItemFields(turn, toolCallId, startedAt, emittedAt);
         yield* emitItemNode(
           turn,
           toolCallId,
           "tool_call",
           status,
-          emittedAt,
+          startedAt,
           completed ? emittedAt : null,
         );
         const shared = {
@@ -1381,6 +1388,7 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
               messageOrdinal: 0,
               streamItems: new Map(),
               toolArgs: new Map(),
+              toolStartedAt: new Map(),
               interrupted: false,
               sawAgentActivity: false,
               failure: null,
