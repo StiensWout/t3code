@@ -490,6 +490,107 @@ describe("PiAdapterV2", () => {
     );
   });
 
+  it.effect("projects the subagent extension's tasks as native subagents", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, providerThread);
+      yield* fake.takeRequest("prompt");
+      yield* fake.emit({ type: "agent_start" });
+      yield* fake.emit({
+        type: "tool_execution_start",
+        toolCallId: "call_sub",
+        toolName: "subagent",
+        args: { tasks: [{ agent: "scout", task: "map the repo" }] },
+      });
+      yield* fake.emit({
+        type: "tool_execution_update",
+        toolCallId: "call_sub",
+        toolName: "subagent",
+        partialResult: {
+          content: [{ type: "text", text: "(running...)" }],
+          details: {
+            mode: "parallel",
+            results: [
+              {
+                agent: "scout",
+                task: "map the repo",
+                exitCode: 0,
+                stderr: "",
+                messages: [
+                  { role: "assistant", content: [{ type: "text", text: "scanning files" }] },
+                ],
+              },
+            ],
+          },
+        },
+      });
+      const running = yield* takeEvent(
+        (event) => event.type === "subagent.updated" && event.subagent.status === "running",
+      );
+      assert.isTrue(
+        running.type === "subagent.updated" &&
+          running.subagent.title === "scout" &&
+          running.subagent.prompt === "map the repo" &&
+          running.subagent.progress === "scanning files",
+      );
+      yield* fake.emit({
+        type: "tool_execution_end",
+        toolCallId: "call_sub",
+        toolName: "subagent",
+        isError: false,
+        result: {
+          content: [{ type: "text", text: "done" }],
+          details: {
+            mode: "parallel",
+            results: [
+              {
+                agent: "scout",
+                task: "map the repo",
+                exitCode: 0,
+                stopReason: "stop",
+                stderr: "",
+                messages: [
+                  { role: "assistant", content: [{ type: "text", text: "repo has one file" }] },
+                ],
+              },
+              {
+                agent: "worker",
+                task: "broken task",
+                exitCode: 1,
+                stderr: "boom",
+                messages: [],
+              },
+            ],
+          },
+        },
+      });
+      const doneCard = yield* takeEvent(
+        (event) => event.type === "subagent.updated" && event.subagent.status === "completed",
+      );
+      assert.isTrue(
+        doneCard.type === "subagent.updated" && doneCard.subagent.result === "repo has one file",
+      );
+      const failedCard = yield* takeEvent(
+        (event) => event.type === "subagent.updated" && event.subagent.status === "failed",
+      );
+      assert.isTrue(
+        failedCard.type === "subagent.updated" &&
+          failedCard.subagent.title === "worker" &&
+          failedCard.subagent.result === "boom",
+      );
+      const subagentItem = yield* takeEvent(
+        (event) => event.type === "turn_item.updated" && event.turnItem.type === "subagent",
+      );
+      assert.equal(subagentItem.type, "turn_item.updated");
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
   it.effect("settles a command-only prompt from its deferred ack and idle probe", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakePi;
