@@ -73,6 +73,8 @@ interface FakePi {
   readonly takeRequest: (type: string) => Effect.Effect<PiRpcRecord>;
   /** Data returned by the next `get_entries` acks, consumed in order. */
   readonly queueEntries: (data: unknown) => void;
+  /** Make the next `switch_session` ack report an extension veto. */
+  readonly vetoNextSwitch: () => void;
 }
 
 /**
@@ -83,6 +85,7 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
   const stdout = yield* Queue.unbounded<Uint8Array>();
   const requests = yield* Queue.unbounded<PiRpcRecord>();
   const entriesQueue: Array<unknown> = [];
+  let vetoSwitch = false;
   let stdinBuffer = "";
 
   const emit = (record: PiRpcRecord) =>
@@ -111,8 +114,11 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
             sessionId: "abc",
           },
         };
-      case "switch_session":
-        return { ...base, data: { cancelled: false } };
+      case "switch_session": {
+        const cancelled = vetoSwitch;
+        vetoSwitch = false;
+        return { ...base, data: { cancelled } };
+      }
       case "get_entries":
         return { ...base, data: entriesQueue.shift() ?? { entries: [], leafId: null } };
       case "fork":
@@ -169,6 +175,9 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
     emit,
     takeRequest,
     queueEntries: (data) => entriesQueue.push(data),
+    vetoNextSwitch: () => {
+      vetoSwitch = true;
+    },
   } satisfies FakePi;
 });
 
@@ -489,6 +498,97 @@ describe("PiAdapterV2", () => {
       "u1",
     );
   });
+
+  it.effect("fails a resume when an extension vetoes the session switch", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      fake.vetoNextSwitch();
+      const error = yield* runtime.resumeThread({ providerThread }).pipe(Effect.flip);
+      assert.equal(error._tag, "ProviderAdapterResumeThreadError");
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("delivers empty dialog answers as values and shows editor prefill", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, providerThread);
+      yield* fake.takeRequest("prompt");
+      yield* fake.emit({ type: "agent_start" });
+      yield* fake.emit({
+        type: "extension_ui_request",
+        id: "ui-editor",
+        method: "editor",
+        title: "Edit the note",
+        prefill: "line one\nline two",
+      });
+      const pending = yield* takeEvent(
+        (event) =>
+          event.type === "runtime_request.updated" && event.runtimeRequest.status === "pending",
+      );
+      const requestId =
+        pending.type === "runtime_request.updated" ? pending.runtimeRequest.id : undefined;
+      const requestItem = yield* takeEvent(
+        (event) =>
+          event.type === "turn_item.updated" && event.turnItem.type === "user_input_request",
+      );
+      assert.isTrue(
+        requestItem.type === "turn_item.updated" &&
+          requestItem.turnItem.type === "user_input_request" &&
+          requestItem.turnItem.questions[0]!.question.includes("Current value:\nline one"),
+      );
+      // An empty string clears the note; it must arrive as a value, not a cancel.
+      yield* runtime.respondToRuntimeRequest({
+        requestId: requestId!,
+        answers: { "ui-editor": "" },
+      });
+      const uiResponse = yield* fake.takeRequest("extension_ui_response");
+      assert.equal(uiResponse["value"], "");
+      assert.notProperty(uiResponse, "cancelled");
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("shows failed compactions instead of dropping them", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, providerThread);
+      yield* fake.takeRequest("prompt");
+      yield* fake.emit({ type: "agent_start" });
+      yield* fake.emit({
+        type: "compaction_end",
+        reason: "threshold",
+        result: null,
+        aborted: false,
+        errorMessage: "API quota exceeded",
+      });
+      const compaction = yield* takeEvent(
+        (event) => event.type === "turn_item.updated" && event.turnItem.type === "compaction",
+      );
+      assert.isTrue(
+        compaction.type === "turn_item.updated" &&
+          compaction.turnItem.type === "compaction" &&
+          compaction.turnItem.status === "failed" &&
+          compaction.turnItem.summary === "API quota exceeded",
+      );
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
 
   it.effect("presents tools aborted by Stop as interrupted, not failed", () =>
     Effect.gen(function* () {

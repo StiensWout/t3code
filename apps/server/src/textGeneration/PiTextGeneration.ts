@@ -59,7 +59,16 @@ export const makePiTextGeneration = Effect.fn("makePiTextGeneration")(function* 
     Effect.gen(function* () {
       const connection = yield* makePiRpcConnection({
         command: piSettings.binaryPath || "pi",
-        args: ["--mode", "rpc", "--no-session", ...tokenizeCliArgs(piSettings.launchArgs)],
+        // --no-extensions is deliberate: an extension raising a dialog here
+        // would stall commit-message generation until the timeout, and no
+        // one is present to answer it. User model config and auth still apply.
+        args: [
+          "--mode",
+          "rpc",
+          "--no-session",
+          "--no-extensions",
+          ...tokenizeCliArgs(piSettings.launchArgs),
+        ],
         cwd,
         env: environment,
       }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
