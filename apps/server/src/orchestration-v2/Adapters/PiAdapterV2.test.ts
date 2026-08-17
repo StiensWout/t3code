@@ -1164,6 +1164,7 @@ describe("PiAdapterV2", () => {
         row.type === "turn_item.updated" &&
           row.turnItem.type === "dynamic_tool" &&
           row.turnItem.status === "running" &&
+          row.turnItem.nativeItemRef?.nativeId === `${row.turnItem.providerTurnId}:status:tps` &&
           (row.turnItem.input as { status?: string }).status === "42 tok/s",
       );
       yield* fake.emit({ type: "agent_settled" });

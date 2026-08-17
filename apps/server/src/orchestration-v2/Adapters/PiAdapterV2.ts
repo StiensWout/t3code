@@ -1252,7 +1252,7 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
               ? recordString(event, "statusKey")
               : recordString(event, "widgetKey");
           if (key === undefined) return;
-          const nativeItemId = `${method === "setStatus" ? "status" : "widget"}:${key}`;
+          const nativeItemId = `${turn.providerTurn.id}:${method === "setStatus" ? "status" : "widget"}:${key}`;
           const statusText = recordString(event, "statusText");
           const widgetLines = Array.isArray(event["widgetLines"])
             ? event["widgetLines"].filter((line): line is string => typeof line === "string")
