@@ -458,7 +458,7 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
        */
       let leafCursorStale = false;
       // Pi's own configured defaults, captured from the first `get_state` so
-      // that selecting "Pi default"/"inherit" again can restore them. Pi has no
+      // that selecting the displayed default again can restore them. Pi has no
       // "unset model" command, so the baseline has to be replayed explicitly.
       let baselineModel: { provider: string; modelId: string } | null = null;
       let baselineThinking: string | null = null;
@@ -1844,7 +1844,7 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
           appliedSessionName = null;
           // The baselines describe the session we just left too. Dropping them
           // lets the `get_state` below re-capture this session's own defaults,
-          // so "Pi default"/"inherit" cannot replay the previous session's.
+          // so the inherited choice cannot replay the previous session's.
           baselineModel = null;
           baselineThinking = null;
         }

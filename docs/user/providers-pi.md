@@ -15,7 +15,8 @@ directory, endpoint, or model configuration.
 
 ## What Carries Over
 
-T3 Code discovers the models reported by Pi and exposes their supported thinking levels. Threads
+T3 Code discovers the models reported by Pi and exposes their supported thinking levels. The
+thinking picker marks Pi's current configured level as the default without overriding it. Threads
 use Pi's native session files, so resume, rollback, and current-branch forks keep Pi's conversation
 state. Extension dialogs appear in the T3 Code composer, and the composer context meter updates from
 Pi's own context-window statistics after a response settles.
