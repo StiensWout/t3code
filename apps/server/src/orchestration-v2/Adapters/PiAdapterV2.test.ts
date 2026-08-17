@@ -348,6 +348,12 @@ describe("PiAdapterV2", () => {
       yield* runtime.resumeThread({ providerThread });
       const switchRequest = yield* fake.takeRequest("switch_session");
       assert.equal(switchRequest["sessionPath"], FAKE_SESSION_FILE);
+
+      yield* startTurn(runtime, providerThread);
+      yield* fake.takeRequest("prompt");
+      const error = yield* runtime.resumeThread({ providerThread }).pipe(Effect.flip);
+      assert.equal(error._tag, "ProviderAdapterResumeThreadError");
+      assert.match(String(error.cause), /while a turn is active/);
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 

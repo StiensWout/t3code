@@ -1816,6 +1816,9 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
       const registerThread = Effect.fnUntraced(function* (
         threadInput: ProviderAdapterV2EnsureThreadInput,
       ) {
+        if (threadState !== null && threadState.activeTurn !== null) {
+          return yield* protocolError("Cannot register a Pi thread while a turn is active");
+        }
         const existing = threadInput.existingProviderThread;
         if (existing?.nativeThreadRef?.nativeId != null) {
           if (liveChildSessions.has(existing.nativeThreadRef.nativeId)) {
