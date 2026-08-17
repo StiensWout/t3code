@@ -78,6 +78,8 @@ interface FakePi {
   readonly queueStats: (data: unknown) => void;
   /** Data returned by the next `get_commands` acks, consumed in order. */
   readonly queueCommands: (data: unknown) => void;
+  /** Make the next `get_commands` ack fail. */
+  readonly failNextCommands: () => void;
   readonly lastSpawn: () => {
     readonly args: ReadonlyArray<string>;
     readonly env: NodeJS.ProcessEnv;
@@ -94,7 +96,7 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
   const entriesQueue: Array<unknown> = [];
   const stateQueue: Array<unknown> = [];
   const statsQueue: Array<unknown> = [];
-  const commandsQueue: Array<unknown> = [];
+  const commandsQueue: Array<{ readonly success: boolean; readonly data?: unknown }> = [];
   let vetoSwitch = false;
   let stdinBuffer = "";
 
@@ -135,7 +137,7 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
       case "get_session_stats":
         return { ...base, data: statsQueue.shift() ?? {} };
       case "get_commands":
-        return { ...base, data: commandsQueue.shift() ?? { commands: [] } };
+        return { ...base, ...(commandsQueue.shift() ?? { data: { commands: [] } }) };
       case "fork":
         return { ...base, data: { cancelled: false, message: "forked" } };
       default:
@@ -205,7 +207,8 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
     },
     queueState: (data) => stateQueue.push(data),
     queueStats: (data) => statsQueue.push(data),
-    queueCommands: (data) => commandsQueue.push(data),
+    queueCommands: (data) => commandsQueue.push({ success: true, data }),
+    failNextCommands: () => commandsQueue.push({ success: false }),
     lastSpawn: () => lastSpawn,
   } satisfies FakePi;
 });
@@ -449,6 +452,35 @@ describe("PiAdapterV2", () => {
       );
       const prompt = yield* fake.takeRequest("prompt");
       assert.equal(prompt["message"], "/skill:repo-review Review this change please");
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("retries skill discovery after a transient session-open failure", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      fake.failNextCommands();
+      const { runtime } = yield* openRuntime(fake);
+      fake.queueCommands({
+        commands: [
+          {
+            name: "skill:repo-review",
+            source: "skill",
+            sourceInfo: {
+              path: "/workspace/.agents/skills/repo-review/SKILL.md",
+              scope: "project",
+            },
+          },
+        ],
+      });
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+
+      yield* startTurn(runtime, providerThread, "default", [], "$repo-review check this");
+      const prompt = yield* fake.takeRequest("prompt");
+      assert.equal(prompt["message"], "/skill:repo-review check this");
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
