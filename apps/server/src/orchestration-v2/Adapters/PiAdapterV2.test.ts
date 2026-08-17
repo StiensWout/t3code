@@ -18,13 +18,17 @@ import {
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as PlatformError from "effect/PlatformError";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { ServerConfig } from "../../config.ts";
@@ -1561,6 +1565,127 @@ describe("PiRpc framing", () => {
       assert.equal(second["type"], "agent_settled");
       const third = yield* Queue.take(connection.events);
       assert.equal(third["type"], "queue_update");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+});
+
+// This fails before a provider transcript exists, so a replay fixture is not
+// an honest fit. The boundary is the stdio transport seeing stdout end.
+describe("PiRpc early process exit", () => {
+  const makeHandle = (options: {
+    readonly exitCode: Effect.Effect<ChildProcessSpawner.ExitCode>;
+    readonly stderr: Stream.Stream<Uint8Array>;
+  }) =>
+    ChildProcessSpawner.makeHandle({
+      pid: ChildProcessSpawner.ProcessId(FAKE_PID),
+      exitCode: options.exitCode,
+      isRunning: Effect.succeed(true),
+      kill: () => Effect.void,
+      unref: Effect.succeed(Effect.void),
+      stdin: Sink.drain,
+      stdout: Stream.empty,
+      stderr: options.stderr,
+      all: Stream.empty,
+      getInputFd: () => Sink.drain,
+      getOutputFd: () => Stream.empty,
+    });
+
+  it.effect("reports a nonzero exit code instead of an unexplained stdout close", () =>
+    Effect.gen(function* () {
+      const secret = "API_KEY=super-secret\n";
+      const spawner = ChildProcessSpawner.make(() =>
+        Effect.succeed(
+          makeHandle({
+            exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(1)),
+            stderr: Stream.fromIterable([new TextEncoder().encode(secret)]),
+          }),
+        ),
+      );
+      const connection = yield* makePiRpcConnection({
+        command: "pi",
+        args: ["--mode", "rpc"],
+        cwd: undefined,
+        env: {},
+      }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
+
+      const error = yield* Queue.take(connection.events).pipe(Effect.flip);
+      assert.equal(error._tag, "PiRpcError");
+      assert.equal(error.operation, "read");
+      assert.equal(error.detail, "pi process exited with code 1");
+      assert.isFalse((error.detail ?? "").includes("API_KEY"));
+      assert.isFalse((error.detail ?? "").includes("super-secret"));
+      assert.isFalse(error.message.includes("API_KEY"));
+      assert.isFalse(error.message.includes("super-secret"));
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("keeps the unexplained stdout-close message when the process has not exited", () =>
+    Effect.gen(function* () {
+      const spawner = ChildProcessSpawner.make(() =>
+        Effect.succeed(
+          makeHandle({
+            exitCode: Effect.never,
+            stderr: Stream.empty,
+          }),
+        ),
+      );
+      const connection = yield* makePiRpcConnection({
+        command: "pi",
+        args: ["--mode", "rpc"],
+        cwd: undefined,
+        env: {},
+      }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
+
+      const fiber = yield* Effect.forkChild(Queue.take(connection.events).pipe(Effect.flip));
+      yield* TestClock.adjust(Duration.millis(300));
+      const error = yield* Fiber.join(fiber);
+      assert.equal(error._tag, "PiRpcError");
+      assert.equal(error.operation, "read");
+      assert.equal(error.detail, "pi process closed stdout");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("keeps the exit-code diagnosis when stdin breaks while exit is still pending", () =>
+    Effect.gen(function* () {
+      const spawner = ChildProcessSpawner.make(() =>
+        Effect.succeed(
+          ChildProcessSpawner.makeHandle({
+            pid: ChildProcessSpawner.ProcessId(FAKE_PID),
+            exitCode: Effect.sleep(Duration.millis(50)).pipe(
+              Effect.andThen(Effect.succeed(ChildProcessSpawner.ExitCode(1))),
+            ),
+            isRunning: Effect.succeed(true),
+            kill: () => Effect.void,
+            unref: Effect.succeed(Effect.void),
+            stdin: Sink.fail(
+              PlatformError.systemError({
+                _tag: "Unknown",
+                module: "ChildProcess",
+                method: "stdin",
+                description: "broken pipe",
+              }),
+            ),
+            stdout: Stream.empty,
+            stderr: Stream.empty,
+            all: Stream.empty,
+            getInputFd: () => Sink.drain,
+            getOutputFd: () => Stream.empty,
+          }),
+        ),
+      );
+      const connection = yield* makePiRpcConnection({
+        command: "pi",
+        args: ["--mode", "rpc"],
+        cwd: undefined,
+        env: {},
+      }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
+
+      const fiber = yield* Effect.forkChild(Queue.take(connection.events).pipe(Effect.flip));
+      yield* TestClock.adjust(Duration.millis(300));
+      const error = yield* Fiber.join(fiber);
+      assert.equal(error._tag, "PiRpcError");
+      assert.equal(error.operation, "read");
+      assert.equal(error.detail, "pi process exited with code 1");
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 });
