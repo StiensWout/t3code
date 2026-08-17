@@ -9,7 +9,6 @@
  * shows up in T3 without any hardcoded catalog.
  */
 import {
-  type ModelCapabilities,
   type PiSettings,
   type ServerProvider,
   type ServerProviderModel,
@@ -17,7 +16,6 @@ import {
   type ServerProviderSlashCommand,
 } from "@t3tools/contracts";
 import { causeErrorTag } from "@t3tools/shared/observability";
-import { createModelCapabilities } from "@t3tools/shared/model";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import { tokenizeCliArgs } from "@t3tools/shared/cliArgs";
 import * as DateTime from "effect/DateTime";
@@ -41,6 +39,10 @@ import {
   enrichProviderSnapshotWithVersionAdvisory,
   type ProviderMaintenanceCapabilities,
 } from "../providerMaintenance.ts";
+import {
+  EMPTY_PI_MODEL_CAPABILITIES,
+  thinkingCapabilitiesForPiModel,
+} from "./piThinkingCapabilities.ts";
 
 const PI_PRESENTATION = {
   displayName: "Pi",
@@ -52,43 +54,12 @@ const PI_PRESENTATION = {
 const VERSION_PROBE_TIMEOUT_MS = 4_000;
 const PI_RPC_DISCOVERY_TIMEOUT_MS = 15_000;
 
-const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({
-  optionDescriptors: [],
-});
-
-/**
- * Reasoning-capable Pi models expose Pi's thinking levels. "Inherit" leaves
- * the user's settings.json `defaultThinkingLevel` untouched.
- *
- * Only the levels every reasoning model accepts are advertised. Pi exposes
- * `xhigh` and `max` per model (see `get_available_thinking_levels`), and
- * offering them globally makes `set_thinking_level` fail on models that lack
- * them, which blocks the turn from starting.
- */
-const THINKING_CAPABILITIES: ModelCapabilities = createModelCapabilities({
-  optionDescriptors: [
-    {
-      id: "thinking",
-      label: "Thinking",
-      type: "select",
-      options: [
-        { id: "inherit", label: "Pi default", isDefault: true },
-        { id: "off", label: "Off" },
-        { id: "minimal", label: "Minimal" },
-        { id: "low", label: "Low" },
-        { id: "medium", label: "Medium" },
-        { id: "high", label: "High" },
-      ],
-    },
-  ],
-});
-
 /** Deferring to the user's own settings.json default model. */
 const PI_DEFAULT_MODEL: ServerProviderModel = {
   slug: "default",
   name: "Pi default",
   isCustom: false,
-  capabilities: EMPTY_CAPABILITIES,
+  capabilities: EMPTY_PI_MODEL_CAPABILITIES,
 };
 
 interface PiDiscovery {
@@ -105,7 +76,7 @@ function piModelsFromSettings(
   return providerModelsFromSettings(
     [PI_DEFAULT_MODEL, ...discovered],
     customModels ?? [],
-    EMPTY_CAPABILITIES,
+    EMPTY_PI_MODEL_CAPABILITIES,
   );
 }
 
@@ -135,8 +106,7 @@ function parseDiscoveredModels(data: unknown): ReadonlyArray<ServerProviderModel
       slug,
       name: recordString(model, "name") ?? slug,
       isCustom: false,
-      capabilities:
-        recordField(model, "reasoning") === true ? THINKING_CAPABILITIES : EMPTY_CAPABILITIES,
+      capabilities: thinkingCapabilitiesForPiModel(model),
     });
   }
   return parsed;
