@@ -74,6 +74,13 @@ export interface PiRpcConnection {
   readonly events: Queue.Queue<PiRpcRecord, PiRpcError>;
   /** Resolves when the process has exited, with its exit code. */
   readonly exited: Effect.Effect<number, PiRpcError>;
+  /**
+   * Kill the pi process group immediately (SIGTERM, grace, SIGKILL). Used by
+   * Stop-with-restart when the process may be wedged and `abort` cannot be
+   * trusted to land. The transport fails and the session manager respawns a
+   * fresh process on the next turn.
+   */
+  readonly terminate: Effect.Effect<void>;
 }
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
@@ -375,5 +382,9 @@ export const makePiRpcConnection = Effect.fnUntraced(function* (options: PiRpcSp
     request,
     events,
     exited: Deferred.await(exitDeferred),
+    terminate: terminatePiProcess(killProcessGroup, hasExited).pipe(
+      Effect.ignore,
+      Effect.uninterruptible,
+    ),
   } satisfies PiRpcConnection;
 });
