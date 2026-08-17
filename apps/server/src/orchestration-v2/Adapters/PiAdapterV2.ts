@@ -36,6 +36,7 @@ import {
   type OrchestrationV2ProviderSession,
   type OrchestrationV2ProviderThread,
   type OrchestrationV2ProviderTurn,
+  type ThreadId,
   type OrchestrationV2RuntimeRequest,
   type OrchestrationV2TurnItem,
   type OrchestrationV2UserInputQuestion,
@@ -91,12 +92,21 @@ import {
 import { makeProviderFailure } from "../ProviderFailure.ts";
 import { turnScopedSelectionTransition } from "../ProviderSelectionTransition.ts";
 import {
+  makeSubagentChildThread,
+  makeSubagentConversationArtifacts,
+  subagentThreadTitle,
+} from "../SubagentProjection.ts";
+import {
   makePiRpcConnection,
   parsePiModelSlug,
   type PiRpcConnection,
   type PiRpcRecord,
 } from "./PiRpc.ts";
-import { buildPiRpcLaunch, materializePiT3McpExtension } from "./piT3McpInjection.ts";
+import {
+  buildPiRpcLaunch,
+  materializePiT3McpExtension,
+  materializePiT3SubagentExtension,
+} from "./piT3McpInjection.ts";
 
 export const PI_PROVIDER = ProviderDriverKind.make("pi");
 export const PI_DRIVER_KIND = PI_PROVIDER;
@@ -175,11 +185,11 @@ export const PiProviderCapabilitiesV2 = {
     planDeltasHaveItemIds: false,
   },
   subagents: {
-    // Pi has no core subagents; the official subagent extension delegates to
-    // separate pi processes through a tool, and the adapter projects its
-    // per-task progress into native subagent lifecycle events when present.
+    // Pi has no core subagents; the T3-owned `subagent` override persists a
+    // session file per task so each child is a resumeable T3 thread. The
+    // official tool is omitted because a second `subagent` registration aborts Pi.
     supportsSubagents: true,
-    exposesSubagentThreadIds: false,
+    exposesSubagentThreadIds: true,
     emitsSubagentLifecycle: true,
     canWaitForSubagents: false,
     canCloseSubagents: false,
@@ -287,6 +297,7 @@ interface ActivePiTurn {
    * tool keeps one start timestamp and reports a real duration.
    */
   readonly toolStartedAt: Map<string, DateTime.Utc>;
+  readonly childSubagents: Map<string, PiChildSubagent>;
   interrupted: boolean;
   /**
    * Whether any agent run activity was observed. Command-only prompts (pure
@@ -296,6 +307,16 @@ interface ActivePiTurn {
    */
   sawAgentActivity: boolean;
   failure: ReturnType<typeof makeProviderFailure> | null;
+}
+
+interface PiChildSubagent {
+  readonly nativeTaskId: string;
+  readonly sessionFile: string;
+  readonly childThreadId: ThreadId;
+  readonly childProviderThreadId: OrchestrationV2ProviderThread["id"];
+  readonly childRootNodeId: OrchestrationV2ExecutionNode["id"];
+  emittedUserPrompt: boolean;
+  emittedMessageCount: number;
 }
 
 interface PendingPiPrompt {
@@ -335,25 +356,33 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
       const scope = yield* Effect.scope;
       const cwd = input.runtimePolicy.cwd ?? options.serverConfig.cwd;
       const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
+      const provideCacheFs = <A, E>(effect: Effect.Effect<A, E, FileSystem.FileSystem>) =>
+        effect.pipe(
+          Effect.provideService(FileSystem.FileSystem, options.fileSystem),
+          Effect.mapError(
+            (cause) =>
+              new ProviderAdapterOpenSessionError({
+                driver: PI_PROVIDER,
+                providerSessionId: input.providerSessionId,
+                cause,
+              }),
+          ),
+        );
       const extensionPath =
         mcpSession === undefined
           ? undefined
-          : yield* materializePiT3McpExtension(options.serverConfig.providerStatusCacheDir).pipe(
-              Effect.provideService(FileSystem.FileSystem, options.fileSystem),
-              Effect.mapError(
-                (cause) =>
-                  new ProviderAdapterOpenSessionError({
-                    driver: PI_PROVIDER,
-                    providerSessionId: input.providerSessionId,
-                    cause,
-                  }),
-              ),
+          : yield* provideCacheFs(
+              materializePiT3McpExtension(options.serverConfig.providerStatusCacheDir),
             );
+      const subagentExtensionPath = yield* provideCacheFs(
+        materializePiT3SubagentExtension(options.serverConfig.providerStatusCacheDir),
+      );
       const launch = buildPiRpcLaunch({
         launchArgs: options.settings.launchArgs,
         environment: options.environment,
         mcpSession,
         extensionPath,
+        subagentExtensionPath,
       });
       const hasT3Mcp = launch.hasT3Mcp;
       const connection: PiRpcConnection = yield* makePiRpcConnection({
@@ -734,12 +763,10 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
       });
 
       /**
-       * Project the official pi subagent extension's per-task progress into
-       * v2's native subagent surface. The extension reports
-       * `details: { results: [{agent, task, exitCode, stopReason, messages,
-       * step?, model?}] }` on every tool update, so each delegated task
-       * becomes a first-class subagent card with live progress. Tolerant by
-       * design: any other tool named `subagent` without that shape is simply
+       * Project the T3-owned pi subagent override's per-task progress into
+       * v2's native subagent surface. Each result may include `sessionFile`;
+       * when present the adapter binds a resumeable child thread. Tolerant by
+       * design: any other tool named `subagent` without the results shape is
        * ignored.
        */
       const emitSubagentTasks = Effect.fnUntraced(function* (
@@ -751,6 +778,10 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
         const results = recordField(recordField(resultRecord, "details"), "results");
         if (!Array.isArray(results)) return;
         const emittedAt = yield* DateTime.now;
+        const parentNodeId = idAllocator.derive.nodeFromProviderItem({
+          driver: PI_PROVIDER,
+          nativeItemId: toolCallId,
+        });
         for (const [index, result] of results.entries()) {
           const agent = recordString(result, "agent");
           const task = recordString(result, "task");
@@ -764,11 +795,6 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
           turn.toolStartedAt.set(nativeTaskId, startedAt);
           const stopReason = recordString(result, "stopReason");
           const exitCode = recordNumber(result, "exitCode") ?? 0;
-          // A non-zero exit code is a failure whether or not the parent tool
-          // has ended, matching `piSubagentOutput`. Gating it on `completed`
-          // let a finished child report "completed" while its result text was
-          // the stderr of a failure. An aborted child (user Stop) presents as
-          // interrupted, matching the run and tool cards.
           const interrupted = stopReason === "aborted";
           const failed = !interrupted && (exitCode !== 0 || stopReason === "error");
           const finished = completed || interrupted || failed || stopReason !== undefined;
@@ -780,7 +806,208 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
                 ? "completed"
                 : "running";
           const outputText = piSubagentOutput(result);
-          const title = recordString(result, "step") === undefined ? agent : `${agent}`;
+          const title = agent;
+          const sessionFile = recordString(result, "sessionFile");
+          let child = turn.childSubagents.get(nativeTaskId);
+          if (sessionFile !== undefined && child === undefined) {
+            const childThreadId = idAllocator.derive.threadFromProviderThread({
+              driver: PI_PROVIDER,
+              nativeThreadId: sessionFile,
+            });
+            const childProviderThreadId = idAllocator.derive.providerThread({
+              driver: PI_PROVIDER,
+              nativeThreadId: sessionFile,
+            });
+            const childRootNodeId = idAllocator.derive.nodeFromProviderItem({
+              driver: PI_PROVIDER,
+              nativeItemId: `${nativeTaskId}:child-root`,
+            });
+            child = {
+              nativeTaskId,
+              sessionFile,
+              childThreadId,
+              childProviderThreadId,
+              childRootNodeId,
+              emittedUserPrompt: false,
+              emittedMessageCount: 0,
+            };
+            turn.childSubagents.set(nativeTaskId, child);
+            const childModelSelection = {
+              ...turn.turnInput.modelSelection,
+              model: recordString(result, "model") ?? turn.turnInput.modelSelection.model,
+            };
+            const childThread = makeSubagentChildThread({
+              parentThread: turn.turnInput.appThread,
+              childThreadId,
+              parentNodeId,
+              activeProviderThreadId: childProviderThreadId,
+              providerInstanceId: options.instanceId,
+              modelSelection: childModelSelection,
+              title: subagentThreadTitle({
+                parentTitle: turn.turnInput.appThread.title,
+                title,
+                prompt: task,
+                ordinal: index + 1,
+              }),
+              now: emittedAt,
+              createdBy: "agent",
+              creationSource: "provider",
+            });
+            // Null session id so a later send allocates a fresh RPC. Pi cannot
+            // host two threads on the parent process; resume uses switch_session
+            // against nativeThreadRef on that new session.
+            const childProviderThread: OrchestrationV2ProviderThread = {
+              id: childProviderThreadId,
+              driver: PI_PROVIDER,
+              providerInstanceId: options.instanceId,
+              providerSessionId: null,
+              appThreadId: childThreadId,
+              ownerNodeId: parentNodeId,
+              nativeThreadRef: providerRef(sessionFile),
+              nativeConversationHeadRef: null,
+              status: "idle",
+              firstRunOrdinal: null,
+              lastRunOrdinal: null,
+              handoffIds: [],
+              forkedFrom: {
+                providerThreadId: turn.turnInput.providerThread.id,
+                providerTurnId: turn.providerTurn.id,
+              },
+              pendingBackgroundTasks: [],
+              createdAt: emittedAt,
+              updatedAt: emittedAt,
+            };
+            yield* emit({
+              type: "app_thread.created",
+              driver: PI_PROVIDER,
+              appThread: childThread,
+            });
+            yield* emit({
+              type: "provider_thread.updated",
+              driver: PI_PROVIDER,
+              providerThread: childProviderThread,
+            });
+            yield* emit({
+              type: "node.updated",
+              driver: PI_PROVIDER,
+              node: {
+                id: childRootNodeId,
+                threadId: childThreadId,
+                runId: null,
+                parentNodeId: null,
+                rootNodeId: childRootNodeId,
+                kind: "root_turn",
+                status: "running",
+                countsForRun: false,
+                providerThreadId: childProviderThreadId,
+                providerTurnId: null,
+                nativeItemRef: providerRef(sessionFile),
+                runtimeRequestId: null,
+                checkpointScopeId: null,
+                startedAt,
+                completedAt: null,
+              },
+            });
+          }
+          if (child !== undefined && !child.emittedUserPrompt) {
+            child.emittedUserPrompt = true;
+            const promptArtifacts = makeSubagentConversationArtifacts({
+              messageId: idAllocator.derive.messageFromProviderItem({
+                driver: PI_PROVIDER,
+                nativeItemId: `${nativeTaskId}:prompt`,
+              }),
+              turnItemId: idAllocator.derive.turnItemFromProviderItem({
+                driver: PI_PROVIDER,
+                nativeItemId: `${nativeTaskId}:prompt`,
+              }),
+              threadId: child.childThreadId,
+              rootNodeId: child.childRootNodeId,
+              providerThreadId: child.childProviderThreadId,
+              providerTurnId: null,
+              nativeItemRef: providerRef(`${nativeTaskId}:prompt`),
+              role: "user",
+              text: task,
+              ordinal: 100,
+              now: emittedAt,
+            });
+            yield* emit({
+              type: "message.updated",
+              driver: PI_PROVIDER,
+              message: promptArtifacts.message,
+            });
+            yield* emit({
+              type: "turn_item.updated",
+              driver: PI_PROVIDER,
+              turnItem: promptArtifacts.turnItem,
+            });
+          }
+          if (child !== undefined) {
+            const messages = recordField(result, "messages");
+            if (Array.isArray(messages)) {
+              for (let messageIndex = child.emittedMessageCount; messageIndex < messages.length; ) {
+                const message = messages[messageIndex];
+                messageIndex += 1;
+                child.emittedMessageCount = messageIndex;
+                if (recordString(message, "role") !== "assistant") continue;
+                const text = contentText(recordField(message, "content"));
+                if (text.length === 0) continue;
+                const nativeMessageId = `${nativeTaskId}:assistant:${messageIndex}`;
+                const artifacts = makeSubagentConversationArtifacts({
+                  messageId: idAllocator.derive.messageFromProviderItem({
+                    driver: PI_PROVIDER,
+                    nativeItemId: nativeMessageId,
+                  }),
+                  turnItemId: idAllocator.derive.turnItemFromProviderItem({
+                    driver: PI_PROVIDER,
+                    nativeItemId: nativeMessageId,
+                  }),
+                  threadId: child.childThreadId,
+                  rootNodeId: child.childRootNodeId,
+                  providerThreadId: child.childProviderThreadId,
+                  providerTurnId: null,
+                  nativeItemRef: providerRef(nativeMessageId),
+                  role: "assistant",
+                  text,
+                  ordinal: 100 + messageIndex,
+                  now: emittedAt,
+                });
+                yield* emit({
+                  type: "message.updated",
+                  driver: PI_PROVIDER,
+                  message: artifacts.message,
+                });
+                yield* emit({
+                  type: "turn_item.updated",
+                  driver: PI_PROVIDER,
+                  turnItem: artifacts.turnItem,
+                });
+              }
+            }
+            if (finished) {
+              yield* emit({
+                type: "node.updated",
+                driver: PI_PROVIDER,
+                node: {
+                  id: child.childRootNodeId,
+                  threadId: child.childThreadId,
+                  runId: null,
+                  parentNodeId: null,
+                  rootNodeId: child.childRootNodeId,
+                  kind: "root_turn",
+                  status,
+                  countsForRun: false,
+                  providerThreadId: child.childProviderThreadId,
+                  providerTurnId: null,
+                  nativeItemRef: providerRef(child.sessionFile),
+                  runtimeRequestId: null,
+                  checkpointScopeId: null,
+                  startedAt,
+                  completedAt: emittedAt,
+                },
+              });
+            }
+          }
+          const childThreadId = child?.childThreadId ?? null;
           yield* emit({
             type: "subagent.updated",
             driver: PI_PROVIDER,
@@ -788,16 +1015,13 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
               id: subagentId,
               threadId: turn.turnInput.threadId,
               runId: turn.turnInput.runId,
-              parentNodeId: idAllocator.derive.nodeFromProviderItem({
-                driver: PI_PROVIDER,
-                nativeItemId: toolCallId,
-              }),
+              parentNodeId,
               origin: "provider_native",
               createdBy: "agent",
               driver: PI_PROVIDER,
               providerInstanceId: options.instanceId,
               providerThreadId: turn.turnInput.providerThread.id,
-              childThreadId: null,
+              childThreadId,
               nativeTaskRef: providerRef(nativeTaskId),
               prompt: task,
               title,
@@ -825,7 +1049,7 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
               origin: "provider_native",
               driver: PI_PROVIDER,
               providerInstanceId: options.instanceId,
-              childThreadId: null,
+              childThreadId,
               prompt: task,
               ...(finished || outputText.length === 0
                 ? {}
@@ -1684,6 +1908,7 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
               streamItems: new Map(),
               toolArgs: new Map(),
               toolStartedAt: new Map(),
+              childSubagents: new Map(),
               interrupted: false,
               sawAgentActivity: false,
               failure: null,

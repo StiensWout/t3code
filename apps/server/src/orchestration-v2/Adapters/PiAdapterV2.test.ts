@@ -306,6 +306,7 @@ describe("PiAdapterV2", () => {
     assert.equal(PiProviderCapabilitiesV2.turns.terminalStatusQuality, "strong");
     assert.isFalse(PiProviderCapabilitiesV2.approvals.supportsCommandApproval);
     assert.isTrue(PiProviderCapabilitiesV2.tools.supportsMcpTools);
+    assert.isTrue(PiProviderCapabilitiesV2.subagents.exposesSubagentThreadIds);
     assert.equal(PiProviderCapabilitiesV2.identity.nativeThreadIds, "strong");
   });
 
@@ -323,8 +324,11 @@ describe("PiAdapterV2", () => {
       yield* openRuntime(fake);
       const spawn = fake.lastSpawn();
       assert.isTrue(spawn.args.includes("--extension"));
-      const extension = spawn.args[spawn.args.indexOf("--extension") + 1];
-      assert.isTrue(extension?.endsWith("pi-t3-mcp-extension.ts"));
+      const extensions = spawn.args.flatMap((arg, index) =>
+        arg === "--extension" ? [spawn.args[index + 1]] : [],
+      );
+      assert.isTrue(extensions.some((path) => path?.endsWith("pi-t3-subagent-extension.ts")));
+      assert.isTrue(extensions.some((path) => path?.endsWith("pi-t3-mcp-extension.ts")));
       assert.equal(spawn.env.T3_MCP_URL, "http://127.0.0.1:43123/mcp");
       assert.equal(spawn.env.T3_MCP_BEARER_TOKEN, "secret-pi-token");
     }).pipe(
@@ -345,6 +349,13 @@ describe("PiAdapterV2", () => {
       });
       assert.equal(providerThread.nativeThreadRef?.nativeId, FAKE_SESSION_FILE);
       assert.equal(providerThread.driver, PI_PROVIDER);
+      const spawn = fake.lastSpawn();
+      assert.isTrue(
+        spawn.args.some(
+          (arg, index) =>
+            arg === "--extension" && spawn.args[index + 1]?.endsWith("pi-t3-subagent-extension.ts"),
+        ),
+      );
 
       yield* runtime.resumeThread({ providerThread });
       const switchRequest = yield* fake.takeRequest("switch_session");
@@ -715,6 +726,7 @@ describe("PiAdapterV2", () => {
                 task: "map the repo",
                 exitCode: 0,
                 stderr: "",
+                sessionFile: "/tmp/pi-children/scout.jsonl",
                 messages: [
                   { role: "assistant", content: [{ type: "text", text: "scanning files" }] },
                 ],
@@ -723,6 +735,23 @@ describe("PiAdapterV2", () => {
           },
         },
       });
+      const childThread = yield* takeEvent((event) => event.type === "app_thread.created");
+      if (childThread.type !== "app_thread.created") {
+        assert.fail("expected app_thread.created");
+        return;
+      }
+      const childThreadId = childThread.appThread.id;
+      const childProviderThread = yield* takeEvent(
+        (event) =>
+          event.type === "provider_thread.updated" &&
+          event.providerThread.appThreadId === childThreadId,
+      );
+      assert.isTrue(
+        childProviderThread.type === "provider_thread.updated" &&
+          childProviderThread.providerThread.nativeThreadRef?.nativeId ===
+            "/tmp/pi-children/scout.jsonl" &&
+          childProviderThread.providerThread.providerSessionId === null,
+      );
       const running = yield* takeEvent(
         (event) => event.type === "subagent.updated" && event.subagent.status === "running",
       );
@@ -730,7 +759,8 @@ describe("PiAdapterV2", () => {
         running.type === "subagent.updated" &&
           running.subagent.title === "scout" &&
           running.subagent.prompt === "map the repo" &&
-          running.subagent.progress === "scanning files",
+          running.subagent.progress === "scanning files" &&
+          running.subagent.childThreadId === childThreadId,
       );
       yield* fake.emit({
         type: "tool_execution_end",
@@ -748,6 +778,7 @@ describe("PiAdapterV2", () => {
                 exitCode: 0,
                 stopReason: "stop",
                 stderr: "",
+                sessionFile: "/tmp/pi-children/scout.jsonl",
                 messages: [
                   { role: "assistant", content: [{ type: "text", text: "repo has one file" }] },
                 ],
@@ -767,7 +798,22 @@ describe("PiAdapterV2", () => {
         (event) => event.type === "subagent.updated" && event.subagent.status === "completed",
       );
       assert.isTrue(
-        doneCard.type === "subagent.updated" && doneCard.subagent.result === "repo has one file",
+        doneCard.type === "subagent.updated" &&
+          doneCard.subagent.result === "repo has one file" &&
+          doneCard.subagent.childThreadId === childThreadId,
+      );
+      // Completed turn_item is emitted immediately after the completed card;
+      // waiting for the failed card first would consume it.
+      const subagentItem = yield* takeEvent(
+        (event) =>
+          event.type === "turn_item.updated" &&
+          event.turnItem.type === "subagent" &&
+          event.turnItem.status === "completed",
+      );
+      assert.isTrue(
+        subagentItem.type === "turn_item.updated" &&
+          subagentItem.turnItem.type === "subagent" &&
+          subagentItem.turnItem.childThreadId === childThreadId,
       );
       const failedCard = yield* takeEvent(
         (event) => event.type === "subagent.updated" && event.subagent.status === "failed",
@@ -775,12 +821,9 @@ describe("PiAdapterV2", () => {
       assert.isTrue(
         failedCard.type === "subagent.updated" &&
           failedCard.subagent.title === "worker" &&
-          failedCard.subagent.result === "boom",
+          failedCard.subagent.result === "boom" &&
+          failedCard.subagent.childThreadId === null,
       );
-      const subagentItem = yield* takeEvent(
-        (event) => event.type === "turn_item.updated" && event.turnItem.type === "subagent",
-      );
-      assert.equal(subagentItem.type, "turn_item.updated");
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
