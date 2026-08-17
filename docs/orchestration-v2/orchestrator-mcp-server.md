@@ -148,6 +148,12 @@ one with `pi.registerTool` under its original name (`delegate_task`,
 without it. User `launchArgs` are preserved. The first turn of a session
 also receives the shared T3 orchestration instructions.
 
+A second T3-owned extension overrides the official `subagent` tool to
+persist `--session` and report `sessionFile`. Duplicate `subagent`
+registrations abort Pi, so the launcher disables extension discovery and
+drops the official tool from `launchArgs`. The adapter binds each result
+as a child thread that later sends resume through `switch_session`.
+
 ### Initial Provider Support
 
 The V2 provider adapters are Codex, Claude Agent SDK, Cursor Agent SDK, Grok
