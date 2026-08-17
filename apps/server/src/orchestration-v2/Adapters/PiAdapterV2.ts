@@ -2034,6 +2034,7 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
         events: Stream.fromQueue(events),
         ensureThread: (threadInput) =>
           registerThread(threadInput).pipe(
+            sessionEventPermit.withPermits(1),
             Effect.mapError(
               (cause) =>
                 new ProviderAdapterEnsureThreadError({
@@ -2051,6 +2052,7 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
             runtimePolicy: threadInput.runtimePolicy ?? input.runtimePolicy,
             existingProviderThread: threadInput.providerThread,
           }).pipe(
+            sessionEventPermit.withPermits(1),
             Effect.mapError(
               (cause) =>
                 new ProviderAdapterResumeThreadError({
