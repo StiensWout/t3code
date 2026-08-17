@@ -514,12 +514,13 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
       const contextUsageFromStats = (
         stats: unknown,
         fallbackUsedTokens: number | null,
-      ): ThreadTokenUsageSnapshot | null => {
+      ): ThreadTokenUsageSnapshot | undefined => {
         const contextUsage = recordField(stats, "contextUsage");
         const maxTokens = nonNegativeInteger(contextUsage, "contextWindow");
         const usedTokens =
           nonNegativeInteger(contextUsage, "tokens") ?? fallbackUsedTokens ?? undefined;
-        if (usedTokens === undefined || maxTokens === undefined || maxTokens === 0) return null;
+        if (usedTokens === undefined || maxTokens === undefined || maxTokens === 0)
+          return undefined;
 
         const totals = recordField(stats, "tokens");
         const totalProcessedTokens = nonNegativeInteger(totals, "total");
@@ -1252,7 +1253,7 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
               ? recordString(event, "statusKey")
               : recordString(event, "widgetKey");
           if (key === undefined) return;
-          const nativeItemId = `${turn.providerTurn.id}:${method === "setStatus" ? "status" : "widget"}:${key}`;
+          const nativeItemId = `${method === "setStatus" ? "status" : "widget"}:${turn.providerTurn.id}:${key}`;
           const statusText = recordString(event, "statusText");
           const widgetLines = Array.isArray(event["widgetLines"])
             ? event["widgetLines"].filter((line): line is string => typeof line === "string")
