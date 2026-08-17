@@ -30,6 +30,7 @@ const mcpSession = {
   providerInstanceId: ProviderInstanceId.make("pi"),
   endpoint: "http://127.0.0.1:43123/mcp",
   authorizationHeader: "Bearer secret-pi-token",
+  browserToolsAvailable: true,
 };
 
 describe("pi T3 MCP injection", () => {

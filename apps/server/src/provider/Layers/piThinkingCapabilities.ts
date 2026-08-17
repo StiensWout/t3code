@@ -29,35 +29,62 @@ const PI_THINKING_LEVEL_LABELS: Record<PiThinkingLevel, string> = {
   max: "Max",
 };
 
-const INHERIT_CHOICE: ProviderOptionChoice = {
-  id: "inherit",
-  label: "Pi default",
-  isDefault: true,
-};
-
 export const EMPTY_PI_MODEL_CAPABILITIES: ModelCapabilities = createModelCapabilities({
   optionDescriptors: [],
 });
 
-export function thinkingCapabilitiesForPiModel(model: unknown): ModelCapabilities {
+export function thinkingCapabilitiesForPiModel(
+  model: unknown,
+  defaultThinkingLevel: unknown,
+): ModelCapabilities {
   const levels = supportedPiThinkingLevelsFromModel(model);
   if (levels.length === 0) return EMPTY_PI_MODEL_CAPABILITIES;
+  const defaultLevel = clampPiThinkingLevel(defaultThinkingLevel, levels);
   return createModelCapabilities({
     optionDescriptors: [
       {
         id: "thinking",
         label: "Thinking",
         type: "select",
-        options: [
-          INHERIT_CHOICE,
-          ...levels.map((level) => ({
-            id: level,
-            label: PI_THINKING_LEVEL_LABELS[level],
-          })),
-        ],
+        options: levels.map(
+          (level): ProviderOptionChoice =>
+            level === defaultLevel
+              ? {
+                  // Keep Pi's default as an inherited value internally so T3
+                  // does not turn the displayed default into an override.
+                  id: "inherit",
+                  label: PI_THINKING_LEVEL_LABELS[level],
+                  isDefault: true,
+                }
+              : {
+                  id: level,
+                  label: PI_THINKING_LEVEL_LABELS[level],
+                },
+        ),
       },
     ],
   });
+}
+
+/** Mirrors `@earendil-works/pi-ai` `clampThinkingLevel`. */
+function clampPiThinkingLevel(
+  input: unknown,
+  availableLevels: ReadonlyArray<PiThinkingLevel>,
+): PiThinkingLevel | undefined {
+  if (typeof input !== "string") return undefined;
+  const requestedIndex = PI_THINKING_LEVELS.findIndex((level) => level === input);
+  if (requestedIndex === -1) return undefined;
+  const exact = availableLevels.find((level) => level === input);
+  if (exact !== undefined) return exact;
+  for (let index = requestedIndex + 1; index < PI_THINKING_LEVELS.length; index += 1) {
+    const higher = availableLevels.find((level) => level === PI_THINKING_LEVELS[index]);
+    if (higher !== undefined) return higher;
+  }
+  for (let index = requestedIndex - 1; index >= 0; index -= 1) {
+    const lower = availableLevels.find((level) => level === PI_THINKING_LEVELS[index]);
+    if (lower !== undefined) return lower;
+  }
+  return availableLevels[0];
 }
 
 /**
