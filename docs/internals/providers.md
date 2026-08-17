@@ -18,10 +18,13 @@ orchestration layer does not know which one is behind a thread.
 | `opencode`    | [`Drivers/OpenCodeDriver.ts`][opencode] |
 | `pi`          | [`Drivers/PiDriver.ts`][pi]             |
 
-The Pi driver speaks Pi's stdio JSONL RPC mode (`pi --mode rpc`) and deliberately spawns the user's
-own `pi` install with no `--no-*` flags, so extensions, skills, context files, custom models, and
-sessions behave exactly as they do in the Pi TUI. Extension UI dialogs surface as orchestration
-runtime requests.
+The Pi driver speaks Pi's stdio JSONL RPC mode (`pi --mode rpc`) and spawns the user's own `pi`
+install, preserving its skills, context files, custom models, auth, and sessions. T3 replaces Pi's
+official `subagent` extension with a session-persisting variant. That launch uses
+`--no-extensions`, then explicitly re-adds the T3 extensions and the user's discovered extensions;
+project-local extensions are only re-added when Pi has standing project trust. Extension UI dialogs
+surface as orchestration runtime requests, and Pi's session statistics feed the shared context
+window meter.
 
 Each driver declares its `driverKind`, a `configSchema`, and a `create` function that builds an
 adapter in a child scope. Adapter implementations live beside them in

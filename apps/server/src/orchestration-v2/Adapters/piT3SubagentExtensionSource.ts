@@ -46,18 +46,10 @@ type SingleResult = {
   agent: string;
   agentSource: "user" | "project" | "unknown";
   task: string;
+  finished: boolean;
   exitCode: number;
   messages: unknown[];
   stderr: string;
-  usage: {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
-    cost: number;
-    contextTokens: number;
-    turns: number;
-  };
   model?: string;
   stopReason?: string;
   errorMessage?: string;
@@ -213,10 +205,10 @@ async function runSingleAgent(
       agent: agentName,
       agentSource: "unknown",
       task,
+      finished: true,
       exitCode: 1,
       messages: [],
       stderr: \`Unknown agent: "\${agentName}". Available agents: \${available}.\`,
-      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
       step,
     };
   }
@@ -245,10 +237,10 @@ async function runSingleAgent(
     agent: agentName,
     agentSource: agent.source,
     task,
+    finished: false,
     exitCode: 0,
     messages: [],
     stderr: "",
-    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
     model,
     step,
     sessionFile,
@@ -291,23 +283,11 @@ async function runSingleAgent(
           currentResult.messages.push(event.message);
           const message = event.message as {
             role?: string;
-            usage?: Record<string, number>;
             model?: string;
             stopReason?: string;
             errorMessage?: string;
           };
           if (message.role === "assistant") {
-            currentResult.usage.turns += 1;
-            if (message.usage) {
-              currentResult.usage.input += message.usage.input || 0;
-              currentResult.usage.output += message.usage.output || 0;
-              currentResult.usage.cacheRead += message.usage.cacheRead || 0;
-              currentResult.usage.cacheWrite += message.usage.cacheWrite || 0;
-              const cost = message.usage.cost as number | { total?: number } | undefined;
-              currentResult.usage.cost +=
-                typeof cost === "number" ? cost : typeof cost?.total === "number" ? cost.total : 0;
-              currentResult.usage.contextTokens = message.usage.totalTokens || 0;
-            }
             if (!currentResult.model && message.model) currentResult.model = message.model;
             if (message.stopReason) currentResult.stopReason = message.stopReason;
             if (message.errorMessage) currentResult.errorMessage = message.errorMessage;
@@ -326,22 +306,33 @@ async function runSingleAgent(
       proc.stderr?.on("data", (chunk: string) => {
         currentResult.stderr += chunk;
       });
+      let killTimer: ReturnType<typeof setTimeout> | undefined;
+      let settled = false;
+      const settle = (code: number) => {
+        if (settled) return;
+        settled = true;
+        signal?.removeEventListener("abort", onAbort);
+        if (killTimer !== undefined) clearTimeout(killTimer);
+        if (buffer.trim()) processLine(buffer);
+        resolve(code);
+      };
       const onAbort = () => {
         currentResult.stopReason = "aborted";
-        proc.kill("SIGTERM");
+        if (proc.kill("SIGTERM")) {
+          killTimer = setTimeout(() => proc.kill("SIGKILL"), 1_000);
+          killTimer.unref();
+        }
       };
-      signal?.addEventListener("abort", onAbort, { once: true });
-      proc.on("close", (code) => {
-        signal?.removeEventListener("abort", onAbort);
-        if (buffer.trim()) processLine(buffer);
-        resolve(code ?? 1);
-      });
+      proc.on("close", (code) => settle(code ?? 1));
       proc.on("error", (error) => {
         currentResult.stderr += error.message;
-        resolve(1);
+        settle(1);
       });
+      if (signal?.aborted) onAbort();
+      else signal?.addEventListener("abort", onAbort, { once: true });
     });
     currentResult.exitCode = exitCode;
+    currentResult.finished = true;
     return currentResult;
   } finally {
     if (tmpPromptDir) {
@@ -482,10 +473,10 @@ export default function t3SubagentExtension(pi: ExtensionAPI) {
           agent: item.agent,
           agentSource: "unknown",
           task: item.task,
+          finished: false,
           exitCode: -1,
           messages: [],
           stderr: "",
-          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
         }));
         const emitParallel = () => {
           onUpdate?.({

@@ -34,12 +34,7 @@ import {
   type ProviderAdapterV2Event,
   type ProviderAdapterV2SessionRuntime,
 } from "../ProviderAdapter.ts";
-import {
-  makePiAdapterV2,
-  piRollbackForkEntry,
-  PiProviderCapabilitiesV2,
-  PI_PROVIDER,
-} from "./PiAdapterV2.ts";
+import { makePiAdapterV2, PI_PROVIDER } from "./PiAdapterV2.ts";
 import { makePiRpcConnection, type PiRpcRecord } from "./PiRpc.ts";
 
 const serverConfigLayer = ServerConfig.layerTest(process.cwd(), {
@@ -79,6 +74,8 @@ interface FakePi {
   readonly vetoNextSwitch: () => void;
   /** Data returned by the next `get_state` acks, consumed in order. */
   readonly queueState: (data: unknown) => void;
+  /** Data returned by the next `get_session_stats` acks, consumed in order. */
+  readonly queueStats: (data: unknown) => void;
   readonly lastSpawn: () => {
     readonly args: ReadonlyArray<string>;
     readonly env: NodeJS.ProcessEnv;
@@ -94,6 +91,7 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
   const requests = yield* Queue.unbounded<PiRpcRecord>();
   const entriesQueue: Array<unknown> = [];
   const stateQueue: Array<unknown> = [];
+  const statsQueue: Array<unknown> = [];
   let vetoSwitch = false;
   let stdinBuffer = "";
 
@@ -119,6 +117,7 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
             thinkingLevel: "medium",
             isStreaming: false,
             isCompacting: false,
+            autoCompactionEnabled: true,
             sessionFile: FAKE_SESSION_FILE,
             sessionId: "abc",
           },
@@ -130,6 +129,8 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
       }
       case "get_entries":
         return { ...base, data: entriesQueue.shift() ?? { entries: [], leafId: null } };
+      case "get_session_stats":
+        return { ...base, data: statsQueue.shift() ?? {} };
       case "fork":
         return { ...base, data: { cancelled: false, message: "forked" } };
       default:
@@ -198,6 +199,7 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
       vetoSwitch = true;
     },
     queueState: (data) => stateQueue.push(data),
+    queueStats: (data) => statsQueue.push(data),
     lastSpawn: () => lastSpawn,
   } satisfies FakePi;
 });
@@ -296,24 +298,6 @@ const startTurn = Effect.fnUntraced(function* (
 });
 
 describe("PiAdapterV2", () => {
-  it("keeps the rollback capability triple consistent with CommandPolicy", () => {
-    // ensureRollback rejects rollback commands unless all three hold, so a
-    // partially-enabled combination is user-visibly broken, not conservative.
-    assert.isTrue(PiProviderCapabilitiesV2.threads.canRollbackThread);
-    assert.isTrue(PiProviderCapabilitiesV2.checkpointing.providerCanRollbackConversation);
-    assert.isTrue(PiProviderCapabilitiesV2.checkpointing.providerRollbackReturnsSnapshot);
-  });
-
-  it("declares Pi-honest capabilities", () => {
-    assert.isTrue(PiProviderCapabilitiesV2.turns.supportsActiveSteering);
-    assert.isFalse(PiProviderCapabilitiesV2.turns.supportsSteeringByInterruptRestart);
-    assert.equal(PiProviderCapabilitiesV2.turns.terminalStatusQuality, "strong");
-    assert.isFalse(PiProviderCapabilitiesV2.approvals.supportsCommandApproval);
-    assert.isTrue(PiProviderCapabilitiesV2.tools.supportsMcpTools);
-    assert.isTrue(PiProviderCapabilitiesV2.subagents.exposesSubagentThreadIds);
-    assert.equal(PiProviderCapabilitiesV2.identity.nativeThreadIds, "strong");
-  });
-
   it.effect("injects the T3 MCP extension and bearer when a session exists", () =>
     Effect.gen(function* () {
       McpProviderSession.setMcpProviderSession({
@@ -433,6 +417,11 @@ describe("PiAdapterV2", () => {
         },
       });
       yield* fake.emit({ type: "agent_end", messages: [], willRetry: false });
+      fake.queueStats({
+        tokens: { input: 12_000, output: 500, cacheRead: 8_000, cacheWrite: 0, total: 20_500 },
+        toolCalls: 3,
+        contextUsage: { tokens: 20_500, contextWindow: 200_000, percent: 10.25 },
+      });
       yield* fake.emit({ type: "agent_settled" });
 
       const assistantItem = yield* takeEvent(
@@ -445,6 +434,23 @@ describe("PiAdapterV2", () => {
         assistantItem.type === "turn_item.updated" &&
           assistantItem.turnItem.type === "assistant_message" &&
           assistantItem.turnItem.text === "Hello",
+      );
+      const usage = yield* takeEvent(
+        (event) =>
+          event.type === "provider_thread.updated" && event.providerThread.contextUsage !== null,
+      );
+      assert.deepEqual(
+        usage.type === "provider_thread.updated" ? usage.providerThread.contextUsage : null,
+        {
+          usedTokens: 20_500,
+          totalProcessedTokens: 20_500,
+          maxTokens: 200_000,
+          inputTokens: 12_000,
+          cachedInputTokens: 8_000,
+          outputTokens: 500,
+          toolUses: 3,
+          compactsAutomatically: true,
+        },
       );
       const terminal = yield* takeEvent((event) => event.type === "turn.terminal");
       assert.isTrue(terminal.type === "turn.terminal" && terminal.status === "completed");
@@ -524,37 +530,6 @@ describe("PiAdapterV2", () => {
       assert.equal(fork["entryId"], "u2");
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
-
-  it("resolves rollback fork entries from captured turn refs", () => {
-    const turn = (ordinal: number, ref: OrchestrationV2ProviderTurn["nativeTurnRef"]) =>
-      ({ ordinal, nativeTurnRef: ref }) as OrchestrationV2ProviderTurn;
-    const strong = (nativeId: string) =>
-      ({ driver: PI_PROVIDER, nativeId, strength: "strong" }) as const;
-    const weak = (nativeId: string) =>
-      ({ driver: PI_PROVIDER, nativeId, strength: "weak" }) as const;
-    // No turns after the target: nothing to discard.
-    assert.isNull(
-      piRollbackForkEntry({
-        target: { type: "provider_turn", providerTurn: turn(2, strong("u2")) },
-        providerThreadTurns: [turn(1, strong("u1")), turn(2, strong("u2"))],
-      }),
-    );
-    // Boundary turn without a captured (strong) entry ref cannot roll back.
-    assert.isUndefined(
-      piRollbackForkEntry({
-        target: { type: "provider_turn", providerTurn: turn(1, strong("u1")) },
-        providerThreadTurns: [turn(1, strong("u1")), turn(2, weak("synthetic"))],
-      }),
-    );
-    // thread_start discards everything from the first captured turn.
-    assert.equal(
-      piRollbackForkEntry({
-        target: { type: "thread_start" },
-        providerThreadTurns: [turn(2, strong("u2")), turn(1, strong("u1"))],
-      }),
-      "u1",
-    );
-  });
 
   it.effect("fails a resume when an extension vetoes the session switch", () =>
     Effect.gen(function* () {
@@ -728,12 +703,22 @@ describe("PiAdapterV2", () => {
               {
                 agent: "scout",
                 task: "map the repo",
+                finished: false,
                 exitCode: 0,
+                stopReason: "toolUse",
                 stderr: "",
                 sessionFile: "/tmp/pi-children/scout.jsonl",
                 messages: [
                   { role: "assistant", content: [{ type: "text", text: "scanning files" }] },
                 ],
+              },
+              {
+                agent: "worker",
+                task: "broken task",
+                finished: false,
+                exitCode: -1,
+                stderr: "",
+                messages: [],
               },
             ],
           },
@@ -766,6 +751,12 @@ describe("PiAdapterV2", () => {
           running.subagent.progress === "scanning files" &&
           running.subagent.childThreadId === childThreadId,
       );
+      const queuedSibling = yield* takeEvent(
+        (event) => event.type === "subagent.updated" && event.subagent.title === "worker",
+      );
+      assert.isTrue(
+        queuedSibling.type === "subagent.updated" && queuedSibling.subagent.status === "running",
+      );
       yield* fake.emit({
         type: "tool_execution_end",
         toolCallId: "call_sub",
@@ -779,6 +770,7 @@ describe("PiAdapterV2", () => {
               {
                 agent: "scout",
                 task: "map the repo",
+                finished: true,
                 exitCode: 0,
                 stopReason: "stop",
                 stderr: "",
@@ -790,6 +782,7 @@ describe("PiAdapterV2", () => {
               {
                 agent: "worker",
                 task: "broken task",
+                finished: true,
                 exitCode: 1,
                 stderr: "boom",
                 messages: [],
@@ -1056,7 +1049,21 @@ describe("PiAdapterV2", () => {
           stopReason: "stop",
         },
       });
+      fake.queueStats({
+        tokens: { input: 12_000, output: 500, cacheRead: 8_000, cacheWrite: 0, total: 20_500 },
+        contextUsage: { tokens: null, contextWindow: 200_000, percent: null },
+      });
       yield* fake.emit({ type: "agent_settled" });
+      const usage = yield* takeEvent(
+        (event) =>
+          event.type === "provider_thread.updated" && event.providerThread.contextUsage !== null,
+      );
+      assert.equal(
+        usage.type === "provider_thread.updated"
+          ? usage.providerThread.contextUsage?.usedTokens
+          : null,
+        3_400,
+      );
       const terminal = yield* takeEvent((event) => event.type === "turn.terminal");
       assert.isTrue(terminal.type === "turn.terminal" && terminal.status === "completed");
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
@@ -1196,7 +1203,9 @@ describe("PiAdapterV2", () => {
               {
                 agent: "worker",
                 task: "long task",
-                exitCode: 0,
+                finished: false,
+                exitCode: -1,
+                stopReason: "toolUse",
                 stderr: "",
                 messages: [],
                 sessionFile: childFile,
@@ -1214,6 +1223,14 @@ describe("PiAdapterV2", () => {
       };
       const error = yield* runtime.resumeThread({ providerThread: childThread }).pipe(Effect.flip);
       assert.equal(error._tag, "ProviderAdapterResumeThreadError");
+
+      // A parent teardown releases every child lock, even when the tool never
+      // emitted a final result (for example after provider transport loss).
+      yield* fake.emit({ type: "agent_settled" });
+      yield* takeEvent((event) => event.type === "turn.terminal");
+      fake.queueState({ sessionFile: childFile, sessionId: "child-1" });
+      const resumed = yield* runtime.resumeThread({ providerThread: childThread });
+      assert.equal(resumed.nativeThreadRef?.nativeId, childFile);
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
@@ -1237,6 +1254,19 @@ describe("PiAdapterV2", () => {
       yield* fake.takeRequest("clone");
       const switchBack = yield* fake.takeRequest("switch_session");
       assert.equal(switchBack["sessionPath"], FAKE_SESSION_FILE);
+
+      fake.queueState({
+        sessionFile: "/fake/.pi/agent/sessions/--workspace--/0003_clone.jsonl",
+        sessionId: "clone-2",
+      });
+      fake.vetoNextSwitch();
+      const error = yield* runtime
+        .forkThread({
+          sourceProviderThread: providerThread,
+          targetThreadId: ThreadId.make("thread-pi-fork-vetoed"),
+        })
+        .pipe(Effect.flip);
+      assert.equal(error._tag, "ProviderAdapterForkThreadError");
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 

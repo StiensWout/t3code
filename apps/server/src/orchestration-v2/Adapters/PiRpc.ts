@@ -19,6 +19,7 @@
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Predicate from "effect/Predicate";
 import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";
 import * as Schema from "effect/Schema";
@@ -38,6 +39,20 @@ export class PiRpcError extends Schema.TaggedErrorClass<PiRpcError>()("PiRpcErro
 }
 
 export type PiRpcRecord = Record<string, unknown>;
+
+export function piRecordField(input: unknown, key: string): unknown {
+  return Predicate.isObject(input) ? input[key] : undefined;
+}
+
+export function piRecordString(input: unknown, key: string): string | undefined {
+  const value = piRecordField(input, key);
+  return Predicate.isString(value) ? value : undefined;
+}
+
+export function piRecordNumber(input: unknown, key: string): number | undefined {
+  const value = piRecordField(input, key);
+  return Predicate.isNumber(value) && Number.isFinite(value) ? value : undefined;
+}
 
 /**
  * Splits a `provider/model` slug into the two fields `set_model` expects.
@@ -122,10 +137,7 @@ function summarizePiError(error: unknown): string {
 function parsePiRecord(line: string): PiRpcRecord | undefined {
   try {
     const parsed: unknown = decodeJsonLine(line);
-    if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
-      return parsed as PiRpcRecord;
-    }
-    return undefined;
+    return Predicate.isObject(parsed) ? parsed : undefined;
   } catch {
     return undefined;
   }
@@ -206,16 +218,13 @@ export const makePiRpcConnection = Effect.fnUntraced(function* (options: PiRpcSp
     yield* taskkill.exitCode;
   }).pipe(Effect.scoped, Effect.ignore);
 
+  const terminateProcess =
+    platform === "win32" ? terminateWindowsTree : terminatePiProcess(killProcessGroup, hasExited);
+
   // Registered before any further setup: an interrupt or failure between the
   // spawn and the rest of this constructor would otherwise leak a detached
   // pi process with no finalizer to reap it.
-  yield* Scope.addFinalizer(
-    scope,
-    (platform === "win32"
-      ? terminateWindowsTree
-      : terminatePiProcess(killProcessGroup, hasExited)
-    ).pipe(Effect.ignore, Effect.uninterruptible),
-  );
+  yield* Scope.addFinalizer(scope, terminateProcess.pipe(Effect.ignore, Effect.uninterruptible));
 
   const pendingRequests = new Map<string, PendingPiRequest>();
   const events = yield* Queue.unbounded<PiRpcRecord, PiRpcError>();
@@ -382,9 +391,6 @@ export const makePiRpcConnection = Effect.fnUntraced(function* (options: PiRpcSp
     request,
     events,
     exited: Deferred.await(exitDeferred),
-    terminate: terminatePiProcess(killProcessGroup, hasExited).pipe(
-      Effect.ignore,
-      Effect.uninterruptible,
-    ),
+    terminate: terminateProcess.pipe(Effect.ignore, Effect.uninterruptible),
   } satisfies PiRpcConnection;
 });

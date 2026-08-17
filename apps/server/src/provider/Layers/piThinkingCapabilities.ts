@@ -1,5 +1,6 @@
 import { type ModelCapabilities, type ProviderOptionChoice } from "@t3tools/contracts";
 import { createModelCapabilities } from "@t3tools/shared/model";
+import * as Predicate from "effect/Predicate";
 
 /**
  * Pi's full thinking ladder. Extra High (`xhigh`) and Max are opt-in per
@@ -65,7 +66,7 @@ export function thinkingCapabilitiesForPiModel(model: unknown): ModelCapabilitie
  * A reasoning model always exposes off through high unless a map entry is
  * `null`. Extra High and Max appear only when the map has a non-null entry.
  */
-export function supportedPiThinkingLevelsFromModel(model: unknown): ReadonlyArray<PiThinkingLevel> {
+function supportedPiThinkingLevelsFromModel(model: unknown): ReadonlyArray<PiThinkingLevel> {
   if (recordField(model, "reasoning") !== true) return [];
   const thinkingLevelMap = thinkingLevelMapFromModel(model);
   return PI_THINKING_LEVELS.filter((level) => {
@@ -83,6 +84,5 @@ function thinkingLevelMapFromModel(model: unknown): Record<string, unknown> | un
 }
 
 function recordField(input: unknown, key: string): unknown {
-  if (typeof input !== "object" || input === null) return undefined;
-  return (input as Record<string, unknown>)[key];
+  return Predicate.isObject(input) ? input[key] : undefined;
 }

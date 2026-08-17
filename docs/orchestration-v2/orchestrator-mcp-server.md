@@ -145,14 +145,17 @@ The extension connects to that HTTP endpoint, lists tools, and registers each
 one with `pi.registerTool` under its original name (`delegate_task`,
 `t3_thread_start`, and the rest). Follow-up HTTP requests send
 `mcp-protocol-version: 2025-06-18`; Effect's MCP transport returns 400
-without it. User `launchArgs` are preserved. The first turn of a session
-also receives the shared T3 orchestration instructions.
+without it. The first turn of a session also receives the shared T3
+orchestration instructions.
 
 A second T3-owned extension overrides the official `subagent` tool to
 persist `--session` and report `sessionFile`. Duplicate `subagent`
 registrations abort Pi, so the launcher disables extension discovery and
-drops the official tool from `launchArgs`. The adapter binds each result
-as a child thread that later sends resume through `switch_session`.
+drops the official tool from `launchArgs`. It then explicitly re-adds the
+T3 extensions and deduplicated user extensions, including project-local
+extensions only under standing project trust. Other user `launchArgs` are
+preserved. The adapter binds each result as a child thread that later sends
+resume through `switch_session`.
 
 ### Initial Provider Support
 

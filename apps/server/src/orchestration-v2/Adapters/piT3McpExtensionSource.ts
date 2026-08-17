@@ -85,6 +85,15 @@ function formatMcpContent(result: unknown): string {
   return JSON.stringify(result);
 }
 
+function isMcpToolError(result: unknown): boolean {
+  return (
+    typeof result === "object" &&
+    result !== null &&
+    "isError" in result &&
+    result.isError === true
+  );
+}
+
 function createMcpClient(endpoint: string, token: string) {
   let nextId = 1;
   let sessionId: string | undefined;
@@ -184,7 +193,8 @@ export default async function t3McpExtension(pi: ExtensionAPI) {
   let started: Promise<void> | undefined;
 
   const ensureStarted = () => {
-    started ??= (async () => {
+    if (started !== undefined) return started;
+    const attempt = (async () => {
       const signal = AbortSignal.timeout(10_000);
       await client.connect(signal);
       const tools = await client.listTools(signal);
@@ -210,25 +220,24 @@ export default async function t3McpExtension(pi: ExtensionAPI) {
             return {
               content: [{ type: "text", text }],
               details: { server: "t3-code", tool: name },
+              ...(isMcpToolError(result) ? { isError: true } : {}),
             };
           },
         });
       }
     })();
-    return started;
+    started = attempt;
+    void attempt.catch(() => {
+      if (started === attempt) started = undefined;
+    });
+    return attempt;
   };
 
   // Await here so tools exist before session_start and the first prompt.
   // session_start is a retry if the process later reloads the extension.
-  try {
-    await ensureStarted();
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    pi.on("session_start", async (_event, ctx) => {
-      ctx.ui.notify(\`t3-code MCP unavailable: \${message}\`, "warning");
-    });
-    return;
-  }
+  // Best effort during extension load. A failed first connection is retried
+  // below on session_start instead of pinning this process to the failure.
+  await ensureStarted().catch(() => undefined);
 
   pi.on("session_start", async (_event, ctx) => {
     try {
