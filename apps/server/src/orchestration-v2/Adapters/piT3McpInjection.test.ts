@@ -143,6 +143,10 @@ describe("pi T3 MCP injection", () => {
       assert.isTrue(dest.endsWith(PI_T3_MCP_EXTENSION_FILENAME));
       const source = yield* fs.readFileString(dest);
       assert.include(source, "export default async function t3McpExtension");
+      // Orchestration guidance rides the system-prompt hook, not the user
+      // message, so first-turn slash commands still expand.
+      assert.include(source, "before_agent_start");
+      assert.include(source, "T3 Code orchestration");
       assert.include(source, T3_MCP_URL_ENV);
       assert.include(source, '"mcp-protocol-version"');
       assert.include(source, '"tools/call"');
