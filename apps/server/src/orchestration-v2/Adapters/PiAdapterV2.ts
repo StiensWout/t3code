@@ -1999,7 +1999,9 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
         // Retry a failed session-local lookup once at first use so a transient
         // startup failure cannot leave a visible $ skill inert for this session.
         if (skillNames === null && text.includes("$")) {
-          skillNames = yield* discoverSkillNames.pipe(Effect.orElseSucceed(() => new Set()));
+          skillNames = yield* discoverSkillNames.pipe(
+            Effect.orElseSucceed(() => new Set<string>()),
+          );
         }
         const expandedText = skillNames === null ? text : expandPiSkillReference(text, skillNames);
         const images: Array<{ type: "image"; data: string; mimeType: string }> = [];
