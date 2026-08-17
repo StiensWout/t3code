@@ -231,6 +231,10 @@ async function runSingleAgent(
     "--name",
     \`t3-subagent \${agentName}\`,
   ];
+  // Children inherit T3_MCP_URL / T3_MCP_BEARER_TOKEN from this process, so
+  // loading the same T3 MCP extension gives them delegate_task / t3_thread_*.
+  const t3McpExtension = process.env["T3_PI_MCP_EXTENSION_PATH"];
+  if (t3McpExtension) args.push("--extension", t3McpExtension);
   const model = agent.model ?? defaults.model;
   if (model) args.push("--model", model);
   if (!agent.model && defaults.thinkingLevel) args.push("--thinking", defaults.thinkingLevel);
