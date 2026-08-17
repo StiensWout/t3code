@@ -437,7 +437,8 @@ describe("PiAdapterV2", () => {
       );
       const usage = yield* takeEvent(
         (event) =>
-          event.type === "provider_thread.updated" && event.providerThread.contextUsage !== null,
+          event.type === "provider_thread.updated" &&
+          event.providerThread.contextUsage?.usedTokens === 20_500,
       );
       assert.deepEqual(
         usage.type === "provider_thread.updated" ? usage.providerThread.contextUsage : null,
@@ -454,6 +455,25 @@ describe("PiAdapterV2", () => {
       );
       const terminal = yield* takeEvent((event) => event.type === "turn.terminal");
       assert.isTrue(terminal.type === "turn.terminal" && terminal.status === "completed");
+
+      // An acknowledged stats request can still omit usable window values.
+      // Keep the last good snapshot instead of making the meter disappear.
+      yield* startTurn(runtime, providerThread);
+      yield* fake.takeRequest("prompt");
+      fake.queueStats({ contextUsage: { tokens: null, contextWindow: 200_000 } });
+      yield* fake.emit({ type: "agent_settled" });
+      const preservedUsage = yield* takeEvent(
+        (event) =>
+          event.type === "provider_thread.updated" &&
+          event.providerThread.status === "idle" &&
+          event.providerThread.contextUsage?.totalProcessedTokens === 20_500,
+      );
+      assert.equal(
+        preservedUsage.type === "provider_thread.updated"
+          ? preservedUsage.providerThread.contextUsage?.usedTokens
+          : null,
+        20_500,
+      );
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
@@ -1056,7 +1076,8 @@ describe("PiAdapterV2", () => {
       yield* fake.emit({ type: "agent_settled" });
       const usage = yield* takeEvent(
         (event) =>
-          event.type === "provider_thread.updated" && event.providerThread.contextUsage !== null,
+          event.type === "provider_thread.updated" &&
+          event.providerThread.contextUsage?.usedTokens === 3_400,
       );
       assert.equal(
         usage.type === "provider_thread.updated"
@@ -1164,7 +1185,7 @@ describe("PiAdapterV2", () => {
         row.type === "turn_item.updated" &&
           row.turnItem.type === "dynamic_tool" &&
           row.turnItem.status === "running" &&
-          row.turnItem.nativeItemRef?.nativeId === `${row.turnItem.providerTurnId}:status:tps` &&
+          row.turnItem.nativeItemRef?.nativeId === `status:${row.turnItem.providerTurnId}:tps` &&
           (row.turnItem.input as { status?: string }).status === "42 tok/s",
       );
       yield* fake.emit({ type: "agent_settled" });
