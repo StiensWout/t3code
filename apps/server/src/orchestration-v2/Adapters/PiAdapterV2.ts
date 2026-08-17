@@ -58,7 +58,6 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
-import { t3OrchestrationPromptForFirstRun } from "../../provider/T3OrchestrationInstructions.ts";
 import { mergeProviderInstanceEnvironment } from "../../provider/ProviderInstanceEnvironment.ts";
 import { IdAllocatorV2 } from "../IdAllocator.ts";
 import {
@@ -405,7 +404,6 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
         subagentExtensionPath,
         discoveredExtensionPaths,
       });
-      const hasT3Mcp = launch.hasT3Mcp;
       const connection: PiRpcConnection = yield* makePiRpcConnection({
         command: options.settings.binaryPath || "pi",
         args: launch.args,
@@ -2027,12 +2025,12 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
             // Resolved before the turn is installed: a failure here (an
             // unreadable attachment) must not leave `activeTurn` set, which
             // would reject every later turn as already active.
+            // Orchestration instructions reach pi through the T3 MCP
+            // extension's before_agent_start system-prompt hook, never by
+            // wrapping the user text: a wrapped first message would no
+            // longer start with "/" and slash commands would stop expanding.
             const payload = yield* resolvePromptPayload(
-              t3OrchestrationPromptForFirstRun({
-                prompt: turnInput.message.text,
-                runOrdinal: turnInput.runOrdinal,
-                hasT3Mcp,
-              }),
+              turnInput.message.text,
               turnInput.message.attachments,
             );
             const startedAt = yield* DateTime.now;
