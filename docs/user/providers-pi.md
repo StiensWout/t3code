@@ -21,6 +21,9 @@ use Pi's native session files, so resume, rollback, and current-branch forks kee
 state. Extension dialogs appear in the T3 Code composer, and the composer context meter updates from
 Pi's own context-window statistics after a response settles.
 
+Pi skills appear in the composer's `$` menu. This includes user skills and project skills that Pi
+loads for the current workspace; selecting one uses Pi's native skill expansion.
+
 Pi's normal user extensions continue to load. T3 Code supplies its own session-aware `subagent`
 tool so each child can be opened and continued as a T3 Code thread. Project-local extensions are
 only loaded automatically when Pi is configured to always trust that project.
@@ -32,4 +35,5 @@ only loaded automatically when Pi is configured to always trust that project.
 - If no models appear, open Pi directly and confirm its authentication and model configuration.
 - If a project extension is missing, approve the project in Pi or configure standing project trust,
   then start a fresh provider session.
+- If a project skill is missing from the `$` menu, approve the project in Pi and refresh the provider.
 - The context meter appears after Pi returns its first usable token snapshot for the thread.

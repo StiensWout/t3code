@@ -76,6 +76,8 @@ interface FakePi {
   readonly queueState: (data: unknown) => void;
   /** Data returned by the next `get_session_stats` acks, consumed in order. */
   readonly queueStats: (data: unknown) => void;
+  /** Data returned by the next `get_commands` acks, consumed in order. */
+  readonly queueCommands: (data: unknown) => void;
   readonly lastSpawn: () => {
     readonly args: ReadonlyArray<string>;
     readonly env: NodeJS.ProcessEnv;
@@ -92,6 +94,7 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
   const entriesQueue: Array<unknown> = [];
   const stateQueue: Array<unknown> = [];
   const statsQueue: Array<unknown> = [];
+  const commandsQueue: Array<unknown> = [];
   let vetoSwitch = false;
   let stdinBuffer = "";
 
@@ -131,6 +134,8 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
         return { ...base, data: entriesQueue.shift() ?? { entries: [], leafId: null } };
       case "get_session_stats":
         return { ...base, data: statsQueue.shift() ?? {} };
+      case "get_commands":
+        return { ...base, data: commandsQueue.shift() ?? { commands: [] } };
       case "fork":
         return { ...base, data: { cancelled: false, message: "forked" } };
       default:
@@ -200,6 +205,7 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
     },
     queueState: (data) => stateQueue.push(data),
     queueStats: (data) => statsQueue.push(data),
+    queueCommands: (data) => commandsQueue.push(data),
     lastSpawn: () => lastSpawn,
   } satisfies FakePi;
 });
@@ -274,6 +280,7 @@ const startTurn = Effect.fnUntraced(function* (
   providerThread: OrchestrationV2ProviderThread,
   model = "default",
   attachments: ReadonlyArray<ChatAttachment> = [],
+  text = "Hello pi",
 ) {
   const appThread = yield* makeAppThread(model);
   yield* runtime.startTurn({
@@ -287,7 +294,7 @@ const startTurn = Effect.fnUntraced(function* (
     providerThread,
     message: {
       messageId: "message:thread-pi-test:1" as never,
-      text: "Hello pi",
+      text,
       attachments,
       createdBy: "user",
       creationSource: "web",
@@ -382,6 +389,41 @@ describe("PiAdapterV2", () => {
       yield* startTurn(runtime, providerThread);
       const prompt = yield* fake.takeRequest("prompt");
       assert.equal(prompt["message"], "Hello pi");
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("expands a selected $ skill through Pi's native skill command", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      fake.queueCommands({
+        commands: [
+          {
+            name: "skill:repo-review",
+            description: "Review this repository.",
+            source: "skill",
+            sourceInfo: {
+              path: "/workspace/.agents/skills/repo-review/SKILL.md",
+              scope: "project",
+            },
+          },
+        ],
+      });
+      const { runtime } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+
+      yield* startTurn(
+        runtime,
+        providerThread,
+        "default",
+        [],
+        "Review this change please $repo-review",
+      );
+      const prompt = yield* fake.takeRequest("prompt");
+      assert.equal(prompt["message"], "/skill:repo-review Review this change please");
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 

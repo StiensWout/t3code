@@ -60,6 +60,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import { expandPiSkillReference, parsePiDiscoveredCommands } from "../../provider/PiCommands.ts";
 import { mergeProviderInstanceEnvironment } from "../../provider/ProviderInstanceEnvironment.ts";
 import { IdAllocatorV2 } from "../IdAllocator.ts";
 import {
@@ -129,6 +130,7 @@ export const PI_INHERIT_THINKING_VALUE = "inherit";
 
 const STREAM_FLUSH_MS = 50;
 const PI_REQUEST_TIMEOUT_MS = 15_000;
+const PI_SKILL_DISCOVERY_TIMEOUT_MS = 4_000;
 
 export const PiProviderCapabilitiesV2 = {
   sessions: {
@@ -409,6 +411,12 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
               cause,
             }),
         ),
+      );
+      const commandData = yield* connection
+        .request({ type: "get_commands" }, PI_SKILL_DISCOVERY_TIMEOUT_MS)
+        .pipe(Effect.orElseSucceed(() => undefined));
+      const skillNames = new Set(
+        parsePiDiscoveredCommands(commandData).skills.map((skill) => skill.name),
       );
 
       const now = yield* DateTime.now;
@@ -1980,6 +1988,7 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
         text: string,
         attachments: ReadonlyArray<ChatAttachment>,
       ) {
+        const expandedText = expandPiSkillReference(text, skillNames);
         const images: Array<{ type: "image"; data: string; mimeType: string }> = [];
         const extraLines: Array<string> = [];
         for (const attachment of attachments) {
@@ -1999,7 +2008,8 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
             extraLines.push(`[Attachment saved at ${path}]`);
           }
         }
-        const message = extraLines.length === 0 ? text : `${text}\n\n${extraLines.join("\n")}`;
+        const message =
+          extraLines.length === 0 ? expandedText : `${expandedText}\n\n${extraLines.join("\n")}`;
         return { message, images };
       });
 

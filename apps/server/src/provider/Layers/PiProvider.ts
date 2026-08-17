@@ -8,13 +8,7 @@
  * `~/.pi/agent` — custom providers, models.json entries, extensions, skills —
  * shows up in T3 without any hardcoded catalog.
  */
-import {
-  type PiSettings,
-  type ServerProvider,
-  type ServerProviderModel,
-  type ServerProviderSkill,
-  type ServerProviderSlashCommand,
-} from "@t3tools/contracts";
+import { type PiSettings, type ServerProvider, type ServerProviderModel } from "@t3tools/contracts";
 import { causeErrorTag } from "@t3tools/shared/observability";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import { tokenizeCliArgs } from "@t3tools/shared/cliArgs";
@@ -47,6 +41,7 @@ import {
   EMPTY_PI_MODEL_CAPABILITIES,
   thinkingCapabilitiesForPiModel,
 } from "./piThinkingCapabilities.ts";
+import { parsePiDiscoveredCommands, type PiDiscoveredCommands } from "../PiCommands.ts";
 
 const PI_PRESENTATION = {
   displayName: "Pi",
@@ -66,10 +61,8 @@ const PI_DEFAULT_MODEL: ServerProviderModel = {
   capabilities: EMPTY_PI_MODEL_CAPABILITIES,
 };
 
-interface PiDiscovery {
+interface PiDiscovery extends PiDiscoveredCommands {
   readonly models: ReadonlyArray<ServerProviderModel>;
-  readonly slashCommands: ReadonlyArray<ServerProviderSlashCommand>;
-  readonly skills: ReadonlyArray<ServerProviderSkill>;
   readonly authenticated: boolean;
 }
 
@@ -109,46 +102,12 @@ function parseDiscoveredModels(
   return parsed;
 }
 
-function parseDiscoveredCommands(data: unknown): {
-  readonly slashCommands: ReadonlyArray<ServerProviderSlashCommand>;
-  readonly skills: ReadonlyArray<ServerProviderSkill>;
-} {
-  const commands = recordField(data, "commands");
-  if (!Array.isArray(commands)) return { slashCommands: [], skills: [] };
-  const slashCommands: Array<ServerProviderSlashCommand> = [];
-  const skills: Array<ServerProviderSkill> = [];
-  for (const command of commands) {
-    const name = recordString(command, "name");
-    if (name === undefined || name.length === 0) continue;
-    const description = recordString(command, "description");
-    if (recordString(command, "source") === "skill") {
-      const path = recordString(command, "path");
-      if (path === undefined) continue;
-      skills.push({
-        name,
-        ...(description === undefined ? {} : { description }),
-        path,
-        ...(recordString(command, "location") === undefined
-          ? {}
-          : { scope: recordString(command, "location") }),
-        enabled: true,
-      });
-      continue;
-    }
-    slashCommands.push({
-      name,
-      ...(description === undefined ? {} : { description }),
-    });
-  }
-  return { slashCommands, skills };
-}
-
-const discoverPiViaRpc = (piSettings: PiSettings, environment: NodeJS.ProcessEnv) =>
+const discoverPiViaRpc = (piSettings: PiSettings, environment: NodeJS.ProcessEnv, cwd?: string) =>
   Effect.gen(function* () {
     const connection = yield* makePiRpcConnection({
       command: piSettings.binaryPath || "pi",
       args: ["--mode", "rpc", "--no-session", ...tokenizeCliArgs(piSettings.launchArgs)],
-      cwd: undefined,
+      cwd,
       env: environment,
     });
     const stateData = yield* connection.request({ type: "get_state" });
@@ -160,7 +119,7 @@ const discoverPiViaRpc = (piSettings: PiSettings, environment: NodeJS.ProcessEnv
       modelsData,
       recordString(stateData, "thinkingLevel"),
     );
-    const { slashCommands, skills } = parseDiscoveredCommands(commandsData);
+    const { slashCommands, skills } = parsePiDiscoveredCommands(commandsData);
     return {
       models: discoveredModels,
       slashCommands,
@@ -224,6 +183,7 @@ export function buildInitialPiProviderSnapshot(
 export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function* (
   piSettings: PiSettings,
   environment: NodeJS.ProcessEnv = process.env,
+  cwd?: string,
 ): Effect.fn.Return<ServerProviderDraft, never, ChildProcessSpawner.ChildProcessSpawner> {
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
   const fallbackModels = piModelsFromSettings(piSettings.customModels);
@@ -303,7 +263,7 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
     });
   }
 
-  const discoveryExit = yield* discoverPiViaRpc(piSettings, environment).pipe(
+  const discoveryExit = yield* discoverPiViaRpc(piSettings, environment, cwd).pipe(
     Effect.timeoutOption(PI_RPC_DISCOVERY_TIMEOUT_MS),
     Effect.exit,
   );
