@@ -1,5 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { tokenizeCliArgs } from "@t3tools/shared/cliArgs";
 
@@ -27,7 +28,7 @@ export {
 /** Env var telling the T3 subagent override where the MCP extension lives. */
 export const T3_PI_MCP_EXTENSION_PATH_ENV = "T3_PI_MCP_EXTENSION_PATH";
 
-export function bearerTokenFromAuthorizationHeader(header: string): string {
+function bearerTokenFromAuthorizationHeader(header: string): string {
   return header.startsWith("Bearer ") ? header.slice("Bearer ".length) : header;
 }
 
@@ -36,9 +37,9 @@ const decodeJson = Schema.decodeSync(Schema.fromJsonString(Schema.Unknown));
 function piDefaultProjectTrust(settingsRaw: string): string | undefined {
   try {
     const parsed = decodeJson(settingsRaw);
-    if (typeof parsed !== "object" || parsed === null) return undefined;
-    const value = (parsed as Record<string, unknown>)["defaultProjectTrust"];
-    return typeof value === "string" ? value : undefined;
+    if (!Predicate.isObject(parsed)) return undefined;
+    const value = parsed["defaultProjectTrust"];
+    return Predicate.isString(value) ? value : undefined;
   } catch {
     return undefined;
   }
@@ -94,15 +95,15 @@ export const discoverPiUserExtensions = Effect.fn("discoverPiUserExtensions")(fu
   return found;
 });
 
-export function piT3McpExtensionDestPath(cacheDir: string): string {
+function piT3McpExtensionDestPath(cacheDir: string): string {
   return `${cacheDir.replace(/\\/g, "/")}/${PI_T3_MCP_EXTENSION_FILENAME}`;
 }
 
-export function piT3SubagentExtensionDestPath(cacheDir: string): string {
+function piT3SubagentExtensionDestPath(cacheDir: string): string {
   return `${cacheDir.replace(/\\/g, "/")}/${PI_T3_SUBAGENT_EXTENSION_FILENAME}`;
 }
 
-export function piChildSessionRootFromLaunchArgs(launchArgs: string): string | undefined {
+function piChildSessionRootFromLaunchArgs(launchArgs: string): string | undefined {
   const args = tokenizeCliArgs(launchArgs);
   const index = args.indexOf("--session-dir");
   const sessionDir = index >= 0 ? args[index + 1] : undefined;
@@ -140,11 +141,7 @@ function appendExtensionArg(
   args: ReadonlyArray<string>,
   extensionPath: string | undefined,
 ): string[] {
-  if (extensionPath === undefined) return [...args];
-  const alreadyHas = args.some(
-    (arg, index) => (arg === "--extension" || arg === "-e") && args[index + 1] === extensionPath,
-  );
-  return alreadyHas ? [...args] : [...args, "--extension", extensionPath];
+  return extensionPath === undefined ? [...args] : [...args, "--extension", extensionPath];
 }
 
 function normalizePiPath(value: string): string {
@@ -152,7 +149,7 @@ function normalizePiPath(value: string): string {
 }
 
 /** Official / user-installed `subagent` tool. Not the T3 override file. */
-export function isConflictingPiSubagentExtensionPath(extensionPath: string): boolean {
+function isConflictingPiSubagentExtensionPath(extensionPath: string): boolean {
   const normalized = normalizePiPath(extensionPath);
   if (normalized.endsWith(`/${PI_T3_SUBAGENT_EXTENSION_FILENAME}`)) return false;
   return (
@@ -163,7 +160,7 @@ export function isConflictingPiSubagentExtensionPath(extensionPath: string): boo
   );
 }
 
-export function stripConflictingPiSubagentExtensionArgs(args: ReadonlyArray<string>): string[] {
+function stripConflictingPiSubagentExtensionArgs(args: ReadonlyArray<string>): string[] {
   const stripped: string[] = [];
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -180,6 +177,26 @@ export function stripConflictingPiSubagentExtensionArgs(args: ReadonlyArray<stri
     stripped.push(arg);
   }
   return stripped;
+}
+
+function deduplicatePiExtensionArgs(args: ReadonlyArray<string>): string[] {
+  const seen = new Set<string>();
+  const deduplicated: Array<string> = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === undefined) continue;
+    const extensionPath = args[index + 1];
+    if ((arg === "--extension" || arg === "-e") && extensionPath !== undefined) {
+      index += 1;
+      const normalized = normalizePiPath(extensionPath);
+      if (seen.has(normalized)) continue;
+      seen.add(normalized);
+      deduplicated.push(arg, extensionPath);
+      continue;
+    }
+    deduplicated.push(arg);
+  }
+  return deduplicated;
 }
 
 export function buildPiRpcLaunch(input: {
@@ -215,6 +232,7 @@ export function buildPiRpcLaunch(input: {
   if (hasT3Mcp && input.extensionPath !== undefined) {
     args = appendExtensionArg(args, input.extensionPath);
   }
+  args = deduplicatePiExtensionArgs(args);
 
   const childSessionRoot = piChildSessionRootFromLaunchArgs(input.launchArgs);
   return {

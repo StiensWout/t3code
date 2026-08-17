@@ -26,7 +26,11 @@ import * as Result from "effect/Result";
 import { HttpClient } from "effect/unstable/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
-import { makePiRpcConnection } from "../../orchestration-v2/Adapters/PiRpc.ts";
+import {
+  makePiRpcConnection,
+  piRecordField as recordField,
+  piRecordString as recordString,
+} from "../../orchestration-v2/Adapters/PiRpc.ts";
 import {
   buildServerProvider,
   isCommandMissingCause,
@@ -78,16 +82,6 @@ function piModelsFromSettings(
     customModels ?? [],
     EMPTY_PI_MODEL_CAPABILITIES,
   );
-}
-
-function recordField(input: unknown, key: string): unknown {
-  if (typeof input !== "object" || input === null) return undefined;
-  return (input as Record<string, unknown>)[key];
-}
-
-function recordString(input: unknown, key: string): string | undefined {
-  const value = recordField(input, key);
-  return typeof value === "string" ? value : undefined;
 }
 
 function parseDiscoveredModels(data: unknown): ReadonlyArray<ServerProviderModel> {

@@ -1,4 +1,5 @@
 import { PROVIDER_DISPLAY_NAMES, type ProviderDriverKind } from "@t3tools/contracts";
+import * as Predicate from "effect/Predicate";
 
 const GENERIC_ERROR_PREFIXES = [
   "Failed to dispatch orchestration V2 command",
@@ -39,7 +40,7 @@ function providerDisplayName(instanceId: string): string {
 
 /** Friendly translation for command-policy rejections; undefined otherwise. */
 function policyRejectionMessage(value: unknown): string | undefined {
-  if (!isRecord(value) || typeof value.providerInstanceId !== "string") return undefined;
+  if (!Predicate.isObject(value) || typeof value.providerInstanceId !== "string") return undefined;
   const provider = providerDisplayName(value.providerInstanceId);
   if (value._tag === "CommandPolicyCapabilityUnsupportedError") {
     const capability = typeof value.capability === "string" ? value.capability : "";
@@ -49,10 +50,6 @@ function policyRejectionMessage(value: unknown): string | undefined {
     return `${provider} cannot deliver a message that way right now.`;
   }
   return undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }
 
 function textValue(value: unknown): string | undefined {
@@ -70,7 +67,7 @@ function messageFrom(value: unknown): string | undefined {
   if (value instanceof Error) {
     return textValue(value.message);
   }
-  if (!isRecord(value)) {
+  if (!Predicate.isObject(value)) {
     return undefined;
   }
   return textValue(value.detail) ?? textValue(value.message);
@@ -91,7 +88,7 @@ function collectErrorMessages(value: unknown, seen: Set<unknown>): ReadonlyArray
   }
 
   const message = messageFrom(value);
-  if (!isRecord(value)) {
+  if (!Predicate.isObject(value)) {
     return message === undefined ? [] : [message];
   }
 
