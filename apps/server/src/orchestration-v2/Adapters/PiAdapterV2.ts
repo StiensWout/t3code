@@ -1844,6 +1844,10 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
           if (recordField(switchData, "cancelled") === true) {
             return yield* protocolError("A Pi extension cancelled the session switch");
           }
+          // Pi is now attached to the target session. Drop the previous
+          // binding before reading its state so a failed refresh cannot let a
+          // later turn run against the old T3 thread and the new Pi session.
+          threadState = null;
           // These caches describe the session we just left. Clearing them
           // stops the next turn from treating this session as already
           // configured and skipping set_model or set_session_name.

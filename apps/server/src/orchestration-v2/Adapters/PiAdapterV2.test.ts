@@ -365,6 +365,31 @@ describe("PiAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
+  it.effect("drops the old thread binding when switched-session state is invalid", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+
+      fake.queueState({ thinkingLevel: "medium" });
+      const resumeError = yield* runtime.resumeThread({ providerThread }).pipe(Effect.flip);
+      assert.equal(resumeError._tag, "ProviderAdapterResumeThreadError");
+      assert.match(String(resumeError.cause), /neither sessionFile nor sessionId/);
+
+      const turnError = yield* startTurn(runtime, providerThread).pipe(Effect.flip);
+      assert.equal(turnError._tag, "ProviderAdapterTurnStartError");
+      assert.match(String(turnError.cause), /no registered thread/);
+
+      fake.queueState({ sessionFile: FAKE_SESSION_FILE, sessionId: "abc" });
+      const resumed = yield* runtime.resumeThread({ providerThread });
+      assert.equal(resumed.nativeThreadRef?.nativeId, FAKE_SESSION_FILE);
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
   it.effect("keeps the thread usable when an attachment cannot be read", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakePi;
