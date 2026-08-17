@@ -412,12 +412,15 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
             }),
         ),
       );
-      const commandData = yield* connection
+      const discoverSkillNames = connection
         .request({ type: "get_commands" }, PI_SKILL_DISCOVERY_TIMEOUT_MS)
-        .pipe(Effect.orElseSucceed(() => undefined));
-      const skillNames = new Set(
-        parsePiDiscoveredCommands(commandData).skills.map((skill) => skill.name),
-      );
+        .pipe(
+          Effect.map(
+            (data) => new Set(parsePiDiscoveredCommands(data).skills.map((skill) => skill.name)),
+          ),
+        );
+      const discoveredSkillNames = yield* discoverSkillNames.pipe(Effect.option);
+      let skillNames = Option.getOrNull(discoveredSkillNames);
 
       const now = yield* DateTime.now;
       let sessionEntity: OrchestrationV2ProviderSession = {
@@ -1992,7 +1995,13 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
         text: string,
         attachments: ReadonlyArray<ChatAttachment>,
       ) {
-        const expandedText = expandPiSkillReference(text, skillNames);
+        // Provider discovery and the live session are separate Pi processes.
+        // Retry a failed session-local lookup once at first use so a transient
+        // startup failure cannot leave a visible $ skill inert for this session.
+        if (skillNames === null && text.includes("$")) {
+          skillNames = yield* discoverSkillNames.pipe(Effect.orElseSucceed(() => new Set()));
+        }
+        const expandedText = skillNames === null ? text : expandPiSkillReference(text, skillNames);
         const images: Array<{ type: "image"; data: string; mimeType: string }> = [];
         const extraLines: Array<string> = [];
         for (const attachment of attachments) {
