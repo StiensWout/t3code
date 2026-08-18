@@ -3,6 +3,7 @@ import {
   type ModelCapabilities,
   type ModelSelection,
   type ServerProviderModel,
+  type ServerProviderRateLimit,
   type ServerProviderSlashCommand,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -23,6 +24,7 @@ import { compareSemverVersions } from "@t3tools/shared/semver";
 import {
   query as claudeQuery,
   type Options as ClaudeQueryOptions,
+  type SDKControlGetUsageResponse,
   type SlashCommand as ClaudeSlashCommand,
   type SDKUserMessage,
   type SettingSource,
@@ -42,6 +44,7 @@ import {
 import { resolveClaudeSdkExecutablePath } from "../Drivers/ClaudeExecutable.ts";
 import { makeClaudeEnvironment } from "../Drivers/ClaudeHome.ts";
 import { discoverClaudeSkills } from "../Drivers/ClaudeSkills.ts";
+import { mapClaudeRateLimitSnapshot } from "../claudeRateLimit.ts";
 
 const DEFAULT_CLAUDE_MODEL_CAPABILITIES: ModelCapabilities = createModelCapabilities({
   optionDescriptors: [],
@@ -641,6 +644,7 @@ type ClaudeCapabilitiesProbe = {
    * the subscription/token fields are absent and auth is external AWS creds.
    */
   readonly apiProvider: string | undefined;
+  readonly rateLimit?: ServerProviderRateLimit | undefined;
   readonly slashCommands: ReadonlyArray<ServerProviderSlashCommand>;
 };
 
@@ -721,10 +725,9 @@ function waitForAbortSignal(signal: AbortSignal): Promise<void> {
  * session and reading the initialization result.
  *
  * We pass a never-yielding AsyncIterable as the prompt so that no user
- * message is ever written to the subprocess stdin. This means the Claude
- * Code subprocess completes its local initialization IPC (returning
- * account info and slash commands) but never starts an API request to
- * Anthropic. We read the init data and then abort the subprocess.
+ * message is ever written to the subprocess stdin. Claude Code completes
+ * its initialization IPC and may read plan quota metadata, but it never
+ * starts a model inference request. We then abort the subprocess.
  *
  * This is used as a fallback when `claude auth status` does not include
  * subscription type information.
@@ -757,6 +760,9 @@ const probeClaudeCapabilities = (
         }),
       });
       const init = await q.initializationResult();
+      const usage: SDKControlGetUsageResponse | undefined = await q
+        .usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET()
+        .catch(() => undefined);
       const account = init.account as
         | {
             readonly email?: string;
@@ -767,9 +773,10 @@ const probeClaudeCapabilities = (
         | undefined;
       return {
         email: account?.email,
-        subscriptionType: account?.subscriptionType,
+        subscriptionType: usage?.subscription_type ?? account?.subscriptionType,
         tokenSource: account?.tokenSource,
         apiProvider: account?.apiProvider,
+        rateLimit: usage === undefined ? undefined : mapClaudeRateLimitSnapshot(usage),
         slashCommands: parseClaudeInitializationCommands(init.commands),
       } satisfies ClaudeCapabilitiesProbe;
     });
@@ -964,6 +971,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
       installed: true,
       version: parsedVersion,
       status: "ready",
+      ...(capabilities.rateLimit === undefined ? {} : { rateLimit: capabilities.rateLimit }),
       auth: {
         status: "authenticated",
         ...(capabilities.email ? { email: capabilities.email } : {}),

@@ -32,6 +32,7 @@ import {
 import { WorkspacePageContainer, WorkspacePageHeader } from "../WorkspacePageContainer";
 import { UsageProviderChart, type UsageChartMetric } from "./UsageProviderChart";
 import { PROVIDER_ORDER, PROVIDER_PRESENTATION } from "./usageProviders";
+import { ProviderQuotaSection } from "./ProviderQuotaSection";
 
 const WINDOW_OPTIONS = [
   { days: 1, label: "Past 24h" },
@@ -286,6 +287,8 @@ export function UsagePage() {
                     />
                   </div>
                 </section>
+
+                <ProviderQuotaSection />
 
                 <section className="flex flex-col gap-2">
                   <h2 className="text-sm font-medium text-foreground">Totals</h2>

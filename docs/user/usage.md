@@ -5,6 +5,10 @@ the providers' local session history and shows API-equivalent token cost, proces
 savings, provider shares, and model breakdowns. Subscription billing is separate from the raw token
 cost shown here.
 
+The Subscription limits section shows provider-reported quota windows for configured Codex and
+Claude accounts. Providers that report only token counts do not appear there. In a thread, hover the
+composer gauge to see the selected provider's quota alongside the current context window.
+
 Use **Past 24h** for an hourly chart covering the exact rolling 24-hour period. The **7 days**,
 **30 days**, and **90 days** ranges use daily resolution. Cost and token toggles update both the
 headline and chart, and refreshing rescans every connected environment.

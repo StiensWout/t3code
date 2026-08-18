@@ -91,6 +91,13 @@ CLAUDE_CONFIG_DIR path: ~/.claude_personal_home
 Use the email shown in Settings to confirm each provider is using the intended account. Emails are
 blurred by default; click the blurred email to reveal it.
 
+## Review Subscription Limits
+
+When Claude Code reports subscription quota, the Usage page shows the available windows for each
+configured Claude account. Hover the composer gauge in a thread to see only the selected Claude
+provider alongside the current context window. Windows that Claude Code does not report, including
+an inactive 5-hour limit, are omitted.
+
 ## Can I Switch Claude Accounts In An Existing Thread?
 
 Usually, no.

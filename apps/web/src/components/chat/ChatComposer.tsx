@@ -395,6 +395,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   compact: boolean;
   activeContextWindow: ReturnType<typeof deriveLatestContextWindowSnapshot>;
   activeThreadModelDisplayName: string | null;
+  selectedProviderStatus: ServerProvider | null;
   isPreparingWorktree: boolean;
   pendingAction: {
     questionIndex: number;
@@ -423,6 +424,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
         <ContextWindowMeter
           usage={props.activeContextWindow}
           modelDisplayName={props.activeThreadModelDisplayName}
+          provider={props.selectedProviderStatus}
         />
       ) : null}
       {props.isPreparingWorktree ? (
@@ -3215,6 +3217,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   compact={isComposerPrimaryActionsCompact}
                   activeContextWindow={activeContextWindow}
                   activeThreadModelDisplayName={activeThreadModelDisplayName}
+                  selectedProviderStatus={selectedProviderStatus}
                   pendingAction={pendingPrimaryAction}
                   isRunning={phase === "running"}
                   showPlanFollowUpPrompt={pendingUserInputs.length === 0 && showPlanFollowUpPrompt}

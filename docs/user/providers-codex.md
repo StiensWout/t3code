@@ -114,6 +114,9 @@ Codex Personal  CODEX_HOME path: ~/.codex, Shadow home path: ~/.codex_p
 Those two providers are considered compatible for continuation, so the locked model picker can show
 both.
 
+Hover over the context gauge in the composer for a compact subscription summary. Open Usage for
+each configured Codex account's provider-reported quota windows and reset times.
+
 If you add a third Codex provider with a completely different `CODEX_HOME path`, T3 Code treats it
 as a different workspace. It will not be offered for existing threads created under `~/.codex`.
 

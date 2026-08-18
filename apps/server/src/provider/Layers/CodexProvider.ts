@@ -33,6 +33,7 @@ import {
   type ServerProviderDraft,
 } from "../providerSnapshot.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
+import { mapCodexRateLimitSnapshot } from "../codexRateLimit.ts";
 import packageJson from "../../../package.json" with { type: "json" };
 const isCodexAppServerSpawnError = Schema.is(CodexErrors.CodexAppServerSpawnError);
 
@@ -45,6 +46,7 @@ const CODEX_PRESENTATION = {
 
 export interface CodexAppServerProviderSnapshot {
   readonly account: CodexSchema.V2GetAccountResponse;
+  readonly rateLimit?: ServerProvider["rateLimit"];
   readonly version: string | undefined;
   readonly models: ReadonlyArray<ServerProviderModel>;
   readonly skills: ReadonlyArray<ServerProviderSkill>;
@@ -395,18 +397,29 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
     } satisfies CodexAppServerProviderSnapshot;
   }
 
-  const [skillsResponse, models] = yield* Effect.all(
+  const [skillsResponse, models, rateLimitResponse] = yield* Effect.all(
     [
       client.request("skills/list", {
         cwds: [input.cwd],
       }),
       requestAllCodexModels(client),
+      accountResponse.account?.type === "chatgpt"
+        ? client.request("account/rateLimits/read", undefined).pipe(Effect.option)
+        : Effect.succeed(Option.none<CodexSchema.V2GetAccountRateLimitsResponse>()),
     ],
     { concurrency: "unbounded" },
   );
 
   return {
     account: accountResponse,
+    ...(Option.isSome(rateLimitResponse)
+      ? {
+          rateLimit: mapCodexRateLimitSnapshot(
+            rateLimitResponse.value.rateLimitsByLimitId?.codex ??
+              rateLimitResponse.value.rateLimits,
+          ),
+        }
+      : {}),
     version,
     models: applyPreferredCodexDefaultModel(
       appendCustomCodexModels(models, input.customModels ?? []),
@@ -606,6 +619,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
       version: snapshot.version ?? null,
       status: accountStatus.status,
       auth: accountStatus.auth,
+      ...(snapshot.rateLimit === undefined ? {} : { rateLimit: snapshot.rateLimit }),
       ...(accountStatus.message ? { message: accountStatus.message } : {}),
     },
   });

@@ -384,6 +384,32 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
         }),
       );
 
+      it.effect("publishes Codex subscription rate limits from the app-server probe", () =>
+        Effect.gen(function* () {
+          const status = yield* checkCodexProviderStatus(defaultCodexSettings, () =>
+            Effect.succeed(
+              makeCodexProbeSnapshot({
+                rateLimit: {
+                  isFull: false,
+                  windows: [
+                    { usedPercent: 18, windowDurationMins: 300 },
+                    { usedPercent: 71, windowDurationMins: 10_080 },
+                  ],
+                },
+              }),
+            ),
+          );
+
+          assert.deepStrictEqual(status.rateLimit, {
+            isFull: false,
+            windows: [
+              { usedPercent: 18, windowDurationMins: 300 },
+              { usedPercent: 71, windowDurationMins: 10_080 },
+            ],
+          });
+        }),
+      );
+
       it.effect("passes configured launch args to the Codex provider probe", () =>
         Effect.gen(function* () {
           let observedLaunchArgs: string | undefined;

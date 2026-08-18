@@ -121,6 +121,24 @@ export const ServerProviderContinuation = Schema.Struct({
 });
 export type ServerProviderContinuation = typeof ServerProviderContinuation.Type;
 
+export const ServerProviderRateLimitWindow = Schema.Struct({
+  label: Schema.optional(TrimmedNonEmptyString),
+  usedPercent: Schema.Number,
+  resetsAt: Schema.optional(NonNegativeInt),
+  windowDurationMins: Schema.optional(NonNegativeInt),
+});
+export type ServerProviderRateLimitWindow = typeof ServerProviderRateLimitWindow.Type;
+
+/**
+ * Subscription quota reported by a provider instance. The provider decides
+ * which rolling windows apply; clients render them without inferring a plan.
+ */
+export const ServerProviderRateLimit = Schema.Struct({
+  isFull: Schema.Boolean,
+  windows: Schema.Array(ServerProviderRateLimitWindow),
+});
+export type ServerProviderRateLimit = typeof ServerProviderRateLimit.Type;
+
 export const ServerProviderVersionAdvisoryStatus = Schema.Literals([
   "unknown",
   "current",
@@ -169,6 +187,7 @@ export const ServerProvider = Schema.Struct({
   accentColor: Schema.optional(TrimmedNonEmptyString),
   badgeLabel: Schema.optional(TrimmedNonEmptyString),
   continuation: Schema.optional(ServerProviderContinuation),
+  rateLimit: Schema.optionalKey(ServerProviderRateLimit),
   showInteractionModeToggle: Schema.optional(Schema.Boolean),
   requiresNewThreadForModelChange: Schema.optional(Schema.Boolean),
   enabled: Schema.Boolean,
