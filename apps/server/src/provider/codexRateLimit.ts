@@ -30,7 +30,7 @@ function mapWindow(
 
 export function mapCodexRateLimitSnapshot(
   input: CodexRateLimitSnapshotInput,
-): ServerProviderRateLimit {
+): ServerProviderRateLimit | undefined {
   const primary = mapWindow(input.primary);
   const secondary = mapWindow(input.secondary);
   const isFull =
@@ -39,8 +39,11 @@ export function mapCodexRateLimitSnapshot(
     (primary?.usedPercent ?? 0) >= 100 ||
     (secondary?.usedPercent ?? 0) >= 100;
 
+  const windows = [primary, secondary].filter((window) => window !== undefined);
+  if (!isFull && windows.length === 0) return undefined;
+
   return {
     isFull,
-    windows: [primary, secondary].filter((window) => window !== undefined),
+    windows,
   };
 }

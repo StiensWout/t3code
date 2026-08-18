@@ -416,17 +416,15 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
     ],
     { concurrency: "unbounded" },
   );
+  const rateLimit = Option.isSome(rateLimitResponse)
+    ? mapCodexRateLimitSnapshot(
+        rateLimitResponse.value.rateLimitsByLimitId?.codex ?? rateLimitResponse.value.rateLimits,
+      )
+    : undefined;
 
   return {
     account: accountResponse,
-    ...(Option.isSome(rateLimitResponse)
-      ? {
-          rateLimit: mapCodexRateLimitSnapshot(
-            rateLimitResponse.value.rateLimitsByLimitId?.codex ??
-              rateLimitResponse.value.rateLimits,
-          ),
-        }
-      : {}),
+    ...(rateLimit === undefined ? {} : { rateLimit }),
     version,
     models: applyPreferredCodexDefaultModel(
       appendCustomCodexModels(models, input.customModels ?? []),

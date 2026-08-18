@@ -32,3 +32,14 @@ it("keeps available Codex subscriptions eligible below both limits", () => {
     },
   );
 });
+
+it("omits Codex quota snapshots without windows or a blocking limit", () => {
+  assert.strictEqual(mapCodexRateLimitSnapshot({}), undefined);
+});
+
+it("keeps blocked Codex quota snapshots without windows", () => {
+  assert.deepStrictEqual(mapCodexRateLimitSnapshot({ spendControlReached: true }), {
+    isFull: true,
+    windows: [],
+  });
+});

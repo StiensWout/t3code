@@ -20,6 +20,7 @@ export interface ProviderQuotaRow {
 }
 
 export interface ProviderQuotaWindow {
+  readonly key: string;
   readonly label: string;
   readonly remainingPercent: number;
   readonly resetsAt: number | undefined;
@@ -89,7 +90,8 @@ function quotaPresentation(provider: ServerProvider): {
   if (rateLimit === undefined) {
     return { remainingPercent: null, windowLabel: "Quota", windows: [] };
   }
-  const windows = rateLimit.windows.map((window) => ({
+  const windows = rateLimit.windows.map((window, index) => ({
+    key: `${window.label ?? window.windowDurationMins ?? "quota"}:${window.resetsAt ?? "none"}:${index}`,
     label: quotaWindowLabel(window.label, window.windowDurationMins),
     remainingPercent: Math.round(Math.max(0, Math.min(100, 100 - window.usedPercent))),
     resetsAt: window.resetsAt,

@@ -88,7 +88,7 @@ function ProviderWindows({
           <span className="shrink-0 text-[9px] font-medium text-destructive">Full</span>
         ) : null}
         {row.windows.map((window) => (
-          <WindowRing key={`${window.label}:${window.resetsAt ?? "none"}`} window={window} />
+          <WindowRing key={window.key} window={window} />
         ))}
       </div>
     </div>

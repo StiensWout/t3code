@@ -53,7 +53,7 @@ export function ProviderQuotaSummary({ provider }: { readonly provider: ServerPr
         {row.windows.map((window) => {
           const tone = quotaTone(window.remainingPercent);
           return (
-            <div className="grid gap-1" key={`${window.label}:${window.resetsAt ?? "none"}`}>
+            <div className="grid gap-1" key={window.key}>
               <div className="flex items-baseline justify-between gap-3 text-[11px]">
                 <span className="text-muted-foreground">
                   {window.label}
