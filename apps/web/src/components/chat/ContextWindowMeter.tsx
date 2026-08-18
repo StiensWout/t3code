@@ -28,7 +28,7 @@ function ConcentricGauge(props: {
   const usageArcLength = (props.trackLength * props.usagePercentage) / 100;
   const outerRadius = props.quotaRemaining === null ? 8 : 9;
   return (
-    <svg viewBox="0 0 24 16" className="size-10 max-w-none" aria-hidden="true">
+    <svg viewBox="0 0 24 16" className="size-10 sm:size-9" aria-hidden="true">
       <circle
         cx="12"
         cy="12"
@@ -113,9 +113,9 @@ export function ContextWindowMeter(props: {
         closeDelay={0}
         render={
           <Button
-            size="icon"
+            size="icon-lg"
             variant="link"
-            className="overflow-visible rounded-full"
+            className="rounded-full"
             aria-label={
               usage.maxTokens !== null && usedPercentage
                 ? `Context window ${usedPercentage} used${quotaRemaining === null ? "" : `, ${providerQuota?.name} quota ${quotaRemaining}% remaining`}`
