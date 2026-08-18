@@ -45,6 +45,7 @@ import {
   type ProviderInstanceId,
   type ThreadTokenUsageSnapshot,
 } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import * as Duration from "effect/Duration";
@@ -435,7 +436,10 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
         updatedAt: now,
         lastError: null,
       };
-      const events = yield* Queue.unbounded<ProviderAdapterV2Event, ProviderAdapterV2Error>();
+      const events = yield* Queue.unbounded<
+        ProviderAdapterV2Event,
+        ProviderAdapterV2Error | Cause.Done
+      >();
       const pendingPrompts = new Map<string, PendingPiPrompt>();
       // Answering a dialog and terminalizing a turn both publish lifecycle
       // events. Pi can settle immediately after `extension_ui_response`, so
@@ -443,6 +447,10 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
       // dialog's own resolution updates.
       const sessionEventPermit = yield* Semaphore.make(1);
       let threadState: PiThreadState | null = null;
+      // User Stop intentionally tears down this RPC process after aborting.
+      // Keep that intent beyond turn finalization so the later stdout close is
+      // not mistaken for an unexpected transport failure.
+      let stopRequested = false;
       let appliedModel: string | null = null;
       let appliedThinking: string | null = null;
       /** Last thread title synced into pi's session name (`/resume` listing). */
@@ -1789,9 +1797,9 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
         Effect.catchCause((cause) =>
           sessionEventPermit.withPermits(1)(
             Effect.gen(function* () {
-              // Transport death: fail any live turn, then surface the error.
-              // A death caused by Stop-with-restart is an interrupt, not a
-              // failure; finalizeTurn already prefers `interrupted`.
+              // Transport death finalizes any live turn. Stop-with-restart
+              // closes the provider stream cleanly; only an unexpected death
+              // is surfaced as an event-stream failure.
               const state = threadState;
               const interrupted = state?.activeTurn?.interrupted === true;
               if (state?.activeTurn != null) {
@@ -1804,18 +1812,23 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
                     });
                 yield* finalizeTurn(state, false);
               }
-              yield* updateProviderSession(
-                "error",
-                interrupted ? "Pi process was stopped." : "Pi process exited unexpectedly.",
-              );
-              yield* Queue.fail(
-                events,
-                new ProviderAdapterEventStreamError({
-                  driver: PI_PROVIDER,
-                  providerSessionId: input.providerSessionId,
-                  cause,
-                }),
-              );
+              if (stopRequested) {
+                yield* updateProviderSession("stopped", null);
+                yield* Queue.end(events);
+              } else {
+                yield* updateProviderSession(
+                  "error",
+                  interrupted ? "Pi process was stopped." : "Pi process exited unexpectedly.",
+                );
+                yield* Queue.fail(
+                  events,
+                  new ProviderAdapterEventStreamError({
+                    driver: PI_PROVIDER,
+                    providerSessionId: input.providerSessionId,
+                    cause,
+                  }),
+                );
+              }
             }),
           ),
         ),
@@ -2254,9 +2267,10 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
             if (interruptInput.requestRuntimeRestart === true) {
               // User Stop with restart: the process may be wedged, so give
               // abort one short chance and then kill the process group. The
-              // transport failure finalizes the turn as interrupted and the
+              // transport closure finalizes the turn as interrupted and the
               // session manager respawns a fresh process on the next turn,
               // resuming the same session file.
+              stopRequested = true;
               yield* request({ type: "abort" }, 2_000).pipe(Effect.ignore);
               yield* connection.terminate;
               return;
