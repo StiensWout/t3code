@@ -69,7 +69,14 @@ function WindowRing({ window }: { readonly window: ProviderQuotaWindow }) {
   );
 }
 
-function ProviderWindows({ row }: { readonly row: ProviderQuotaRow }) {
+function ProviderWindows({
+  row,
+  showEnvironmentLabel,
+}: {
+  readonly row: ProviderQuotaRow;
+  readonly showEnvironmentLabel: boolean;
+}) {
+  const accountContext = showEnvironmentLabel ? `${row.plan} · ${row.environmentLabel}` : row.plan;
   return (
     <div className="min-w-0 border-border border-r px-2 py-1.5 last:border-r-0">
       <div className="flex min-w-0 items-center gap-1.5">
@@ -79,7 +86,7 @@ function ProviderWindows({ row }: { readonly row: ProviderQuotaRow }) {
           iconClassName="size-3 shrink-0"
         />
         <span className="truncate text-[10px] font-medium text-foreground">{row.name}</span>
-        <span className="ml-auto truncate text-[9px] text-muted-foreground">{row.plan}</span>
+        <span className="ml-auto truncate text-[9px] text-muted-foreground">{accountContext}</span>
       </div>
       <div className="mt-1.5 flex min-w-0 items-center gap-3">
         {row.windows.map((window) => (
@@ -94,6 +101,7 @@ function ProviderWindows({ row }: { readonly row: ProviderQuotaRow }) {
 export function ProviderQuotaSection() {
   const { environments } = useEnvironments();
   const rows = collectProviderQuotaUsage(environments);
+  const showEnvironmentLabel = new Set(rows.map((row) => row.environmentLabel)).size > 1;
 
   if (rows.length === 0) return null;
 
@@ -102,7 +110,7 @@ export function ProviderQuotaSection() {
       <h2 className="text-[10px] font-medium text-muted-foreground">Subscription limits</h2>
       <div className="grid grid-cols-2 border-y border-border lg:grid-cols-4">
         {rows.map((row) => (
-          <ProviderWindows key={row.key} row={row} />
+          <ProviderWindows key={row.key} row={row} showEnvironmentLabel={showEnvironmentLabel} />
         ))}
       </div>
     </section>

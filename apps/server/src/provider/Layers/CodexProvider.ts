@@ -38,6 +38,7 @@ import packageJson from "../../../package.json" with { type: "json" };
 const isCodexAppServerSpawnError = Schema.is(CodexErrors.CodexAppServerSpawnError);
 
 const CODEX_APP_SERVER_PROBE_FORCE_KILL_AFTER = "2 seconds" as const;
+const CODEX_RATE_LIMIT_PROBE_TIMEOUT = "2 seconds" as const;
 
 const CODEX_PRESENTATION = {
   displayName: "Codex",
@@ -404,7 +405,13 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
       }),
       requestAllCodexModels(client),
       accountResponse.account?.type === "chatgpt"
-        ? client.request("account/rateLimits/read", undefined).pipe(Effect.option)
+        ? client
+            .request("account/rateLimits/read", undefined)
+            .pipe(
+              Effect.option,
+              Effect.timeoutOption(CODEX_RATE_LIMIT_PROBE_TIMEOUT),
+              Effect.map(Option.flatten),
+            )
         : Effect.succeed(Option.none<CodexSchema.V2GetAccountRateLimitsResponse>()),
     ],
     { concurrency: "unbounded" },
