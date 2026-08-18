@@ -67,12 +67,8 @@ function piNpmPackageName(source: string): string | undefined {
     : undefined;
 }
 
-function piUnfilteredPackageSource(pkg: typeof PiPackageSource.Type): string | undefined {
-  if (typeof pkg === "string") return pkg;
-  // Pi's object form can narrow or disable individual resources. Re-adding
-  // the whole manifest would bypass that choice, so only restore packages
-  // whose extension set is inherited unchanged.
-  return pkg.autoload === false || pkg.extensions !== undefined ? undefined : pkg.source;
+function piPackageSource(pkg: typeof PiPackageSource.Type): string {
+  return typeof pkg === "string" ? pkg : pkg.source;
 }
 
 function piPackageExtensionPath(packageRoot: string, entry: string): string | undefined {
@@ -86,6 +82,87 @@ function piPackageExtensionPath(packageRoot: string, entry: string): string | un
     segments.push(segment);
   }
   return segments.length === 0 ? undefined : `${packageRoot}/${segments.join("/")}`;
+}
+
+function piPackagePatternPaths(
+  fs: FileSystem.FileSystem,
+  packageRoot: string,
+  pattern: string,
+  exact: boolean,
+): Effect.Effect<Set<string>> {
+  const normalizedPattern = pattern.replace(/\\/g, "/").replace(/^\.\//, "");
+  if (
+    normalizedPattern.length === 0 ||
+    normalizedPattern.startsWith("/") ||
+    /^[A-Za-z]:\//.test(normalizedPattern) ||
+    normalizedPattern.split("/").includes("..")
+  ) {
+    return Effect.succeed(new Set());
+  }
+  const patterns =
+    exact || normalizedPattern.includes("/")
+      ? [normalizedPattern]
+      : [normalizedPattern, `**/${normalizedPattern}`];
+  return Effect.forEach(patterns, (candidate) =>
+    exact
+      ? Effect.succeed([candidate])
+      : fs.glob(candidate, { root: packageRoot }).pipe(Effect.orElseSucceed(() => [])),
+  ).pipe(
+    Effect.map(
+      (groups) =>
+        new Set(
+          groups.flatMap((matches) =>
+            matches.flatMap((match) => {
+              const normalizedMatch = normalizePiPath(match);
+              const path = normalizedMatch.startsWith(`${normalizePiPath(packageRoot)}/`)
+                ? normalizedMatch
+                : piPackageExtensionPath(packageRoot, normalizedMatch);
+              return path === undefined ? [] : [path];
+            }),
+          ),
+        ),
+    ),
+  );
+}
+
+function piEnabledPackageExtensions(
+  fs: FileSystem.FileSystem,
+  packageRoot: string,
+  extensionPaths: ReadonlyArray<string>,
+  pkg: typeof PiPackageSource.Type,
+): Effect.Effect<Array<string>> {
+  return Effect.gen(function* () {
+    if (typeof pkg === "string") return [...extensionPaths];
+    if (pkg.extensions === undefined) return pkg.autoload === false ? [] : [...extensionPaths];
+    if (pkg.extensions.length === 0) return [];
+    const includes = pkg.extensions.filter((pattern) => !/^[!+-]/.test(pattern));
+    const patterns =
+      pkg.autoload === false
+        ? pkg.extensions
+        : [
+            ...includes,
+            ...pkg.extensions.filter((pattern) => pattern.startsWith("!")),
+            ...pkg.extensions.filter((pattern) => pattern.startsWith("+")),
+            ...pkg.extensions.filter((pattern) => pattern.startsWith("-")),
+          ];
+    const enabled = new Set(pkg.autoload === false || includes.length > 0 ? [] : extensionPaths);
+    for (const pattern of patterns) {
+      const prefix = pattern[0];
+      const target = /^[!+-]/.test(prefix ?? "") ? pattern.slice(1) : pattern;
+      const matches = yield* piPackagePatternPaths(
+        fs,
+        packageRoot,
+        target,
+        prefix === "+" || prefix === "-",
+      );
+      for (const path of extensionPaths) {
+        if (!matches.has(path)) continue;
+        if (prefix === "!" || prefix === "-") enabled.delete(path);
+        else enabled.add(path);
+      }
+    }
+    return extensionPaths.filter((path) => enabled.has(path));
+  });
 }
 
 /**
@@ -134,7 +211,7 @@ export const discoverPiUserExtensions = Effect.fn("discoverPiUserExtensions")(fu
       .readDirectory(root)
       .pipe(Effect.orElseSucceed(() => [] as Array<string>));
     for (const entry of entries.toSorted()) {
-      if (entry === "subagent" || entry === "subagent.ts") continue;
+      if (entry === "subagent" || entry === "subagent.ts" || entry === "subagent.js") continue;
       const path = `${root}/${entry}`;
       if (entry.endsWith(".ts") || entry.endsWith(".js")) {
         addFound(path);
@@ -151,19 +228,28 @@ export const discoverPiUserExtensions = Effect.fn("discoverPiUserExtensions")(fu
   }
   if (normalizedAgentDir !== undefined) {
     for (const pkg of settings?.packages ?? []) {
-      const source = piUnfilteredPackageSource(pkg);
-      const packageName = source === undefined ? undefined : piNpmPackageName(source);
+      const packageName = piNpmPackageName(piPackageSource(pkg));
       if (packageName === undefined || packageName === "pi-subagents") continue;
       const packageRoot = `${normalizedAgentDir}/npm/node_modules/${packageName}`;
       const packageJsonRaw = yield* fs
         .readFileString(`${packageRoot}/package.json`)
         .pipe(Effect.orElseSucceed(() => ""));
       const packageJson = Option.getOrUndefined(decodePiPackageJson(packageJsonRaw));
+      const extensionPaths: Array<string> = [];
       for (const entry of packageJson?.pi?.extensions ?? []) {
         const extensionPath = piPackageExtensionPath(packageRoot, entry);
         if (extensionPath === undefined) continue;
         const exists = yield* fs.exists(extensionPath).pipe(Effect.orElseSucceed(() => false));
-        if (exists) addFound(extensionPath);
+        if (exists) extensionPaths.push(extensionPath);
+      }
+      const enabledExtensions = yield* piEnabledPackageExtensions(
+        fs,
+        packageRoot,
+        extensionPaths,
+        pkg,
+      );
+      for (const extensionPath of enabledExtensions) {
+        addFound(extensionPath);
       }
     }
   }
