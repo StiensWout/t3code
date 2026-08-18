@@ -106,22 +106,57 @@ describe("pi T3 MCP injection", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("discovers user extensions from the agent dir and skips the subagent", () =>
+  it.effect("discovers user and npm package extensions while skipping subagent overrides", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const home = yield* fs.makeTempDirectoryScoped({ prefix: "t3-pi-home-" });
       const extensionsDir = `${home}/.pi/agent/extensions`;
+      const lensDir = `${home}/.pi/agent/npm/node_modules/pi-lens`;
+      const authDir = `${home}/.pi/agent/npm/node_modules/@gotgenes/pi-anthropic-auth`;
+      const packageSubagentDir = `${home}/.pi/agent/npm/node_modules/pi-subagents`;
       yield* fs.makeDirectory(`${extensionsDir}/todos`, { recursive: true });
       yield* fs.makeDirectory(`${extensionsDir}/subagent`, { recursive: true });
+      yield* fs.makeDirectory(`${lensDir}/src`, { recursive: true });
+      yield* fs.makeDirectory(`${authDir}/src`, { recursive: true });
+      yield* fs.makeDirectory(packageSubagentDir, { recursive: true });
       yield* fs.writeFileString(`${extensionsDir}/demo.ts`, "export default () => {}");
       yield* fs.writeFileString(`${extensionsDir}/subagent.ts`, "export default () => {}");
       yield* fs.writeFileString(`${extensionsDir}/todos/index.ts`, "export default () => {}");
       yield* fs.writeFileString(`${extensionsDir}/subagent/index.ts`, "export default () => {}");
+      yield* fs.writeFileString(`${lensDir}/src/index.ts`, "export default () => {}");
+      yield* fs.writeFileString(`${authDir}/src/index.ts`, "export default () => {}");
+      yield* fs.writeFileString(`${packageSubagentDir}/index.ts`, "export default () => {}");
+      yield* fs.writeFileString(
+        `${lensDir}/package.json`,
+        '{ "pi": { "extensions": ["./src/index.ts"] } }',
+      );
+      yield* fs.writeFileString(
+        `${authDir}/package.json`,
+        '{ "pi": { "extensions": ["./src/index.ts"] } }',
+      );
+      yield* fs.writeFileString(
+        `${packageSubagentDir}/package.json`,
+        '{ "pi": { "extensions": ["./index.ts"] } }',
+      );
+      yield* fs.writeFileString(
+        `${home}/.pi/agent/settings.json`,
+        `{ "packages": [
+          "npm:pi-lens",
+          "npm:@gotgenes/pi-anthropic-auth@1.2.3",
+          "npm:pi-subagents",
+          { "source": "npm:disabled-extension", "extensions": [] }
+        ] }`,
+      );
       const found = yield* discoverPiUserExtensions({
         environment: { HOME: home },
         cwd: undefined,
       });
-      assert.deepEqual(found, [`${extensionsDir}/demo.ts`, `${extensionsDir}/todos/index.ts`]);
+      assert.deepEqual(found, [
+        `${extensionsDir}/demo.ts`,
+        `${extensionsDir}/todos/index.ts`,
+        `${lensDir}/src/index.ts`,
+        `${authDir}/src/index.ts`,
+      ]);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
