@@ -33,6 +33,17 @@ export function providerQuotaSeverity(remainingPercent: number): ProviderQuotaSe
   return "healthy";
 }
 
+export function providerQuotaStroke(remainingPercent: number): string {
+  switch (providerQuotaSeverity(remainingPercent)) {
+    case "critical":
+      return "var(--color-destructive)";
+    case "warning":
+      return "var(--color-warning)";
+    case "healthy":
+      return "var(--color-success)";
+  }
+}
+
 function providerLabel(driver: ProviderDriverKind): string {
   switch (driver) {
     case "codex":

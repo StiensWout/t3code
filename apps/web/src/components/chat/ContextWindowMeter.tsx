@@ -3,7 +3,7 @@ import { Button } from "../ui/button";
 import { type ContextWindowSnapshot, formatContextWindowTokens } from "~/lib/contextWindow";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { ProviderQuotaSummary } from "../usage/ProviderQuotaSummary";
-import { collectProviderQuotaUsage, providerQuotaSeverity } from "../usage/providerQuota";
+import { collectProviderQuotaUsage, providerQuotaStroke } from "../usage/providerQuota";
 import { formatContextWindowCompactionMessage } from "./ContextWindowMeter.logic";
 
 function formatPercentage(value: number | null): string | null {
@@ -14,17 +14,6 @@ function formatPercentage(value: number | null): string | null {
     return `${value.toFixed(1).replace(/\.0$/, "")}%`;
   }
   return `${Math.round(value)}%`;
-}
-
-function quotaStroke(remainingPercent: number): string {
-  switch (providerQuotaSeverity(remainingPercent)) {
-    case "critical":
-      return "var(--color-destructive)";
-    case "warning":
-      return "var(--color-warning)";
-    case "healthy":
-      return "var(--color-success)";
-  }
 }
 
 function ConcentricGauge(props: {
@@ -84,7 +73,7 @@ function ConcentricGauge(props: {
             r="5"
             fill="none"
             pathLength="100"
-            stroke={quotaStroke(props.quotaRemaining)}
+            stroke={providerQuotaStroke(props.quotaRemaining)}
             strokeDasharray={`${quotaArcLength} ${100 - quotaArcLength}`}
             strokeLinecap="round"
             strokeWidth="3"

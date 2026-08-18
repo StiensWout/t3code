@@ -3,21 +3,10 @@ import { useEnvironments } from "../../state/environments";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import {
   collectProviderQuotaUsage,
-  providerQuotaSeverity,
+  providerQuotaStroke,
   type ProviderQuotaRow,
   type ProviderQuotaWindow,
 } from "./providerQuota";
-
-function quotaStroke(remainingPercent: number): string {
-  switch (providerQuotaSeverity(remainingPercent)) {
-    case "critical":
-      return "var(--color-destructive)";
-    case "warning":
-      return "var(--color-warning)";
-    case "healthy":
-      return "var(--color-success)";
-  }
-}
 
 function QuotaRing(props: {
   readonly percentage: number;
@@ -48,7 +37,7 @@ function QuotaRing(props: {
           fill="none"
           pathLength="100"
           r="9"
-          stroke={quotaStroke(props.percentage)}
+          stroke={providerQuotaStroke(props.percentage)}
           strokeDasharray={`${props.percentage} ${100 - props.percentage}`}
           strokeLinecap="round"
           strokeWidth="2.25"
