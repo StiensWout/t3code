@@ -37,9 +37,6 @@ export function mapClaudeRateLimitSnapshot(
     mapWindow(usage.rate_limits.seven_day_oauth_apps, "OAuth apps weekly", 10_080),
     mapWindow(usage.rate_limits.seven_day_opus, "Opus weekly", 10_080),
     mapWindow(usage.rate_limits.seven_day_sonnet, "Sonnet weekly", 10_080),
-    ...(usage.rate_limits.model_scoped ?? []).map((window) =>
-      mapWindow(window, `${window.display_name} weekly`, 10_080),
-    ),
   ]
     .filter((window) => window !== undefined)
     .toSorted((left, right) => right.usedPercent - left.usedPercent)[0];
