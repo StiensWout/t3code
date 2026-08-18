@@ -186,6 +186,35 @@ describe("pi T3 MCP injection", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("discovers installed git packages and falls back when a project copy is missing", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const home = yield* fs.makeTempDirectoryScoped({ prefix: "t3-pi-home-" });
+      const project = yield* fs.makeTempDirectoryScoped({ prefix: "t3-pi-project-" });
+      const gitDir = `${home}/.pi/agent/git/github.com/mwolson/pi-xai-ws`;
+      yield* fs.makeDirectory(`${gitDir}/src`, { recursive: true });
+      yield* fs.makeDirectory(`${project}/.pi`, { recursive: true });
+      yield* fs.writeFileString(`${gitDir}/src/index.ts`, "export default () => {}");
+      yield* fs.writeFileString(
+        `${gitDir}/package.json`,
+        '{ "pi": { "extensions": ["./src/index.ts"] } }',
+      );
+      yield* fs.writeFileString(
+        `${home}/.pi/agent/settings.json`,
+        '{ "defaultProjectTrust": "always", "packages": ["git:github.com/mwolson/pi-xai-ws"] }',
+      );
+      yield* fs.writeFileString(
+        `${project}/.pi/settings.json`,
+        '{ "packages": ["git:github.com/mwolson/pi-xai-ws"] }',
+      );
+      const found = yield* discoverPiUserExtensions({
+        environment: { HOME: home },
+        cwd: project,
+      });
+      assert.deepEqual(found, [`${gitDir}/src/index.ts`]);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("includes project extensions only under standing project trust", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
