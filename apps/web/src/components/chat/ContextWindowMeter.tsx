@@ -3,7 +3,7 @@ import { Button } from "../ui/button";
 import { type ContextWindowSnapshot, formatContextWindowTokens } from "~/lib/contextWindow";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { ProviderQuotaSummary } from "../usage/ProviderQuotaSummary";
-import { collectProviderQuotaUsage } from "../usage/providerQuota";
+import { collectProviderQuotaUsage, providerQuotaSeverity } from "../usage/providerQuota";
 import { formatContextWindowCompactionMessage } from "./ContextWindowMeter.logic";
 
 function formatPercentage(value: number | null): string | null {
@@ -17,9 +17,14 @@ function formatPercentage(value: number | null): string | null {
 }
 
 function quotaStroke(remainingPercent: number): string {
-  if (remainingPercent <= 10) return "var(--color-destructive)";
-  if (remainingPercent < 50) return "var(--color-warning)";
-  return "var(--color-success)";
+  switch (providerQuotaSeverity(remainingPercent)) {
+    case "critical":
+      return "var(--color-destructive)";
+    case "warning":
+      return "var(--color-warning)";
+    case "healthy":
+      return "var(--color-success)";
+  }
 }
 
 function ConcentricGauge(props: {
@@ -119,9 +124,9 @@ export function ContextWindowMeter(props: {
         closeDelay={0}
         render={
           <Button
-            size="icon-sm"
+            size="icon"
             variant="link"
-            className="size-9 overflow-visible rounded-full border-transparent shadow-none sm:size-8"
+            className="overflow-visible rounded-full"
             aria-label={
               usage.maxTokens !== null && usedPercentage
                 ? `Context window ${usedPercentage} used${quotaRemaining === null ? "" : `, ${providerQuota?.name} quota ${quotaRemaining}% remaining`}`

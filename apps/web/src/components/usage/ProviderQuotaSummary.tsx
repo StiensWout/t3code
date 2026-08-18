@@ -1,7 +1,7 @@
 import type { ServerProvider } from "@t3tools/contracts";
 import { cn } from "../../lib/utils";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
-import { collectProviderQuotaUsage } from "./providerQuota";
+import { collectProviderQuotaUsage, providerQuotaSeverity } from "./providerQuota";
 
 function formattedTimestamp(epochSeconds: number): string {
   return new Intl.DateTimeFormat(undefined, {
@@ -15,13 +15,14 @@ function quotaTone(remainingPercent: number): {
   readonly text: string;
   readonly bar: string;
 } {
-  if (remainingPercent <= 10) {
-    return { text: "text-destructive", bar: "bg-destructive" };
+  switch (providerQuotaSeverity(remainingPercent)) {
+    case "critical":
+      return { text: "text-destructive", bar: "bg-destructive" };
+    case "warning":
+      return { text: "text-warning", bar: "bg-warning" };
+    case "healthy":
+      return { text: "text-success", bar: "bg-success" };
   }
-  if (remainingPercent < 50) {
-    return { text: "text-warning", bar: "bg-warning" };
-  }
-  return { text: "text-success", bar: "bg-success" };
 }
 
 export function ProviderQuotaSummary({ provider }: { readonly provider: ServerProvider | null }) {
@@ -64,11 +65,11 @@ export function ProviderQuotaSummary({ provider }: { readonly provider: ServerPr
                 aria-valuemax={100}
                 aria-valuemin={0}
                 aria-valuenow={window.remainingPercent}
-                className="h-1 overflow-hidden rounded-[1px] bg-muted"
+                className="h-1.5 overflow-hidden rounded-full bg-muted/60"
                 role="progressbar"
               >
                 <div
-                  className={cn("h-full", tone.bar)}
+                  className={cn("h-full rounded-full", tone.bar)}
                   style={{ width: `${window.remainingPercent}%` }}
                 />
               </div>

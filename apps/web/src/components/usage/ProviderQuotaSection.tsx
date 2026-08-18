@@ -3,14 +3,20 @@ import { useEnvironments } from "../../state/environments";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import {
   collectProviderQuotaUsage,
+  providerQuotaSeverity,
   type ProviderQuotaRow,
   type ProviderQuotaWindow,
 } from "./providerQuota";
 
 function quotaStroke(remainingPercent: number): string {
-  if (remainingPercent <= 10) return "var(--color-destructive)";
-  if (remainingPercent < 50) return "var(--color-warning)";
-  return "var(--color-success)";
+  switch (providerQuotaSeverity(remainingPercent)) {
+    case "critical":
+      return "var(--color-destructive)";
+    case "warning":
+      return "var(--color-warning)";
+    case "healthy":
+      return "var(--color-success)";
+  }
 }
 
 function QuotaRing(props: {
@@ -78,7 +84,7 @@ function ProviderWindows({
 }) {
   const accountContext = showEnvironmentLabel ? `${row.plan} · ${row.environmentLabel}` : row.plan;
   return (
-    <div className="min-w-0 border-border border-r px-2 py-1.5 last:border-r-0">
+    <div className="min-w-0 bg-background px-2 py-1.5">
       <div className="flex min-w-0 items-center gap-1.5">
         <ProviderInstanceIcon
           displayName={row.name}
@@ -108,7 +114,7 @@ export function ProviderQuotaSection() {
   return (
     <section className="grid gap-1.5">
       <h2 className="text-[10px] font-medium text-muted-foreground">Subscription limits</h2>
-      <div className="grid grid-cols-2 border-y border-border lg:grid-cols-4">
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(10rem,1fr))] gap-px border-y border-border bg-border">
         {rows.map((row) => (
           <ProviderWindows key={row.key} row={row} showEnvironmentLabel={showEnvironmentLabel} />
         ))}

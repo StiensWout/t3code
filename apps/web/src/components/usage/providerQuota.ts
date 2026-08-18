@@ -25,6 +25,14 @@ export interface ProviderQuotaWindow {
   readonly resetsAt: number | undefined;
 }
 
+export type ProviderQuotaSeverity = "critical" | "warning" | "healthy";
+
+export function providerQuotaSeverity(remainingPercent: number): ProviderQuotaSeverity {
+  if (remainingPercent <= 10) return "critical";
+  if (remainingPercent < 50) return "warning";
+  return "healthy";
+}
+
 function providerLabel(driver: ProviderDriverKind): string {
   switch (driver) {
     case "codex":
