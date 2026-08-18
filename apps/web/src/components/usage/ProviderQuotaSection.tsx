@@ -95,6 +95,9 @@ function ProviderWindows({
         <span className="ml-auto truncate text-[9px] text-muted-foreground">{accountContext}</span>
       </div>
       <div className="mt-1.5 flex min-w-0 items-center gap-3">
+        {row.isFull ? (
+          <span className="shrink-0 text-[9px] font-medium text-destructive">Full</span>
+        ) : null}
         {row.windows.map((window) => (
           <WindowRing key={`${window.label}:${window.resetsAt ?? "none"}`} window={window} />
         ))}

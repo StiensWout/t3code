@@ -45,6 +45,9 @@ export function ProviderQuotaSummary({ provider }: { readonly provider: ServerPr
         />
         <span className="min-w-0 flex-1 truncate font-medium text-foreground">{row.name}</span>
         <span className="truncate text-[10px] text-muted-foreground">{row.plan}</span>
+        {row.isFull ? (
+          <span className="shrink-0 text-[10px] font-medium text-destructive">Full</span>
+        ) : null}
       </div>
       <div className="mt-2 grid gap-2">
         {row.windows.map((window) => {
