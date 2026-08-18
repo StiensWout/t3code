@@ -2247,6 +2247,7 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
               ...(payload.images.length === 0 ? {} : { images: payload.images }),
             });
           }).pipe(
+            sessionEventPermit.withPermits(1),
             Effect.mapError(
               (cause) =>
                 new ProviderAdapterSteerRunError({
@@ -2279,6 +2280,7 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
               Effect.tapError(() => Effect.sync(() => (turn.interrupted = false))),
             );
           }).pipe(
+            sessionEventPermit.withPermits(1),
             Effect.mapError(
               (cause) =>
                 new ProviderAdapterInterruptError({
@@ -2397,6 +2399,7 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
               runtimeRequests: [],
             };
           }).pipe(
+            sessionEventPermit.withPermits(1),
             Effect.mapError(
               (cause) =>
                 new ProviderAdapterReadThreadSnapshotError({
@@ -2448,6 +2451,7 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
             });
             return piThreadSnapshot(state.providerThread);
           }).pipe(
+            sessionEventPermit.withPermits(1),
             Effect.mapError(
               (cause) =>
                 new ProviderAdapterRollbackThreadError({
@@ -2526,6 +2530,7 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
               updatedAt: createdAt,
             } satisfies OrchestrationV2ProviderThread;
           }).pipe(
+            sessionEventPermit.withPermits(1),
             Effect.mapError(
               (cause) =>
                 new ProviderAdapterForkThreadError({
