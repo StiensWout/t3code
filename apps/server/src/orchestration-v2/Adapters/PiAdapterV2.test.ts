@@ -315,6 +315,45 @@ const startTurn = Effect.fnUntraced(function* (
   });
 });
 
+const expectModelFailure = (errorMessage: string) =>
+  Effect.gen(function* () {
+    const fake = yield* makeFakePi;
+    const { runtime, takeEvent } = yield* openRuntime(fake);
+    const providerThread = yield* runtime.ensureThread({
+      threadId: THREAD_ID,
+      modelSelection: modelSelection("default"),
+      runtimePolicy,
+    });
+    yield* startTurn(runtime, providerThread);
+    yield* fake.takeRequest("prompt");
+    yield* fake.emit({ type: "agent_start" });
+    yield* fake.emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [],
+        stopReason: "error",
+        errorMessage,
+      },
+    });
+    yield* fake.emit({ type: "agent_settled" });
+
+    const sessionError = yield* takeEvent(
+      (event) =>
+        event.type === "provider_session.updated" && event.providerSession.status === "error",
+    );
+    assert.isTrue(
+      sessionError.type === "provider_session.updated" &&
+        sessionError.providerSession.lastError === errorMessage,
+    );
+    const terminal = yield* takeEvent((event) => event.type === "turn.terminal");
+    assert.isTrue(
+      terminal.type === "turn.terminal" &&
+        terminal.status === "failed" &&
+        terminal.failure.message === errorMessage,
+    );
+  }).pipe(Effect.scoped, Effect.provide(testLayer));
+
 describe("PiAdapterV2", () => {
   it.effect("injects the T3 MCP extension and bearer when a session exists", () =>
     Effect.gen(function* () {
@@ -984,6 +1023,16 @@ describe("PiAdapterV2", () => {
       const terminal = yield* takeEvent((event) => event.type === "turn.terminal");
       assert.isTrue(terminal.type === "turn.terminal" && terminal.status === "completed");
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("persists current xAI capacity text for the thread error banner", () =>
+    expectModelFailure("The model is currently at capacity due to high demand."),
+  );
+
+  it.effect("persists extension-normalized xAI capacity text for the thread error banner", () =>
+    expectModelFailure(
+      "Provider overloaded: The model is currently at capacity due to high demand.",
+    ),
   );
 
   it.effect("fails the turn when pi rejects a fire-and-forget prompt", () =>

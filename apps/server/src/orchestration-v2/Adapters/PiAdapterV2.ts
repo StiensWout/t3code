@@ -1492,7 +1492,10 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
             : { nativeConversationHeadRef: providerRef(treeRefs.leafId) }),
           ...(contextUsage === undefined ? {} : { contextUsage }),
         });
-        yield* updateProviderSession(failure !== null ? "error" : "ready");
+        yield* updateProviderSession(
+          failure !== null ? "error" : "ready",
+          failure?.message ?? null,
+        );
         if (failure !== null) {
           const failureItemId = `terminal-failure:${turn.providerTurn.id}`;
           yield* emit({
