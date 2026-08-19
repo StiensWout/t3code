@@ -1,3 +1,5 @@
+import * as NodePath from "node:path";
+
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
@@ -54,8 +56,26 @@ const PiPackageJson = Schema.Struct({
   ),
 });
 
+const PiTrustStore = Schema.Record(Schema.String, Schema.NullOr(Schema.Boolean));
+
 const decodePiSettings = Schema.decodeUnknownOption(Schema.fromJsonString(PiSettingsFile));
 const decodePiPackageJson = Schema.decodeUnknownOption(Schema.fromJsonString(PiPackageJson));
+const decodePiTrustStore = Schema.decodeUnknownOption(Schema.fromJsonString(PiTrustStore));
+
+/** Mirrors Pi's canonical nearest-ancestor lookup over `trust.json`. */
+function piNearestProjectTrustDecision(
+  trust: typeof PiTrustStore.Type,
+  cwd: string,
+): boolean | undefined {
+  let current = cwd;
+  while (true) {
+    const decision = trust[current];
+    if (decision === true || decision === false) return decision;
+    const parent = NodePath.dirname(current);
+    if (parent === current) return undefined;
+    current = parent;
+  }
+}
 
 function piNpmPackageName(source: string): string | undefined {
   if (!source.startsWith("npm:")) return undefined;
@@ -171,7 +191,8 @@ function piEnabledPackageExtensions(
  * aborts pi), which must not cost the user every other extension they have.
  * Mirrors pi's own discovery roots and user npm package manifests:
  * `<agent dir>/extensions`, `settings.json` package `pi.extensions`, and the
- * project-local `.pi/extensions` only when the user's `defaultProjectTrust` is `always` —
+ * project-local `.pi/extensions` only under Pi's recorded per-project trust
+ * or, when no decision exists, `defaultProjectTrust: "always"` —
  * explicit `--extension` paths bypass pi's trust prompt, so anything short
  * of standing trust must not be silently loaded. Pi's `pi-subagents` package
  * and conventional `subagent` entries are skipped in favor of the T3 override.
@@ -195,12 +216,24 @@ export const discoverPiUserExtensions = Effect.fn("discoverPiUserExtensions")(fu
   const settings = Option.getOrUndefined(decodePiSettings(settingsRaw));
   const roots: Array<string> = [];
   if (normalizedAgentDir !== undefined) roots.push(`${normalizedAgentDir}/extensions`);
-  if (
-    normalizedAgentDir !== undefined &&
-    input.cwd !== undefined &&
-    settings?.defaultProjectTrust === "always"
-  ) {
-    roots.push(`${normalizePiPath(input.cwd)}/.pi/extensions`);
+  if (normalizedAgentDir !== undefined && input.cwd !== undefined) {
+    const trustPath = `${normalizedAgentDir}/trust.json`;
+    const trustExists = yield* fs.exists(trustPath).pipe(Effect.orElseSucceed(() => false));
+    const trustRaw = trustExists
+      ? yield* fs.readFileString(trustPath).pipe(Effect.orElseSucceed(() => ""))
+      : undefined;
+    const trustStore =
+      trustRaw === undefined ? {} : Option.getOrUndefined(decodePiTrustStore(trustRaw));
+    const resolvedCwd = NodePath.resolve(input.cwd);
+    const canonicalCwd = yield* fs
+      .realPath(resolvedCwd)
+      .pipe(Effect.orElseSucceed(() => resolvedCwd));
+    const decision =
+      trustStore === undefined ? false : piNearestProjectTrustDecision(trustStore, canonicalCwd);
+    const projectTrusted = decision ?? settings?.defaultProjectTrust === "always";
+    if (projectTrusted) {
+      roots.push(`${normalizePiPath(input.cwd)}/.pi/extensions`);
+    }
   }
   const found: Array<string> = [];
   const addFound = (path: string) => {

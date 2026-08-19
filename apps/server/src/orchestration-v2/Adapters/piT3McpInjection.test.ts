@@ -190,7 +190,8 @@ describe("pi T3 MCP injection", () => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const home = yield* fs.makeTempDirectoryScoped({ prefix: "t3-pi-home-" });
-      const project = yield* fs.makeTempDirectoryScoped({ prefix: "t3-pi-project-" });
+      const parent = yield* fs.makeTempDirectoryScoped({ prefix: "t3-pi-parent-" });
+      const project = `${parent}/project`;
       yield* fs.makeDirectory(`${home}/.pi/agent`, { recursive: true });
       yield* fs.makeDirectory(`${project}/.pi/extensions`, { recursive: true });
       yield* fs.writeFileString(`${project}/.pi/extensions/local.ts`, "export default () => {}");
@@ -199,15 +200,31 @@ describe("pi T3 MCP injection", () => {
         cwd: project,
       });
       assert.deepEqual(untrusted, []);
+      yield* fs.writeFileString(`${home}/.pi/agent/trust.json`, `{ "${parent}": true }`);
+      const trustedViaAncestor = yield* discoverPiUserExtensions({
+        environment: { HOME: home },
+        cwd: project,
+      });
+      assert.deepEqual(trustedViaAncestor, [`${project}/.pi/extensions/local.ts`]);
       yield* fs.writeFileString(
         `${home}/.pi/agent/settings.json`,
         '{ "defaultProjectTrust": "always" }',
       );
-      const trusted = yield* discoverPiUserExtensions({
+      yield* fs.writeFileString(
+        `${home}/.pi/agent/trust.json`,
+        `{ "${parent}": true, "${project}": false }`,
+      );
+      const explicitlyUntrusted = yield* discoverPiUserExtensions({
         environment: { HOME: home },
         cwd: project,
       });
-      assert.deepEqual(trusted, [`${project}/.pi/extensions/local.ts`]);
+      assert.deepEqual(explicitlyUntrusted, []);
+      yield* fs.writeFileString(`${home}/.pi/agent/trust.json`, "{}");
+      const trustedByDefault = yield* discoverPiUserExtensions({
+        environment: { HOME: home },
+        cwd: project,
+      });
+      assert.deepEqual(trustedByDefault, [`${project}/.pi/extensions/local.ts`]);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 });
