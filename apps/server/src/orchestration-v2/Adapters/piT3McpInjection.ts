@@ -235,6 +235,7 @@ export const discoverPiUserExtensions = Effect.fn("discoverPiUserExtensions")(fu
   const roots: Array<string> = [];
   if (normalizedAgentDir !== undefined) roots.push(`${normalizedAgentDir}/extensions`);
   if (normalizedAgentDir !== undefined && input.cwd !== undefined) {
+    const cwd = input.cwd;
     const trustPath = `${normalizedAgentDir}/trust.json`;
     const trustExists = yield* fs.exists(trustPath).pipe(Effect.orElseSucceed(() => false));
     const trustRaw = trustExists
@@ -242,12 +243,12 @@ export const discoverPiUserExtensions = Effect.fn("discoverPiUserExtensions")(fu
       : undefined;
     const trustStore =
       trustRaw === undefined ? {} : Option.getOrUndefined(decodePiTrustStore(trustRaw));
-    const canonicalCwd = yield* fs.realPath(input.cwd).pipe(Effect.orElseSucceed(() => input.cwd));
+    const canonicalCwd = yield* fs.realPath(cwd).pipe(Effect.orElseSucceed(() => cwd));
     const decision =
       trustStore === undefined ? false : piNearestProjectTrustDecision(trustStore, canonicalCwd);
     const projectTrusted = decision ?? settings?.defaultProjectTrust === "always";
     if (projectTrusted) {
-      roots.push(`${normalizePiPath(input.cwd)}/.pi/extensions`);
+      roots.push(`${normalizePiPath(cwd)}/.pi/extensions`);
     }
   }
   const found: Array<string> = [];
