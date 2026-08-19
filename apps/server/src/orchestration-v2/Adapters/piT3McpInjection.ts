@@ -1,5 +1,3 @@
-import * as NodePath from "node:path";
-
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
@@ -62,19 +60,39 @@ const decodePiSettings = Schema.decodeUnknownOption(Schema.fromJsonString(PiSett
 const decodePiPackageJson = Schema.decodeUnknownOption(Schema.fromJsonString(PiPackageJson));
 const decodePiTrustStore = Schema.decodeUnknownOption(Schema.fromJsonString(PiTrustStore));
 
+function normalizePiTrustPath(value: string): string {
+  const normalized = value.replace(/\\/g, "/").replace(/\/+$/, "");
+  if (normalized.length === 0) return "/";
+  return /^[A-Za-z]:$/.test(normalized) ? `${normalized}/` : normalized;
+}
+
+function piTrustParentPath(value: string): string | undefined {
+  if (value === "/" || /^[A-Za-z]:\/$/.test(value)) return undefined;
+  const uncRoot = value.match(/^\/\/[^/]+\/[^/]+/)?.[0];
+  if (uncRoot === value) return undefined;
+  const separatorIndex = value.lastIndexOf("/");
+  if (separatorIndex < 0) return undefined;
+  const parent = separatorIndex === 0 ? "/" : value.slice(0, separatorIndex);
+  return uncRoot !== undefined && parent.length < uncRoot.length
+    ? uncRoot
+    : normalizePiTrustPath(parent);
+}
+
 /** Mirrors Pi's canonical nearest-ancestor lookup over `trust.json`. */
 function piNearestProjectTrustDecision(
   trust: typeof PiTrustStore.Type,
   cwd: string,
 ): boolean | undefined {
-  let current = cwd;
-  while (true) {
-    const decision = trust[current];
+  const decisions = new Map(
+    Object.entries(trust).map(([path, decision]) => [normalizePiTrustPath(path), decision]),
+  );
+  let current: string | undefined = normalizePiTrustPath(cwd);
+  while (current !== undefined) {
+    const decision = decisions.get(current);
     if (decision === true || decision === false) return decision;
-    const parent = NodePath.dirname(current);
-    if (parent === current) return undefined;
-    current = parent;
+    current = piTrustParentPath(current);
   }
+  return undefined;
 }
 
 function piNpmPackageName(source: string): string | undefined {
@@ -224,10 +242,7 @@ export const discoverPiUserExtensions = Effect.fn("discoverPiUserExtensions")(fu
       : undefined;
     const trustStore =
       trustRaw === undefined ? {} : Option.getOrUndefined(decodePiTrustStore(trustRaw));
-    const resolvedCwd = NodePath.resolve(input.cwd);
-    const canonicalCwd = yield* fs
-      .realPath(resolvedCwd)
-      .pipe(Effect.orElseSucceed(() => resolvedCwd));
+    const canonicalCwd = yield* fs.realPath(input.cwd).pipe(Effect.orElseSucceed(() => input.cwd));
     const decision =
       trustStore === undefined ? false : piNearestProjectTrustDecision(trustStore, canonicalCwd);
     const projectTrusted = decision ?? settings?.defaultProjectTrust === "always";
