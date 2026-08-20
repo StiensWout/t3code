@@ -502,6 +502,42 @@ describe("PiAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
+  it.effect("expands every selected $ skill through Pi native skill commands", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      fake.queueCommands({
+        commands: [
+          {
+            name: "skill:repo-review",
+            source: "skill",
+            sourceInfo: {
+              path: "/workspace/.agents/skills/repo-review/SKILL.md",
+              scope: "project",
+            },
+          },
+          {
+            name: "skill:deploy",
+            source: "skill",
+            sourceInfo: {
+              path: "/workspace/.agents/skills/deploy/SKILL.md",
+              scope: "project",
+            },
+          },
+        ],
+      });
+      const { runtime } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+
+      yield* startTurn(runtime, providerThread, "default", [], "use $repo-review and $deploy");
+      const prompt = yield* fake.takeRequest("prompt");
+      assert.equal(prompt["message"], "/skill:repo-review /skill:deploy use and");
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
   it.effect("retries skill discovery after a transient session-open failure", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakePi;

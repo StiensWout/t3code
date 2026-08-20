@@ -48,6 +48,44 @@ it("maps current Pi skill metadata to T3's user and project skill scopes", () =>
   });
 });
 
+it("maps Pi global location and interface labels onto T3 skill fields", () => {
+  expect(
+    parsePiDiscoveredCommands({
+      commands: [
+        {
+          name: "skill:global-review",
+          description: "Review changes.",
+          source: "skill",
+          location: "global",
+          interface: {
+            displayName: "Global Review",
+            shortDescription: "Review diffs.",
+          },
+        },
+      ],
+    }),
+  ).toEqual({
+    skills: [
+      {
+        name: "global-review",
+        description: "Review changes.",
+        path: "pi:skill:global-review",
+        scope: "user",
+        enabled: true,
+        displayName: "Global Review",
+        shortDescription: "Review diffs.",
+      },
+    ],
+    slashCommands: [],
+  });
+});
+
 it("leaves unrelated dollar-prefixed text unchanged", () => {
   expect(expandPiSkillReference("Explain $HOME", new Set(["global-review"]))).toBe("Explain $HOME");
+});
+
+it("hoists every known $ skill and keeps the rest of the prompt", () => {
+  expect(expandPiSkillReference("use $alpha then $beta please", new Set(["alpha", "beta"]))).toBe(
+    "/skill:alpha /skill:beta use then please",
+  );
 });

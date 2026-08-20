@@ -53,5 +53,11 @@ describe("formatProviderSkillInstallSource", () => {
         scope: "project",
       }),
     ).toBe("Project");
+    expect(
+      formatProviderSkillInstallSource({
+        path: "/home/test/.agents/skills/global-review/SKILL.md",
+        scope: "global",
+      }),
+    ).toBe("Personal");
   });
 });

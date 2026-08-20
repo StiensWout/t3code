@@ -42,7 +42,11 @@ export function formatProviderSkillInstallSource(
   ) {
     return "Project";
   }
-  if (normalizedScope === "user" || normalizedScope === "personal") {
+  if (
+    normalizedScope === "user" ||
+    normalizedScope === "personal" ||
+    normalizedScope === "global"
+  ) {
     return "Personal";
   }
   if (normalizedScope) {
