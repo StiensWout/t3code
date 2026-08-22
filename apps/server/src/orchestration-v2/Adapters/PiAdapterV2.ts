@@ -474,11 +474,12 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
        * and the next capture re-syncs it instead of trusting it.
        */
       let leafCursorStale = false;
-      // Pi's own configured model, captured from the first `get_state` so
-      // that selecting the displayed "Pi default" again can restore it. Pi
-      // has no "unset model" command, so the baseline has to be replayed
+      // Pi's own configured defaults, captured from the first `get_state` so
+      // that selecting the displayed "Pi default" again can restore them. Pi
+      // has no "unset" commands, so the baselines have to be replayed
       // explicitly.
       let baselineModel: { provider: string; modelId: string } | null = null;
+      let baselineThinking: string | null = null;
       let autoCompactionEnabled: boolean | undefined;
 
       const emit = (event: ProviderAdapterV2Event) =>
@@ -1871,19 +1872,20 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
           appliedModel = null;
           appliedThinking = null;
           appliedSessionName = null;
-          // The model baseline describes the session we just left too.
-          // Dropping it lets the `get_state` below re-capture this session's
-          // own default, so the "Pi default" choice cannot replay the
-          // previous session's model.
+          // The baselines describe the session we just left too. Dropping
+          // them lets the `get_state` below re-capture this session's own
+          // defaults, so the "Pi default" choice cannot replay the previous
+          // session's model or thinking level.
           baselineModel = null;
+          baselineThinking = null;
         }
         const stateData = yield* request({ type: "get_state" });
         const reportedAutoCompaction = recordField(stateData, "autoCompactionEnabled");
         autoCompactionEnabled =
           typeof reportedAutoCompaction === "boolean" ? reportedAutoCompaction : undefined;
-        // The baseline is captured only while nothing has been applied yet,
-        // so a `get_state` that arrives after our own selection cannot record
-        // that selection as Pi's default.
+        // Each baseline is captured independently, and only while nothing has
+        // been applied yet, so a `get_state` that arrives after our own
+        // selection cannot record that selection as Pi's default.
         if (baselineModel === null && appliedModel === null) {
           const stateModel = recordField(stateData, "model");
           const provider = recordString(stateModel, "provider");
@@ -1891,6 +1893,9 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
           if (provider !== undefined && modelId !== undefined) {
             baselineModel = { provider, modelId };
           }
+        }
+        if (baselineThinking === null && appliedThinking === null) {
+          baselineThinking = recordString(stateData, "thinkingLevel") ?? null;
         }
         const nativeId =
           recordString(stateData, "sessionFile") ?? recordString(stateData, "sessionId");
@@ -1951,6 +1956,7 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
       });
 
       const applySelection = Effect.fnUntraced(function* (modelSelection: ModelSelection) {
+        const thinking = getModelSelectionStringOptionValue(modelSelection, "thinking");
         if (modelSelection.model === PI_INHERIT_MODEL_SLUG) {
           // Returning to "Pi default" after an explicit pick has to replay the
           // captured baseline, otherwise Pi stays on the last model applied.
@@ -1964,6 +1970,18 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
               driver: PI_PROVIDER,
               providerSession: sessionEntity,
             });
+          }
+          // The "Pi default" model advertises no thinking choices of its own,
+          // so an unqualified return also restores Pi's configured level
+          // instead of silently keeping the effort a previous pick applied.
+          if (
+            thinking === undefined &&
+            appliedThinking !== null &&
+            baselineThinking !== null &&
+            appliedThinking !== baselineThinking
+          ) {
+            yield* request({ type: "set_thinking_level", level: baselineThinking });
+            appliedThinking = null;
           }
         } else if (modelSelection.model !== appliedModel) {
           const parsed = parsePiModelSlug(modelSelection.model);
@@ -1986,7 +2004,6 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
             providerSession: sessionEntity,
           });
         }
-        const thinking = getModelSelectionStringOptionValue(modelSelection, "thinking");
         if (
           thinking !== undefined &&
           thinking !== appliedThinking &&
