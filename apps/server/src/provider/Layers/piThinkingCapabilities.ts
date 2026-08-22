@@ -47,19 +47,11 @@ export function thinkingCapabilitiesForPiModel(
         label: "Thinking",
         type: "select",
         options: levels.map(
-          (level): ProviderOptionChoice =>
-            level === defaultLevel
-              ? {
-                  // Keep Pi's default as an inherited value internally so T3
-                  // does not turn the displayed default into an override.
-                  id: "inherit",
-                  label: PI_THINKING_LEVEL_LABELS[level],
-                  isDefault: true,
-                }
-              : {
-                  id: level,
-                  label: PI_THINKING_LEVEL_LABELS[level],
-                },
+          (level): ProviderOptionChoice => ({
+            id: level,
+            label: PI_THINKING_LEVEL_LABELS[level],
+            ...(level === defaultLevel ? { isDefault: true } : {}),
+          }),
         ),
       },
     ],

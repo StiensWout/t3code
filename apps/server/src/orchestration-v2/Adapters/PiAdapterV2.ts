@@ -126,8 +126,6 @@ const DEFAULT_PI_SETTINGS = Schema.decodeSync(PiSettings)({});
  * from the user's own settings.json (`defaultProvider`/`defaultModel`).
  */
 export const PI_INHERIT_MODEL_SLUG = "default";
-/** Thinking-level option value meaning "do not call set_thinking_level". */
-export const PI_INHERIT_THINKING_VALUE = "inherit";
 
 const STREAM_FLUSH_MS = 50;
 const PI_REQUEST_TIMEOUT_MS = 15_000;
@@ -476,11 +474,11 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
        * and the next capture re-syncs it instead of trusting it.
        */
       let leafCursorStale = false;
-      // Pi's own configured defaults, captured from the first `get_state` so
-      // that selecting the displayed default again can restore them. Pi has no
-      // "unset model" command, so the baseline has to be replayed explicitly.
+      // Pi's own configured model, captured from the first `get_state` so
+      // that selecting the displayed "Pi default" again can restore it. Pi
+      // has no "unset model" command, so the baseline has to be replayed
+      // explicitly.
       let baselineModel: { provider: string; modelId: string } | null = null;
-      let baselineThinking: string | null = null;
       let autoCompactionEnabled: boolean | undefined;
 
       const emit = (event: ProviderAdapterV2Event) =>
@@ -1873,19 +1871,19 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
           appliedModel = null;
           appliedThinking = null;
           appliedSessionName = null;
-          // The baselines describe the session we just left too. Dropping them
-          // lets the `get_state` below re-capture this session's own defaults,
-          // so the inherited choice cannot replay the previous session's.
+          // The model baseline describes the session we just left too.
+          // Dropping it lets the `get_state` below re-capture this session's
+          // own default, so the "Pi default" choice cannot replay the
+          // previous session's model.
           baselineModel = null;
-          baselineThinking = null;
         }
         const stateData = yield* request({ type: "get_state" });
         const reportedAutoCompaction = recordField(stateData, "autoCompactionEnabled");
         autoCompactionEnabled =
           typeof reportedAutoCompaction === "boolean" ? reportedAutoCompaction : undefined;
-        // Each baseline is captured independently, and only while nothing has
-        // been applied yet, so a `get_state` that omits one field still lets
-        // the other be picked up later without recording our own selection.
+        // The baseline is captured only while nothing has been applied yet,
+        // so a `get_state` that arrives after our own selection cannot record
+        // that selection as Pi's default.
         if (baselineModel === null && appliedModel === null) {
           const stateModel = recordField(stateData, "model");
           const provider = recordString(stateModel, "provider");
@@ -1893,9 +1891,6 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
           if (provider !== undefined && modelId !== undefined) {
             baselineModel = { provider, modelId };
           }
-        }
-        if (baselineThinking === null && appliedThinking === null) {
-          baselineThinking = recordString(stateData, "thinkingLevel") ?? null;
         }
         const nativeId =
           recordString(stateData, "sessionFile") ?? recordString(stateData, "sessionId");
@@ -1992,12 +1987,7 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
           });
         }
         const thinking = getModelSelectionStringOptionValue(modelSelection, "thinking");
-        if (thinking === PI_INHERIT_THINKING_VALUE) {
-          if (appliedThinking !== null && baselineThinking !== null) {
-            yield* request({ type: "set_thinking_level", level: baselineThinking });
-            appliedThinking = null;
-          }
-        } else if (
+        if (
           thinking !== undefined &&
           thinking !== appliedThinking &&
           PI_THINKING_LEVELS.has(thinking)
