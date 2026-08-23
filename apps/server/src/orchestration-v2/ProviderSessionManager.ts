@@ -24,6 +24,7 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
 import * as McpProviderSession from "../mcp/McpProviderSession.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import { EventSinkV2 } from "./EventSink.ts";
 import { IdAllocatorV2 } from "./IdAllocator.ts";
@@ -146,6 +147,10 @@ export interface ProviderSessionManagerV2Shape {
   readonly close: (
     providerSessionId: ProviderSessionId,
   ) => Effect.Effect<void, ProviderSessionManagerV2Error>;
+  /** Closes every live runtime owned by one provider instance. */
+  readonly closeInstance: (
+    instanceId: ProviderInstanceId,
+  ) => Effect.Effect<void, ProviderSessionManagerV2Error>;
   readonly release: (input: {
     readonly providerSessionId: ProviderSessionId;
     readonly reason: ProviderSessionReleaseReason;
@@ -265,6 +270,28 @@ export const layerWithOptions = (
     Effect.gen(function* () {
       const registry = yield* ProviderAdapterRegistryV2;
       const mcpSessionRegistry = yield* McpSessionRegistry.McpSessionRegistry;
+      /**
+       * Optional so the many focused tests that assemble this layer by hand do
+       * not each need a settings stub; the production composition always
+       * provides it. When present, an unreadable settings file withholds
+       * browser access rather than granting it — an explicit "off" silently
+       * becoming "on" would violate the user's stated choice, whereas the
+       * reverse costs an agent one toolset and is visible immediately (#7083).
+       */
+      const serverSettings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
+      const agentBrowserAccessEnabled = Option.match(serverSettings, {
+        onNone: () => Effect.succeed(true),
+        onSome: (settings) =>
+          settings.getSettings.pipe(
+            Effect.map((resolved) => resolved.enableAgentBrowserAccess),
+            Effect.catch((cause) =>
+              Effect.logWarning(
+                "Could not read server settings; withholding agent browser access for this session.",
+                { cause },
+              ).pipe(Effect.as(false)),
+            ),
+          ),
+      });
       const eventSink = yield* EventSinkV2;
       const idAllocator = yield* IdAllocatorV2;
       const projectionStore = yield* ProjectionStoreV2;
@@ -331,6 +358,7 @@ export const layerWithOptions = (
                 // the credential it started with, so a thread that detaches and
                 // re-attaches across a workspace handoff must come back to the
                 // same token or the process's tool calls fail auth.
+                const browserToolsAvailable = yield* agentBrowserAccessEnabled;
                 const existing = McpProviderSession.readMcpProviderSession(threadId);
                 if (existing !== undefined) {
                   // Reserve before the async resolve so a release cannot
@@ -341,7 +369,10 @@ export const layerWithOptions = (
                   if (
                     resolved !== undefined &&
                     resolved.threadId === threadId &&
-                    resolved.providerInstanceId === providerInstanceId
+                    resolved.providerInstanceId === providerInstanceId &&
+                    // A flipped browser-access setting must not survive through
+                    // credential reuse: rotate so the new scope reflects it.
+                    resolved.capabilities.has("preview") === browserToolsAvailable
                   ) {
                     return { mcpCredentialId: existing.providerSessionId, issued: false };
                   }
@@ -351,6 +382,7 @@ export const layerWithOptions = (
                 const credential = yield* mcpSessionRegistry.issue({
                   threadId,
                   providerInstanceId,
+                  browserToolsAvailable,
                 });
                 McpProviderSession.setMcpProviderSession(credential.config);
                 reserveMcpCredential(threadId, credential.config.providerSessionId);
@@ -1534,6 +1566,36 @@ export const layerWithOptions = (
               (cause) =>
                 new ProviderSessionCloseError({
                   providerSessionId,
+                  cause,
+                }),
+            ),
+          ),
+        closeInstance: (instanceId) =>
+          Effect.gen(function* () {
+            const active = [...(yield* Ref.get(sessions)).values()].filter(
+              (entry) => entry.runtime.instanceId === instanceId,
+            );
+            const outcomes = yield* Effect.forEach(
+              active,
+              (entry) =>
+                releaseEntry({
+                  providerSessionId: entry.runtime.providerSessionId,
+                  reason: "manual_shutdown",
+                  detail: `Provider instance ${instanceId} logged out.`,
+                }).pipe(Effect.exit),
+              { concurrency: "unbounded" },
+            );
+            const failure = outcomes.find(Exit.isFailure);
+            if (failure !== undefined && Exit.isFailure(failure)) {
+              return yield* Effect.failCause(failure.cause);
+            }
+          }).pipe(
+            Effect.mapError(
+              (cause) =>
+                new ProviderSessionCloseError({
+                  providerSessionId: ProviderSessionId.make(
+                    `provider-session:provider-instance:${instanceId}`,
+                  ),
                   cause,
                 }),
             ),

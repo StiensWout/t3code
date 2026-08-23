@@ -6,7 +6,19 @@ import {
   normalizeCompactToolLabel,
   resolveAssistantMessageCopyState,
   resolveTimelineToolPresentation,
+  shouldPreserveAssistantLineBreaks,
 } from "./MessagesTimeline.logic";
+
+describe("shouldPreserveAssistantLineBreaks", () => {
+  it("preserves Claude insight formatting without changing regular markdown", () => {
+    expect(
+      shouldPreserveAssistantLineBreaks(
+        "★ Insight ─────────────────\\nFirst observation\\nSecond observation\\n─────────────────",
+      ),
+    ).toBe(true);
+    expect(shouldPreserveAssistantLineBreaks("A normal\\nmarkdown paragraph")).toBe(false);
+  });
+});
 
 describe("computeMessageDurationStart", () => {
   it("returns message createdAt when there is no preceding user message", () => {
@@ -511,6 +523,20 @@ describe("deriveMessagesTimelineRows", () => {
         },
       },
       {
+        id: "provider-recovered-entry",
+        kind: "work" as const,
+        createdAt: "2026-01-01T00:00:09Z",
+        entry: {
+          id: "provider-recovered",
+          createdAt: "2026-01-01T00:00:09Z",
+          runId: "turn-1" as never,
+          label: "Provider recovered (2/5 retries)",
+          tone: "info" as const,
+          itemType: "error" as const,
+          toolLifecycleStatus: "completed" as const,
+        },
+      },
+      {
         id: "thread-created-entry",
         kind: "event" as const,
         createdAt: "2026-01-01T00:00:10Z",
@@ -579,6 +605,11 @@ describe("deriveMessagesTimelineRows", () => {
     expect(
       expandedRows.find((row) => row.kind === "turn-fold" && row.expanded === true),
     ).toBeDefined();
+    const expandedWork = expandedRows.find((row) => row.kind === "work");
+    expect(expandedWork?.kind === "work" ? expandedWork.groupedEntries : []).toEqual([
+      expect.objectContaining({ id: "work-1" }),
+      expect.objectContaining({ id: "provider-recovered" }),
+    ]);
   });
 
   it("keeps persistent cards after the Worked-for row when they arrive before commentary", () => {

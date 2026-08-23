@@ -584,6 +584,7 @@ describe("AcpSessionRuntime", () => {
         resume: {},
         close: {},
       });
+      expect(started.initializeResult.agentCapabilities?.auth).toMatchObject({ logout: {} });
 
       const listed = yield* runtime.listSessions();
       expect(listed.sessions.map((session) => session.sessionId)).toEqual(["mock-session-1"]);
@@ -595,6 +596,7 @@ describe("AcpSessionRuntime", () => {
       const resumed = yield* runtime.resumeSession(started.sessionId);
       expect(resumed.sessionId).toBe("mock-session-1");
       yield* runtime.closeSession();
+      yield* runtime.logout;
 
       expect(
         requestEvents.find(
@@ -604,7 +606,13 @@ describe("AcpSessionRuntime", () => {
       expect(
         requestEvents.filter((event) => event.status === "started").map((event) => event.method),
       ).toEqual(
-        expect.arrayContaining(["session/list", "session/fork", "session/resume", "session/close"]),
+        expect.arrayContaining([
+          "session/list",
+          "session/fork",
+          "session/resume",
+          "session/close",
+          "logout",
+        ]),
       );
     }).pipe(
       Effect.provide(
@@ -616,6 +624,37 @@ describe("AcpSessionRuntime", () => {
             env: {
               T3_ACP_SESSION_LIFECYCLE: "1",
             },
+          },
+          cwd: process.cwd(),
+          clientInfo: { name: "t3-test", version: "0.0.0" },
+          requestLogger: (event) =>
+            Effect.sync(() => {
+              requestEvents.push(event);
+            }),
+        }),
+      ),
+      Effect.scoped,
+      Effect.provide(NodeServices.layer),
+    );
+  });
+
+  it.effect("lists sessions without creating a disposable session", () => {
+    const requestEvents: Array<AcpSessionRuntime.AcpSessionRequestLogEvent> = [];
+    return Effect.gen(function* () {
+      const runtime = yield* AcpSessionRuntime.AcpSessionRuntime;
+      const listed = yield* runtime.listSessions();
+
+      expect(listed.sessions).toHaveLength(1);
+      expect(
+        requestEvents.filter((event) => event.status === "started").map((event) => event.method),
+      ).toEqual(["initialize", "session/list"]);
+    }).pipe(
+      Effect.provide(
+        AcpSessionRuntime.layer({
+          spawn: {
+            command: mockAgentCommand,
+            args: mockAgentArgs,
+            env: { T3_ACP_SESSION_LIFECYCLE: "1" },
           },
           cwd: process.cwd(),
           clientInfo: { name: "t3-test", version: "0.0.0" },

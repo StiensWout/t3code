@@ -37,7 +37,6 @@ import {
   ActivityIndicator,
   Alert,
   Image,
-  Linking,
   Platform,
   type LayoutChangeEvent,
   type NativeScrollEvent,
@@ -47,7 +46,6 @@ import {
   StyleSheet,
   Text as NativeText,
   type ColorValue,
-  useColorScheme,
   useWindowDimensions,
   View,
 } from "react-native";
@@ -60,6 +58,7 @@ import { IOS_NAV_BAR_HEIGHT } from "../../lib/layoutMetrics";
 import { useFontFamily } from "../../lib/useFontFamily";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
+import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
 import { hasWideMarkdownBlock } from "../../lib/wideMarkdownBlocks";
 import {
   hasNativeSelectableMarkdownText,
@@ -88,9 +87,7 @@ import { uuidv4 } from "../../lib/uuid";
 import {
   resolveMarkdownFontSizes,
   resolveNativeMarkdownTypography,
-  scaledTypographyLineHeight,
 } from "../../lib/appearancePreferences";
-import { MOBILE_TYPOGRAPHY } from "../../lib/typography";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { useAppearanceCodeSurface } from "../settings/appearance/useAppearanceCodeSurface";
 import { markdownFileIconSource } from "@t3tools/mobile-markdown-text/file-icons";
@@ -106,12 +103,8 @@ import {
   resolveThreadFeedLiveFollow,
   type ThreadFeedLiveFollowEvent,
 } from "./thread-feed-live-follow";
-import {
-  collapsedWorkLogHeight,
-  ThreadWorkGroupToggle,
-  ThreadWorkLog,
-  WORK_GROUP_TOGGLE_HEIGHT,
-} from "./thread-work-log";
+import { ThreadWorkGroupToggle, ThreadWorkLog } from "./thread-work-log";
+import { resolveThreadFeedFixedItemSize } from "./thread-feed-item-size";
 import { useMarkdownCodeHighlight } from "./markdownCodeHighlightState";
 import { useAssetUrl } from "../../state/assets";
 import { appAtomRegistry } from "../../state/atom-registry";
@@ -137,16 +130,6 @@ function formatMessageTime(input: string): string {
   }
   return MESSAGE_TIME_FORMATTER.format(timestamp);
 }
-
-// Pre-measurement heights for getFixedItemSize, mirroring renderFeedEntry's
-// classNames. The fold row's min-h-11 (44px) stays taller than its single
-// text-sm line at every supported base font size (26px at the 22pt maximum),
-// so its height is a constant; a drifted value costs one correction on
-// measure, not a persistent offset.
-const TURN_FOLD_HEIGHT = 56; // min-h-11 (44) + mb-3 (12)
-// The working row has no min-height clamp — its height follows the scaled
-// text-xs line height (see workingRowHeight in ThreadFeed).
-const WORKING_ROW_VERTICAL_EXTRAS = 24; // py-1 (8) + mb-4 (16)
 
 // Entering animations must only play for rows born just now — LegendList
 // remounts rows when they scroll back into view, and replaying an entrance for
@@ -300,43 +283,6 @@ function MessageAttachmentImage(props: {
   );
 }
 
-const MARKDOWN_COLORS = {
-  light: {
-    body: "#111111",
-    strong: "#000000",
-    link: "#2563eb",
-    blockquoteBorder: "rgba(0, 0, 0, 0.08)",
-    blockquoteBackground: "rgba(0, 0, 0, 0.02)",
-    codeBackground: "rgba(0, 0, 0, 0.04)",
-    codeText: "#262626",
-    inlineCodeText: "#5f6368",
-    horizontalRule: "rgba(0, 0, 0, 0.08)",
-    userBody: "#ffffff",
-    userCodeBackground: "rgba(255, 255, 255, 0.22)",
-    userCodeText: "#ffffff",
-    userInlineCodeText: "rgba(255, 255, 255, 0.82)",
-    userFenceBackground: "rgba(0, 0, 0, 0.16)",
-    userFenceText: "#ffffff",
-  },
-  dark: {
-    body: "#e5e5e5",
-    strong: "#f5f5f5",
-    link: "#60a5fa",
-    blockquoteBorder: "rgba(255, 255, 255, 0.1)",
-    blockquoteBackground: "rgba(255, 255, 255, 0.03)",
-    codeBackground: "rgba(255, 255, 255, 0.06)",
-    codeText: "#e5e5e5",
-    inlineCodeText: "#b8bcc2",
-    horizontalRule: "rgba(255, 255, 255, 0.08)",
-    userBody: "#ffffff",
-    userCodeBackground: "rgba(255, 255, 255, 0.18)",
-    userCodeText: "#ffffff",
-    userInlineCodeText: "rgba(255, 255, 255, 0.82)",
-    userFenceBackground: "rgba(0, 0, 0, 0.28)",
-    userFenceText: "#ffffff",
-  },
-} as const;
-
 const MARKDOWN_MONO_FONT = Platform.select({
   ios: "ui-monospace",
   android: "monospace",
@@ -389,7 +335,7 @@ const MarkdownExternalLink = memo(function MarkdownExternalLink(props: {
     <NativeText
       className="font-sans"
       onPress={() => {
-        void Linking.openURL(props.href);
+        void tryOpenExternalUrl(props.href, "markdown-link");
       }}
       style={{
         color: props.color,
@@ -532,14 +478,12 @@ function MarkdownCodeBlock(props: {
 }
 
 function useReviewCommentColors(): ReviewCommentColors {
-  const colorScheme = useColorScheme();
-  const isDark = colorScheme === "dark";
-  const background = isDark ? "#151515" : "#ffffff";
-  const border = isDark ? "#2a2a2a" : "#d7d7d7";
-  const mutedBackground = isDark ? "#242424" : "#f2f2f2";
-  const text = isDark ? "#f3f3f3" : "#111111";
-  const mutedText = isDark ? "#8f8f8f" : "#666666";
-  const codeBackground = isDark ? "#0f0f0f" : "#ffffff";
+  const background = useThemeColor("--color-card");
+  const border = useThemeColor("--color-border");
+  const mutedBackground = useThemeColor("--color-subtle");
+  const text = useThemeColor("--color-foreground");
+  const mutedText = useThemeColor("--color-foreground-muted");
+  const codeBackground = useThemeColor("--color-md-code-bg");
 
   return useMemo(
     () => ({
@@ -555,8 +499,7 @@ function useReviewCommentColors(): ReviewCommentColors {
 }
 
 function useMarkdownStyles(onLinkPress: (href: string) => void): MarkdownStyleSets {
-  const colorScheme = useColorScheme();
-  const { appearance } = useAppearancePreferences();
+  const { appearance, themeAppearance } = useAppearancePreferences();
   const markdownFontSizes = useMemo(
     () => resolveMarkdownFontSizes(appearance.baseFontSize),
     [appearance.baseFontSize],
@@ -565,31 +508,30 @@ function useMarkdownStyles(onLinkPress: (href: string) => void): MarkdownStyleSe
     () => resolveNativeMarkdownTypography(appearance.baseFontSize),
     [appearance.baseFontSize],
   );
-  const themeMode = colorScheme === "dark" ? "dark" : "light";
-  const colors = MARKDOWN_COLORS[themeMode];
+  const themeMode = themeAppearance;
+  const markdownBodyColor = String(useThemeColor("--color-md-body"));
+  const markdownStrongColor = String(useThemeColor("--color-md-strong"));
+  const markdownLinkColor = String(useThemeColor("--color-md-link"));
+  const markdownBlockquoteBg = String(useThemeColor("--color-md-blockquote-bg"));
+  const markdownBlockquoteBorder = String(useThemeColor("--color-md-blockquote-border"));
+  const markdownCodeBg = String(useThemeColor("--color-md-code-bg"));
+  const markdownCodeText = String(useThemeColor("--color-md-code-text"));
+  const markdownInlineCodeText = String(useThemeColor("--color-foreground-secondary"));
+  const markdownHrColor = String(useThemeColor("--color-md-hr"));
+  const markdownUserBodyColor = String(useThemeColor("--color-user-bubble-foreground"));
+  const markdownUserCodeBg = String(useThemeColor("--color-md-user-code-bg"));
+  const markdownUserCodeText = String(useThemeColor("--color-md-user-code-text"));
+  const markdownUserInlineCodeText = String(useThemeColor("--color-user-bubble-foreground-muted"));
+  const markdownUserFenceBg = String(useThemeColor("--color-md-user-fence-bg"));
+  const markdownUserFenceText = String(useThemeColor("--color-md-user-fence-text"));
   const iconSubtleColor = String(useThemeColor("--color-icon-subtle"));
   const inlineSkillForeground = String(useThemeColor("--color-inline-skill-foreground"));
+  const userBubbleSkillForeground = String(useThemeColor("--color-user-bubble-skill-foreground"));
   const userBubbleForegroundMuted = String(useThemeColor("--color-user-bubble-foreground-muted"));
   const regularFontFamily = useFontFamily("regular");
   const boldFontFamily = useFontFamily("bold");
 
   return useMemo(() => {
-    const markdownBodyColor = colors.body;
-    const markdownStrongColor = colors.strong;
-    const markdownLinkColor = colors.link;
-    const markdownBlockquoteBg = colors.blockquoteBackground;
-    const markdownBlockquoteBorder = colors.blockquoteBorder;
-    const markdownCodeBg = colors.codeBackground;
-    const markdownCodeText = colors.codeText;
-    const markdownInlineCodeText = colors.inlineCodeText;
-    const markdownHrColor = colors.horizontalRule;
-    const markdownUserBodyColor = colors.userBody;
-    const markdownUserCodeBg = colors.userCodeBackground;
-    const markdownUserCodeText = colors.userCodeText;
-    const markdownUserInlineCodeText = colors.userInlineCodeText;
-    const markdownUserFenceBg = colors.userFenceBackground;
-    const markdownUserFenceText = colors.userFenceText;
-
     const baseTheme: PartialMarkdownTheme = {
       colors: {
         text: markdownBodyColor,
@@ -719,7 +661,7 @@ function useMarkdownStyles(onLinkPress: (href: string) => void): MarkdownStyleSe
             onPress={
               linkHref
                 ? () => {
-                    void Linking.openURL(linkHref);
+                    void tryOpenExternalUrl(linkHref, "markdown-link");
                   }
                 : undefined
             }
@@ -865,8 +807,8 @@ function useMarkdownStyles(onLinkPress: (href: string) => void): MarkdownStyleSe
           codeColor: markdownUserCodeText,
           codeBackgroundColor: markdownUserCodeBg,
           codeBlockBackgroundColor: markdownUserFenceBg,
-          fileTextColor: "#ffffff",
-          skillTextColor: "#f0abfc",
+          fileTextColor: markdownUserBodyColor,
+          skillTextColor: userBubbleSkillForeground,
           quoteMarkerColor: markdownUserBodyColor,
           dividerColor: markdownUserBodyColor,
           fontSize: nativeMarkdownTypography.fontSize,
@@ -913,15 +855,30 @@ function useMarkdownStyles(onLinkPress: (href: string) => void): MarkdownStyleSe
     };
   }, [
     boldFontFamily,
-    colors,
     iconSubtleColor,
     inlineSkillForeground,
+    markdownBlockquoteBg,
+    markdownBlockquoteBorder,
+    markdownBodyColor,
+    markdownCodeBg,
+    markdownCodeText,
     markdownFontSizes,
+    markdownHrColor,
+    markdownInlineCodeText,
+    markdownLinkColor,
+    markdownStrongColor,
+    markdownUserBodyColor,
+    markdownUserCodeBg,
+    markdownUserCodeText,
+    markdownUserFenceBg,
+    markdownUserFenceText,
+    markdownUserInlineCodeText,
     nativeMarkdownTypography,
     onLinkPress,
     regularFontFamily,
     themeMode,
     userBubbleForegroundMuted,
+    userBubbleSkillForeground,
   ]);
 }
 
@@ -1290,8 +1247,7 @@ const ReviewCommentCard = memo(function ReviewCommentCard(props: {
   readonly colors: ReviewCommentColors;
 }) {
   const { codeSurface, nativeReviewDiffStyle } = useAppearanceCodeSurface();
-  const colorScheme = useColorScheme();
-  const appearanceScheme = colorScheme === "light" ? "light" : "dark";
+  const { themeAppearance: appearanceScheme, themeId } = useAppearancePreferences();
   const NativeReviewDiffView = resolveNativeReviewDiffView();
   const patch = useMemo(() => buildReviewCommentPatch(props.comment), [props.comment]);
   const parsedDiff = useMemo(
@@ -1304,8 +1260,8 @@ const ReviewCommentCard = memo(function ReviewCommentCard(props: {
     [nativeReviewDiffData.rows],
   );
   const nativeReviewDiffTheme = useMemo(
-    () => createNativeReviewDiffTheme(appearanceScheme),
-    [appearanceScheme],
+    () => createNativeReviewDiffTheme(appearanceScheme, themeId),
+    [appearanceScheme, themeId],
   );
   const nativeRowsJson = useMemo(() => JSON.stringify(compactNativeRows), [compactNativeRows]);
   const nativeThemeJson = useMemo(
@@ -1620,7 +1576,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       }
 
       if (presentation.href) {
-        void Linking.openURL(presentation.href);
+        void tryOpenExternalUrl(presentation.href, "markdown-link");
       }
     },
     [props.environmentId, props.threadId, props.workspaceRoot, navigation],
@@ -1961,31 +1917,13 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   // scrolling up through unmeasured content corrects each row's height as it
   // mounts — the feed visibly jumps. Fixed sizes make the small chrome rows
   // exact; message rows stay undefined and use LegendList's per-type running
-  // average once one of their type has been measured. Text-driven heights
-  // follow the configurable base font size via scaledTypographyLineHeight.
-  const workingRowHeight =
-    WORKING_ROW_VERTICAL_EXTRAS +
-    scaledTypographyLineHeight(MOBILE_TYPOGRAPHY.label, appearance.baseFontSize);
+  // average once one of their type has been measured. Activity groups are
+  // also content-driven: prominent v2 items add a card and related-thread
+  // link, so marking them fixed would make LegendList skip their measurement
+  // and position the next message inside the card.
   const getFixedItemSize = useCallback(
-    (entry: ThreadFeedEntry) => {
-      switch (entry.type) {
-        case "run-fold":
-          return TURN_FOLD_HEIGHT;
-        case "work-toggle":
-          return WORK_GROUP_TOGGLE_HEIGHT;
-        case "working":
-          return workingRowHeight;
-        case "activity-group":
-          // Expanded rows append a variable detail block — fall back to
-          // measurement for those groups.
-          return entry.activities.some((activity) => expandedWorkRows[activity.id])
-            ? undefined
-            : collapsedWorkLogHeight(entry.activities, appearance.baseFontSize);
-        default:
-          return undefined;
-      }
-    },
-    [expandedWorkRows, workingRowHeight, appearance.baseFontSize],
+    (entry: ThreadFeedEntry) => resolveThreadFeedFixedItemSize(entry.type, appearance.baseFontSize),
+    [appearance.baseFontSize],
   );
 
   const renderItem = useCallback(

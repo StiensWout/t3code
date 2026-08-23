@@ -13,6 +13,8 @@ import type { AcpSessionRuntimeStartResult } from "./AcpSessionRuntime.ts";
 import {
   acpRegistryProbeFailure,
   acpRegistryProbeResult,
+  listAcpRegistrySessions,
+  logoutAcpRegistry,
   normalizeAcpRegistryAuthMethods,
   normalizeAcpRegistryCommands,
   probeAcpRegistryConfiguration,
@@ -30,6 +32,11 @@ describe("ACP Registry probe", () => {
       sessionId: "probe-session",
       initializeResult: {
         protocolVersion: 1,
+        agentCapabilities: {
+          loadSession: true,
+          auth: { logout: {} },
+          sessionCapabilities: { list: {}, resume: {} },
+        },
         authMethods: [
           { id: "chatgpt", name: "ChatGPT" },
           {
@@ -78,6 +85,12 @@ describe("ACP Registry probe", () => {
       models: [{ id: "gpt-5.4", name: "GPT-5.4", description: null }],
       currentModelId: "gpt-5.4",
       configOptions: [],
+      sessionManagement: {
+        canList: true,
+        canLoad: true,
+        canResume: true,
+        canLogout: true,
+      },
     });
   });
 
@@ -337,6 +350,58 @@ describe("ACP Registry probe", () => {
       Effect.scoped,
     ),
   );
+
+  it.effect("lists native sessions and logs out through generic ACP lifecycle methods", () => {
+    const catalog = AcpRegistryCatalog.of({
+      search: () => Effect.die("unused search"),
+      prepare: () => Effect.die("unused prepare"),
+      inspect: () => Effect.die("unused inspect"),
+      uninstallManagedBinary: () => Effect.die("unused uninstall"),
+      resolve: () =>
+        Effect.succeed({
+          agent: {
+            id: "mock-agent",
+            name: "Mock Agent",
+            version: "1.0.0",
+            description: "ACP session management test agent",
+            distribution: { npx: { package: "mock-agent@1.0.0" } },
+          },
+          distribution: "npx" as const,
+          spawn: {
+            command: "node",
+            args: [mockAgentPath],
+            env: { ...process.env, T3_ACP_SESSION_LIFECYCLE: "1" },
+          },
+        }),
+    });
+    const input = {
+      instanceId,
+      settings: decodeSettings({ agentId: "mock-agent" }),
+      cwd: process.cwd(),
+      environment: process.env,
+    };
+
+    return Effect.gen(function* () {
+      const listed = yield* listAcpRegistrySessions(input);
+      expect(listed).toMatchObject({
+        canLoad: true,
+        canResume: true,
+        nextCursor: null,
+        sessions: [
+          {
+            sessionId: "mock-session-1",
+            cwd: process.cwd(),
+            importedThreadId: null,
+          },
+        ],
+      });
+      yield* logoutAcpRegistry(input);
+    }).pipe(
+      Effect.provideService(AcpRegistryCatalog, catalog),
+      Effect.provide(NodeServices.layer),
+      Effect.scoped,
+    );
+  });
 
   it("distinguishes authentication failures from generic probe failures", () => {
     const advertised = normalizeAcpRegistryAuthMethods([

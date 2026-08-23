@@ -31,7 +31,6 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
-import * as NodeBuffer from "node:buffer";
 import * as NodeCrypto from "node:crypto";
 
 import { collectUint8StreamText } from "../../stream/collectUint8StreamText.ts";
@@ -41,10 +40,10 @@ export const ACP_REGISTRY_URL =
   "https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json";
 
 const MAX_REGISTRY_BYTES = 1024 * 1024;
-const MAX_ARCHIVE_BYTES = 512 * 1024 * 1024;
+const MAX_ARCHIVE_BYTES = 1024 * 1024 * 1024;
 const MAX_SEARCH_RESULTS = 20;
 const REGISTRY_REQUEST_TIMEOUT = "30 seconds";
-const ARCHIVE_REQUEST_TIMEOUT = "5 minutes";
+const ARCHIVE_REQUEST_TIMEOUT = "20 minutes";
 
 const BoundedAgentId = Schema.String.check(
   Schema.isMaxLength(128),
@@ -421,25 +420,6 @@ function searchRank(agent: AcpRegistryAgent, query: string): number | undefined 
 function runnerFor(distribution: AcpRegistryDistributionKind): "npx" | "uvx" | undefined {
   return distribution === "npx" ? "npx" : distribution === "uvx" ? "uvx" : undefined;
 }
-
-const collectBoundedBytes = Effect.fn("AcpRegistryCatalog.collectBoundedBytes")(function* (
-  response: HttpClientResponse.HttpClientResponse,
-  maxBytes: number,
-  error: () => AcpRegistryError,
-) {
-  const chunks: Array<Uint8Array<ArrayBufferLike>> = [];
-  let bytes = 0;
-  yield* response.stream.pipe(
-    Stream.runForEach((chunk) => {
-      if (bytes + chunk.byteLength > maxBytes) return Effect.fail(error());
-      chunks.push(chunk);
-      bytes += chunk.byteLength;
-      return Effect.void;
-    }),
-    Effect.mapError((cause) => (isAcpRegistryError(cause) ? cause : error())),
-  );
-  return new Uint8Array(NodeBuffer.Buffer.concat(chunks, bytes));
-});
 
 export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(function* (
   input: AcpRegistryCatalogOptions,
@@ -892,15 +872,32 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
             ),
         }),
       );
-      const bytes = yield* collectBoundedBytes(
-        response,
-        MAX_ARCHIVE_BYTES,
-        () =>
-          new AcpRegistryError({
-            reason: "archive_invalid",
-            detail: `ACP Registry agent ${agent.id} archive exceeds ${MAX_ARCHIVE_BYTES} bytes.`,
-          }),
-      ).pipe(
+      const hash = NodeCrypto.createHash("sha256");
+      let downloadedBytes = 0;
+      yield* response.stream.pipe(
+        Stream.tap((chunk) => {
+          if (downloadedBytes + chunk.byteLength > MAX_ARCHIVE_BYTES) {
+            return Effect.fail(
+              new AcpRegistryError({
+                reason: "archive_invalid",
+                detail: `ACP Registry agent ${agent.id} archive exceeds ${MAX_ARCHIVE_BYTES} bytes.`,
+              }),
+            );
+          }
+          downloadedBytes += chunk.byteLength;
+          hash.update(chunk);
+          return Effect.void;
+        }),
+        Stream.run(fileSystem.sink(archivePath)),
+        Effect.mapError((cause) =>
+          isAcpRegistryError(cause)
+            ? cause
+            : new AcpRegistryError({
+                reason: "download_failed",
+                detail: `Could not save ACP Registry agent ${agent.id} ${agent.version}.`,
+                cause,
+              }),
+        ),
         Effect.timeoutOrElse({
           duration: ARCHIVE_REQUEST_TIMEOUT,
           orElse: () =>
@@ -913,7 +910,7 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
         }),
       );
       if (target.sha256 !== undefined) {
-        const actual = NodeCrypto.createHash("sha256").update(bytes).digest("hex");
+        const actual = hash.digest("hex");
         if (actual !== target.sha256.toLowerCase()) {
           return yield* new AcpRegistryError({
             reason: "checksum_mismatch",
@@ -921,7 +918,6 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
           });
         }
       }
-      yield* fileSystem.writeFile(archivePath, bytes);
 
       if (kind === "raw") {
         const targetPath = path.join(extractionRoot, ...commandSegments);

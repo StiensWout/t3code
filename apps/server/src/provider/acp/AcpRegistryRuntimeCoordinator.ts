@@ -1,5 +1,10 @@
-import { type ProviderInstanceId } from "@t3tools/contracts";
+import {
+  type AcpRegistryAcceptUrlAuthInput,
+  type AcpRegistryUrlAuthAction,
+  type ProviderInstanceId,
+} from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -7,11 +12,29 @@ import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 
-import type { AcpRegistryAvailableCommands } from "./AcpRegistryProbe.ts";
+import type {
+  AcpRegistryAvailableCommands,
+  AcpRegistryLiveConfiguration,
+} from "./AcpRegistryProbe.ts";
 
 interface AvailableCommandsUpdate {
   readonly instanceId: ProviderInstanceId;
   readonly commands: AcpRegistryAvailableCommands;
+}
+
+interface LiveConfigurationUpdate {
+  readonly instanceId: ProviderInstanceId;
+  readonly configuration: AcpRegistryLiveConfiguration;
+}
+
+interface UrlAuthActionUpdate {
+  readonly instanceId: ProviderInstanceId;
+  readonly action: AcpRegistryUrlAuthAction | null;
+}
+
+interface PendingUrlAuthAction {
+  readonly action: AcpRegistryUrlAuthAction;
+  readonly consent: Deferred.Deferred<boolean>;
 }
 
 /** Gives a user-started ACP process priority over disposable discovery for the same agent. */
@@ -38,6 +61,32 @@ export class AcpRegistryRuntimeCoordinator extends Context.Service<
       instanceId: ProviderInstanceId,
       onUpdate: (commands: AcpRegistryAvailableCommands) => Effect.Effect<void>,
     ) => Effect.Effect<void>;
+    readonly clearLiveConfiguration: (instanceId: ProviderInstanceId) => Effect.Effect<void>;
+    readonly publishLiveConfiguration: (
+      instanceId: ProviderInstanceId,
+      configuration: AcpRegistryLiveConfiguration,
+    ) => Effect.Effect<void>;
+    readonly getLiveConfiguration: (
+      instanceId: ProviderInstanceId,
+    ) => Effect.Effect<Option.Option<AcpRegistryLiveConfiguration>>;
+    readonly watchLiveConfiguration: (
+      instanceId: ProviderInstanceId,
+      onUpdate: (configuration: AcpRegistryLiveConfiguration) => Effect.Effect<void>,
+    ) => Effect.Effect<void>;
+    readonly requestUrlAuthentication: (
+      instanceId: ProviderInstanceId,
+      action: AcpRegistryUrlAuthAction,
+    ) => Effect.Effect<boolean>;
+    readonly acceptUrlAuthentication: (
+      input: AcpRegistryAcceptUrlAuthInput,
+    ) => Effect.Effect<boolean>;
+    readonly getUrlAuthAction: (
+      instanceId: ProviderInstanceId,
+    ) => Effect.Effect<Option.Option<AcpRegistryUrlAuthAction>>;
+    readonly watchUrlAuthAction: (
+      instanceId: ProviderInstanceId,
+      onUpdate: (action: AcpRegistryUrlAuthAction | null) => Effect.Effect<void>,
+    ) => Effect.Effect<void>;
   }
 >()("t3/provider/acp/AcpRegistryRuntimeCoordinator") {
   static get layer() {
@@ -51,6 +100,14 @@ export const make = Effect.gen(function* () {
   const availableCommandsUpdates = yield* PubSub.unbounded<AvailableCommandsUpdate>();
   const availableCommandsByInstance = yield* Ref.make(
     new Map<ProviderInstanceId, AcpRegistryAvailableCommands>(),
+  );
+  const liveConfigurationUpdates = yield* PubSub.unbounded<LiveConfigurationUpdate>();
+  const liveConfigurationByInstance = yield* Ref.make(
+    new Map<ProviderInstanceId, AcpRegistryLiveConfiguration>(),
+  );
+  const urlAuthActionUpdates = yield* PubSub.unbounded<UrlAuthActionUpdate>();
+  const pendingUrlAuthActions = yield* Ref.make(
+    new Map<ProviderInstanceId, PendingUrlAuthAction>(),
   );
 
   const withForegroundStartup: AcpRegistryRuntimeCoordinator["Service"]["withForegroundStartup"] = (
@@ -142,6 +199,118 @@ export const make = Effect.gen(function* () {
         }),
       );
 
+  const clearLiveConfiguration: AcpRegistryRuntimeCoordinator["Service"]["clearLiveConfiguration"] =
+    (instanceId) =>
+      Ref.update(liveConfigurationByInstance, (current) => {
+        const next = new Map(current);
+        next.delete(instanceId);
+        return next;
+      });
+
+  const publishLiveConfiguration: AcpRegistryRuntimeCoordinator["Service"]["publishLiveConfiguration"] =
+    (instanceId, configuration) =>
+      Ref.update(liveConfigurationByInstance, (current) =>
+        new Map(current).set(instanceId, configuration),
+      ).pipe(
+        Effect.andThen(
+          PubSub.publish(liveConfigurationUpdates, {
+            instanceId,
+            configuration,
+          }),
+        ),
+        Effect.asVoid,
+      );
+
+  const getLiveConfiguration: AcpRegistryRuntimeCoordinator["Service"]["getLiveConfiguration"] =
+    Effect.fn("AcpRegistryRuntimeCoordinator.getLiveConfiguration")(function* (instanceId) {
+      return Option.fromNullishOr((yield* Ref.get(liveConfigurationByInstance)).get(instanceId));
+    });
+
+  const watchLiveConfiguration: AcpRegistryRuntimeCoordinator["Service"]["watchLiveConfiguration"] =
+    (instanceId, onUpdate) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const subscription = yield* PubSub.subscribe(liveConfigurationUpdates);
+          const current = yield* getLiveConfiguration(instanceId);
+          if (Option.isSome(current)) {
+            yield* onUpdate(current.value);
+          }
+          yield* Stream.fromSubscription(subscription).pipe(
+            Stream.filter((update) => update.instanceId === instanceId),
+            Stream.runForEach((update) => onUpdate(update.configuration)),
+          );
+        }),
+      );
+
+  const publishUrlAuthAction = (
+    instanceId: ProviderInstanceId,
+    action: AcpRegistryUrlAuthAction | null,
+  ) => PubSub.publish(urlAuthActionUpdates, { instanceId, action }).pipe(Effect.asVoid);
+
+  const requestUrlAuthentication: AcpRegistryRuntimeCoordinator["Service"]["requestUrlAuthentication"] =
+    Effect.fn("AcpRegistryRuntimeCoordinator.requestUrlAuthentication")(
+      function* (instanceId, action) {
+        const consent = yield* Deferred.make<boolean>();
+        const previous = yield* Ref.modify(pendingUrlAuthActions, (current) => {
+          const next = new Map(current);
+          const existing = next.get(instanceId);
+          next.set(instanceId, { action, consent });
+          return [existing, next] as const;
+        });
+        if (previous !== undefined) {
+          yield* Deferred.succeed(previous.consent, false).pipe(Effect.ignore);
+        }
+        yield* publishUrlAuthAction(instanceId, action);
+        return yield* Deferred.await(consent).pipe(
+          Effect.ensuring(
+            Ref.modify(pendingUrlAuthActions, (current) => {
+              if (current.get(instanceId)?.consent !== consent) {
+                return [false, current] as const;
+              }
+              const next = new Map(current);
+              next.delete(instanceId);
+              return [true, next] as const;
+            }).pipe(
+              Effect.flatMap((removed) =>
+                removed ? publishUrlAuthAction(instanceId, null) : Effect.void,
+              ),
+            ),
+          ),
+        );
+      },
+    );
+
+  const acceptUrlAuthentication: AcpRegistryRuntimeCoordinator["Service"]["acceptUrlAuthentication"] =
+    Effect.fn("AcpRegistryRuntimeCoordinator.acceptUrlAuthentication")(function* (input) {
+      const pending = (yield* Ref.get(pendingUrlAuthActions)).get(input.instanceId);
+      if (pending?.action.elicitationId !== input.elicitationId) return false;
+      return yield* Deferred.succeed(pending.consent, true);
+    });
+
+  const getUrlAuthAction: AcpRegistryRuntimeCoordinator["Service"]["getUrlAuthAction"] = Effect.fn(
+    "AcpRegistryRuntimeCoordinator.getUrlAuthAction",
+  )(function* (instanceId) {
+    return Option.fromNullishOr((yield* Ref.get(pendingUrlAuthActions)).get(instanceId)?.action);
+  });
+
+  const watchUrlAuthAction: AcpRegistryRuntimeCoordinator["Service"]["watchUrlAuthAction"] = (
+    instanceId,
+    onUpdate,
+  ) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const subscription = yield* PubSub.subscribe(urlAuthActionUpdates);
+        const current = yield* getUrlAuthAction(instanceId);
+        if (Option.isSome(current)) {
+          yield* onUpdate(current.value);
+        }
+        yield* Stream.fromSubscription(subscription).pipe(
+          Stream.filter((update) => update.instanceId === instanceId),
+          Stream.runForEach((update) => onUpdate(update.action)),
+        );
+      }),
+    );
+
   return AcpRegistryRuntimeCoordinator.of({
     withForegroundStartup,
     runBackgroundProbe,
@@ -149,6 +318,14 @@ export const make = Effect.gen(function* () {
     publishAvailableCommands,
     getAvailableCommands,
     watchAvailableCommands,
+    clearLiveConfiguration,
+    publishLiveConfiguration,
+    getLiveConfiguration,
+    watchLiveConfiguration,
+    requestUrlAuthentication,
+    acceptUrlAuthentication,
+    getUrlAuthAction,
+    watchUrlAuthAction,
   });
 });
 

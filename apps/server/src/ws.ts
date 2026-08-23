@@ -12,6 +12,7 @@ import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
 import {
   DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL,
+  AcpRegistryOperationError,
   AuthAccessStreamError,
   type AuthAccessStreamEvent,
   type ApplicationStoredEvent,
@@ -22,6 +23,8 @@ import {
   type GitActionProgressEvent,
   type GitManagerServiceError,
   type MessageId,
+  type AcpRegistryImportSessionInput,
+  type AcpRegistryListSessionsInput,
   OrchestrationGetFullThreadDiffError,
   OrchestrationSearchThreadsError,
   OrchestrationGetTurnDiffError,
@@ -54,6 +57,9 @@ import {
   PersistChatAttachmentsError,
   RpcClientId,
   EnvironmentAuthorizationError,
+  type ProjectId,
+  type ProviderDriverKind,
+  type ProviderInstanceId,
   ThreadId,
   type TerminalAttachStreamEvent,
   type TerminalError,
@@ -73,9 +79,12 @@ import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as ThreadManagementService from "./orchestration-v2/ThreadManagementService.ts";
 import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
+import * as IdAllocator from "./orchestration-v2/IdAllocator.ts";
+import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import {
   archivedShellStreamItemFromThreadShell,
+  buildActiveShellSnapshot,
   coalesceShellApplicationEvents,
   coalesceStoredThreadEvents,
   composeShellStreamWithEnrichment,
@@ -84,6 +93,7 @@ import {
   shellStreamItemsFromInitialSnapshot,
   shellStreamItemsFromResumeSnapshot,
 } from "./orchestration-v2/ShellStream.ts";
+import { ORCHESTRATION_V2_PROJECTION_SCHEMA_VERSION } from "./orchestration-v2/ProjectionStore.ts";
 import {
   decideThreadResume,
   threadReplayEncodedBytes,
@@ -102,12 +112,14 @@ import {
   observeRpcStreamEffect as instrumentRpcStreamEffect,
 } from "./observability/RpcInstrumentation.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
+import * as ProviderInstanceRegistry from "./provider/Services/ProviderInstanceRegistry.ts";
 import {
   AcpRegistryCatalog,
   AcpRegistryError,
   isAcpRegistryError,
   toAcpRegistryOperationError,
 } from "./provider/acp/AcpRegistrySupport.ts";
+import { AcpRegistryRuntimeCoordinator } from "./provider/acp/AcpRegistryRuntimeCoordinator.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
@@ -131,6 +143,7 @@ import * as ReviewService from "./review/ReviewService.ts";
 import * as ProjectEnrichmentService from "./project/ProjectEnrichmentService.ts";
 import * as ProjectService from "./project/ProjectService.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
+import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import { requiredScopeForRpcMethod } from "./auth/RpcAuthorization.ts";
@@ -433,6 +446,7 @@ const makeWsRpcLayer = (
           ),
       );
       const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
+      const providerSessionManager = yield* ProviderSessionManager.ProviderSessionManagerV2;
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
       const pullRequests = yield* PullRequestService.PullRequestService;
       const usage = yield* UsageService.UsageService;
@@ -440,6 +454,7 @@ const makeWsRpcLayer = (
       const checkpointDiffQuery = yield* CheckpointDiffQuery.CheckpointDiffQuery;
       const keybindings = yield* Keybindings.Keybindings;
       const externalLauncher = yield* ExternalLauncher.ExternalLauncher;
+      const remoteOpenTargets = yield* RemoteOpenTargets.RemoteOpenTargets;
       const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
       const review = yield* ReviewService.ReviewService;
       const vcsProvisioning = yield* VcsProvisioningService.VcsProvisioningService;
@@ -448,7 +463,9 @@ const makeWsRpcLayer = (
       const previewManager = yield* PreviewManager.PreviewManager;
       const portDiscovery = yield* PortScanner.PortDiscovery;
       const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
+      const providerInstances = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
       const acpRegistryCatalog = yield* AcpRegistryCatalog;
+      const acpRegistryRuntimeCoordinator = yield* AcpRegistryRuntimeCoordinator;
       const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
       const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
       const config = yield* ServerConfig.ServerConfig;
@@ -513,6 +530,172 @@ const makeWsRpcLayer = (
         currentSession.scopes.includes(requiredScope)
           ? stream
           : Stream.fail(authorizationError(requiredScope));
+
+      const acpRegistryProject = Effect.fn("ws.acpRegistry.project")(function* (
+        projectId: ProjectId,
+      ) {
+        const project = yield* projectService.getById(projectId).pipe(
+          Effect.mapError(
+            () =>
+              new AcpRegistryOperationError({
+                reason: "project_not_found",
+                message: `Project ${projectId} is unavailable.`,
+              }),
+          ),
+        );
+        return yield* Option.match(project, {
+          onNone: () =>
+            Effect.fail(
+              new AcpRegistryOperationError({
+                reason: "project_not_found",
+                message: `Project ${projectId} was not found.`,
+              }),
+            ),
+          onSome: Effect.succeed,
+        });
+      });
+
+      const acpSessionManager = Effect.fn("ws.acpRegistry.sessionManager")(function* (
+        instanceId: ProviderInstanceId,
+      ) {
+        const instance = yield* providerInstances.getInstance(instanceId);
+        if (instance === undefined) {
+          return yield* new AcpRegistryOperationError({
+            reason: "instance_not_found",
+            message: `Provider instance ${instanceId} was not found.`,
+          });
+        }
+        if (instance.acpSessionManagement === undefined) {
+          return yield* new AcpRegistryOperationError({
+            reason: "session_list_unsupported",
+            message: `Provider instance ${instanceId} does not expose ACP session management.`,
+          });
+        }
+        return { instance, manager: instance.acpSessionManagement };
+      });
+
+      const importedAcpThreadId = (input: {
+        readonly driver: ProviderDriverKind;
+        readonly instanceId: ProviderInstanceId;
+        readonly sessionId: string;
+      }) =>
+        IdAllocator.deriveThreadFromProviderThread({
+          driver: input.driver,
+          providerInstanceId: input.instanceId,
+          nativeThreadId: input.sessionId,
+        });
+
+      const listAcpRegistrySessions = Effect.fn("ws.acpRegistry.listSessions")(function* (
+        input: AcpRegistryListSessionsInput,
+      ) {
+        const project = yield* acpRegistryProject(input.projectId);
+        const { instance, manager } = yield* acpSessionManager(input.instanceId);
+        const listed = yield* manager.listSessions({
+          cwd: project.workspaceRoot,
+          ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+        });
+        const sessions = yield* Effect.forEach(
+          listed.sessions,
+          (session) => {
+            const threadId = importedAcpThreadId({
+              driver: instance.driverKind,
+              instanceId: input.instanceId,
+              sessionId: session.sessionId,
+            });
+            return threadManagement.getThreadShell(threadId).pipe(
+              Effect.map((thread) => ({
+                ...session,
+                importedThreadId: thread === null ? null : threadId,
+              })),
+              Effect.mapError(
+                () =>
+                  new AcpRegistryOperationError({
+                    reason: "session_import_failed",
+                    message: "Could not inspect existing imported ACP sessions.",
+                  }),
+              ),
+            );
+          },
+          { concurrency: 16 },
+        );
+        return { ...listed, sessions };
+      });
+
+      const importAcpRegistrySession = Effect.fn("ws.acpRegistry.importSession")(function* (
+        input: AcpRegistryImportSessionInput,
+      ) {
+        yield* acpRegistryProject(input.projectId);
+        const { instance } = yield* acpSessionManager(input.instanceId);
+        const providerSnapshot = yield* instance.snapshot.getSnapshot;
+        if (
+          providerSnapshot.nativeSessions?.canLoad !== true &&
+          providerSnapshot.nativeSessions?.canResume !== true
+        ) {
+          return yield* new AcpRegistryOperationError({
+            reason: "session_resume_unsupported",
+            message: "The ACP agent cannot load or resume native sessions.",
+          });
+        }
+        const threadId = importedAcpThreadId({
+          driver: instance.driverKind,
+          instanceId: input.instanceId,
+          sessionId: input.sessionId,
+        });
+        const existing = yield* threadManagement.getThreadShell(threadId).pipe(
+          Effect.mapError(
+            () =>
+              new AcpRegistryOperationError({
+                reason: "session_import_failed",
+                message: "Could not inspect the imported ACP session mapping.",
+              }),
+          ),
+        );
+        if (existing !== null) return { threadId, imported: false } as const;
+
+        const provider = (yield* providerRegistry.getProviders).find(
+          (candidate) => candidate.instanceId === input.instanceId,
+        );
+        const model =
+          provider?.models.find((candidate) => candidate.isDefault)?.slug ??
+          provider?.models[0]?.slug ??
+          "default";
+        yield* startup
+          .enqueueCommand(
+            threadLaunch.launch({
+              commandId: CommandId.make(`command:acp-session-import:${threadId}`),
+              threadId,
+              projectId: input.projectId,
+              title: input.title ?? "Imported ACP session",
+              modelSelection: { instanceId: input.instanceId, model },
+              runtimeMode: "approval-required",
+              interactionMode: "default",
+              workspaceStrategy: { type: "root" },
+              importedNativeThread: {
+                ref: {
+                  driver: instance.driverKind,
+                  nativeId: input.sessionId,
+                  strength: "strong",
+                },
+                metadata: {
+                  ...(input.title === undefined ? {} : { title: input.title }),
+                  ...(input.updatedAt === undefined ? {} : { updatedAt: input.updatedAt }),
+                },
+              },
+              createdBy: "user",
+              creationSource: "web",
+            }),
+          )
+          .pipe(
+            Effect.mapError(
+              () =>
+                new AcpRegistryOperationError({
+                  reason: "session_import_failed",
+                  message: "Could not create a T3 thread for the ACP session.",
+                }),
+            ),
+          );
+        return { threadId, imported: true } as const;
+      });
       const observeRpcEffect = <A, E, R>(
         method: string,
         effect: Effect.Effect<A, E, R>,
@@ -579,6 +762,11 @@ const makeWsRpcLayer = (
           providers,
           availableEditors: yield* resolveAvailableEditorsForConfig(
             externalLauncher.resolveAvailableEditors(),
+          ),
+          // Same discovery-with-timeout treatment as editors: a slow probe
+          // must not stall server.getConfig, so it degrades to no targets.
+          remoteOpenTargets: yield* resolveAvailableEditorsForConfig(
+            remoteOpenTargets.resolveTargets(),
           ),
           observability: {
             logsDirectoryPath: config.logsDir,
@@ -747,18 +935,32 @@ const makeWsRpcLayer = (
           readonly requestCompletionMarker?: boolean;
         }) {
           const enrichmentChanges = yield* projectEnrichment.subscribeChanges;
+          const loadProjectMetadataSnapshot = Effect.fn(
+            "ws.orchestrationV2.loadProjectMetadataSnapshot",
+          )(function* (snapshotSequence: number) {
+            const projects = yield* projectionSnapshotQuery.getProjectShellsWithoutEnrichment();
+            const enriched = yield* enrichProjectShells(projects);
+            return {
+              snapshot: {
+                schemaVersion: ORCHESTRATION_V2_PROJECTION_SCHEMA_VERSION,
+                snapshotSequence,
+                projects: enriched.projects,
+                threads: [],
+                archivedThreads: [],
+              } as OrchestrationV2ShellSnapshot,
+              resolvedRepositoryIdentityRoots: enriched.resolvedRepositoryIdentityRoots,
+            };
+          });
           const loadSnapshot = Effect.fn("ws.orchestrationV2.loadShellSnapshot")(function* () {
             const base = yield* sql.withTransaction(
               Effect.gen(function* () {
-                const projects = yield* projectionSnapshotQuery.getShellSnapshotWithoutEnrichment();
-                const threads = yield* threadManagement.getShellSnapshot();
-                return {
-                  schemaVersion: threads.schemaVersion,
+                const projects = yield* projectionSnapshotQuery.getProjectShellsWithoutEnrichment();
+                const threads = yield* threadManagement.getShellSnapshot({ location: "active" });
+                return buildActiveShellSnapshot({
+                  projects,
+                  threads,
                   snapshotSequence: yield* applicationEvents.latestApplicationSequence,
-                  projects: projects.projects,
-                  threads: threads.threads,
-                  archivedThreads: threads.archivedThreads,
-                } as const;
+                });
               }),
             );
             const enriched = yield* enrichProjectShells(base.projects);
@@ -829,7 +1031,8 @@ const makeWsRpcLayer = (
             Stream.filter((change) => change.repositoryIdentityResolved),
             Stream.groupedWithin(64, Duration.millis(25)),
             Stream.mapEffect((changes) =>
-              loadSnapshot().pipe(
+              applicationEvents.latestApplicationSequence.pipe(
+                Effect.flatMap(loadProjectMetadataSnapshot),
                 Effect.map(({ snapshot }) =>
                   shellStreamItemFromEnrichmentRefresh({
                     snapshot,
@@ -887,11 +1090,10 @@ const makeWsRpcLayer = (
             Stream.concat(completionMarker, liveFrom(afterSequence));
 
           const stream = yield* Effect.gen(function* () {
-            const loaded = yield* loadSnapshot();
-            const initial = initialSnapshotItems(loaded);
             if (input.afterSequence === undefined) {
+              const loaded = yield* loadSnapshot();
               return composeShellStreamWithEnrichment({
-                initial,
+                initial: initialSnapshotItems(loaded),
                 tail: completionThenLive(loaded.snapshot.snapshotSequence),
                 enrichment: enrichmentRefreshes,
               });
@@ -900,13 +1102,15 @@ const makeWsRpcLayer = (
             const highWater = yield* applicationEvents.latestApplicationSequence;
             const replayGap = highWater - input.afterSequence;
             if (replayGap < 0 || replayGap > SHELL_RESUME_MAX_GAP) {
+              const loaded = yield* loadSnapshot();
               return composeShellStreamWithEnrichment({
-                initial,
+                initial: initialSnapshotItems(loaded),
                 tail: completionThenLive(loaded.snapshot.snapshotSequence),
                 enrichment: enrichmentRefreshes,
               });
             }
 
+            const loaded = yield* loadProjectMetadataSnapshot(highWater);
             const replay = toShellStream(
               applicationEvents.readApplicationEvents({
                 afterSequence: input.afterSequence,
@@ -943,12 +1147,12 @@ const makeWsRpcLayer = (
       const getOrchestrationV2ArchivedShellSnapshot = sql
         .withTransaction(
           Effect.gen(function* () {
-            const projects = yield* projectionSnapshotQuery.getShellSnapshotWithoutEnrichment();
-            const threads = yield* threadManagement.getShellSnapshot();
+            const projects = yield* projectionSnapshotQuery.getProjectShellsWithoutEnrichment();
+            const threads = yield* threadManagement.getShellSnapshot({ location: "archive" });
             return {
               schemaVersion: threads.schemaVersion,
               snapshotSequence: yield* applicationEvents.latestApplicationSequence,
-              projects: projects.projects,
+              projects,
               threads: threads.archivedThreads,
             } as const;
           }),
@@ -1346,6 +1550,67 @@ const makeWsRpcLayer = (
               "acp_registry.agent_id": input.agentId,
             },
           ),
+        [WS_METHODS.serverAcceptAcpRegistryUrlAuth]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverAcceptAcpRegistryUrlAuth,
+            acpRegistryRuntimeCoordinator
+              .acceptUrlAuthentication(input)
+              .pipe(Effect.map((accepted) => ({ accepted }))),
+            {
+              "rpc.aggregate": "server",
+              "provider.instance_id": input.instanceId,
+            },
+          ),
+        [WS_METHODS.serverListAcpRegistrySessions]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverListAcpRegistrySessions,
+            listAcpRegistrySessions(input),
+            {
+              "rpc.aggregate": "server",
+              "provider.instance_id": input.instanceId,
+              "project.id": input.projectId,
+            },
+          ),
+        [WS_METHODS.serverImportAcpRegistrySession]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverImportAcpRegistrySession,
+            importAcpRegistrySession(input),
+            {
+              "rpc.aggregate": "server",
+              "provider.instance_id": input.instanceId,
+              "project.id": input.projectId,
+            },
+          ),
+        [WS_METHODS.serverLogoutAcpRegistry]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverLogoutAcpRegistry,
+            Effect.gen(function* () {
+              const { instance, manager } = yield* acpSessionManager(input.instanceId);
+              const snapshot = yield* instance.snapshot.getSnapshot;
+              if (snapshot.auth.canLogout !== true) {
+                return yield* new AcpRegistryOperationError({
+                  reason: "logout_unsupported",
+                  message: "The ACP agent does not advertise logout.",
+                });
+              }
+              yield* providerSessionManager.closeInstance(input.instanceId).pipe(
+                Effect.mapError(
+                  () =>
+                    new AcpRegistryOperationError({
+                      reason: "logout_failed",
+                      message: "Could not stop live sessions before ACP logout.",
+                    }),
+                ),
+              );
+              yield* manager.logout(config.cwd);
+              yield* providerRegistry.refreshInstance(input.instanceId);
+              return { loggedOut: true } as const;
+            }),
+            {
+              "rpc.aggregate": "server",
+              "provider.instance_id": input.instanceId,
+            },
+          ),
         [WS_METHODS.serverRefreshProviders]: (input) =>
           observeRpcEffect(
             WS_METHODS.serverRefreshProviders,
@@ -1561,6 +1826,14 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.pullRequestsActivity, pullRequests.activity(input), {
             "rpc.aggregate": "pull-requests",
           }),
+        [WS_METHODS.pullRequestsThreadComments]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.pullRequestsThreadComments,
+            pullRequests.threadComments(input),
+            {
+              "rpc.aggregate": "pull-requests",
+            },
+          ),
         [WS_METHODS.pullRequestsDiffFileContents]: (input) =>
           observeRpcEffect(
             WS_METHODS.pullRequestsDiffFileContents,

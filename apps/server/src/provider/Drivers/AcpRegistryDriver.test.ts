@@ -24,6 +24,12 @@ const identity = {
   accentColor: undefined,
   continuationKey: "acpRegistry:instance:acpRegistry_test",
 };
+const noSessionManagement = {
+  canList: false,
+  canLoad: false,
+  canResume: false,
+  canLogout: false,
+} as const;
 
 function catalogWithInspection(inspection: AcpRegistryInspection): AcpRegistryCatalog["Service"] {
   return {
@@ -56,6 +62,7 @@ describe("acpRegistrySnapshotReadiness", () => {
           models: [],
           currentModelId: null,
           configOptions: [],
+          sessionManagement: noSessionManagement,
         },
         slashCommands: [{ name: "stale" }],
         skills: [{ name: "stale-skill", path: "stale", enabled: true }],
@@ -135,13 +142,14 @@ describe("acpRegistrySnapshotReadiness", () => {
           models: [{ id: "gpt-discovered", name: "GPT Discovered", description: null }],
           currentModelId: "gpt-discovered",
           configOptions: [],
+          sessionManagement: noSessionManagement,
         },
         slashCommands: [{ name: "plan", description: "Create a plan", input: { hint: "topic" } }],
         skills: [{ name: "workspace-skill", path: "acp://skill/workspace-skill", enabled: true }],
       },
     });
 
-    expect(snapshot.auth).toEqual({ status: "authenticated" });
+    expect(snapshot.auth).toEqual({ status: "authenticated", canLogout: false });
     expect(snapshot.supportsAppTextGeneration).toBe(false);
     expect(
       snapshot.models.map(({ slug, name, isCustom, isDefault }) => ({
@@ -192,6 +200,7 @@ describe("acpRegistrySnapshotReadiness", () => {
           models: [],
           currentModelId: null,
           configOptions: [],
+          sessionManagement: noSessionManagement,
         },
         slashCommands: [],
         skills: [],
@@ -271,6 +280,7 @@ describe("acpRegistrySnapshotReadiness", () => {
                 models: [{ id: "agent-model", name: "Agent Model", description: null }],
                 currentModelId: "agent-model",
                 configOptions: [],
+                sessionManagement: noSessionManagement,
               },
               slashCommands: [{ name: "review" }],
               skills: [],

@@ -45,6 +45,9 @@ import {
   type AcpRegistryAvailableCommands,
   type AcpRegistryConfigurationProbe,
   type AcpRegistryConfigurationProbeResult,
+  type AcpRegistryLiveConfiguration,
+  listAcpRegistrySessions,
+  logoutAcpRegistry,
   probeAcpRegistryConfiguration,
 } from "../acp/AcpRegistryProbe.ts";
 import { AcpRegistryCatalog, type AcpRegistryInspection } from "../acp/AcpRegistrySupport.ts";
@@ -79,17 +82,19 @@ const makeUnsupportedTextGeneration = (): TextGenerationShape => {
   };
 };
 
-function modelsFromProbe(
-  probe: AcpRegistryConfigurationProbeResult | undefined,
+function modelsFromDiscovery(
+  discovery:
+    | Pick<AcpRegistryLiveConfiguration, "models" | "currentModelId" | "configOptions">
+    | undefined,
   customModels: ReadonlyArray<string>,
 ): ReadonlyArray<ServerProviderModel> {
-  const discovered = probe?.probe.models ?? [];
+  const discovered = discovery?.models ?? [];
   // Discovered session config options and modes ride on every model so the
   // composer's generic option controls can drive them per thread.
   const capabilities =
-    probe === undefined || probe.probe.configOptions.length === 0
+    discovery === undefined || discovery.configOptions.length === 0
       ? EMPTY_CAPABILITIES
-      : createModelCapabilities({ optionDescriptors: probe.probe.configOptions });
+      : createModelCapabilities({ optionDescriptors: discovery.configOptions });
   const builtInModels: ReadonlyArray<ServerProviderModel> =
     discovered.length === 0
       ? [
@@ -105,7 +110,7 @@ function modelsFromProbe(
           slug: model.id,
           name: model.name,
           isCustom: false,
-          ...(model.id === probe?.probe.currentModelId ? { isDefault: true } : {}),
+          ...(model.id === discovery?.currentModelId ? { isDefault: true } : {}),
           capabilities,
         }));
   return providerModelsFromSettings(builtInModels, customModels, capabilities);
@@ -198,7 +203,16 @@ function baseSnapshot(
     auth: input.auth,
     checkedAt: input.checkedAt,
     ...(input.message ? { message: input.message } : {}),
-    models: modelsFromProbe(input.probe, input.settings.customModels),
+    models: modelsFromDiscovery(input.probe?.probe, input.settings.customModels),
+    ...(input.probe === undefined
+      ? {}
+      : {
+          nativeSessions: {
+            canList: input.probe.probe.sessionManagement.canList,
+            canLoad: input.probe.probe.sessionManagement.canLoad,
+            canResume: input.probe.probe.sessionManagement.canResume,
+          },
+        }),
     slashCommands: input.probe?.slashCommands ?? [],
     skills: input.probe?.skills ?? [],
   };
@@ -212,6 +226,34 @@ export function applyAcpRegistryAvailableCommands(
     onNone: () => provider,
     onSome: ({ slashCommands, skills }) => ({ ...provider, slashCommands, skills }),
   });
+}
+
+export function applyAcpRegistryLiveConfiguration(
+  provider: ServerProvider,
+  configuration: AcpRegistryLiveConfiguration,
+  customModels: ReadonlyArray<string>,
+): ServerProvider {
+  const { message: _staleProbeMessage, ...snapshot } = provider;
+  return {
+    ...snapshot,
+    status: provider.enabled ? "ready" : provider.status,
+    auth: { ...provider.auth, status: "authenticated" },
+    models: modelsFromDiscovery(configuration, customModels),
+  };
+}
+
+function applyAcpRegistryUrlAuthAction(
+  provider: ServerProvider,
+  action: Option.Option<NonNullable<ServerProvider["auth"]["action"]>>,
+): ServerProvider {
+  const { action: _previousAction, ...auth } = provider.auth;
+  return {
+    ...provider,
+    auth: Option.match(action, {
+      onNone: () => auth,
+      onSome: (nextAction) => ({ ...auth, action: nextAction }),
+    }),
+  };
 }
 
 export const buildInitialAcpRegistrySnapshot = Effect.fn("AcpRegistryDriver.buildInitialSnapshot")(
@@ -267,13 +309,19 @@ export function buildCheckedAcpRegistrySnapshot(
     // (for example after the user completes authentication).
     status: probeFailed ? "warning" : readiness.status,
     auth: input.probe
-      ? { status: "authenticated" }
+      ? {
+          status: "authenticated",
+          canLogout: input.probe.probe.sessionManagement.canLogout,
+        }
       : input.probeError?.reason === "authentication_failed"
         ? {
             status: "unauthenticated",
             ...(advertisedAuthMethod
               ? { type: advertisedAuthMethod.type, label: advertisedAuthMethod.name }
               : {}),
+            ...(input.probeError.authAction === undefined
+              ? {}
+              : { action: input.probeError.authAction }),
           }
         : { status: "unknown" },
     ...(input.probeError
@@ -393,8 +441,11 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
       const runtimeCoordinator = yield* Effect.serviceOption(AcpRegistryRuntimeCoordinator);
       if (Option.isSome(runtimeCoordinator)) {
         yield* runtimeCoordinator.value.clearAvailableCommands(instanceId);
+        yield* runtimeCoordinator.value.clearLiveConfiguration(instanceId);
         yield* Effect.addFinalizer(() =>
-          runtimeCoordinator.value.clearAvailableCommands(instanceId),
+          runtimeCoordinator.value
+            .clearAvailableCommands(instanceId)
+            .pipe(Effect.andThen(runtimeCoordinator.value.clearLiveConfiguration(instanceId))),
         );
       }
       const crypto = yield* Crypto.Crypto;
@@ -437,17 +488,31 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         settings: effectiveConfig,
         environment: processEnvironment,
       };
-      const withAvailableCommands = (provider: ServerProvider) =>
+      const withLiveRuntimeState = (provider: ServerProvider) =>
         Option.isNone(runtimeCoordinator)
           ? Effect.succeed(provider)
-          : runtimeCoordinator.value
-              .getAvailableCommands(instanceId)
-              .pipe(
-                Effect.map((commands) => applyAcpRegistryAvailableCommands(provider, commands)),
-              );
+          : Effect.all({
+              commands: runtimeCoordinator.value.getAvailableCommands(instanceId),
+              configuration: runtimeCoordinator.value.getLiveConfiguration(instanceId),
+              authAction: runtimeCoordinator.value.getUrlAuthAction(instanceId),
+            }).pipe(
+              Effect.map(({ commands, configuration, authAction }) => {
+                const withCommands = applyAcpRegistryAvailableCommands(provider, commands);
+                const withConfiguration = Option.match(configuration, {
+                  onNone: () => withCommands,
+                  onSome: (liveConfiguration) =>
+                    applyAcpRegistryLiveConfiguration(
+                      withCommands,
+                      liveConfiguration,
+                      effectiveConfig.customModels,
+                    ),
+                });
+                return applyAcpRegistryUrlAuthAction(withConfiguration, authAction);
+              }),
+            );
       const checkProvider = checkAcpRegistryProviderReadiness(readinessInput).pipe(
         Effect.provideService(AcpRegistryCatalog, catalog),
-        Effect.flatMap(withAvailableCommands),
+        Effect.flatMap(withLiveRuntimeState),
       );
       const enrichProvider = checkAcpRegistryProviderStatus(
         {
@@ -459,7 +524,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         Effect.provideService(AcpRegistryCatalog, catalog),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Effect.provideService(Crypto.Crypto, crypto),
-        Effect.flatMap(withAvailableCommands),
+        Effect.flatMap(withLiveRuntimeState),
       );
       const enrichmentCache = yield* Ref.make<{
         readonly provider: ServerProvider;
@@ -474,7 +539,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
             cached.expiresAt > now &&
             cached.provider.version === baseSnapshot.version
           ) {
-            return yield* withAvailableCommands({
+            return yield* withLiveRuntimeState({
               ...cached.provider,
               checkedAt: baseSnapshot.checkedAt,
             });
@@ -530,7 +595,45 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
                 ),
               ),
           );
-          return publishEnrichment.pipe(Effect.andThen(publishLiveCommands));
+          const publishLiveConfiguration = runtimeCoordinator.value.watchLiveConfiguration(
+            instanceId,
+            (configuration) =>
+              Ref.set(enrichmentCache, null).pipe(
+                Effect.andThen(getSnapshot),
+                Effect.flatMap((current) =>
+                  publishSnapshot(
+                    applyAcpRegistryLiveConfiguration(
+                      current,
+                      configuration,
+                      effectiveConfig.customModels,
+                    ),
+                  ),
+                ),
+              ),
+          );
+          const publishUrlAuthAction = runtimeCoordinator.value.watchUrlAuthAction(
+            instanceId,
+            (action) =>
+              getSnapshot.pipe(
+                Effect.flatMap((current) =>
+                  publishSnapshot(
+                    applyAcpRegistryUrlAuthAction(current, Option.fromNullishOr(action)),
+                  ),
+                ),
+              ),
+          );
+          return Effect.all(
+            [
+              publishEnrichment,
+              publishLiveCommands,
+              publishLiveConfiguration,
+              publishUrlAuthAction,
+            ],
+            {
+              concurrency: "unbounded",
+              discard: true,
+            },
+          );
         },
       }).pipe(
         Effect.mapError(
@@ -554,6 +657,37 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         snapshot,
         orchestrationAdapter,
         textGeneration: makeUnsupportedTextGeneration(),
+        acpSessionManagement: {
+          listSessions: ({ cwd, cursor }) =>
+            listAcpRegistrySessions({
+              instanceId,
+              settings: effectiveConfig,
+              cwd,
+              environment: processEnvironment,
+              ...(Option.isSome(runtimeCoordinator)
+                ? { runtimeCoordinator: runtimeCoordinator.value }
+                : {}),
+              ...(cursor === undefined ? {} : { cursor }),
+            }).pipe(
+              Effect.provideService(AcpRegistryCatalog, catalog),
+              Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+              Effect.provideService(Crypto.Crypto, crypto),
+            ),
+          logout: (cwd) =>
+            logoutAcpRegistry({
+              instanceId,
+              settings: effectiveConfig,
+              cwd,
+              environment: processEnvironment,
+              ...(Option.isSome(runtimeCoordinator)
+                ? { runtimeCoordinator: runtimeCoordinator.value }
+                : {}),
+            }).pipe(
+              Effect.provideService(AcpRegistryCatalog, catalog),
+              Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+              Effect.provideService(Crypto.Crypto, crypto),
+            ),
+        },
       } satisfies ProviderInstance;
     }),
 };

@@ -8,6 +8,7 @@ import {
 import {
   defaultInstanceIdForDriver,
   type EnvironmentId,
+  type AcpRegistryUrlAuthAction,
   PROVIDER_DISPLAY_NAMES,
   ProviderDriverKind,
   type ProviderInstanceConfig,
@@ -50,6 +51,7 @@ import {
 } from "../../state/environments";
 import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
 import { useEnvironmentSessionState } from "../../state/session";
+import { useProjects } from "../../state/entities";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { getRelativeTimeState } from "../../timestampFormat";
 import {
@@ -382,6 +384,7 @@ export function EnvironmentProviderSettings({
   const persistProviderInstance = usePersistEnvironmentProviderInstanceMutation(environmentId);
   const serverProviders =
     useAtomValue(serverEnvironment.providersValueAtom(environmentId)) ?? EMPTY_SERVER_PROVIDERS;
+  const projects = useProjects().filter((project) => project.environmentId === environmentId);
   const refreshServerProviders = useAtomCommand(serverEnvironment.refreshProviders, {
     reportFailure: false,
   });
@@ -392,6 +395,9 @@ export function EnvironmentProviderSettings({
     serverEnvironment.uninstallAcpRegistryManagedBinary,
     { reportFailure: false },
   );
+  const acceptAcpRegistryUrlAuth = useAtomCommand(serverEnvironment.acceptAcpRegistryUrlAuth, {
+    reportFailure: false,
+  });
   const [isRefreshingProviders, setIsRefreshingProviders] = useState(false);
   const [isAddInstanceDialogOpen, setIsAddInstanceDialogOpen] = useState(false);
   const [updatingProviderDrivers, setUpdatingProviderDrivers] = useState<
@@ -400,6 +406,34 @@ export function EnvironmentProviderSettings({
   const [openInstanceDetails, setOpenInstanceDetails] = useState<Record<string, boolean>>({});
   const refreshingRef = useRef(false);
   const updatingDriversRef = useRef<Set<ProviderDriverKind>>(new Set());
+
+  const acceptUrlAuthentication = useCallback(
+    (instanceId: ProviderInstanceId, action: AcpRegistryUrlAuthAction) => {
+      void acceptAcpRegistryUrlAuth({
+        environmentId,
+        input: { instanceId, elicitationId: action.elicitationId },
+      }).then((result) => {
+        if (result._tag === "Success" && !result.value.accepted) {
+          toastManager.add({
+            type: "warning",
+            title: "Authentication request expired",
+            description: "Refresh the provider and start the authentication flow again.",
+          });
+          return;
+        }
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add({
+            type: "error",
+            title: "Could not continue authentication",
+            description:
+              error instanceof Error ? error.message : "The authentication request expired.",
+          });
+        }
+      });
+    },
+    [acceptAcpRegistryUrlAuth, environmentId],
+  );
 
   const providerUpdateCandidates = useMemo(
     () => collectProviderUpdateCandidates(serverProviders),
@@ -735,9 +769,8 @@ export function EnvironmentProviderSettings({
                   <TooltipTrigger
                     render={
                       <Button
-                        size="icon-xs"
-                        variant="ghost"
-                        className="size-5 rounded-sm p-0 text-muted-foreground hover:text-foreground"
+                        size="icon-micro"
+                        variant="ghost-muted"
                         onClick={() => setIsAddInstanceDialogOpen(true)}
                         aria-label="Add provider instance"
                       >
@@ -751,9 +784,8 @@ export function EnvironmentProviderSettings({
                   <TooltipTrigger
                     render={
                       <Button
-                        size="icon-xs"
-                        variant="ghost"
-                        className="size-5 rounded-sm p-0 text-muted-foreground hover:text-foreground"
+                        size="icon-micro"
+                        variant="ghost-muted"
                         disabled={isRefreshingProviders}
                         onClick={() => void refreshProviders()}
                         aria-label="Refresh provider status"
@@ -947,6 +979,12 @@ export function EnvironmentProviderSettings({
                       }
                     : undefined
                 }
+                onAcceptUrlAuth={
+                  readOnly ? undefined : (action) => acceptUrlAuthentication(row.instanceId, action)
+                }
+                environmentId={environmentId}
+                acpProjects={projects}
+                readOnly={readOnly}
                 isUpdating={showInlineUpdateButton ? isDriverUpdateRunning : undefined}
               />
             );

@@ -6,7 +6,11 @@ import * as Ref from "effect/Ref";
 import type * as EffectAcpSchema from "effect-acp/schema";
 import { deriveToolActivityPresentation } from "@t3tools/shared/toolActivity";
 import { T3_MCP_TOOL_NAMES } from "@t3tools/shared/t3McpToolPresentation";
-import type { ToolLifecycleItemType } from "@t3tools/contracts";
+import type {
+  OrchestrationV2ProviderThreadNativeMetadata,
+  ThreadTokenUsageSnapshot,
+  ToolLifecycleItemType,
+} from "@t3tools/contracts";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -89,9 +93,90 @@ export type AcpParsedSessionEvent =
   | {
       readonly _tag: "ContentDelta";
       readonly itemId?: string;
+      readonly messageId?: string;
       readonly text: string;
       readonly rawPayload: unknown;
+    }
+  | {
+      readonly _tag: "UsageUpdated";
+      readonly usage: ThreadTokenUsageSnapshot;
+      readonly rawPayload: unknown;
+    }
+  | {
+      readonly _tag: "SessionInfoUpdated";
+      readonly metadata: OrchestrationV2ProviderThreadNativeMetadata;
+      readonly rawPayload: unknown;
     };
+
+const boundedContentMetadata = (value: string | null | undefined, maximumLength: number): string =>
+  value?.trim().slice(0, maximumLength) ?? "";
+
+const boundedContentUri = (value: string | null | undefined): string => {
+  const uri = boundedContentMetadata(value, 4_096);
+  return uri.toLowerCase().startsWith("data:") ? "" : uri;
+};
+
+/** Convert every ACP output block into bounded, displayable text without retaining base64 data. */
+export function acpContentBlockDisplayText(
+  content: EffectAcpSchema.ContentBlock,
+): string | undefined {
+  switch (content.type) {
+    case "text":
+      return content.text;
+    case "resource_link": {
+      const label =
+        boundedContentMetadata(content.title, 512) ||
+        boundedContentMetadata(content.name, 512) ||
+        "resource";
+      const description = boundedContentMetadata(content.description, 2_048);
+      const uri = boundedContentUri(content.uri);
+      return `${description ? `${label}: ${description}` : label}${uri ? `\n${uri}` : ""}`;
+    }
+    case "resource": {
+      if ("text" in content.resource) {
+        return content.resource.text;
+      }
+      const mimeType = boundedContentMetadata(content.resource.mimeType, 256);
+      const uri = boundedContentUri(content.resource.uri);
+      return `[ACP binary resource${mimeType ? ` (${mimeType})` : ""}${uri ? `: ${uri}` : ""}]`;
+    }
+    case "image": {
+      const mimeType = boundedContentMetadata(content.mimeType, 256) || "unknown type";
+      const uri = boundedContentUri(content.uri);
+      return `[ACP image (${mimeType})${uri ? `: ${uri}` : ""}]`;
+    }
+    case "audio": {
+      const mimeType = boundedContentMetadata(content.mimeType, 256) || "unknown type";
+      return `[ACP audio (${mimeType})]`;
+    }
+  }
+}
+
+function sanitizeAcpToolCallContent(
+  content: ReadonlyArray<EffectAcpSchema.ToolCallContent>,
+): ReadonlyArray<EffectAcpSchema.ToolCallContent> {
+  return content.map((entry) => {
+    switch (entry.type) {
+      case "content":
+        return {
+          type: "content",
+          content: {
+            type: "text",
+            text: acpContentBlockDisplayText(entry.content) ?? "",
+          },
+        };
+      case "diff":
+        return {
+          type: "diff",
+          path: entry.path,
+          ...(entry.oldText !== undefined ? { oldText: entry.oldText } : {}),
+          newText: entry.newText,
+        };
+      case "terminal":
+        return { type: "terminal", terminalId: entry.terminalId };
+    }
+  });
+}
 
 type AcpSessionSetupResponse =
   | EffectAcpSchema.ForkSessionResponse
@@ -257,11 +342,7 @@ function extractTextContentFromToolCallContent(
     if (entry.type !== "content") {
       continue;
     }
-    const nestedContent = entry.content;
-    if (nestedContent.type !== "text") {
-      continue;
-    }
-    const text = nestedContent.text.trim();
+    const text = acpContentBlockDisplayText(entry.content)?.trim() ?? "";
     if (text.length > 0) {
       chunks.push(text);
     }
@@ -341,8 +422,8 @@ function makeToolCallState(
   if (input.rawOutput !== undefined) {
     data.rawOutput = input.rawOutput;
   }
-  if (input.content !== undefined) {
-    data.content = input.content;
+  if (input.content != null) {
+    data.content = sanitizeAcpToolCallContent(input.content);
   }
   if (input.locations !== undefined) {
     data.locations = input.locations;
@@ -619,7 +700,7 @@ export function sessionUpdateCountsAsLoadReplayActivity(
   switch (update.sessionUpdate) {
     case "agent_message_chunk":
     case "agent_thought_chunk":
-      return update.content.type === "text" && update.content.text.length > 0;
+      return (acpContentBlockDisplayText(update.content)?.length ?? 0) > 0;
     case "tool_call":
     case "tool_call_update":
     case "plan":
@@ -740,13 +821,41 @@ export function parseSessionUpdateEvent(params: EffectAcpSchema.SessionNotificat
       break;
     }
     case "agent_message_chunk": {
-      if (upd.content.type === "text" && upd.content.text.length > 0) {
+      const text = acpContentBlockDisplayText(upd.content);
+      if (text !== undefined && text.length > 0) {
         events.push({
           _tag: "ContentDelta",
-          text: upd.content.text,
+          ...(upd.messageId ? { messageId: upd.messageId } : {}),
+          text,
           rawPayload: params,
         });
       }
+      break;
+    }
+    case "usage_update": {
+      const currency = upd.cost?.currency.trim().slice(0, 32);
+      events.push({
+        _tag: "UsageUpdated",
+        usage: {
+          usedTokens: upd.used,
+          ...(upd.size > 0 ? { maxTokens: upd.size } : {}),
+          ...(upd.cost && currency ? { cost: { amount: upd.cost.amount, currency } } : {}),
+        },
+        rawPayload: params,
+      });
+      break;
+    }
+    case "session_info_update": {
+      const title = upd.title?.trim().slice(0, 1_024);
+      const updatedAt = upd.updatedAt?.trim().slice(0, 128);
+      events.push({
+        _tag: "SessionInfoUpdated",
+        metadata: {
+          ...(upd.title === null ? { title: null } : title ? { title } : {}),
+          ...(upd.updatedAt === null ? { updatedAt: null } : updatedAt ? { updatedAt } : {}),
+        },
+        rawPayload: params,
+      });
       break;
     }
     default:

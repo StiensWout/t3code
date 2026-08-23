@@ -1158,6 +1158,11 @@ export class AcpSessionRuntime extends Context.Service<
      * Concurrent calls share the same in-flight startup and a failed startup may be retried.
      */
     readonly start: () => Effect.Effect<AcpSessionRuntimeStartResult, EffectAcpErrors.AcpError>;
+    /** Initializes the ACP connection without creating or activating a session. */
+    readonly initialize: Effect.Effect<
+      EffectAcpSchema.InitializeResponse,
+      EffectAcpErrors.AcpError
+    >;
     /** Stream of parsed ACP session events emitted after startup. */
     readonly getEvents: () => Stream.Stream<AcpSessionRuntimeEvent, never>;
     /** Waits until the current event consumer has processed every queued event. */
@@ -1184,6 +1189,8 @@ export class AcpSessionRuntime extends Context.Service<
     readonly closeSession: (
       sessionId?: string,
     ) => Effect.Effect<EffectAcpSchema.CloseSessionResponse, EffectAcpErrors.AcpError>;
+    /** Logs out the current ACP identity when the agent advertises support. */
+    readonly logout: Effect.Effect<EffectAcpSchema.LogoutResponse, EffectAcpErrors.AcpError>;
     /**
      * Sends a prompt turn to the active session.
      * @see https://agentclientprotocol.com/protocol/schema#session/prompt
@@ -1263,6 +1270,17 @@ type AcpStartState =
     }
   | { readonly _tag: "Started"; readonly result: AcpStartedState };
 
+type AcpInitializeState =
+  | { readonly _tag: "NotStarted" }
+  | {
+      readonly _tag: "Starting";
+      readonly deferred: Deferred.Deferred<
+        EffectAcpSchema.InitializeResponse,
+        EffectAcpErrors.AcpError
+      >;
+    }
+  | { readonly _tag: "Started"; readonly result: EffectAcpSchema.InitializeResponse };
+
 interface AcpAssistantSegmentState {
   readonly nextSegmentIndex: number;
   readonly activeItemId?: string;
@@ -1298,6 +1316,7 @@ export const make = (
     );
     const assistantSegmentRef = yield* Ref.make<AcpAssistantSegmentState>({ nextSegmentIndex: 0 });
     const configOptionsRef = yield* Ref.make(sessionConfigOptionsFromSetup(undefined));
+    const initializeStateRef = yield* Ref.make<AcpInitializeState>({ _tag: "NotStarted" });
     const startStateRef = yield* Ref.make<AcpStartState>({ _tag: "NotStarted" });
     const promptSerializationSemaphore = yield* Semaphore.make(1);
     const sessionLoadSemaphore = yield* Semaphore.make(1);
@@ -1613,6 +1632,9 @@ export const make = (
               }),
             );
           }
+          if (notification.update.sessionUpdate === "config_option_update") {
+            yield* Ref.set(configOptionsRef, notification.update.configOptions);
+          }
           return;
         }
         if (sessionUpdateIsReplay(notification)) {
@@ -1626,6 +1648,9 @@ export const make = (
           notification.sessionId !== startState.result.sessionId
         ) {
           return;
+        }
+        if (notification.update.sessionUpdate === "config_option_update") {
+          yield* Ref.set(configOptionsRef, notification.update.configOptions);
         }
         yield* handleSessionUpdate({
           queue: eventQueue,
@@ -1888,7 +1913,7 @@ export const make = (
         ),
       );
 
-    const startOnce = Effect.gen(function* () {
+    const initializeOnce = Effect.gen(function* () {
       const initializePayload = {
         protocolVersion: 1,
         clientCapabilities: initializeClientCapabilities,
@@ -1901,6 +1926,43 @@ export const make = (
         acp.agent.initialize(initializePayload),
       );
       yield* options.onInitialized?.(initializeResult) ?? Effect.void;
+      return initializeResult;
+    });
+
+    const initialize = Effect.gen(function* () {
+      const deferred = yield* Deferred.make<
+        EffectAcpSchema.InitializeResponse,
+        EffectAcpErrors.AcpError
+      >();
+      const effect = yield* Ref.modify(initializeStateRef, (state) => {
+        switch (state._tag) {
+          case "Started":
+            return [Effect.succeed(state.result), state] as const;
+          case "Starting":
+            return [Deferred.await(state.deferred), state] as const;
+          case "NotStarted":
+            return [
+              initializeOnce.pipe(
+                Effect.tap((result) =>
+                  Ref.set(initializeStateRef, { _tag: "Started", result }).pipe(
+                    Effect.andThen(Deferred.succeed(deferred, result)),
+                  ),
+                ),
+                Effect.onError((cause) =>
+                  Deferred.failCause(deferred, cause).pipe(
+                    Effect.andThen(Ref.set(initializeStateRef, { _tag: "NotStarted" })),
+                  ),
+                ),
+              ),
+              { _tag: "Starting", deferred } satisfies AcpInitializeState,
+            ] as const;
+        }
+      });
+      return yield* effect;
+    });
+
+    const startOnce = Effect.gen(function* () {
+      const initializeResult = yield* initialize;
 
       const authenticateAfterRequired = (
         authRequiredError: EffectAcpErrors.AcpError,
@@ -1950,14 +2012,31 @@ export const make = (
           | EffectAcpSchema.NewSessionResponse
           | EffectAcpSchema.ResumeSessionResponse;
         if (options.resumeSessionId) {
-          const loadPayload = {
-            sessionId: options.resumeSessionId,
-            cwd: options.cwd,
-            mcpServers: options.mcpServers ?? [],
-          } satisfies EffectAcpSchema.LoadSessionRequest;
-
           sessionId = options.resumeSessionId;
-          sessionSetupResult = yield* runLoadSessionWithReplayIdle(loadPayload, initializeResult);
+          if (initializeResult.agentCapabilities?.loadSession === true) {
+            const loadPayload = {
+              sessionId,
+              cwd: options.cwd,
+              mcpServers: options.mcpServers ?? [],
+            } satisfies EffectAcpSchema.LoadSessionRequest;
+            sessionSetupResult = yield* runLoadSessionWithReplayIdle(loadPayload, initializeResult);
+          } else if (initializeResult.agentCapabilities?.sessionCapabilities?.resume != null) {
+            const resumePayload = {
+              sessionId,
+              cwd: options.cwd,
+              mcpServers: options.mcpServers ?? [],
+            } satisfies EffectAcpSchema.ResumeSessionRequest;
+            sessionSetupResult = yield* runLoggedRequest(
+              "session/resume",
+              resumePayload,
+              acp.agent.resumeSession(resumePayload),
+            );
+          } else {
+            return yield* new EffectAcpErrors.AcpRequestError({
+              code: -32601,
+              errorMessage: "ACP agent does not advertise session/load or session/resume support",
+            });
+          }
         } else {
           const createPayload = {
             cwd: options.cwd,
@@ -2051,6 +2130,7 @@ export const make = (
       handleUnknownExtNotification: acp.handleUnknownExtNotification,
       handleExtRequest: acp.handleExtRequest,
       handleExtNotification: acp.handleExtNotification,
+      initialize,
       start: () => start,
       getEvents: () => Stream.fromQueue(eventQueue),
       drainEvents: Effect.gen(function* () {
@@ -2112,7 +2192,15 @@ export const make = (
           cwd: options.cwd,
           ...(cursor === undefined ? {} : { cursor }),
         } satisfies EffectAcpSchema.ListSessionsRequest;
-        return start.pipe(
+        return initialize.pipe(
+          Effect.filterOrFail(
+            (initialized) => initialized.agentCapabilities?.sessionCapabilities?.list != null,
+            () =>
+              new EffectAcpErrors.AcpRequestError({
+                code: -32601,
+                errorMessage: "ACP agent does not advertise session/list support",
+              }),
+          ),
           Effect.andThen(
             runLoggedRequest(
               "session/list",
@@ -2135,6 +2223,17 @@ export const make = (
             );
           }),
         ),
+      logout: initialize.pipe(
+        Effect.filterOrFail(
+          (initialized) => initialized.agentCapabilities?.auth?.logout != null,
+          () =>
+            new EffectAcpErrors.AcpRequestError({
+              code: -32601,
+              errorMessage: "ACP agent does not advertise logout support",
+            }),
+        ),
+        Effect.andThen(runLoggedRequest("logout", {}, acp.agent.logout({}))),
+      ),
       prompt: (payload) =>
         promptSerializationSemaphore.withPermit(
           Effect.gen(function* () {

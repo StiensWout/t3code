@@ -43,12 +43,20 @@ and managed-cache readiness. The driver's managed provider snapshot then uses a 
 successful session is the authentication-readiness proof and projects advertised model choices into
 the snapshot without persisting discovered IDs into settings. The disposable probe captures a
 bounded initial `available_commands_update`. Normal ACP sessions continue publishing later command
-updates through a server-lifetime coordinator, so asynchronous advertisements are not limited by the
-probe window. Regular command names populate `slashCommands`; names beginning with `$` populate
-`skills` and therefore T3 Code's `$` composer menu. ACP has no separate generic installed-skills
-inventory, so this exposes only skills the agent advertises as user-invocable commands. The same
-coordinator interrupts or suppresses a disposable probe when foreground startup begins for that
-registry agent. Authentication credentials remain owned by the agent and user.
+and configuration updates through a server-lifetime coordinator, so asynchronous commands, model
+changes, and options are not limited by the probe window. Regular command names populate
+`slashCommands`; names beginning with `$` populate `skills` and therefore T3 Code's `$` composer
+menu. ACP has no separate generic installed-skills inventory, so this exposes only skills the agent
+advertises as user-invocable commands. The same coordinator interrupts or suppresses a disposable
+probe when foreground startup begins for that registry agent. It also holds URL elicitations until
+the client explicitly accepts the exact elicitation ID; stale consent cannot release a replacement
+request. Authentication credentials remain owned by the agent and user.
+
+Session management starts a scoped runtime with `initialize` only. `session/list` therefore does
+not create a throwaway native conversation. Capability-gated list, load/resume import, and logout
+RPCs are routed to the owning environment. Imported session IDs deterministically derive both the
+app thread and provider-thread IDs using the provider instance ID, making repeated and concurrent
+imports idempotent without a mapping table. Logout first closes every live runtime for the instance.
 
 Deleting the final configured instance for an agent removes only T3-owned binary files. Package
 runner caches remain owned by `npx` and `uvx`. Registry icons are restricted to the official HTTPS
@@ -69,6 +77,23 @@ such as Grok's xAI background-task and user-input methods. Standard permission r
 explicitly tagged MCP approval elicitations both resolve through the thread's runtime and sandbox
 policy. Runtime generation checks quarantine late requests and responses after Stop or restart
 without allowing them to mutate the replacement turn.
+
+ACP `messageId` values form assistant and history message boundaries when present; bounded synthetic
+identities remain the fallback for older agents. `usage_update` and `session_info_update` project
+onto the provider thread, keeping provider metadata separate from the user-owned app-thread title.
+Non-text assistant blocks are converted to displayable links, text resources, or explicit unsupported
+binary placeholders without retaining base64 payloads.
+
+Runtime policy enforcement for ACP is `client-boundary`: T3 mediates permission requests and its own
+filesystem and terminal handlers, but it cannot sandbox provider-owned execution. Checkpoint rollback
+restores the workspace and replaces the ACP native session because the protocol has no conversation
+truncation method. Registry providers intentionally reject app-owned text-generation operations.
+Portable native subagent lineage is also not claimed; provider extensions may add it.
+
+The opt-in live orchestrator fixture accepts any Registry agent. Setting
+`T3_ACP_ANTIGRAVITY_LIVE=1` pins it to Google's official `antigravity-acp` entry and verifies two
+turns through the production V2 driver, adapter, session manager, and orchestrator. The host must
+already have usable Antigravity credentials.
 
 ## Registry and routing
 

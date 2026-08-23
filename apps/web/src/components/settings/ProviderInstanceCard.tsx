@@ -5,6 +5,7 @@ import {
   ChevronDownIcon,
   CopyIcon,
   DownloadIcon,
+  ExternalLinkIcon,
   LoaderIcon,
   PlusIcon,
   Trash2Icon,
@@ -18,6 +19,9 @@ import {
   type ProviderInstanceConfig,
   type ProviderInstanceEnvironmentVariable,
   type ProviderInstanceId,
+  type AcpRegistryUrlAuthAction,
+  type EnvironmentId,
+  type ProjectId,
   type ProviderDriverKind,
   type ServerProvider,
   type ServerProviderModel,
@@ -43,6 +47,7 @@ import { ProviderModelsSection } from "./ProviderModelsSection";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import { ProviderAccentColorPicker } from "./ProviderAccentColorPicker";
 import { RedactedSensitiveText } from "./RedactedSensitiveText";
+import { AcpSessionManagementSection } from "./AcpSessionManagementSection";
 import {
   getProviderVersionAdvisoryPresentation,
   PROVIDER_STATUS_STYLES,
@@ -451,7 +456,19 @@ interface ProviderInstanceCardProps {
   readonly onModelOrderChange: (next: ReadonlyArray<string>) => void;
   readonly onRunUpdate?: (() => void) | undefined;
   readonly isUpdating?: boolean | undefined;
+  readonly onAcceptUrlAuth?: ((action: AcpRegistryUrlAuthAction) => void) | undefined;
+  readonly environmentId?: EnvironmentId | undefined;
+  readonly acpProjects?:
+    | ReadonlyArray<{
+        readonly id: ProjectId;
+        readonly title: string;
+        readonly workspaceRoot: string;
+      }>
+    | undefined;
+  readonly readOnly?: boolean | undefined;
 }
+
+const EMPTY_ACP_PROJECTS: NonNullable<ProviderInstanceCardProps["acpProjects"]> = [];
 
 /**
  * A single configured provider-instance row in the Providers settings
@@ -495,6 +512,10 @@ export function ProviderInstanceCard({
   onModelOrderChange,
   onRunUpdate,
   isUpdating = false,
+  onAcceptUrlAuth,
+  environmentId,
+  acpProjects = EMPTY_ACP_PROJECTS,
+  readOnly = false,
 }: ProviderInstanceCardProps) {
   const enabled = instance.enabled ?? true;
   // The server-reported status wins when present; otherwise fall back to
@@ -513,6 +534,7 @@ export function ProviderInstanceCard({
   const summary = rawSummary;
   const versionLabel = getProviderVersionLabel(liveProvider?.version);
   const versionAdvisory = getProviderVersionAdvisoryPresentation(liveProvider?.versionAdvisory);
+  const urlAuthAction = liveProvider?.auth.action;
   const updateCommand = versionAdvisory?.updateCommand ?? null;
   const FallbackIconComponent = driverOption?.icon;
   const displayName =
@@ -687,9 +709,9 @@ export function ProviderInstanceCard({
             <TooltipTrigger
               render={
                 <Button
-                  size="icon-xs"
+                  size="icon-micro"
                   variant="ghost"
-                  className="size-5 rounded-sm p-0 text-muted-foreground hover:text-destructive"
+                  className="text-muted-foreground hover:text-destructive"
                   onClick={onDelete}
                   aria-label={`Delete provider instance ${instanceId}`}
                 >
@@ -832,12 +854,35 @@ export function ProviderInstanceCard({
               {titleTailNode}
             </div>
             {authRowNode}
+            {urlAuthAction && onAcceptUrlAuth ? (
+              <div className="grid max-w-xl gap-1.5 pt-1 text-xs">
+                <p className="text-foreground/80">{urlAuthAction.message}</p>
+                <code className="break-all text-[11px] text-muted-foreground">
+                  {urlAuthAction.url}
+                </code>
+                <Button
+                  render={
+                    <a
+                      href={urlAuthAction.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={() => onAcceptUrlAuth(urlAuthAction)}
+                    />
+                  }
+                  size="xs"
+                  variant="outline"
+                  className="w-fit"
+                >
+                  <ExternalLinkIcon />
+                  Continue authentication
+                </Button>
+              </div>
+            ) : null}
           </div>
           <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto sm:justify-end">
             <Button
-              size="sm"
-              variant="ghost"
-              className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
+              size="compact"
+              variant="ghost-muted"
               onClick={() => onExpandedChange(!isExpanded)}
               aria-label={`Toggle ${displayName} details`}
             >
@@ -939,6 +984,16 @@ export function ProviderInstanceCard({
                 </p>
               </div>
             )}
+
+            {environmentId !== undefined && liveProvider?.driver === "acpRegistry" ? (
+              <AcpSessionManagementSection
+                environmentId={environmentId}
+                instanceId={instanceId}
+                provider={liveProvider}
+                projects={acpProjects}
+                readOnly={readOnly}
+              />
+            ) : null}
           </div>
         </CollapsibleContent>
       </Collapsible>

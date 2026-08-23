@@ -66,6 +66,7 @@ import {
 import type { ProviderContinuationRequest } from "../ProviderContinuationRequests.ts";
 import {
   AcpProviderCapabilitiesV2,
+  acpScopedNativeId,
   acpCarryoverTerminalShouldClearContinuation,
   acpPostSettleContinuationOfferEvidence,
   acpIsAppOwnedWakeTurn,
@@ -552,6 +553,7 @@ describe("AcpAdapterV2", () => {
         providerInstanceId: instanceId,
         endpoint: "http://127.0.0.1:43123/mcp",
         authorizationHeader: "Bearer instruction-transition-token",
+        browserToolsAvailable: false,
       });
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => McpProviderSession.clearMcpProviderSession(threadId)),
@@ -703,6 +705,66 @@ describe("AcpAdapterV2", () => {
         yield* runtime.resumeThread({ providerThread, modelSelection, runtimePolicy });
         assert.notInclude(yield* pollProtocolMethods(protocolEvents), "session/load");
       }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
+  it.live("resumes a persisted ACP session when session/load is unavailable", () =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const idAllocator = yield* IdAllocatorV2;
+      const path = yield* Path.Path;
+      const serverConfig = yield* ServerConfig;
+      const mockAgentPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+      const protocolEvents = yield* Queue.unbounded<EffectAcpProtocol.AcpProtocolLogEvent>();
+      const instanceId = ProviderInstanceId.make("acp-test-resume-only");
+      const adapter = makeAcpAdapterV2({
+        crypto: yield* Crypto.Crypto,
+        instanceId,
+        flavor: {
+          driver: ACP_TEST_DRIVER,
+          capabilities: AcpProviderCapabilitiesV2,
+          makeRuntime: makeMockRuntime({
+            childProcessSpawner,
+            mockAgentPath,
+            protocolEvents,
+            environment: () => ({
+              T3_ACP_DISABLE_LOAD_SESSION: "1",
+              T3_ACP_SESSION_LIFECYCLE: "1",
+            }),
+          }),
+        },
+        fileSystem,
+        idAllocator,
+        serverConfig,
+      });
+      const threadId = ThreadId.make("thread-acp-resume-only");
+      const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+      });
+      const modelSelection = { instanceId, model: "default" } as const;
+      const runtime = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("provider-session-acp-resume-only"),
+        modelSelection,
+        runtimePolicy,
+        initialNativeThreadId: "persisted-resume-only-session",
+      });
+      const providerThread = yield* runtime.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy,
+      });
+
+      assert.equal(providerThread.nativeThreadRef?.nativeId, "persisted-resume-only-session");
+      const startupMethods = yield* pollProtocolMethods(protocolEvents);
+      assert.include(startupMethods, "session/resume");
+      assert.notInclude(startupMethods, "session/load");
+      assert.notInclude(startupMethods, "session/new");
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 
   it.live("preserves new-session fallback when an eager ACP session load is stale", () =>
@@ -1170,6 +1232,7 @@ describe("AcpAdapterV2", () => {
         providerInstanceId: instanceId,
         endpoint: "http://127.0.0.1:43123/mcp",
         authorizationHeader: "Bearer target-thread-token",
+        browserToolsAvailable: true,
       });
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => McpProviderSession.clearMcpProviderSession(targetThreadId)),
@@ -1436,6 +1499,7 @@ describe("AcpAdapterV2", () => {
         providerInstanceId: instanceId,
         endpoint: "http://127.0.0.1:43124/mcp",
         authorizationHeader: "Bearer rollback-target-token",
+        browserToolsAvailable: false,
       });
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => McpProviderSession.clearMcpProviderSession(rollbackThreadId)),
@@ -1512,7 +1576,7 @@ describe("AcpAdapterV2", () => {
       }
       const firstProviderTurnId = idAllocator.derive.providerTurn({
         driver: ACP_TEST_DRIVER,
-        nativeTurnId: `${firstSessionId}:turn:1`,
+        nativeTurnId: acpScopedNativeId(instanceId, `${firstSessionId}:turn:1`),
       });
       while (true) {
         const event = yield* Queue.take(events);
@@ -1562,7 +1626,10 @@ describe("AcpAdapterV2", () => {
       );
       const secondProviderTurnId = idAllocator.derive.providerTurn({
         driver: ACP_TEST_DRIVER,
-        nativeTurnId: `${rolledBack.providerThread.nativeThreadRef?.nativeId}:turn:2`,
+        nativeTurnId: acpScopedNativeId(
+          instanceId,
+          `${rolledBack.providerThread.nativeThreadRef?.nativeId}:turn:2`,
+        ),
       });
       let secondStatus: string | null = null;
       while (secondStatus === null) {
@@ -1833,7 +1900,10 @@ describe("AcpAdapterV2", () => {
       );
       const providerTurnId = idAllocator.derive.providerTurn({
         driver: ACP_TEST_DRIVER,
-        nativeTurnId: `${providerThread.nativeThreadRef?.nativeId}:turn:1`,
+        nativeTurnId: acpScopedNativeId(
+          instanceId,
+          `${providerThread.nativeThreadRef?.nativeId}:turn:1`,
+        ),
       });
       while (true) {
         const event = yield* Queue.take(events);
@@ -2172,7 +2242,7 @@ describe("AcpAdapterV2", () => {
       );
       const secondProviderTurnId = idAllocator.derive.providerTurn({
         driver: ACP_TEST_DRIVER,
-        nativeTurnId: "mock-session-1:turn:2",
+        nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:2"),
       });
       yield* runtime.interruptTurn({
         providerThread,
@@ -3099,7 +3169,7 @@ describe("AcpAdapterV2", () => {
               providerThread,
               providerTurnId: idAllocator.derive.providerTurn({
                 driver: ACP_TEST_DRIVER,
-                nativeTurnId: "mock-session-1:turn:1",
+                nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
               }),
               requestRuntimeRestart: true,
             })
@@ -3192,7 +3262,7 @@ describe("AcpAdapterV2", () => {
           providerThread,
           providerTurnId: idAllocator.derive.providerTurn({
             driver: ACP_TEST_DRIVER,
-            nativeTurnId: "mock-session-1:turn:1",
+            nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
           }),
           requestRuntimeRestart: true,
         })
@@ -3288,7 +3358,7 @@ describe("AcpAdapterV2", () => {
         providerThread,
         providerTurnId: idAllocator.derive.providerTurn({
           driver: ACP_TEST_DRIVER,
-          nativeTurnId: "mock-session-1:turn:1",
+          nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
         }),
         requestRuntimeRestart: true,
       });
@@ -3473,7 +3543,7 @@ describe("AcpAdapterV2", () => {
       );
       const providerTurnId = idAllocator.derive.providerTurn({
         driver: ACP_TEST_DRIVER,
-        nativeTurnId: "mock-session-1:turn:1",
+        nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
       });
       const interruptFiber = yield* runtime
         .interruptTurn({ providerThread, providerTurnId })
@@ -3578,7 +3648,7 @@ describe("AcpAdapterV2", () => {
       );
       const providerTurnId = idAllocator.derive.providerTurn({
         driver: ACP_TEST_DRIVER,
-        nativeTurnId: "mock-session-1:turn:1",
+        nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
       });
       yield* runtime.interruptTurn({
         providerThread,
@@ -3690,7 +3760,7 @@ describe("AcpAdapterV2", () => {
 
       const providerTurnId = idAllocator.derive.providerTurn({
         driver: ACP_TEST_DRIVER,
-        nativeTurnId: "mock-session-1:turn:1",
+        nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
       });
       const interruptFiber = yield* runtime
         .interruptTurn({ providerThread, providerTurnId })
@@ -3809,7 +3879,7 @@ describe("AcpAdapterV2", () => {
 
         const firstProviderTurnId = idAllocator.derive.providerTurn({
           driver: ACP_TEST_DRIVER,
-          nativeTurnId: "mock-session-1:turn:1",
+          nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
         });
         const interruptFiber = yield* runtime
           .interruptTurn({ providerThread, providerTurnId: firstProviderTurnId })
@@ -3845,7 +3915,7 @@ describe("AcpAdapterV2", () => {
         );
         const secondProviderTurnId = idAllocator.derive.providerTurn({
           driver: ACP_TEST_DRIVER,
-          nativeTurnId: "mock-session-1:turn:2",
+          nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:2"),
         });
         let carriedItemStatus: string | null = null;
         let secondTerminalStatus: string | null = null;
@@ -3972,7 +4042,7 @@ describe("AcpAdapterV2", () => {
 
         const firstProviderTurnId = idAllocator.derive.providerTurn({
           driver: ACP_TEST_DRIVER,
-          nativeTurnId: "mock-session-1:turn:1",
+          nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
         });
         const interruptFiber = yield* runtime
           .interruptTurn({ providerThread, providerTurnId: firstProviderTurnId })
@@ -4008,7 +4078,7 @@ describe("AcpAdapterV2", () => {
         );
         const secondProviderTurnId = idAllocator.derive.providerTurn({
           driver: ACP_TEST_DRIVER,
-          nativeTurnId: "mock-session-1:turn:2",
+          nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:2"),
         });
         let secondTerminalStatus: string | null = null;
         while (secondTerminalStatus === null) {
@@ -4154,7 +4224,7 @@ describe("AcpAdapterV2", () => {
 
       const firstProviderTurnId = idAllocator.derive.providerTurn({
         driver: ACP_TEST_DRIVER,
-        nativeTurnId: "mock-session-1:turn:1",
+        nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
       });
       const interruptFiber = yield* runtime
         .interruptTurn({ providerThread, providerTurnId: firstProviderTurnId })
@@ -4470,7 +4540,7 @@ describe("AcpAdapterV2", () => {
 
           const providerTurnId = idAllocator.derive.providerTurn({
             driver: ACP_TEST_DRIVER,
-            nativeTurnId: "mock-session-1:turn:1",
+            nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
           });
           let completedSubagentUpdates = 0;
           let rootTerminalStatus: string | null = null;
@@ -4623,7 +4693,7 @@ describe("AcpAdapterV2", () => {
 
         const firstProviderTurnId = idAllocator.derive.providerTurn({
           driver: ACP_TEST_DRIVER,
-          nativeTurnId: "mock-session-1:turn:1",
+          nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
         });
         const interruptFiber = yield* runtime
           .interruptTurn({ providerThread, providerTurnId: firstProviderTurnId })
@@ -4706,7 +4776,7 @@ describe("AcpAdapterV2", () => {
         );
         const attachProviderTurnId = idAllocator.derive.providerTurn({
           driver: ACP_TEST_DRIVER,
-          nativeTurnId: "mock-session-1:turn:2",
+          nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:2"),
         });
         let attachTerminal: string | null = null;
         let completedAfterAttach = 0;
@@ -4852,7 +4922,7 @@ describe("AcpAdapterV2", () => {
 
       const firstProviderTurnId = idAllocator.derive.providerTurn({
         driver: ACP_TEST_DRIVER,
-        nativeTurnId: "mock-session-1:turn:1",
+        nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
       });
       let firstTerminalStatus: string | null = null;
       while (firstTerminalStatus === null) {
@@ -5100,7 +5170,7 @@ describe("AcpAdapterV2", () => {
 
         const firstProviderTurnId = idAllocator.derive.providerTurn({
           driver: ACP_TEST_DRIVER,
-          nativeTurnId: "mock-session-1:turn:1",
+          nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
         });
         const interruptFiber = yield* runtime
           .interruptTurn({ providerThread, providerTurnId: firstProviderTurnId })
@@ -5192,7 +5262,7 @@ describe("AcpAdapterV2", () => {
 
         const userProviderTurnId = idAllocator.derive.providerTurn({
           driver: ACP_TEST_DRIVER,
-          nativeTurnId: "mock-session-1:turn:2",
+          nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:2"),
         });
         let userTurnTerminal: string | null = null;
         let completedSubagentTurnItems = 0;
@@ -5246,7 +5316,7 @@ describe("AcpAdapterV2", () => {
         yield* TestClock.adjust("3 seconds");
         const continuationProviderTurnId = idAllocator.derive.providerTurn({
           driver: ACP_TEST_DRIVER,
-          nativeTurnId: "mock-session-1:turn:3",
+          nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:3"),
         });
         let continuationTerminal: string | null = null;
         let bufferedTextSeenInContinuation = false;
@@ -5415,7 +5485,7 @@ describe("AcpAdapterV2", () => {
 
         const firstProviderTurnId = idAllocator.derive.providerTurn({
           driver: ACP_TEST_DRIVER,
-          nativeTurnId: "mock-session-1:turn:1",
+          nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
         });
         const interruptFiber = yield* runtime
           .interruptTurn({ providerThread, providerTurnId: firstProviderTurnId })
@@ -5497,7 +5567,7 @@ describe("AcpAdapterV2", () => {
         );
         const attachProviderTurnId = idAllocator.derive.providerTurn({
           driver: ACP_TEST_DRIVER,
-          nativeTurnId: "mock-session-1:turn:2",
+          nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:2"),
         });
         let attachTerminal: string | null = null;
         while (attachTerminal === null) {
@@ -5648,7 +5718,7 @@ describe("AcpAdapterV2", () => {
 
       const firstProviderTurnId = idAllocator.derive.providerTurn({
         driver: ACP_TEST_DRIVER,
-        nativeTurnId: "mock-session-1:turn:1",
+        nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
       });
       const interruptFiber = yield* runtime
         .interruptTurn({ providerThread, providerTurnId: firstProviderTurnId })
@@ -5732,7 +5802,7 @@ describe("AcpAdapterV2", () => {
       );
       const attachProviderTurnId = idAllocator.derive.providerTurn({
         driver: ACP_TEST_DRIVER,
-        nativeTurnId: "mock-session-1:turn:2",
+        nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:2"),
       });
       let attachTerminal: string | null = null;
       while (attachTerminal === null) {
@@ -5877,7 +5947,7 @@ describe("AcpAdapterV2", () => {
 
         const firstProviderTurnId = idAllocator.derive.providerTurn({
           driver: ACP_TEST_DRIVER,
-          nativeTurnId: "mock-session-1:turn:1",
+          nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
         });
         const interruptFiber = yield* runtime
           .interruptTurn({ providerThread, providerTurnId: firstProviderTurnId })
@@ -5989,7 +6059,7 @@ describe("AcpAdapterV2", () => {
 
         const continuationProviderTurnId = idAllocator.derive.providerTurn({
           driver: ACP_TEST_DRIVER,
-          nativeTurnId: "mock-session-1:turn:2",
+          nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:2"),
         });
         let continuationTerminal: string | null = null;
         let completedSubagentTurnItems = 0;
@@ -6157,7 +6227,7 @@ describe("AcpAdapterV2", () => {
 
         const firstProviderTurnId = idAllocator.derive.providerTurn({
           driver: ACP_TEST_DRIVER,
-          nativeTurnId: "mock-session-1:turn:1",
+          nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
         });
         const interruptFiber = yield* runtime
           .interruptTurn({ providerThread, providerTurnId: firstProviderTurnId })
@@ -6253,7 +6323,7 @@ describe("AcpAdapterV2", () => {
 
         const continuationProviderTurnId = idAllocator.derive.providerTurn({
           driver: ACP_TEST_DRIVER,
-          nativeTurnId: "mock-session-1:turn:2",
+          nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:2"),
         });
         let continuationTerminal: string | null = null;
         let completedSubagentTurnItems = 0;
@@ -6405,7 +6475,7 @@ describe("AcpAdapterV2", () => {
 
         const firstProviderTurnId = idAllocator.derive.providerTurn({
           driver: ACP_TEST_DRIVER,
-          nativeTurnId: "mock-session-1:turn:1",
+          nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
         });
         const interruptFiber = yield* runtime
           .interruptTurn({ providerThread, providerTurnId: firstProviderTurnId })
@@ -6447,7 +6517,7 @@ describe("AcpAdapterV2", () => {
         // mock-session-2 and drop the carryover on the session mismatch.
         const secondProviderTurnId = idAllocator.derive.providerTurn({
           driver: ACP_TEST_DRIVER,
-          nativeTurnId: "mock-session-1:turn:2",
+          nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:2"),
         });
         let carriedItemStatus: string | null = null;
         let secondTerminalStatus: string | null = null;
@@ -6548,7 +6618,7 @@ describe("AcpAdapterV2", () => {
       );
       const providerTurnId = idAllocator.derive.providerTurn({
         driver: ACP_TEST_DRIVER,
-        nativeTurnId: "mock-session-1:turn:1",
+        nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
       });
       const interruptExit = yield* runtime
         .interruptTurn({ providerThread, providerTurnId })
@@ -6672,7 +6742,7 @@ describe("AcpAdapterV2", () => {
 
         const firstProviderTurnId = idAllocator.derive.providerTurn({
           driver: ACP_TEST_DRIVER,
-          nativeTurnId: "mock-session-1:turn:1",
+          nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
         });
         // No requestRuntimeRestart: a steering interrupt, not a user Stop.
         yield* runtime.interruptTurn({ providerThread, providerTurnId: firstProviderTurnId });
@@ -6717,7 +6787,7 @@ describe("AcpAdapterV2", () => {
         );
         const secondProviderTurnId = idAllocator.derive.providerTurn({
           driver: ACP_TEST_DRIVER,
-          nativeTurnId: "mock-session-1:turn:2",
+          nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:2"),
         });
         let secondTerminalStatus: string | null = null;
         while (secondTerminalStatus === null) {
@@ -6871,7 +6941,7 @@ describe("AcpAdapterV2", () => {
 
       const providerTurnId = idAllocator.derive.providerTurn({
         driver: ACP_TEST_DRIVER,
-        nativeTurnId: "mock-session-1:turn:1",
+        nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
       });
       yield* runtime.interruptTurn({ providerThread, providerTurnId, requestRuntimeRestart: true });
       let terminalStatus: string | null = null;
@@ -6984,7 +7054,7 @@ describe("AcpAdapterV2", () => {
       );
       const providerTurnId = idAllocator.derive.providerTurn({
         driver: ACP_TEST_DRIVER,
-        nativeTurnId: "mock-session-1:turn:1",
+        nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
       });
       yield* runtime.interruptTurn({ providerThread, providerTurnId, requestRuntimeRestart: true });
       let terminalStatus: string | null = null;
@@ -7182,7 +7252,7 @@ describe("AcpAdapterV2", () => {
 
         const firstProviderTurnId = idAllocator.derive.providerTurn({
           driver: ACP_TEST_DRIVER,
-          nativeTurnId: "mock-session-1:turn:1",
+          nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
         });
         // Soft steer first: clears the turn, leaves the process alive.
         yield* runtime.interruptTurn({ providerThread, providerTurnId: firstProviderTurnId });
@@ -7309,7 +7379,7 @@ describe("AcpAdapterV2", () => {
         subagentPhase = "complete";
         const secondProviderTurnId = idAllocator.derive.providerTurn({
           driver: ACP_TEST_DRIVER,
-          nativeTurnId: "mock-session-1:turn:2",
+          nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:2"),
         });
         let carriedItemStatus: string | null = null;
         let secondTerminalStatus: string | null = null;
@@ -7453,7 +7523,7 @@ describe("AcpAdapterV2", () => {
 
       const providerTurnId = idAllocator.derive.providerTurn({
         driver: ACP_TEST_DRIVER,
-        nativeTurnId: "mock-session-1:turn:1",
+        nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
       });
       yield* runtime.interruptTurn({ providerThread, providerTurnId });
       let rootTerminal: string | null = null;
@@ -7655,7 +7725,7 @@ describe("AcpAdapterV2", () => {
 
         const firstProviderTurnId = idAllocator.derive.providerTurn({
           driver: ACP_TEST_DRIVER,
-          nativeTurnId: "mock-session-1:turn:1",
+          nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
         });
         // Fork interrupt while the adapter-side return is still gated. Release so
         // promptWireSettled completes (Effect.tap) before/while the completion
@@ -7785,7 +7855,7 @@ describe("AcpAdapterV2", () => {
         );
         const providerTurnId = idAllocator.derive.providerTurn({
           driver: ACP_TEST_DRIVER,
-          nativeTurnId: "mock-session-1:turn:1",
+          nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
         });
 
         let terminalStatus: string | null = null;
@@ -7900,7 +7970,7 @@ describe("AcpAdapterV2", () => {
         );
         const providerTurnId = idAllocator.derive.providerTurn({
           driver: ACP_TEST_DRIVER,
-          nativeTurnId: "mock-session-1:turn:1",
+          nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
         });
         let terminalStatus: string | null = null;
         while (terminalStatus === null) {
@@ -8045,7 +8115,7 @@ describe("AcpAdapterV2", () => {
       );
       const firstProviderTurnId = idAllocator.derive.providerTurn({
         driver: ACP_TEST_DRIVER,
-        nativeTurnId: "mock-session-1:turn:1",
+        nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
       });
       let firstTerminalStatus: string | null = null;
       while (firstTerminalStatus === null) {
@@ -8095,7 +8165,7 @@ describe("AcpAdapterV2", () => {
 
       const userProviderTurnId = idAllocator.derive.providerTurn({
         driver: ACP_TEST_DRIVER,
-        nativeTurnId: "mock-session-1:turn:2",
+        nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:2"),
       });
       let userTerminalStatus: string | null = null;
       while (userTerminalStatus === null) {
@@ -8126,7 +8196,7 @@ describe("AcpAdapterV2", () => {
       yield* TestClock.adjust("3 seconds");
       const continuationProviderTurnId = idAllocator.derive.providerTurn({
         driver: ACP_TEST_DRIVER,
-        nativeTurnId: "mock-session-1:turn:3",
+        nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:3"),
       });
       let continuationTerminalStatus: string | null = null;
       let bufferedTextSeen = false;
@@ -8231,7 +8301,7 @@ describe("AcpAdapterV2", () => {
         );
         const providerTurnId = idAllocator.derive.providerTurn({
           driver: ACP_TEST_DRIVER,
-          nativeTurnId: "mock-session-1:turn:1",
+          nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
         });
 
         // Wait (real time) until the post-settle end notice and TaskOutput
@@ -8418,7 +8488,7 @@ describe("AcpAdapterV2", () => {
         );
         const providerTurnId = idAllocator.derive.providerTurn({
           driver: ACP_TEST_DRIVER,
-          nativeTurnId: "mock-session-1:turn:1",
+          nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
         });
 
         let reportSeen = false;
@@ -8732,7 +8802,7 @@ describe("AcpAdapterV2", () => {
 
         const providerTurnId = idAllocator.derive.providerTurn({
           driver: ACP_TEST_DRIVER,
-          nativeTurnId: "mock-session-1:turn:1",
+          nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
         });
         let terminalStatus: string | null = null;
         while (terminalStatus === null) {
@@ -8919,7 +8989,7 @@ describe("AcpAdapterV2", () => {
         yield* Deferred.succeed(promptGate, { stopReason: "end_turn" });
         const providerTurnId = idAllocator.derive.providerTurn({
           driver: ACP_TEST_DRIVER,
-          nativeTurnId: "mock-session-1:turn:1",
+          nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
         });
         let terminalStatus: string | null = null;
         while (terminalStatus === null) {
@@ -9143,7 +9213,7 @@ describe("AcpAdapterV2", () => {
 
         const providerTurnId = idAllocator.derive.providerTurn({
           driver: ACP_TEST_DRIVER,
-          nativeTurnId: "mock-session-1:turn:1",
+          nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
         });
         yield* runtime.interruptTurn({ providerThread, providerTurnId });
 
@@ -9392,7 +9462,7 @@ describe("AcpAdapterV2", () => {
         yield* Deferred.succeed(promptGates[0]!, { stopReason: "end_turn" });
         const firstProviderTurnId = idAllocator.derive.providerTurn({
           driver: ACP_TEST_DRIVER,
-          nativeTurnId: "mock-session-1:turn:1",
+          nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
         });
         let firstTerminal: string | null = null;
         while (firstTerminal === null) {
@@ -9531,7 +9601,7 @@ describe("AcpAdapterV2", () => {
         yield* Deferred.succeed(promptGates[1]!, { stopReason: "end_turn" });
         const secondProviderTurnId = idAllocator.derive.providerTurn({
           driver: ACP_TEST_DRIVER,
-          nativeTurnId: "mock-session-1:turn:2",
+          nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:2"),
         });
         let secondTerminal: string | null = null;
         while (secondTerminal === null) {
@@ -9680,7 +9750,7 @@ describe("AcpAdapterV2", () => {
       yield* Deferred.succeed(promptGates[0]!, { stopReason: "end_turn" });
       const firstProviderTurnId = idAllocator.derive.providerTurn({
         driver: ACP_TEST_DRIVER,
-        nativeTurnId: "mock-session-1:turn:1",
+        nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
       });
       let firstTerminal: string | null = null;
       while (firstTerminal === null) {
@@ -9769,7 +9839,7 @@ describe("AcpAdapterV2", () => {
       yield* Deferred.succeed(promptGates[1]!, { stopReason: "end_turn" });
       const secondProviderTurnId = idAllocator.derive.providerTurn({
         driver: ACP_TEST_DRIVER,
-        nativeTurnId: "mock-session-1:turn:2",
+        nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:2"),
       });
       let secondTerminal: string | null = null;
       while (secondTerminal === null) {
@@ -9862,7 +9932,7 @@ describe("AcpAdapterV2", () => {
       yield* Deferred.succeed(promptGates[2]!, { stopReason: "end_turn" });
       const thirdProviderTurnId = idAllocator.derive.providerTurn({
         driver: ACP_TEST_DRIVER,
-        nativeTurnId: "mock-session-1:turn:3",
+        nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:3"),
       });
       let thirdTerminal: string | null = null;
       while (thirdTerminal === null) {
@@ -10024,7 +10094,7 @@ describe("AcpAdapterV2", () => {
         yield* Deferred.succeed(promptGate, { stopReason: "end_turn" });
         const providerTurnId = idAllocator.derive.providerTurn({
           driver: ACP_TEST_DRIVER,
-          nativeTurnId: "mock-session-1:turn:1",
+          nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
         });
         let terminalStatus: string | null = null;
         while (terminalStatus === null) {
@@ -10207,7 +10277,7 @@ describe("AcpAdapterV2", () => {
       yield* Deferred.succeed(promptGate, { stopReason: "end_turn" });
       const rootProviderTurnId = idAllocator.derive.providerTurn({
         driver: ACP_TEST_DRIVER,
-        nativeTurnId: "mock-session-1:turn:1",
+        nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
       });
       let rootTerminal: string | null = null;
       while (rootTerminal === null) {
@@ -10246,7 +10316,7 @@ describe("AcpAdapterV2", () => {
 
       const continuationProviderTurnId = idAllocator.derive.providerTurn({
         driver: ACP_TEST_DRIVER,
-        nativeTurnId: "mock-session-1:turn:2",
+        nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:2"),
       });
       // Still open: no terminal yet (quiet window).
       let polled = yield* Queue.poll(events);
@@ -10445,7 +10515,7 @@ describe("AcpAdapterV2", () => {
       yield* Deferred.succeed(promptGate, { stopReason: "end_turn" });
       const rootProviderTurnId = idAllocator.derive.providerTurn({
         driver: ACP_TEST_DRIVER,
-        nativeTurnId: "mock-session-1:turn:1",
+        nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
       });
       let rootTerminal: string | null = null;
       while (rootTerminal === null) {
@@ -10482,7 +10552,7 @@ describe("AcpAdapterV2", () => {
 
       const continuationProviderTurnId = idAllocator.derive.providerTurn({
         driver: ACP_TEST_DRIVER,
-        nativeTurnId: "mock-session-1:turn:2",
+        nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:2"),
       });
       // No frames: quiet window must still finalize (no wedge).
       yield* TestClock.adjust("3 seconds");
@@ -10557,7 +10627,10 @@ describe("AcpAdapterV2", () => {
       );
       const providerTurnId = idAllocator.derive.providerTurn({
         driver: ACP_TEST_DRIVER,
-        nativeTurnId: `${providerThread.nativeThreadRef?.nativeId}:turn:1`,
+        nativeTurnId: acpScopedNativeId(
+          instanceId,
+          `${providerThread.nativeThreadRef?.nativeId}:turn:1`,
+        ),
       });
       yield* runtime.interruptTurn({
         providerThread,
@@ -10846,7 +10919,7 @@ describe("AcpAdapterV2", () => {
 
       const providerTurnId = idAllocator.derive.providerTurn({
         driver: ACP_TEST_DRIVER,
-        nativeTurnId: "mock-session-1:turn:1",
+        nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
       });
       const interruptFiber = yield* runtime
         .interruptTurn({ providerThread, providerTurnId, requestRuntimeRestart: true })
@@ -11017,7 +11090,7 @@ describe("AcpAdapterV2", () => {
       );
       const providerTurnId = idAllocator.derive.providerTurn({
         driver: ACP_TEST_DRIVER,
-        nativeTurnId: "mock-session-1:turn:1",
+        nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
       });
       const interruptExit = yield* runtime
         .interruptTurn({ providerThread, providerTurnId, requestRuntimeRestart: true })
@@ -11113,7 +11186,7 @@ describe("AcpAdapterV2", () => {
       yield* Effect.yieldNow;
       const providerTurnId = idAllocator.derive.providerTurn({
         driver: ACP_TEST_DRIVER,
-        nativeTurnId: "mock-session-1:turn:1",
+        nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
       });
       yield* pollProtocolMethods(protocolEvents);
       const interruptFiber = yield* runtime
@@ -11297,7 +11370,7 @@ describe("AcpAdapterV2", () => {
       );
       const providerTurnId = idAllocator.derive.providerTurn({
         driver: ACP_TEST_DRIVER,
-        nativeTurnId: "mock-session-1:turn:1",
+        nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
       });
       const permissionRequest = {
         sessionId: "mock-session-1",
@@ -11504,7 +11577,7 @@ describe("AcpAdapterV2", () => {
         providerThread,
         providerTurnId: idAllocator.derive.providerTurn({
           driver: ACP_TEST_DRIVER,
-          nativeTurnId: "mock-session-1:turn:2",
+          nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:2"),
         }),
         requestRuntimeRestart: true,
       });
@@ -11710,7 +11783,7 @@ describe("AcpAdapterV2", () => {
       yield* pollProtocolMethods(protocolEvents);
       const providerTurnId = idAllocator.derive.providerTurn({
         driver: ACP_TEST_DRIVER,
-        nativeTurnId: "mock-session-1:turn:1",
+        nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
       });
       const interruptFiber = yield* runtime
         .interruptTurn({ providerThread, providerTurnId, requestRuntimeRestart: true })
@@ -11888,7 +11961,7 @@ describe("AcpAdapterV2", () => {
 
       const firstProviderTurnId = idAllocator.derive.providerTurn({
         driver: ACP_TEST_DRIVER,
-        nativeTurnId: "mock-session-1:turn:1",
+        nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
       });
       yield* Queue.takeAll(events);
       const interruptFiber = yield* runtime
@@ -12013,7 +12086,7 @@ describe("AcpAdapterV2", () => {
 
       const secondProviderTurnId = idAllocator.derive.providerTurn({
         driver: ACP_TEST_DRIVER,
-        nativeTurnId: "mock-session-1:turn:2",
+        nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:2"),
       });
       let secondTerminal: string | null = null;
       let stoppedRunTextOnFollowUp = false;
@@ -12138,7 +12211,7 @@ describe("AcpAdapterV2", () => {
 
         const firstProviderTurnId = idAllocator.derive.providerTurn({
           driver: ACP_TEST_DRIVER,
-          nativeTurnId: "mock-session-1:turn:1",
+          nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
         });
         const interruptFiber = yield* runtime
           .interruptTurn({
@@ -12178,7 +12251,7 @@ describe("AcpAdapterV2", () => {
         );
         const secondProviderTurnId = idAllocator.derive.providerTurn({
           driver: ACP_TEST_DRIVER,
-          nativeTurnId: "mock-session-1:turn:2",
+          nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:2"),
         });
         let carriedCompleted = false;
         let secondTerminalStatus: string | null = null;
@@ -12309,7 +12382,7 @@ describe("AcpAdapterV2", () => {
 
       const firstProviderTurnId = idAllocator.derive.providerTurn({
         driver: ACP_TEST_DRIVER,
-        nativeTurnId: "mock-session-1:turn:1",
+        nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
       });
       // restart_active path: interrupt without requestRuntimeRestart.
       const interruptFiber = yield* runtime
@@ -12359,7 +12432,7 @@ describe("AcpAdapterV2", () => {
       assert.isTrue(promptSeen, "replacement prompt must start after reload");
       const secondProviderTurnId = idAllocator.derive.providerTurn({
         driver: ACP_TEST_DRIVER,
-        nativeTurnId: "mock-session-1:turn:2",
+        nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:2"),
       });
       let staleEventSeen = false;
       let secondTerminal: string | null = null;

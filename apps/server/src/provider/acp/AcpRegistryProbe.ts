@@ -1,17 +1,21 @@
 import {
   AcpRegistryOperationError,
+  AcpRegistryListSessionsResult,
   AcpRegistryProbeResult,
   AcpRegistrySettings,
   type AcpRegistryProbeAuthMethod,
   type AcpRegistryProbeModel,
+  type AcpRegistryUrlAuthAction,
   type ProviderInstanceId,
   type ServerProviderSkill,
   type ServerProviderSlashCommand,
 } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import { ChildProcessSpawner } from "effect/unstable/process";
@@ -21,6 +25,7 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 import { AcpRegistryCatalog, toAcpRegistryOperationError } from "./AcpRegistrySupport.ts";
 import { parseSessionModeState } from "./AcpRuntimeModel.ts";
 import { acpProviderOptionDescriptors } from "./AcpSessionConfig.ts";
+import { AcpRegistryRuntimeCoordinator } from "./AcpRegistryRuntimeCoordinator.ts";
 import * as AcpSessionRuntime from "./AcpSessionRuntime.ts";
 
 const MAX_AUTH_METHODS = 32;
@@ -42,10 +47,16 @@ const boundedText = (value: string, maximumLength: number): string =>
 const boundedOpaqueValue = (value: string, maximumLength: number): string | undefined =>
   value.length > 0 && value === value.trim() && value.length <= maximumLength ? value : undefined;
 
+export function normalizeAcpRegistryWebUrl(value: string): string | undefined {
+  if (value.length > 2_048 || !URL.canParse(value)) return undefined;
+  const url = new URL(value);
+  return url.protocol === "https:" || url.protocol === "http:" ? url.href : undefined;
+}
+
 function modelConfigOptions(
-  setup: AcpSessionRuntime.AcpSessionRuntimeStartResult["sessionSetupResult"],
+  configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption> | null | undefined,
 ): ReadonlyArray<EffectAcpSchema.SessionConfigSelectOption> {
-  return (setup.configOptions ?? []).flatMap((option) => {
+  return (configOptions ?? []).flatMap((option) => {
     if (option.category !== "model" || option.type !== "select") return [];
     return option.options.flatMap((candidate) =>
       "value" in candidate ? [candidate] : candidate.options,
@@ -54,11 +65,11 @@ function modelConfigOptions(
 }
 
 function normalizeModels(
-  setup: AcpSessionRuntime.AcpSessionRuntimeStartResult["sessionSetupResult"],
+  configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption> | null | undefined,
 ): ReadonlyArray<AcpRegistryProbeModel> {
   // Model discovery is the model config option's base models; ACP has no
   // other portable model inventory.
-  const candidates = modelConfigOptions(setup).map((model) => ({
+  const candidates = modelConfigOptions(configOptions).map((model) => ({
     id: model.value,
     name: model.name,
     description: model.description ?? null,
@@ -128,6 +139,10 @@ export function normalizeAcpRegistryAuthMethods(
       spawn !== undefined && "type" in method && method.type === "terminal"
         ? terminalAuthCommand(method, spawn)
         : undefined;
+    const link =
+      type === "env_var" && "link" in method && method.link
+        ? normalizeAcpRegistryWebUrl(method.link)
+        : undefined;
     normalized.push({
       id,
       name: boundedText(method.name, MAX_NAME_LENGTH) || id,
@@ -138,6 +153,7 @@ export function normalizeAcpRegistryAuthMethods(
       type,
       ...(command === undefined ? {} : { command }),
       ...(envVarNames.length > 0 ? { envVarNames } : {}),
+      ...(link === undefined ? {} : { link }),
     });
     if (normalized.length === MAX_AUTH_METHODS) break;
   }
@@ -147,6 +163,34 @@ export function normalizeAcpRegistryAuthMethods(
 export interface AcpRegistryAvailableCommands {
   readonly slashCommands: ReadonlyArray<ServerProviderSlashCommand>;
   readonly skills: ReadonlyArray<ServerProviderSkill>;
+}
+
+export interface AcpRegistryLiveConfiguration {
+  readonly models: ReadonlyArray<AcpRegistryProbeModel>;
+  readonly currentModelId: string | null;
+  readonly configOptions: AcpRegistryProbeResult["configOptions"];
+}
+
+/** Normalizes volatile session configuration using the same bounds as discovery probes. */
+export function normalizeAcpRegistryLiveConfiguration(
+  configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption>,
+  modeState?: Parameters<typeof acpProviderOptionDescriptors>[0]["modeState"],
+): AcpRegistryLiveConfiguration {
+  const modelOption = configOptions.find(
+    (option) => option.category === "model" && option.type === "select",
+  );
+  const boundedCurrentModelId =
+    modelOption?.type === "select"
+      ? (boundedOpaqueValue(modelOption.currentValue, MAX_ID_LENGTH) ?? null)
+      : null;
+  const models = normalizeModels(configOptions);
+  return {
+    models,
+    currentModelId: models.some((model) => model.id === boundedCurrentModelId)
+      ? boundedCurrentModelId
+      : null,
+    configOptions: acpProviderOptionDescriptors({ configOptions, modeState }),
+  };
 }
 
 export const emptyAcpRegistryAvailableCommands = (): AcpRegistryAvailableCommands => ({
@@ -200,38 +244,29 @@ export function acpRegistryProbeResult(
   icon: string | null = null,
   spawn?: AcpRegistryAuthSpawnContext,
 ): AcpRegistryProbeResult {
-  const modelOption = (started.sessionSetupResult.configOptions ?? []).find(
-    (option) => option.category === "model" && option.type === "select",
+  const liveConfiguration = normalizeAcpRegistryLiveConfiguration(
+    started.sessionSetupResult.configOptions ?? [],
+    parseSessionModeState(started.sessionSetupResult),
   );
-  const configModelId = modelOption?.type === "select" ? modelOption.currentValue : null;
-  // Bound the agent-reported current model the same way normalizeModels bounds
-  // model IDs, so it stays wire-encodable and matches a normalized model row.
-  const rawCurrentModelId = configModelId ?? null;
-  const boundedCurrentModelId =
-    rawCurrentModelId == null
-      ? null
-      : (boundedOpaqueValue(rawCurrentModelId, MAX_ID_LENGTH) ?? null);
-  const models = normalizeModels(started.sessionSetupResult);
-  const currentModelId = models.some((model) => model.id === boundedCurrentModelId)
-    ? boundedCurrentModelId
-    : null;
   return AcpRegistryProbeResult.make({
     instanceId,
     ready: true,
     icon,
     authMethods: normalizeAcpRegistryAuthMethods(started.initializeResult.authMethods, spawn),
-    models,
-    currentModelId,
-    configOptions: acpProviderOptionDescriptors({
-      configOptions: started.sessionSetupResult.configOptions,
-      modeState: parseSessionModeState(started.sessionSetupResult),
-    }),
+    sessionManagement: {
+      canList: started.initializeResult.agentCapabilities?.sessionCapabilities?.list != null,
+      canLoad: started.initializeResult.agentCapabilities?.loadSession === true,
+      canResume: started.initializeResult.agentCapabilities?.sessionCapabilities?.resume != null,
+      canLogout: started.initializeResult.agentCapabilities?.auth?.logout != null,
+    },
+    ...liveConfiguration,
   });
 }
 
 export function acpRegistryProbeFailure(
   error: EffectAcpErrors.AcpError,
   authMethods: ReadonlyArray<AcpRegistryProbeAuthMethod> = [],
+  authAction?: AcpRegistryUrlAuthAction,
 ): AcpRegistryOperationError {
   const detail = error._tag === "AcpTransportError" && error.detail ? error.detail : error.message;
   const authenticationFailed =
@@ -243,6 +278,7 @@ export function acpRegistryProbeFailure(
       ? `The ACP agent could not complete authentication: ${detail}`
       : `The ACP agent could not create a test session: ${detail}`,
     ...(authMethods.length > 0 ? { authMethods } : {}),
+    ...(authAction === undefined ? {} : { authAction }),
   });
 }
 
@@ -251,6 +287,10 @@ export interface AcpRegistryConfigurationProbeInput {
   readonly settings: AcpRegistrySettings;
   readonly cwd: string;
   readonly environment: NodeJS.ProcessEnv;
+}
+
+interface AcpRegistryManagementInput extends AcpRegistryConfigurationProbeInput {
+  readonly runtimeCoordinator?: AcpRegistryRuntimeCoordinator["Service"];
 }
 
 export interface AcpRegistryConfigurationProbeResult {
@@ -281,12 +321,15 @@ export const probeAcpRegistryConfiguration = Effect.fn("AcpRegistryProbe.probeCo
 
     const result = yield* Effect.gen(function* () {
       const authMethodsRef = yield* Ref.make<ReadonlyArray<AcpRegistryProbeAuthMethod>>([]);
+      const authActionRef = yield* Ref.make<AcpRegistryUrlAuthAction | undefined>(undefined);
+      const runtimeCoordinator = yield* Effect.serviceOption(AcpRegistryRuntimeCoordinator);
       const runtimeContext = yield* Layer.build(
         AcpSessionRuntime.layer({
           spawn: resolved.spawn,
           cwd: input.cwd,
           clientCapabilities: {
             auth: { terminal: false },
+            elicitation: { url: {} },
             fs: { readTextFile: false, writeTextFile: false },
             terminal: false,
           },
@@ -317,6 +360,33 @@ export const probeAcpRegistryConfiguration = Effect.fn("AcpRegistryProbe.probeCo
         emptyAcpRegistryAvailableCommands(),
       );
       const commandsAdvertised = yield* Deferred.make<void>();
+      yield* runtime.handleElicitation((request) => {
+        if (request.mode !== "url" || !("url" in request) || !("elicitationId" in request)) {
+          return Effect.succeed({ action: "decline" } as const);
+        }
+        const url = normalizeAcpRegistryWebUrl(request.url);
+        const elicitationId = boundedOpaqueValue(request.elicitationId, MAX_ID_LENGTH);
+        if (url === undefined || elicitationId === undefined) {
+          return Effect.succeed({ action: "decline" } as const);
+        }
+        const action: AcpRegistryUrlAuthAction = {
+          elicitationId,
+          url,
+          message: boundedText(request.message, MAX_DESCRIPTION_LENGTH),
+        };
+        return Ref.set(authActionRef, action).pipe(
+          Effect.andThen(
+            Option.match(runtimeCoordinator, {
+              onNone: () => Effect.succeed(false),
+              onSome: (coordinator) =>
+                coordinator.requestUrlAuthentication(input.instanceId, action),
+            }),
+          ),
+          Effect.map((accepted) =>
+            accepted ? ({ action: "accept" } as const) : ({ action: "decline" } as const),
+          ),
+        );
+      });
       yield* runtime.handleSessionUpdate((notification) => {
         const update = notification.update;
         return update.sessionUpdate === "available_commands_update"
@@ -328,7 +398,11 @@ export const probeAcpRegistryConfiguration = Effect.fn("AcpRegistryProbe.probeCo
       });
       const startResult = yield* Effect.result(runtime.start());
       if (Result.isFailure(startResult)) {
-        return yield* acpRegistryProbeFailure(startResult.failure, yield* Ref.get(authMethodsRef));
+        return yield* acpRegistryProbeFailure(
+          startResult.failure,
+          yield* Ref.get(authMethodsRef),
+          yield* Ref.get(authActionRef),
+        );
       }
       const started = startResult.success;
       yield* Deferred.await(commandsAdvertised).pipe(
@@ -360,4 +434,169 @@ export const probeAcpRegistryConfiguration = Effect.fn("AcpRegistryProbe.probeCo
       skills: result.commands.skills,
     };
   },
+);
+
+const MANAGEMENT_TIMEOUT = Duration.seconds(60);
+
+function acpRegistryUnsupportedOperation(
+  reason: "session_list_unsupported" | "logout_unsupported",
+  message: string,
+) {
+  return new AcpRegistryOperationError({ reason, message });
+}
+
+const makeAcpRegistryManagementRuntime = Effect.fn("AcpRegistryProbe.makeManagementRuntime")(
+  function* (input: AcpRegistryManagementInput) {
+    const catalog = yield* AcpRegistryCatalog;
+    const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const crypto = yield* Crypto.Crypto;
+    const resolved = yield* catalog
+      .resolve(input.settings, input.cwd, input.environment)
+      .pipe(Effect.mapError(toAcpRegistryOperationError));
+    const runtimeContext = yield* Layer.build(
+      AcpSessionRuntime.layer({
+        spawn: resolved.spawn,
+        cwd: input.cwd,
+        clientCapabilities: {
+          auth: { terminal: false },
+          elicitation: { url: {} },
+          fs: { readTextFile: false, writeTextFile: false },
+          terminal: false,
+        },
+        clientInfo: { name: "t3-code-session-manager", version: "0.0.0" },
+        ...(input.settings.authMethodId ? { authMethodId: input.settings.authMethodId } : {}),
+      }).pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner),
+            Layer.succeed(Crypto.Crypto, crypto),
+          ),
+        ),
+      ),
+    );
+    const runtime = yield* Effect.service(AcpSessionRuntime.AcpSessionRuntime).pipe(
+      Effect.provide(runtimeContext),
+    );
+    yield* runtime.handleElicitation((request) => {
+      if (request.mode !== "url" || !("url" in request) || !("elicitationId" in request)) {
+        return Effect.succeed({ action: "decline" } as const);
+      }
+      const url = normalizeAcpRegistryWebUrl(request.url);
+      const elicitationId = boundedOpaqueValue(request.elicitationId, MAX_ID_LENGTH);
+      if (url === undefined || elicitationId === undefined) {
+        return Effect.succeed({ action: "decline" } as const);
+      }
+      const action: AcpRegistryUrlAuthAction = {
+        elicitationId,
+        url,
+        message: boundedText(request.message, MAX_DESCRIPTION_LENGTH),
+      };
+      const accepted =
+        input.runtimeCoordinator === undefined
+          ? Effect.succeed(false)
+          : input.runtimeCoordinator.requestUrlAuthentication(input.instanceId, action);
+      return accepted.pipe(
+        Effect.map((accepted) =>
+          accepted ? ({ action: "accept" } as const) : ({ action: "decline" } as const),
+        ),
+      );
+    });
+    return runtime;
+  },
+);
+
+function managementFailure(
+  operation: "list" | "logout",
+  error: EffectAcpErrors.AcpError | AcpRegistryOperationError,
+): AcpRegistryOperationError {
+  if (error._tag === "AcpRegistryOperationError") return error;
+  if (error._tag === "AcpRequestError" && error.code === -32601) {
+    return acpRegistryUnsupportedOperation(
+      operation === "list" ? "session_list_unsupported" : "logout_unsupported",
+      operation === "list"
+        ? "The ACP agent does not advertise session listing."
+        : "The ACP agent does not advertise logout.",
+    );
+  }
+  return acpRegistryProbeFailure(error);
+}
+
+export const listAcpRegistrySessions = Effect.fn("AcpRegistryProbe.listSessions")(
+  function* (input: AcpRegistryManagementInput & { readonly cursor?: string }) {
+    const runtime = yield* makeAcpRegistryManagementRuntime(input);
+    const initialized = yield* runtime.initialize;
+    const listed = yield* runtime.listSessions(input.cursor);
+    const sessions = listed.sessions.slice(0, 256).flatMap((session) => {
+      const sessionId = boundedOpaqueValue(session.sessionId, 1_024);
+      const cwd = boundedOpaqueValue(session.cwd, 4_096);
+      if (sessionId === undefined || cwd === undefined) return [];
+      return [
+        {
+          sessionId,
+          cwd,
+          additionalDirectories: (session.additionalDirectories ?? [])
+            .flatMap((directory) => {
+              const normalized = boundedOpaqueValue(directory, 4_096);
+              return normalized === undefined ? [] : [normalized];
+            })
+            .slice(0, 32),
+          title:
+            session.title === undefined || session.title === null
+              ? null
+              : boundedText(session.title, 1_024) || null,
+          updatedAt:
+            session.updatedAt === undefined || session.updatedAt === null
+              ? null
+              : boundedText(session.updatedAt, 128) || null,
+          importedThreadId: null,
+        },
+      ];
+    });
+    return AcpRegistryListSessionsResult.make({
+      sessions,
+      nextCursor:
+        listed.nextCursor === undefined || listed.nextCursor === null
+          ? null
+          : boundedText(listed.nextCursor, 2_048) || null,
+      canLoad: initialized.agentCapabilities?.loadSession === true,
+      canResume: initialized.agentCapabilities?.sessionCapabilities?.resume != null,
+    });
+  },
+  (effect) =>
+    effect.pipe(
+      Effect.scoped,
+      Effect.timeoutOrElse({
+        duration: MANAGEMENT_TIMEOUT,
+        orElse: () =>
+          Effect.fail(
+            new AcpRegistryOperationError({
+              reason: "probe_failed",
+              message: "The ACP session list request timed out.",
+            }),
+          ),
+      }),
+      Effect.mapError((error) => managementFailure("list", error)),
+    ),
+);
+
+export const logoutAcpRegistry = Effect.fn("AcpRegistryProbe.logout")(
+  function* (input: AcpRegistryManagementInput) {
+    const runtime = yield* makeAcpRegistryManagementRuntime(input);
+    yield* runtime.logout;
+  },
+  (effect) =>
+    effect.pipe(
+      Effect.scoped,
+      Effect.timeoutOrElse({
+        duration: MANAGEMENT_TIMEOUT,
+        orElse: () =>
+          Effect.fail(
+            new AcpRegistryOperationError({
+              reason: "probe_failed",
+              message: "The ACP logout request timed out.",
+            }),
+          ),
+      }),
+      Effect.mapError((error) => managementFailure("logout", error)),
+    ),
 );

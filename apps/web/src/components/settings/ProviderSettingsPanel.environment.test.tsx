@@ -18,12 +18,14 @@ const atoms = vi.hoisted(() => ({
   refreshProviders: Symbol("refreshProviders"),
   updateProvider: Symbol("updateProvider"),
   uninstallAcpRegistryManagedBinary: Symbol("uninstallAcpRegistryManagedBinary"),
+  acceptAcpRegistryUrlAuth: Symbol("acceptAcpRegistryUrlAuth"),
 }));
 
 const commands = vi.hoisted(() => ({
   refresh: vi.fn(),
   updateProvider: vi.fn(),
   uninstall: vi.fn(),
+  acceptUrlAuth: vi.fn(),
 }));
 
 const settingsState = vi.hoisted(() => ({
@@ -63,6 +65,7 @@ vi.mock("../../state/server", () => ({
     refreshProviders: atoms.refreshProviders,
     updateProvider: atoms.updateProvider,
     uninstallAcpRegistryManagedBinary: atoms.uninstallAcpRegistryManagedBinary,
+    acceptAcpRegistryUrlAuth: atoms.acceptAcpRegistryUrlAuth,
   },
 }));
 
@@ -72,7 +75,9 @@ vi.mock("../../state/use-atom-command", () => ({
       ? commands.refresh
       : atom === atoms.uninstallAcpRegistryManagedBinary
         ? commands.uninstall
-        : commands.updateProvider,
+        : atom === atoms.acceptAcpRegistryUrlAuth
+          ? commands.acceptUrlAuth
+          : commands.updateProvider,
 }));
 
 vi.mock("../../hooks/useSettings", () => ({
@@ -96,6 +101,10 @@ vi.mock("../../environments/primary", () => ({
 
 vi.mock("../../state/session", () => ({
   useEnvironmentSessionState: () => ({ data: null, hasError: false, isPending: true }),
+}));
+
+vi.mock("../../state/entities", () => ({
+  useProjects: () => [],
 }));
 
 import { EnvironmentProviderSettings } from "./ProviderSettingsPanel";
@@ -160,6 +169,9 @@ describe("EnvironmentProviderSettings routing", () => {
     commands.refresh.mockReset().mockResolvedValue({ _tag: "Success" });
     commands.updateProvider.mockReset().mockResolvedValue({ _tag: "Success" });
     commands.uninstall.mockReset().mockResolvedValue({ _tag: "Success", value: {} });
+    commands.acceptUrlAuth
+      .mockReset()
+      .mockResolvedValue({ _tag: "Success", value: { accepted: true } });
   });
 
   it("coalesces a nullable provider snapshot before rendering array-backed UI", () => {
@@ -327,6 +339,43 @@ describe("EnvironmentProviderSettings routing", () => {
     expect(commands.uninstall).toHaveBeenCalledWith({
       environmentId,
       input: { agentId: "kilo" },
+    });
+  });
+
+  it("routes explicit ACP browser authentication consent to the selected environment", async () => {
+    const instanceId = ProviderInstanceId.make("acpRegistry_antigravity");
+    const action = {
+      elicitationId: "google-login-1",
+      url: "https://accounts.google.com/login",
+      message: "Continue with Google",
+    };
+    settingsState.value = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      providerInstances: {
+        [instanceId]: {
+          driver: ProviderDriverKind.make("acpRegistry"),
+          enabled: true,
+          config: { agentId: "antigravity" },
+        },
+      },
+    };
+    atoms.providers = [
+      {
+        ...provider(),
+        instanceId,
+        driver: ProviderDriverKind.make("acpRegistry"),
+        auth: { status: "unauthenticated", action },
+      },
+    ];
+
+    const panel = renderPanel();
+    const card = visitElements(panel, (element) => element.props.instanceId === instanceId);
+    (card?.props.onAcceptUrlAuth as ((candidate: typeof action) => void) | undefined)?.(action);
+    await flushPromises();
+
+    expect(commands.acceptUrlAuth).toHaveBeenCalledWith({
+      environmentId,
+      input: { instanceId, elicitationId: action.elicitationId },
     });
   });
 });

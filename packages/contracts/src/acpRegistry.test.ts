@@ -2,6 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Schema from "effect/Schema";
 
 import {
+  AcpRegistryImportSessionInput,
   AcpRegistryManagedBinaryUninstallInput,
   AcpRegistryManagedBinaryUninstallResult,
   AcpRegistryOperationError,
@@ -12,6 +13,7 @@ import {
 } from "./acpRegistry.ts";
 
 const decodeSearchInput = Schema.decodeUnknownSync(AcpRegistrySearchInput);
+const decodeImportSessionInput = Schema.decodeUnknownSync(AcpRegistryImportSessionInput);
 const decodePrepareResult = Schema.decodeUnknownSync(AcpRegistryPrepareResult);
 const decodeSearchAgent = Schema.decodeUnknownSync(AcpRegistrySearchAgent);
 const decodeUninstallInput = Schema.decodeUnknownSync(AcpRegistryManagedBinaryUninstallInput);
@@ -62,6 +64,32 @@ describe("ACP Registry contracts", () => {
       removed: false,
     });
     expect(() => decodeUninstallInput({ agentId: "../example-agent" })).toThrow();
+  });
+
+  it("decodes bounded native session import metadata", () => {
+    expect(
+      decodeImportSessionInput({
+        instanceId: "acpRegistry_example",
+        projectId: "project-1",
+        sessionId: "native-session-1",
+        title: " Native session ",
+        updatedAt: " 2026-08-23T00:00:00Z ",
+      }),
+    ).toEqual({
+      instanceId: "acpRegistry_example",
+      projectId: "project-1",
+      sessionId: "native-session-1",
+      title: "Native session",
+      updatedAt: "2026-08-23T00:00:00Z",
+    });
+    expect(() =>
+      decodeImportSessionInput({
+        instanceId: "acpRegistry_example",
+        projectId: "project-1",
+        sessionId: "native-session-1",
+        title: "x".repeat(1_025),
+      }),
+    ).toThrow();
   });
 
   it("decodes valid probe metadata and rejects oversized or invalid payloads", () => {

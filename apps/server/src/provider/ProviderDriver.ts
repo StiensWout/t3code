@@ -22,6 +22,8 @@
  * @module provider/ProviderDriver
  */
 import type {
+  AcpRegistryListSessionsResult,
+  AcpRegistryOperationError,
   ProviderDriverKind,
   ProviderInstanceEnvironment,
   ProviderInstanceId,
@@ -71,6 +73,13 @@ export interface ProviderInstance {
   readonly snapshot: ServerProviderShape;
   readonly orchestrationAdapter: ProviderAdapterV2Shape;
   readonly textGeneration: TextGenerationShape;
+  readonly acpSessionManagement?: {
+    readonly listSessions: (input: {
+      readonly cwd: string;
+      readonly cursor?: string;
+    }) => Effect.Effect<AcpRegistryListSessionsResult, AcpRegistryOperationError>;
+    readonly logout: (cwd: string) => Effect.Effect<void, AcpRegistryOperationError>;
+  };
 }
 
 export interface ProviderContinuationIdentity {

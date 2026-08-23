@@ -12,6 +12,7 @@ import {
   type OrchestrationV2ProviderFailure,
   type OrchestrationV2ProviderSession,
   type OrchestrationV2ProviderThread,
+  type OrchestrationV2ProviderThreadNativeMetadata,
   type OrchestrationV2ProviderTurn,
   type OrchestrationV2RuntimeRequest,
   type OrchestrationV2Subagent,
@@ -25,6 +26,7 @@ import {
   type ProviderThreadId,
   type ProviderUserInputAnswers,
   type RuntimeRequestId,
+  type ThreadTokenUsageSnapshot,
   type ThreadId,
 } from "@t3tools/contracts";
 import { modelSelectionsEqual } from "@t3tools/shared/model";
@@ -52,12 +54,14 @@ import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import {
+  acpContentBlockDisplayText,
   embeddedTerminalIdsFromSessionUpdate,
   extractMcpToolCallIdentity,
   mergeToolCallState,
   parsePermissionRequest,
   parseSessionUpdateEvent,
   type AcpPlanUpdate,
+  type AcpSessionModeState,
   type AcpToolCallState,
 } from "../../provider/acp/AcpRuntimeModel.ts";
 import type {
@@ -72,7 +76,6 @@ import {
   acpPermissionDisposition,
   makeAcpClientPolicyGrants,
   unknownRecord,
-  type AcpPermissionDisposition,
 } from "../../provider/acp/AcpClientPolicy.ts";
 import {
   makeAcpClientTerminals,
@@ -176,6 +179,15 @@ export interface AcpAdapterV2Flavor {
   readonly onAvailableCommandsUpdate?: (
     commands: ReadonlyArray<EffectAcpSchema.AvailableCommand>,
   ) => Effect.Effect<void>;
+  readonly onSessionConfigurationUpdate?: (
+    configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption>,
+    modeState: AcpSessionModeState | undefined,
+  ) => Effect.Effect<void>;
+  readonly onUrlElicitation?: (input: {
+    readonly elicitationId: string;
+    readonly url: string;
+    readonly message: string;
+  }) => Effect.Effect<boolean>;
   readonly withRuntimeStartup?: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
   readonly makeRuntime: (
     input: AcpAdapterV2RuntimeInput,
@@ -295,6 +307,11 @@ export function acpSupportsImagePrompts(input: {
   readonly negotiatedImage?: boolean | undefined;
 }): boolean {
   return input.flavorSupportsImagePrompts === true || input.negotiatedImage === true;
+}
+
+/** Keeps provider-derived ids distinct when two configured ACP instances reuse native ids. */
+export function acpScopedNativeId(instanceId: ProviderInstanceId, nativeId: string): string {
+  return `provider-instance:${encodeURIComponent(instanceId)}:${nativeId}`;
 }
 
 export interface AcpAdapterV2SubagentUpdate {
@@ -571,6 +588,7 @@ function makeProviderThread(input: {
   return {
     id: input.idAllocator.derive.providerThread({
       driver: input.driver,
+      providerInstanceId: input.providerInstanceId,
       nativeThreadId: input.nativeThreadId,
     }),
     driver: input.driver,
@@ -589,6 +607,8 @@ function makeProviderThread(input: {
     lastRunOrdinal: null,
     handoffIds: [],
     forkedFrom: input.forkedFrom ?? null,
+    contextUsage: null,
+    nativeMetadata: null,
     createdAt: input.now,
     updatedAt: input.now,
   };
@@ -811,6 +831,7 @@ function elicitationContent(
 interface ActiveTextSegment {
   readonly nativeItemId: string;
   readonly startedAt: DateTime.Utc;
+  sourceMessageId: string | null;
   text: string;
 }
 
@@ -828,6 +849,8 @@ interface ActiveAcpTurn {
   readonly completed: Deferred.Deferred<void, never>;
   readonly assistant: ActiveTextStream;
   readonly reasoning: ActiveTextStream;
+  contextUsage: ThreadTokenUsageSnapshot | null;
+  nativeMetadata: OrchestrationV2ProviderThreadNativeMetadata | null;
   readonly tools: Map<string, AcpToolCallState>;
   readonly toolStartedAt: Map<string, DateTime.Utc>;
   readonly subagents: Map<string, ActiveAcpSubagent>;
@@ -894,7 +917,7 @@ export function acpRootSessionUpdateIngestsOutput(
   switch (update.sessionUpdate) {
     case "agent_message_chunk":
     case "agent_thought_chunk":
-      return update.content.type === "text" && update.content.text.length > 0;
+      return (acpContentBlockDisplayText(update.content)?.length ?? 0) > 0;
     case "tool_call":
     case "tool_call_update":
     case "plan":
@@ -951,7 +974,7 @@ export function acpPostSettleContinuationOfferEvidence(
   // Assistant text only. Thought/reasoning bursts alone must not open synthetic
   // "Background task completed." runs (duplicate-run spam after monitors).
   if (update.sessionUpdate === "agent_message_chunk") {
-    return update.content.type === "text" && update.content.text.trim().length > 0;
+    return (acpContentBlockDisplayText(update.content)?.trim().length ?? 0) > 0;
   }
   if (update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update") {
     return parseSessionUpdateEvent(notification).events.some((event) => {
@@ -1076,17 +1099,6 @@ type AcpCarryoverSubagents = {
   readonly subagents: ReadonlyArray<ActiveAcpSubagent>;
 };
 
-function acpTurnHasPendingRuntimeRequest(
-  providerTurnId: OrchestrationV2ProviderTurn["id"],
-  pending: ReadonlyMap<string, PendingRuntimeRequest>,
-): boolean {
-  return [...pending.values()].some(
-    (request) =>
-      request.runtimeRequest.providerTurnId === providerTurnId &&
-      request.runtimeRequest.status === "pending",
-  );
-}
-
 type PendingRuntimeRequest = {
   readonly generation: number;
   readonly nativeResponseAcknowledgement: Deferred.Deferred<void, EffectAcpErrors.AcpError>;
@@ -1110,12 +1122,31 @@ interface SnapshotMessageState {
   readonly order: Array<string>;
   readonly messages: Map<string, OrchestrationV2ConversationMessage>;
   loadingRole: "user" | "assistant" | null;
+  loadingMessageId: string | null;
   loadingIndex: number;
 }
 
 export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV2Shape {
   const { flavor, fileSystem, idAllocator, serverConfig } = options;
   const driver = flavor.driver;
+  // ACP native ids are only unique within one agent instance. Scope every
+  // derived orchestration id so two configured instances cannot collide when
+  // they report the same session, turn, message, task, or tool ids.
+  const scopedNativeId = (nativeId: string) => acpScopedNativeId(options.instanceId, nativeId);
+  const providerNodeId = (nativeItemId: string) =>
+    idAllocator.derive.nodeFromProviderItem({ driver, nativeItemId: scopedNativeId(nativeItemId) });
+  const providerMessageId = (nativeItemId: string) =>
+    idAllocator.derive.messageFromProviderItem({
+      driver,
+      nativeItemId: scopedNativeId(nativeItemId),
+    });
+  const providerTurnItemId = (nativeItemId: string) =>
+    idAllocator.derive.turnItemFromProviderItem({
+      driver,
+      nativeItemId: scopedNativeId(nativeItemId),
+    });
+  const deriveProviderTurnId = (nativeTurnId: string) =>
+    idAllocator.derive.providerTurn({ driver, nativeTurnId: scopedNativeId(nativeTurnId) });
   const continuationRequests = options.continuationRequests;
   const postSettleContinuationEnabled =
     flavor.enablePostSettleContinuation === true && continuationRequests !== undefined;
@@ -1180,6 +1211,15 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
         const events = yield* Queue.unbounded<ProviderAdapterV2Event>();
         const activeTurn = yield* Ref.make<ActiveAcpTurn | null>(null);
         const activeSessionId = yield* Ref.make<string | null>(null);
+        const contextUsageBySessionId = yield* Ref.make(
+          new Map<string, ThreadTokenUsageSnapshot>(),
+        );
+        const nativeMetadataBySessionId = yield* Ref.make(
+          new Map<string, OrchestrationV2ProviderThreadNativeMetadata>(),
+        );
+        const providerThreadByNativeSessionId = yield* Ref.make(
+          new Map<string, OrchestrationV2ProviderThread>(),
+        );
         const initialSessionActivationFailure = yield* Ref.make<{
           readonly sessionId: string;
           readonly error: EffectAcpErrors.AcpError;
@@ -1221,6 +1261,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           order: [],
           messages: new Map(),
           loadingRole: null,
+          loadingMessageId: null,
           loadingIndex: 0,
         });
 
@@ -1694,14 +1735,8 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           if (segment === null || segment.text.length === 0) return;
           const now = yield* DateTime.now;
           const ordinal = yield* resolveItemOrdinal(context, segment.nativeItemId);
-          const nodeId = idAllocator.derive.nodeFromProviderItem({
-            driver,
-            nativeItemId: segment.nativeItemId,
-          });
-          const turnItemId = idAllocator.derive.turnItemFromProviderItem({
-            driver,
-            nativeItemId: segment.nativeItemId,
-          });
+          const nodeId = providerNodeId(segment.nativeItemId);
+          const turnItemId = providerTurnItemId(segment.nativeItemId);
           const nativeItemRef = {
             driver,
             nativeId: segment.nativeItemId,
@@ -1729,10 +1764,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
             },
           });
           if (kind === "assistant") {
-            const messageId = idAllocator.derive.messageFromProviderItem({
-              driver,
-              nativeItemId: segment.nativeItemId,
-            });
+            const messageId = providerMessageId(segment.nativeItemId);
             const message: OrchestrationV2ConversationMessage = {
               createdBy: "agent",
               creationSource: "provider",
@@ -1819,19 +1851,37 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           context: ActiveAcpTurn,
           kind: "assistant" | "reasoning",
           text: string,
+          messageId?: string | null,
         ) {
           if (text.length === 0) return;
           const other = kind === "assistant" ? "reasoning" : "assistant";
           yield* closeTextStream(context, other);
           const stream = kind === "assistant" ? context.assistant : context.reasoning;
+          const sourceMessageId = messageId?.trim() || null;
+          if (
+            stream.current !== null &&
+            sourceMessageId !== null &&
+            stream.current.sourceMessageId !== null &&
+            stream.current.sourceMessageId !== sourceMessageId
+          ) {
+            yield* closeTextStream(context, kind);
+          }
           if (stream.current === null) {
             const now = yield* DateTime.now;
             stream.current = {
-              nativeItemId: `${context.nativeTurnId}:${kind}:${stream.nextSegment}`,
+              nativeItemId:
+                sourceMessageId === null
+                  ? `${context.nativeTurnId}:${kind}:${stream.nextSegment}`
+                  : `${context.nativeTurnId}:${kind}:message:${sourceMessageId}`,
               startedAt: now,
+              sourceMessageId,
               text: "",
             };
             stream.nextSegment += 1;
+          } else if (stream.current.sourceMessageId === null && sourceMessageId !== null) {
+            // Some agents omit messageId on the first chunk. Keep the already
+            // projected identity and use the first later id as its boundary.
+            stream.current.sourceMessageId = sourceMessageId;
           }
           stream.current.text += text;
           yield* emitTextSegment(context, kind, false);
@@ -1846,8 +1896,8 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           const now = yield* DateTime.now;
           const nativeItemId = `${subagent.task.nativeTaskRef?.nativeId ?? subagent.task.id}:result`;
           const artifacts = makeSubagentConversationArtifacts({
-            messageId: idAllocator.derive.messageFromProviderItem({ driver, nativeItemId }),
-            turnItemId: idAllocator.derive.turnItemFromProviderItem({ driver, nativeItemId }),
+            messageId: providerMessageId(nativeItemId),
+            turnItemId: providerTurnItemId(nativeItemId),
             threadId: subagent.childThreadId,
             rootNodeId: subagent.childRootNodeId,
             providerThreadId: subagent.task.providerThreadId,
@@ -1871,8 +1921,11 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           notification: EffectAcpSchema.SessionNotification,
         ) {
           const update = notification.update;
-          if (update.sessionUpdate === "agent_message_chunk" && update.content.type === "text") {
-            yield* emitSubagentAssistant(subagent, update.content.text);
+          if (update.sessionUpdate === "agent_message_chunk") {
+            const text = acpContentBlockDisplayText(update.content);
+            if (text !== undefined) {
+              yield* emitSubagentAssistant(subagent, text);
+            }
           }
         });
 
@@ -1920,30 +1973,17 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
             nativeId: nativeTaskId,
             strength: "strong" as const,
           };
-          const nodeId =
-            existing?.task.id ??
-            idAllocator.derive.nodeFromProviderItem({
-              driver,
-              nativeItemId: nativeTaskId,
-            });
+          const nodeId = existing?.task.id ?? providerNodeId(nativeTaskId);
           const childThreadId =
             existing?.childThreadId ??
             idAllocator.derive.threadFromProviderThread({
               driver,
+              providerInstanceId: context.input.modelSelection.instanceId,
               nativeThreadId: `${context.nativeThreadId}:task:${nativeTaskId}`,
             });
           const childRootNodeId =
-            existing?.childRootNodeId ??
-            idAllocator.derive.nodeFromProviderItem({
-              driver,
-              nativeItemId: `${nativeTaskId}:child-root`,
-            });
-          const turnItemId =
-            existing?.turnItemId ??
-            idAllocator.derive.turnItemFromProviderItem({
-              driver,
-              nativeItemId: nativeTaskId,
-            });
+            existing?.childRootNodeId ?? providerNodeId(`${nativeTaskId}:child-root`);
+          const turnItemId = existing?.turnItemId ?? providerTurnItemId(nativeTaskId);
           const turnItemOrdinal =
             existing?.turnItemOrdinal ?? (yield* resolveItemOrdinal(context, nativeTaskId));
           const taskStatus = update.status;
@@ -2014,14 +2054,8 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
             });
             const promptNativeItemId = `${nativeTaskId}:prompt`;
             const promptArtifacts = makeSubagentConversationArtifacts({
-              messageId: idAllocator.derive.messageFromProviderItem({
-                driver,
-                nativeItemId: promptNativeItemId,
-              }),
-              turnItemId: idAllocator.derive.turnItemFromProviderItem({
-                driver,
-                nativeItemId: promptNativeItemId,
-              }),
+              messageId: providerMessageId(promptNativeItemId),
+              turnItemId: providerTurnItemId(promptNativeItemId),
               threadId: childThreadId,
               rootNodeId: childRootNodeId,
               providerThreadId: null,
@@ -2044,16 +2078,17 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
             });
           }
 
-          if (update.childSessionId !== null && subagent.childSessionId === null) {
-            subagent.childSessionId = update.childSessionId;
-            context.subagentsBySessionId.set(update.childSessionId, subagent);
+          const childSessionId = update.childSessionId;
+          if (childSessionId !== null && subagent.childSessionId === null) {
+            subagent.childSessionId = childSessionId;
+            context.subagentsBySessionId.set(childSessionId, subagent);
             const providerThread = makeProviderThread({
               driver,
               providerInstanceId: context.input.modelSelection.instanceId,
               idAllocator,
               appThreadId: childThreadId,
               providerSessionId: input.providerSessionId,
-              nativeThreadId: update.childSessionId,
+              nativeThreadId: childSessionId,
               forkedFrom: {
                 providerThreadId: context.input.providerThread.id,
                 providerTurnId: context.providerTurnId,
@@ -2061,13 +2096,16 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               now,
             });
             subagent.task = { ...subagent.task, providerThreadId: providerThread.id };
+            yield* Ref.update(providerThreadByNativeSessionId, (current) =>
+              new Map(current).set(childSessionId, providerThread),
+            );
             yield* emitProviderEvent({
               type: "provider_thread.updated",
               driver,
               providerThread: { ...providerThread, status: "idle" },
             });
-            const buffered = context.pendingSubagentNotifications.get(update.childSessionId) ?? [];
-            context.pendingSubagentNotifications.delete(update.childSessionId);
+            const buffered = context.pendingSubagentNotifications.get(childSessionId) ?? [];
+            context.pendingSubagentNotifications.delete(childSessionId);
             yield* Effect.forEach(
               buffered,
               (notification) => projectSubagentNotification(subagent, notification),
@@ -2424,11 +2462,8 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           const now = yield* DateTime.now;
           const nativeItemId = `${context.nativeThreadId}:tool:${toolCall.toolCallId}`;
           const ordinal = yield* resolveItemOrdinal(context, nativeItemId);
-          const nodeId = idAllocator.derive.nodeFromProviderItem({ driver, nativeItemId });
-          const turnItemId = idAllocator.derive.turnItemFromProviderItem({
-            driver,
-            nativeItemId,
-          });
+          const nodeId = providerNodeId(nativeItemId);
+          const turnItemId = providerTurnItemId(nativeItemId);
           const nativeItemRef = {
             driver,
             nativeId: toolCall.toolCallId,
@@ -2633,11 +2668,8 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           const nativeItemId = `${context.nativeTurnId}:plan`;
           const ordinal = yield* resolveItemOrdinal(context, nativeItemId);
           const now = yield* DateTime.now;
-          const nodeId = idAllocator.derive.nodeFromProviderItem({ driver, nativeItemId });
-          const turnItemId = idAllocator.derive.turnItemFromProviderItem({
-            driver,
-            nativeItemId,
-          });
+          const nodeId = providerNodeId(nativeItemId);
+          const turnItemId = providerTurnItemId(nativeItemId);
           if (context.plan === null) {
             context.plan = {
               id: yield* idAllocator.allocate.plan({
@@ -2728,13 +2760,23 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
             if (text.length === 0) return;
             const now = yield* DateTime.now;
             yield* Ref.update(snapshot, (current) => {
-              const startsNew = current.loadingRole !== role;
+              const update = notification.update;
+              const sourceMessageId =
+                (update.sessionUpdate === "user_message_chunk" ||
+                  update.sessionUpdate === "agent_message_chunk" ||
+                  update.sessionUpdate === "agent_thought_chunk") &&
+                update.messageId
+                  ? update.messageId
+                  : null;
+              const startsNew =
+                current.loadingRole !== role ||
+                (sourceMessageId !== null && current.loadingMessageId !== sourceMessageId);
               const loadingIndex = startsNew ? current.loadingIndex + 1 : current.loadingIndex;
-              const nativeItemId = `${notification.sessionId}:history:${role}:${loadingIndex}`;
-              const messageId = idAllocator.derive.messageFromProviderItem({
-                driver,
-                nativeItemId,
-              });
+              const nativeItemId =
+                sourceMessageId === null
+                  ? `${notification.sessionId}:history:${role}:${loadingIndex}`
+                  : `${notification.sessionId}:history:${role}:message:${sourceMessageId}`;
+              const messageId = providerMessageId(nativeItemId);
               const key = String(messageId);
               const previous = current.messages.get(key);
               const messages = new Map(current.messages);
@@ -2756,6 +2798,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                 order: current.order.includes(key) ? current.order : [...current.order, key],
                 messages,
                 loadingRole: role,
+                loadingMessageId: sourceMessageId ?? (startsNew ? null : current.loadingMessageId),
                 loadingIndex,
               };
             });
@@ -3072,6 +3115,61 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           const context = yield* Ref.get(activeTurn);
           const update = notification.update;
           if (
+            update.sessionUpdate === "usage_update" ||
+            update.sessionUpdate === "session_info_update"
+          ) {
+            const stateEvent = parseSessionUpdateEvent(notification).events.find(
+              (event) => event._tag === "UsageUpdated" || event._tag === "SessionInfoUpdated",
+            );
+            if (stateEvent === undefined) return;
+            if (stateEvent._tag === "UsageUpdated") {
+              yield* Ref.update(contextUsageBySessionId, (current) =>
+                new Map(current).set(notification.sessionId, stateEvent.usage),
+              );
+              if (context?.nativeThreadId === notification.sessionId) {
+                context.contextUsage = stateEvent.usage;
+              }
+            } else {
+              const metadata = yield* Ref.modify(nativeMetadataBySessionId, (current) => {
+                const merged = {
+                  ...current.get(notification.sessionId),
+                  ...stateEvent.metadata,
+                };
+                return [merged, new Map(current).set(notification.sessionId, merged)] as const;
+              });
+              if (context?.nativeThreadId === notification.sessionId) {
+                context.nativeMetadata = metadata;
+              }
+            }
+            const knownProviderThread = (yield* Ref.get(providerThreadByNativeSessionId)).get(
+              notification.sessionId,
+            );
+            if (knownProviderThread !== undefined) {
+              const now = yield* DateTime.now;
+              const providerThread: OrchestrationV2ProviderThread = {
+                ...knownProviderThread,
+                contextUsage:
+                  (yield* Ref.get(contextUsageBySessionId)).get(notification.sessionId) ??
+                  knownProviderThread.contextUsage ??
+                  null,
+                nativeMetadata:
+                  (yield* Ref.get(nativeMetadataBySessionId)).get(notification.sessionId) ??
+                  knownProviderThread.nativeMetadata ??
+                  null,
+                updatedAt: now,
+              };
+              yield* Ref.update(providerThreadByNativeSessionId, (current) =>
+                new Map(current).set(notification.sessionId, providerThread),
+              );
+              yield* emitProviderEvent({
+                type: "provider_thread.updated",
+                driver,
+                providerThread,
+              });
+            }
+            return;
+          }
+          if (
             context?.finalized === true &&
             (yield* applyFinalizedActiveTurnSubagentTerminal(context, notification))
           ) {
@@ -3215,14 +3313,17 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               return;
             }
             if (
-              (update.sessionUpdate === "user_message_chunk" ||
-                update.sessionUpdate === "agent_message_chunk") &&
-              update.content.type === "text"
+              update.sessionUpdate === "user_message_chunk" ||
+              update.sessionUpdate === "agent_message_chunk"
             ) {
               // Late monitor end/event reminders must not become ghost user/assistant
               // history (or OS-facing chatter) after the root turn already finalized.
-              const text = update.content.text;
-              const lateBackgroundMutations = flavor.extractBackgroundToolMutation?.(text) ?? [];
+              const text = acpContentBlockDisplayText(update.content);
+              if (text === undefined) return;
+              const lateBackgroundMutations =
+                update.content.type === "text"
+                  ? (flavor.extractBackgroundToolMutation?.(text) ?? [])
+                  : [];
               for (const lateBackgroundMutation of lateBackgroundMutations) {
                 yield* applyLateBackgroundMutation(notification.sessionId, lateBackgroundMutation);
               }
@@ -3245,7 +3346,11 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               update.sessionUpdate === "tool_call_update" ||
               update.sessionUpdate === "plan"
             ) {
-              yield* Ref.update(snapshot, (current) => ({ ...current, loadingRole: null }));
+              yield* Ref.update(snapshot, (current) => ({
+                ...current,
+                loadingRole: null,
+                loadingMessageId: null,
+              }));
             }
             return;
           }
@@ -3277,7 +3382,10 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               }
               return;
             }
-            if (update.sessionUpdate !== "agent_message_chunk" || update.content.type !== "text") {
+            if (
+              update.sessionUpdate !== "agent_message_chunk" ||
+              acpContentBlockDisplayText(update.content) === undefined
+            ) {
               return;
             }
             if (subagent !== undefined) {
@@ -3293,8 +3401,9 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           // finalize the same context object while we waited.
           if (context.finalized) return;
           switch (update.sessionUpdate) {
-            case "agent_message_chunk":
-              if (update.content.type === "text") {
+            case "agent_message_chunk": {
+              const text = acpContentBlockDisplayText(update.content);
+              if (text !== undefined) {
                 const startsNewAssistantSegment = context.assistant.current === null;
                 // The injected-turn report is streaming; the normal debounce
                 // after the last chunk takes over from here. Drop matching
@@ -3315,14 +3424,17 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                   // and consume its task id when the notice follows.
                   context.earlyInjectedReportObserved = true;
                 }
-                yield* appendText(context, "assistant", update.content.text);
+                yield* appendText(context, "assistant", text, update.messageId);
               }
               break;
-            case "agent_thought_chunk":
-              if (update.content.type === "text") {
-                yield* appendText(context, "reasoning", update.content.text);
+            }
+            case "agent_thought_chunk": {
+              const text = acpContentBlockDisplayText(update.content);
+              if (text !== undefined) {
+                yield* appendText(context, "reasoning", text, update.messageId);
               }
               break;
+            }
             case "user_message_chunk":
               if (update.content.type === "text" && flavor.extractBackgroundToolMutation) {
                 const mutations = flavor.extractBackgroundToolMutation(update.content.text);
@@ -3570,14 +3682,8 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
             nativeResponseAcknowledgement,
           );
           const now = yield* DateTime.now;
-          const nodeId = idAllocator.derive.nodeFromProviderItem({
-            driver,
-            nativeItemId: request.nativeItemId,
-          });
-          const turnItemId = idAllocator.derive.turnItemFromProviderItem({
-            driver,
-            nativeItemId: request.nativeItemId,
-          });
+          const nodeId = providerNodeId(request.nativeItemId);
+          const turnItemId = providerTurnItemId(request.nativeItemId);
           const nativeItemRef = {
             driver,
             nativeId: request.nativeItemId,
@@ -3693,7 +3799,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           ).pipe(
             Effect.flatMap((pending) => {
               if (Option.isNone(pending)) return Effect.never;
-              const { answers, context, requestId, transportRequestId } = pending.value;
+              const { answers, requestId, transportRequestId } = pending.value;
               return Deferred.await(answers).pipe(
                 Effect.flatMap((result) =>
                   runRuntimeCallbackAtGeneration(generation, Effect.succeed(result)).pipe(
@@ -4107,6 +4213,17 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                   Effect.void
               );
             }
+            if (
+              notification.update.sessionUpdate === "config_option_update" ||
+              notification.update.sessionUpdate === "current_mode_update"
+            ) {
+              yield* (
+                flavor.onSessionConfigurationUpdate?.(
+                  yield* runtime.getConfigOptions,
+                  yield* runtime.getModeState,
+                ) ?? Effect.void
+              );
+            }
             yield* handleSessionUpdate(notification);
           }).pipe(
             Effect.mapError(
@@ -4379,7 +4496,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                   return { action: "decline" } as const;
                 }
               }
-              if (params.mode === "url") {
+              if (params.mode === "url" && "url" in params && "elicitationId" in params) {
                 const admitted = yield* runRuntimeCallbackAtGeneration(
                   handlerGeneration,
                   Effect.gen(function* () {
@@ -4392,7 +4509,16 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                       transportRequestId,
                       nativeResponseAcknowledgement,
                     );
-                    return { action: "decline" } as const;
+                    const accepted = yield* (
+                      flavor.onUrlElicitation?.({
+                        elicitationId: params.elicitationId,
+                        url: params.url,
+                        message: params.message,
+                      }) ?? Effect.succeed(false)
+                    );
+                    return accepted
+                      ? ({ action: "accept" } as const)
+                      : ({ action: "decline" } as const);
                   }),
                 );
                 if (Option.isNone(admitted)) return yield* Effect.never;
@@ -4675,10 +4801,11 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
         const started = Result.isSuccess(initialStart)
           ? initialStart.success
           : yield* Effect.gen(function* () {
+              const failedMethod =
+                "method" in initialStart.failure ? initialStart.failure.method : undefined;
               if (
                 input.initialNativeThreadId === undefined ||
-                !("method" in initialStart.failure) ||
-                initialStart.failure.method !== "session/load"
+                (failedMethod !== "session/load" && failedMethod !== "session/resume")
               ) {
                 return yield* initialStart.failure;
               }
@@ -4846,6 +4973,12 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               yield* runtime.setConfigOption(collaborationOption.id, requestedChoice);
             }
           }
+          yield* (
+            flavor.onSessionConfigurationUpdate?.(
+              yield* runtime.getConfigOptions,
+              yield* runtime.getModeState,
+            ) ?? Effect.void
+          );
         });
 
         yield* configureSession(started, input.modelSelection, input.runtimePolicy);
@@ -4970,18 +5103,24 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
             threadId: context.input.threadId,
             providerTurn: turn,
           });
+          const updatedProviderThread: OrchestrationV2ProviderThread = {
+            ...context.input.providerThread,
+            providerSessionId: input.providerSessionId,
+            status: "active",
+            lastRunOrdinal: context.input.runOrdinal,
+            firstRunOrdinal:
+              context.input.providerThread.firstRunOrdinal ?? context.input.runOrdinal,
+            contextUsage: context.contextUsage,
+            nativeMetadata: context.nativeMetadata,
+            updatedAt: now,
+          };
+          yield* Ref.update(providerThreadByNativeSessionId, (current) =>
+            new Map(current).set(context.nativeThreadId, updatedProviderThread),
+          );
           yield* emitProviderEvent({
             type: "provider_thread.updated",
             driver,
-            providerThread: {
-              ...context.input.providerThread,
-              providerSessionId: input.providerSessionId,
-              status: "active",
-              lastRunOrdinal: context.input.runOrdinal,
-              firstRunOrdinal:
-                context.input.providerThread.firstRunOrdinal ?? context.input.runOrdinal,
-              updatedAt: now,
-            },
+            providerThread: updatedProviderThread,
           });
           yield* emitProviderEvent(
             settledStatus === "failed"
@@ -5165,6 +5304,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
             order: [],
             messages: new Map(),
             loadingRole: null,
+            loadingMessageId: null,
             loadingIndex: 0,
           });
           return true;
@@ -5268,9 +5408,15 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               : yield* resolvePromptParts(turnInput, requestedSessionId);
             const startedAt = yield* DateTime.now;
             const nativeTurnId = `${requestedSessionId}:turn:${turnInput.providerTurnOrdinal}`;
-            const providerTurnId = idAllocator.derive.providerTurn({ driver, nativeTurnId });
+            const providerTurnId = deriveProviderTurnId(nativeTurnId);
             const completed = yield* Deferred.make<void, never>();
             const promptWireSettled = yield* Deferred.make<void, never>();
+            const rememberedContextUsage = (yield* Ref.get(contextUsageBySessionId)).get(
+              requestedSessionId,
+            );
+            const rememberedNativeMetadata = (yield* Ref.get(nativeMetadataBySessionId)).get(
+              requestedSessionId,
+            );
             const context: ActiveAcpTurn = {
               input: turnInput,
               providerTurnId,
@@ -5280,6 +5426,9 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               completed,
               assistant: { current: null, nextSegment: 0 },
               reasoning: { current: null, nextSegment: 0 },
+              contextUsage: rememberedContextUsage ?? turnInput.providerThread.contextUsage ?? null,
+              nativeMetadata:
+                rememberedNativeMetadata ?? turnInput.providerThread.nativeMetadata ?? null,
               tools: new Map(),
               toolStartedAt: new Map(),
               subagents: new Map(),
@@ -5330,15 +5479,21 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               threadId: turnInput.threadId,
               providerTurn: runningTurn,
             });
+            const activeProviderThread: OrchestrationV2ProviderThread = {
+              ...turnInput.providerThread,
+              providerSessionId: input.providerSessionId,
+              status: "active",
+              contextUsage: context.contextUsage,
+              nativeMetadata: context.nativeMetadata,
+              updatedAt: startedAt,
+            };
+            yield* Ref.update(providerThreadByNativeSessionId, (current) =>
+              new Map(current).set(requestedSessionId, activeProviderThread),
+            );
             yield* emitProviderEvent({
               type: "provider_thread.updated",
               driver,
-              providerThread: {
-                ...turnInput.providerThread,
-                providerSessionId: input.providerSessionId,
-                status: "active",
-                updatedAt: startedAt,
-              },
+              providerThread: activeProviderThread,
             });
             yield* rememberSnapshotMessage({
               createdBy: turnInput.message.createdBy,
@@ -5607,7 +5762,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                   detail: "ACP runtime did not produce a session id",
                 });
               }
-              return makeProviderThread({
+              const providerThread = makeProviderThread({
                 driver,
                 providerInstanceId: options.instanceId,
                 idAllocator,
@@ -5616,6 +5771,10 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                 nativeThreadId: sessionId,
                 now,
               });
+              yield* Ref.update(providerThreadByNativeSessionId, (current) =>
+                new Map(current).set(sessionId, providerThread),
+              );
+              return providerThread;
             },
             (effect, threadInput) =>
               effect.pipe(
@@ -5647,6 +5806,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                       order: [],
                       messages: new Map(),
                       loadingRole: null,
+                      loadingMessageId: null,
                       loadingIndex: 0,
                     });
                     const activated = yield* activateSession(
@@ -6058,6 +6218,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                       order: [],
                       messages: new Map(),
                       loadingRole: null,
+                      loadingMessageId: null,
                       loadingIndex: 0,
                     });
                     prepareTerminalEnvironment(snapshotInput.providerThread.appThreadId);
@@ -6143,6 +6304,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                           order: [],
                           messages: new Map(),
                           loadingRole: null,
+                          loadingMessageId: null,
                           loadingIndex: 0,
                         });
                         yield* continuationPermit.withPermit(
@@ -6226,7 +6388,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                   yield* Ref.set(activeSelection, null);
                   yield* Ref.set(activeInteractionMode, null);
                   const now = yield* DateTime.now;
-                  return makeProviderThread({
+                  const providerThread = makeProviderThread({
                     driver,
                     providerInstanceId: options.instanceId,
                     idAllocator,
@@ -6244,6 +6406,10 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                     },
                     now,
                   });
+                  yield* Ref.update(providerThreadByNativeSessionId, (current) =>
+                    new Map(current).set(forked.sessionId, providerThread),
+                  );
+                  return providerThread;
                 }),
               );
             },

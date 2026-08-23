@@ -5,7 +5,9 @@ import {
   type ModelSelection,
   type OrchestrationV2Actor,
   type OrchestrationV2CreationSource,
+  type OrchestrationV2ProviderThreadNativeMetadata,
   type OrchestrationV2ThreadProjection,
+  type ProviderDriverKind,
   type ProviderInteractionMode,
   ProjectId,
   type RunId,
@@ -68,6 +70,14 @@ export interface ThreadLaunchInput {
   readonly interactionMode: ProviderInteractionMode;
   readonly workspaceStrategy: ThreadLaunchWorkspaceStrategy;
   readonly initialMessage?: ThreadLaunchInitialMessage;
+  readonly importedNativeThread?: {
+    readonly ref: {
+      readonly driver: ProviderDriverKind;
+      readonly nativeId: string;
+      readonly strength: "strong";
+    };
+    readonly metadata?: OrchestrationV2ProviderThreadNativeMetadata;
+  };
   readonly createdBy: OrchestrationV2Actor;
   readonly creationSource: OrchestrationV2CreationSource;
 }
@@ -487,6 +497,9 @@ export const make = Effect.gen(function* () {
                 interactionMode: input.interactionMode,
                 branch: initialBranch,
                 worktreePath: initialWorktreePath,
+                ...(input.importedNativeThread === undefined
+                  ? {}
+                  : { importedNativeThread: input.importedNativeThread }),
                 createdBy: input.createdBy,
                 creationSource: input.creationSource,
               });

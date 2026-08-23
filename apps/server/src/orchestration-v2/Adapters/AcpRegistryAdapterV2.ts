@@ -15,7 +15,11 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import * as EffectAcpErrors from "effect-acp/errors";
 
 import { ServerConfig } from "../../config.ts";
-import { normalizeAcpRegistryCommands } from "../../provider/acp/AcpRegistryProbe.ts";
+import {
+  normalizeAcpRegistryCommands,
+  normalizeAcpRegistryLiveConfiguration,
+  normalizeAcpRegistryWebUrl,
+} from "../../provider/acp/AcpRegistryProbe.ts";
 import { AcpRegistryCatalog } from "../../provider/acp/AcpRegistrySupport.ts";
 import { AcpRegistryRuntimeCoordinator } from "../../provider/acp/AcpRegistryRuntimeCoordinator.ts";
 import * as AcpSessionRuntime from "../../provider/acp/AcpSessionRuntime.ts";
@@ -122,6 +126,22 @@ export function makeAcpRegistryAdapterV2(options: AcpRegistryAdapterV2Options) {
               options.instanceId,
               normalizeAcpRegistryCommands(commands),
             ),
+          onSessionConfigurationUpdate: (configOptions, modeState) =>
+            runtimeCoordinator.publishLiveConfiguration(
+              options.instanceId,
+              normalizeAcpRegistryLiveConfiguration(configOptions, modeState),
+            ),
+          onUrlElicitation: ({ elicitationId, url, message }) => {
+            const normalizedUrl = normalizeAcpRegistryWebUrl(url);
+            if (normalizedUrl === undefined || elicitationId.trim().length === 0) {
+              return Effect.succeed(false);
+            }
+            return runtimeCoordinator.requestUrlAuthentication(options.instanceId, {
+              elicitationId: elicitationId.trim().slice(0, 256),
+              url: normalizedUrl,
+              message: message.trim().slice(0, 1_024),
+            });
+          },
           withRuntimeStartup: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
             runtimeCoordinator.withForegroundStartup(options.settings.agentId, effect),
         }),

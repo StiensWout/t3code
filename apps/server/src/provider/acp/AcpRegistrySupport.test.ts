@@ -17,6 +17,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import * as TestClock from "effect/testing/TestClock";
+import * as NodeCrypto from "node:crypto";
 
 import {
   acpRegistryManagedBinaryDirectories,
@@ -205,16 +206,17 @@ describe("AcpRegistrySupport", () => {
   });
 
   it.effect("installs and reuses a registry binary in the managed cache", () => {
+    const binaryBytes = new TextEncoder().encode("#!/bin/sh\necho example\n");
     const agent = makeAgent({
       binary: {
         "linux-x86_64": {
           archive: archiveUrl,
           cmd: "./bin/example-agent",
           args: ["acp"],
+          sha256: NodeCrypto.createHash("sha256").update(binaryBytes).digest("hex"),
         },
       },
     });
-    const binaryBytes = new TextEncoder().encode("#!/bin/sh\necho example\n");
     const requests: Array<string> = [];
     return Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -241,7 +243,15 @@ describe("AcpRegistrySupport", () => {
           const response =
             request.url === registryUrl
               ? new Response(makeRegistry(agent))
-              : new Response(binaryBytes.buffer as ArrayBuffer);
+              : new Response(
+                  new ReadableStream<Uint8Array>({
+                    start(controller) {
+                      controller.enqueue(binaryBytes.slice(0, 8));
+                      controller.enqueue(binaryBytes.slice(8));
+                      controller.close();
+                    },
+                  }),
+                );
           return Effect.succeed(HttpClientResponse.fromWeb(request, response));
         }),
       ),

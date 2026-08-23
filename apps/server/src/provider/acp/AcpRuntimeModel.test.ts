@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import type * as EffectAcpSchema from "effect-acp/schema";
 
 import {
+  acpContentBlockDisplayText,
   embeddedTerminalIdsFromSessionUpdate,
   extractMcpToolCallIdentity,
   extractModelConfigId,
@@ -433,6 +434,123 @@ describe("AcpRuntimeModel", () => {
         kind: "execute",
         status: "pending",
         command: "cat package.json",
+      },
+    });
+  });
+
+  it("preserves message identity, usage, metadata, and non-text output", () => {
+    const message = parseSessionUpdateEvent({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        messageId: "message-1",
+        content: {
+          type: "resource_link",
+          name: "report.txt",
+          title: "Report",
+          description: "Generated artifact",
+          uri: "file:///workspace/report.txt",
+        },
+      },
+    } satisfies EffectAcpSchema.SessionNotification);
+    const usage = parseSessionUpdateEvent({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "usage_update",
+        used: 2_500,
+        size: 10_000,
+        cost: { amount: 0.42, currency: "USD" },
+      },
+    } satisfies EffectAcpSchema.SessionNotification);
+    const metadata = parseSessionUpdateEvent({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "session_info_update",
+        title: " Native session ",
+        updatedAt: " 2026-08-23T00:00:00Z ",
+      },
+    } satisfies EffectAcpSchema.SessionNotification);
+
+    expect(message.events[0]).toMatchObject({
+      _tag: "ContentDelta",
+      messageId: "message-1",
+      text: "Report: Generated artifact\nfile:///workspace/report.txt",
+    });
+    expect(usage.events[0]).toMatchObject({
+      _tag: "UsageUpdated",
+      usage: {
+        usedTokens: 2_500,
+        maxTokens: 10_000,
+        cost: { amount: 0.42, currency: "USD" },
+      },
+    });
+    expect(metadata.events[0]).toMatchObject({
+      _tag: "SessionInfoUpdated",
+      metadata: {
+        title: "Native session",
+        updatedAt: "2026-08-23T00:00:00Z",
+      },
+    });
+  });
+
+  it("projects binary ACP content without retaining encoded payloads", () => {
+    const encodedPayload = "sensitive-base64-payload";
+    const binary = acpContentBlockDisplayText({
+      type: "resource",
+      resource: {
+        blob: encodedPayload,
+        mimeType: "application/octet-stream",
+        uri: "file:///workspace/archive.bin",
+      },
+    });
+    const image = acpContentBlockDisplayText({
+      type: "image",
+      data: encodedPayload,
+      mimeType: "image/png",
+      uri: "file:///workspace/image.png",
+    });
+    const audio = acpContentBlockDisplayText({
+      type: "audio",
+      data: encodedPayload,
+      mimeType: "audio/wav",
+    });
+
+    expect(binary).toBe(
+      "[ACP binary resource (application/octet-stream): file:///workspace/archive.bin]",
+    );
+    expect(image).toBe("[ACP image (image/png): file:///workspace/image.png]");
+    expect(audio).toBe("[ACP audio (audio/wav)]");
+    expect(`${binary}${image}${audio}`).not.toContain(encodedPayload);
+
+    const toolUpdate = parseSessionUpdateEvent({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "tool-with-image",
+        title: "Generated image",
+        content: [
+          {
+            type: "content",
+            content: {
+              type: "image",
+              data: encodedPayload,
+              mimeType: "image/png",
+              uri: `data:image/png;base64,${encodedPayload}`,
+            },
+          },
+        ],
+      },
+    } satisfies EffectAcpSchema.SessionNotification);
+    const toolEvent = toolUpdate.events.find((event) => event._tag === "ToolCallUpdated");
+    expect(JSON.stringify(toolEvent?.toolCall)).not.toContain(encodedPayload);
+    expect(toolUpdate.events[0]).toMatchObject({
+      _tag: "ToolCallUpdated",
+      toolCall: {
+        data: {
+          content: [
+            { type: "content", content: { type: "text", text: "[ACP image (image/png)]" } },
+          ],
+        },
       },
     });
   });

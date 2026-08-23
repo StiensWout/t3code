@@ -70,6 +70,7 @@ const omitModelConfigOption = process.env.T3_ACP_OMIT_MODEL_CONFIG_OPTION === "1
 const promptResponseText = process.env.T3_ACP_PROMPT_RESPONSE_TEXT;
 const promptDelayMs = Number(process.env.T3_ACP_PROMPT_DELAY_MS ?? "0");
 const supportsSessionLifecycle = process.env.T3_ACP_SESSION_LIFECYCLE === "1";
+const supportsLoadSession = process.env.T3_ACP_DISABLE_LOAD_SESSION !== "1";
 const advertisedAuthMethodId = process.env.T3_ACP_AUTH_METHOD_ID?.trim();
 const requiresAuthentication = process.env.T3_ACP_REQUIRE_AUTH === "1";
 const commandAdvertisementDelayMs = Number(
@@ -303,9 +304,10 @@ const program = Effect.gen(function* () {
       return {
         protocolVersion: 1,
         agentCapabilities: {
-          loadSession: true,
+          ...(supportsLoadSession ? { loadSession: true } : {}),
           ...(supportsSessionLifecycle
             ? {
+                auth: { logout: {} },
                 sessionCapabilities: {
                   list: {},
                   fork: {},
@@ -337,6 +339,13 @@ const program = Effect.gen(function* () {
         );
       }
       authenticated = true;
+      return {};
+    }),
+  );
+
+  yield* agent.handleLogout(() =>
+    Effect.sync(() => {
+      authenticated = false;
       return {};
     }),
   );

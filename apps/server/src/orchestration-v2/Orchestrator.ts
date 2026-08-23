@@ -129,12 +129,40 @@ export class OrchestratorCommandPreviouslyRejectedError extends Schema.TaggedErr
   }
 }
 
+export class OrchestratorCommandIdConflictError extends Schema.TaggedErrorClass<OrchestratorCommandIdConflictError>()(
+  "OrchestratorCommandIdConflictError",
+  {
+    commandId: CommandId,
+    commandType: Schema.String,
+    receiptThreadId: ThreadId,
+    commandThreadId: ThreadId,
+  },
+) {
+  override get message(): string {
+    return `Command ${this.commandId} was already handled for thread ${this.receiptThreadId} and cannot be replayed for ${this.commandThreadId}.`;
+  }
+}
+
+/**
+ * A command receipt only proves that this exact command already ran for the
+ * thread it was recorded against. Replaying it for a command aimed at another
+ * thread would report success for work that never happened there, so the
+ * dispatcher rejects the reuse instead (mirrors v1's command-id conflict).
+ */
+export function canReplayCommandReceipt(
+  receiptThreadId: ThreadId,
+  commandThreadId: ThreadId,
+): boolean {
+  return receiptThreadId === commandThreadId;
+}
+
 export const OrchestratorV2Error = Schema.Union([
   OrchestratorDispatchError,
   OrchestratorProjectionError,
   OrchestratorDomainEventStreamError,
   OrchestratorProviderAdapterError,
   OrchestratorCommandPreviouslyRejectedError,
+  OrchestratorCommandIdConflictError,
 ]);
 export type OrchestratorV2Error = typeof OrchestratorV2Error.Type;
 
@@ -159,10 +187,9 @@ export interface OrchestratorV2Shape {
     },
     OrchestratorV2Error
   >;
-  readonly getShellSnapshot: () => Effect.Effect<
-    OrchestrationV2ThreadShellSnapshot,
-    OrchestratorV2Error
-  >;
+  readonly getShellSnapshot: (options?: {
+    readonly location?: "active" | "archive";
+  }) => Effect.Effect<OrchestrationV2ThreadShellSnapshot, OrchestratorV2Error>;
   readonly getThreadShell: (
     threadId: ThreadId,
   ) => Effect.Effect<OrchestrationV2ThreadShell | null, OrchestratorV2Error>;
@@ -1331,6 +1358,38 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       occurredAt: now,
       payload: thread,
     });
+    if (command.importedNativeThread !== undefined) {
+      yield* emitEvent({
+        type: "provider-thread.updated",
+        threadId: command.threadId,
+        driver: command.importedNativeThread.ref.driver,
+        providerInstanceId: command.modelSelection.instanceId,
+        occurredAt: now,
+        payload: {
+          id: idAllocator.derive.providerThread({
+            driver: command.importedNativeThread.ref.driver,
+            providerInstanceId: command.modelSelection.instanceId,
+            nativeThreadId: command.importedNativeThread.ref.nativeId,
+          }),
+          driver: command.importedNativeThread.ref.driver,
+          providerInstanceId: command.modelSelection.instanceId,
+          providerSessionId: null,
+          appThreadId: command.threadId,
+          ownerNodeId: null,
+          nativeThreadRef: command.importedNativeThread.ref,
+          nativeConversationHeadRef: null,
+          status: "not_loaded",
+          firstRunOrdinal: null,
+          lastRunOrdinal: null,
+          handoffIds: [],
+          forkedFrom: null,
+          contextUsage: null,
+          nativeMetadata: command.importedNativeThread.metadata ?? null,
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+    }
   });
 
   const dispatchThreadMutation = Effect.fn("orchestrationV2.dispatch.threadMutation")(function* (
@@ -6846,6 +6905,18 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           detail: receipt.error ?? "Previously rejected.",
         });
       }
+      // A receipt only proves this exact command was handled for its own
+      // thread. Replaying it for a command aimed at another thread would
+      // report success for work that never happened.
+      const dispatchThreadId = commandThreadId(command);
+      if (!canReplayCommandReceipt(receipt.threadId, dispatchThreadId)) {
+        return yield* new OrchestratorCommandIdConflictError({
+          commandId: command.commandId,
+          commandType: command.type,
+          receiptThreadId: receipt.threadId,
+          commandThreadId: dispatchThreadId,
+        });
+      }
       const storedEvents = yield* eventSink.readByCommandId({ commandId: command.commandId }).pipe(
         Stream.runCollect,
         Effect.map((events): ReadonlyArray<OrchestrationV2StoredEvent> => Array.from(events)),
@@ -7110,8 +7181,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       projectionStore
         .getThreadSnapshot(threadId)
         .pipe(Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause }))),
-    getShellSnapshot: () =>
-      projectionStore.getShellSnapshot().pipe(
+    getShellSnapshot: (options) =>
+      projectionStore.getShellSnapshot(options).pipe(
         Effect.mapError(
           (cause) =>
             new OrchestratorProjectionError({

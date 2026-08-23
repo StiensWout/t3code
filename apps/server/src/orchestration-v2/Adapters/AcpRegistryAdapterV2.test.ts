@@ -13,7 +13,10 @@ import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import { ServerConfig } from "../../config.ts";
-import type { AcpRegistryAvailableCommands } from "../../provider/acp/AcpRegistryProbe.ts";
+import type {
+  AcpRegistryAvailableCommands,
+  AcpRegistryLiveConfiguration,
+} from "../../provider/acp/AcpRegistryProbe.ts";
 import { makeAcpRegistryCatalog } from "../../provider/acp/AcpRegistrySupport.ts";
 import { layer as idAllocatorLayer, IdAllocatorV2 } from "../IdAllocator.ts";
 import { ProviderAdapterV2RuntimePolicy } from "../ProviderAdapter.ts";
@@ -116,6 +119,7 @@ describe("AcpRegistryAdapterV2", () => {
         readonly instanceId: ProviderInstanceId;
         readonly commands: AcpRegistryAvailableCommands;
       }>();
+      const configurationPublished = yield* Deferred.make<AcpRegistryLiveConfiguration>();
       const adapter = makeAcpRegistryAdapterV2({
         crypto: yield* Crypto.Crypto,
         instanceId,
@@ -150,6 +154,15 @@ describe("AcpRegistryAdapterV2", () => {
             }).pipe(Effect.asVoid),
           getAvailableCommands: () => Effect.succeed(Option.none()),
           watchAvailableCommands: () => Effect.never,
+          clearLiveConfiguration: () => Effect.void,
+          publishLiveConfiguration: (_publishedInstanceId, configuration) =>
+            Deferred.succeed(configurationPublished, configuration).pipe(Effect.asVoid),
+          getLiveConfiguration: () => Effect.succeed(Option.none()),
+          watchLiveConfiguration: () => Effect.never,
+          requestUrlAuthentication: () => Effect.succeed(false),
+          acceptUrlAuthentication: () => Effect.succeed(false),
+          getUrlAuthAction: () => Effect.succeed(Option.none()),
+          watchUrlAuthAction: () => Effect.never,
         },
         resolver: {
           resolve: (configuredSettings, cwd, environment) =>
@@ -211,6 +224,13 @@ describe("AcpRegistryAdapterV2", () => {
             },
           ],
         },
+      });
+      const configuration = yield* Deferred.await(configurationPublished);
+      assert.equal(configuration.currentModelId, "default");
+      assert.deepInclude(configuration.models[0], {
+        id: "default",
+        name: "Auto",
+        description: null,
       });
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );

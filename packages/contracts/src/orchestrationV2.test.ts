@@ -60,6 +60,9 @@ const decodeOrchestrationV2ProviderThreadJson = Schema.decodeUnknownSync(
 );
 const decodeOrchestrationV2ProviderThread = Schema.decodeUnknownSync(OrchestrationV2ProviderThread);
 const decodeOrchestrationV2ThreadShell = Schema.decodeUnknownSync(OrchestrationV2ThreadShell);
+const decodeOrchestrationV2ProviderCapabilities = Schema.decodeUnknownSync(
+  OrchestrationV2ProviderCapabilities,
+);
 
 describe("orchestration V2 contracts", () => {
   it("decodes persisted capability snapshots that predate runtimePolicy", () => {
@@ -156,12 +159,10 @@ describe("orchestration V2 contracts", () => {
       },
     };
 
-    const decoded = Schema.decodeUnknownSync(OrchestrationV2ProviderCapabilities)(
-      legacyCapabilities,
-    );
+    const decoded = decodeOrchestrationV2ProviderCapabilities(legacyCapabilities);
     expect(decoded.runtimePolicy).toEqual({ enforcement: "client-boundary" });
 
-    const explicit = Schema.decodeUnknownSync(OrchestrationV2ProviderCapabilities)({
+    const explicit = decodeOrchestrationV2ProviderCapabilities({
       ...legacyCapabilities,
       runtimePolicy: { enforcement: "native" },
     });
@@ -813,6 +814,8 @@ describe("orchestration V2 contracts", () => {
     });
 
     expect(providerThread.pendingBackgroundTasks).toEqual([]);
+    expect(providerThread.contextUsage).toBeNull();
+    expect(providerThread.nativeMetadata).toBeNull();
 
     const runtimeThread = decodeOrchestrationV2ProviderThread({
       id: "provider-thread-2",
@@ -832,6 +835,8 @@ describe("orchestration V2 contracts", () => {
       updatedAt: now,
     });
     expect(runtimeThread.pendingBackgroundTasks).toEqual([]);
+    expect(runtimeThread.contextUsage).toBeNull();
+    expect(runtimeThread.nativeMetadata).toBeNull();
   });
 
   it("decodes historical thread shell JSON without pendingBackgroundTasks as empty roster", () => {
