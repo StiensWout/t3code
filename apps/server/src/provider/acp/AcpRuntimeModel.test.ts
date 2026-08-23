@@ -605,7 +605,7 @@ describe("extractMcpToolCallIdentity", () => {
           '/usr/bin/node /srv/t3/bin.ts acp-mcp-call delegate_task {"task":"x"}',
         ],
       }),
-    ).toEqual({ server: "t3-code", tool: "delegate_task" });
+    ).toEqual({ server: "t3-code", tool: "delegate_task", input: { task: "x" } });
   });
 
   it("recovers T3 identity from pi-acp title-only fallback execs", () => {
@@ -632,6 +632,7 @@ describe("extractMcpToolCallIdentity", () => {
     expect(extractMcpToolCallIdentity(toolCall)).toEqual({
       server: "t3-code",
       tool: "orchestrator_capabilities",
+      input: {},
     });
   });
 
@@ -803,6 +804,19 @@ describe("extractMcpToolCallIdentity", () => {
     expect(
       extractMcpToolCallIdentity(toolCall, { embeddedTerminalCommands: ["bash -lc ls"] }),
     ).toBeUndefined();
+  });
+
+  it("does not treat generic raw server and tool fields as MCP provenance", () => {
+    const toolCall = toolCallFromUpdate({
+      sessionUpdate: "tool_call",
+      toolCallId: "generic-1",
+      kind: "other",
+      title: "Deploy",
+      status: "pending",
+      rawInput: { server: "production", tool: "deploy" },
+    });
+
+    expect(extractMcpToolCallIdentity(toolCall)).toBeUndefined();
   });
 });
 

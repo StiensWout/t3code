@@ -505,10 +505,31 @@ export function mergeToolCallState(
 export interface AcpMcpToolCallIdentity {
   readonly server: string;
   readonly tool: string;
+  readonly input?: Record<string, unknown>;
 }
 
 /** Matches an invocation of T3's `acp-mcp-call` bridge fallback CLI. */
-const ACP_MCP_FALLBACK_CALL = /(?:^|[\s"'=])acp-mcp-call[\s"']+([A-Za-z0-9_.-]+)/u;
+const ACP_MCP_FALLBACK_CALL = /(?:^|[\s"'=])acp-mcp-call[\s"']+([A-Za-z0-9_.-]+)(?:\s+(.+?))?\s*$/u;
+
+function acpMcpFallbackInput(value: string | undefined): Record<string, unknown> | undefined {
+  if (value === undefined) return undefined;
+  const trimmed = value.trim();
+  const candidates = [
+    trimmed,
+    ...(trimmed.startsWith("'") && trimmed.endsWith("'") ? [trimmed.slice(1, -1)] : []),
+  ];
+  for (const candidate of candidates) {
+    try {
+      const parsed: unknown = JSON.parse(candidate);
+      const unwrapped = typeof parsed === "string" ? JSON.parse(parsed) : parsed;
+      if (isRecord(unwrapped)) return unwrapped;
+    } catch {
+      // ACP agents choose their own shell quoting. An unrecognized form keeps
+      // the MCP identity but leaves the input empty instead of misreporting it.
+    }
+  }
+  return undefined;
+}
 
 /**
  * Agents flatten injected MCP tools into model-facing function names with no
@@ -555,9 +576,10 @@ export function extractMcpToolCallIdentity(
   },
 ): AcpMcpToolCallIdentity | undefined {
   const rawInput = isRecord(toolCall.data.rawInput) ? toolCall.data.rawInput : undefined;
+  const meta = isRecord(toolCall.data.meta) ? toolCall.data.meta : undefined;
   const server = typeof rawInput?.server === "string" ? rawInput.server.trim() : "";
   const tool = typeof rawInput?.tool === "string" ? rawInput.tool.trim() : "";
-  if (server.length > 0 && tool.length > 0) {
+  if (meta?.is_mcp_tool_call === true && server.length > 0 && tool.length > 0) {
     return { server, tool };
   }
   // Agents without tagged rawInput identify their MCP calls through _meta
@@ -567,7 +589,6 @@ export function extractMcpToolCallIdentity(
   // match those rather than the summarized state title. Name-derived matches
   // are gated on the known T3 tool inventory so path-like titles (for
   // example "t3-code/README.md") never brand.
-  const meta = isRecord(toolCall.data.meta) ? toolCall.data.meta : undefined;
   const claudeCode = isRecord(meta?.claudeCode) ? meta.claudeCode : undefined;
   const gooseToolCall = isRecord(meta?.goose)
     ? isRecord(meta.goose.toolCall)
@@ -629,7 +650,8 @@ export function extractMcpToolCallIdentity(
     if (match?.[1] !== undefined) {
       // The acp-mcp-call CLI exists only as T3's bridge fallback, so the
       // server identity is T3's by construction.
-      return { server: "t3-code", tool: match[1] };
+      const input = acpMcpFallbackInput(match[2]);
+      return { server: "t3-code", tool: match[1], ...(input === undefined ? {} : { input }) };
     }
   }
   return undefined;

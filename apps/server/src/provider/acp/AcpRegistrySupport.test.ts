@@ -30,6 +30,7 @@ import {
 const registryUrl = "https://registry.test/registry.json";
 const archiveUrl = "https://registry.test/example-agent.bin";
 const decodeAcpRegistrySettings = Schema.decodeSync(AcpRegistrySettings);
+const encodeUnknownJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 
 function makeAgent(distribution: AcpRegistryAgent["distribution"]): AcpRegistryAgent {
   return {
@@ -432,6 +433,44 @@ describe("AcpRegistrySupport", () => {
               ),
             ),
           { PATH: "" },
+        ),
+      ),
+    );
+  });
+
+  it.effect("discards registry agents with blank names or versions", () => {
+    const distribution = {
+      binary: {
+        "linux-x86_64": { archive: archiveUrl, cmd: "example-agent" },
+      },
+    } satisfies AcpRegistryAgent["distribution"];
+    const valid = makeAgent(distribution);
+    const blankName = { ...valid, id: "blank-name", name: "   " };
+    const blankVersion = { ...valid, id: "blank-version", version: "\t" };
+    return Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-acp-registry-blank-fields-",
+      });
+      const resolver = yield* makeAcpRegistryCatalog({ cacheDir, registryUrl });
+      const result = yield* resolver.search({ query: "" });
+
+      expect(result.agents.map((agent) => agent.id)).toEqual([valid.id]);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        resolverLayer((request) =>
+          Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              new Response(
+                JSON.stringify({
+                  version: "1.0.0",
+                  agents: [blankName, blankVersion, valid],
+                }),
+              ),
+            ),
+          ),
         ),
       ),
     );
@@ -965,43 +1004,73 @@ describe("AcpRegistrySupport", () => {
 });
 
 describe("acpRegistryManagedBinaryDirectories", () => {
-  it.effect("lists this platform's install directories, newest version first", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-acp-registry-bins-",
-      });
-      const install = (agent: string, version: string, target: string) =>
-        fileSystem.makeDirectory(
-          path.join(cacheDir, "acp-registry", "agents", agent, version, target),
-          { recursive: true },
+  it.effect(
+    "lists executable directories from cached registry commands, newest version first",
+    () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "t3-acp-registry-bins-",
+        });
+        const install = (agent: string, version: string, target: string, commandDirectory = "") =>
+          fileSystem.makeDirectory(
+            path.join(cacheDir, "acp-registry", "agents", agent, version, target, commandDirectory),
+            { recursive: true },
+          );
+        yield* install("kimi", "1.49.0", "linux-x86_64", "bin");
+        yield* install("kimi", "1.50.0", "linux-x86_64", "cmd");
+        yield* install("kimi", "1.50.0", "darwin-aarch64");
+        yield* install("other-agent", "0.2.0", "darwin-aarch64");
+        yield* fileSystem.writeFileString(
+          path.join(cacheDir, "acp-registry", "registry.json"),
+          encodeUnknownJson({
+            version: "1.0.0",
+            agents: [
+              {
+                ...makeAgent({
+                  binary: {
+                    "linux-x86_64": { archive: archiveUrl, cmd: "bin/kimi" },
+                  },
+                }),
+                id: "kimi",
+                name: "Kimi",
+                version: "1.49.0",
+              },
+              {
+                ...makeAgent({
+                  binary: {
+                    "linux-x86_64": { archive: archiveUrl, cmd: "cmd/kimi" },
+                  },
+                }),
+                id: "kimi",
+                name: "Kimi",
+                version: "1.50.0",
+              },
+            ],
+          }),
         );
-      yield* install("kimi", "1.49.0", "linux-x86_64");
-      yield* install("kimi", "1.50.0", "linux-x86_64");
-      yield* install("kimi", "1.50.0", "darwin-aarch64");
-      yield* install("other-agent", "0.2.0", "darwin-aarch64");
 
-      const directories = yield* acpRegistryManagedBinaryDirectories({
-        fileSystem,
-        path,
-        cacheDir,
-        platform: "linux",
-        architecture: "x64",
-      });
-      expect(directories).toEqual([
-        path.join(cacheDir, "acp-registry", "agents", "kimi", "1.50.0", "linux-x86_64"),
-        path.join(cacheDir, "acp-registry", "agents", "kimi", "1.49.0", "linux-x86_64"),
-      ]);
+        const directories = yield* acpRegistryManagedBinaryDirectories({
+          fileSystem,
+          path,
+          cacheDir,
+          platform: "linux",
+          architecture: "x64",
+        });
+        expect(directories).toEqual([
+          path.join(cacheDir, "acp-registry", "agents", "kimi", "1.50.0", "linux-x86_64", "cmd"),
+          path.join(cacheDir, "acp-registry", "agents", "kimi", "1.49.0", "linux-x86_64", "bin"),
+        ]);
 
-      const missing = yield* acpRegistryManagedBinaryDirectories({
-        fileSystem,
-        path,
-        cacheDir: path.join(cacheDir, "does-not-exist"),
-        platform: "linux",
-        architecture: "x64",
-      });
-      expect(missing).toEqual([]);
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        const missing = yield* acpRegistryManagedBinaryDirectories({
+          fileSystem,
+          path,
+          cacheDir: path.join(cacheDir, "does-not-exist"),
+          platform: "linux",
+          architecture: "x64",
+        });
+        expect(missing).toEqual([]);
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 });

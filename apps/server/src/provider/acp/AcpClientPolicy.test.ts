@@ -209,6 +209,13 @@ describe("acpMcpToolApprovalElicitationDisposition", () => {
     assert.equal(acpMcpToolApprovalElicitationDisposition(approvalRequired, tagged), "ask");
     assert.equal(
       acpMcpToolApprovalElicitationDisposition(
+        { ...fullAccess, approvalPolicy: "on-request" },
+        tagged,
+      ),
+      "ask",
+    );
+    assert.equal(
+      acpMcpToolApprovalElicitationDisposition(
         {
           runtimeMode: "auto-accept-edits",
           cwd: process.cwd(),

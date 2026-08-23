@@ -485,6 +485,7 @@ export const make = Effect.gen(function* () {
                 type: "thread.metadata.update",
                 commandId: input.commandId,
                 threadId: candidateThreadId,
+                expectedEmpty: true,
               })
             : threads.dispatch({
                 type: "thread.create",

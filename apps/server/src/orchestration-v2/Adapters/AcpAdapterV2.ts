@@ -2558,7 +2558,11 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               title: null,
               type: "dynamic_tool",
               toolName: `${mcpIdentity.server}.${mcpIdentity.tool}`,
-              input: unknownRecord(rawInputRecord?.arguments) ?? rawInputRecord ?? {},
+              input:
+                mcpIdentity.input ??
+                unknownRecord(rawInputRecord?.arguments) ??
+                rawInputRecord ??
+                {},
               ...(rawOutput === undefined ? {} : { output: acpMcpToolCallOutput(rawOutput) }),
             };
             yield* emitProviderEvent({ type: "turn_item.updated", driver, turnItem });
@@ -5320,6 +5324,10 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                 detail: `ACP provider turn ${existing.providerTurnId} is still active`,
               });
             }
+            // Session activation can itself invoke client fs/terminal methods.
+            // Install the incoming thread policy before load/resume so those
+            // requests can never inherit the previously active thread's policy.
+            latestRuntimePolicy = turnInput.runtimePolicy;
             const requestedSessionId = yield* nativeThreadId(driver, turnInput.providerThread);
             const restartAfterInterrupt = yield* restartRuntimeAfterTeardownIfRequired(
               turnInput.threadId,
@@ -5463,7 +5471,6 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               }
             }
             yield* Ref.set(activeTurn, context);
-            latestRuntimePolicy = turnInput.runtimePolicy;
             // Direct Stop closes and recreates the old runtime before reaching
             // this reset. The quarantine remains session-scoped by design.
             yield* Ref.set(stoppedRunQuarantine, false);

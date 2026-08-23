@@ -99,6 +99,12 @@ interface AcpPolicyOperation {
   readonly locations: ReadonlyArray<{ readonly path: string }> | null | undefined;
 }
 
+function acpPolicyRequiresApproval(runtimePolicy: AcpRuntimePolicy): boolean {
+  return runtimePolicy.approvalPolicy === undefined
+    ? runtimePolicy.runtimeMode === "approval-required"
+    : runtimePolicy.approvalPolicy !== "never";
+}
+
 function acpWorkspaceWriteAllowsMutation(
   runtimePolicy: AcpRuntimePolicy,
   sandboxPolicy: Record<string, unknown>,
@@ -150,12 +156,7 @@ export function acpOperationDisposition(
   runtimePolicy: AcpRuntimePolicy,
   operation: AcpPolicyOperation,
 ): AcpPermissionDisposition {
-  const approvalPolicy = runtimePolicy.approvalPolicy;
-  const requiresApproval =
-    approvalPolicy === undefined
-      ? runtimePolicy.runtimeMode === "approval-required"
-      : approvalPolicy !== "never";
-  if (requiresApproval) {
+  if (acpPolicyRequiresApproval(runtimePolicy)) {
     return "ask";
   }
 
@@ -217,7 +218,7 @@ export function acpMcpToolApprovalElicitationDisposition(
   // This request comes from T3's authenticated, scope-checked MCP endpoint,
   // not an arbitrary provider command. Let explicit approval mode surface it
   // to the user and otherwise allow the endpoint to enforce its own policy.
-  return runtimePolicy.runtimeMode === "approval-required" ? "ask" : "allow";
+  return acpPolicyRequiresApproval(runtimePolicy) ? "ask" : "allow";
 }
 
 /** Disposition of a client-mediated `fs/write_text_file` to one path. */

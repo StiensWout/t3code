@@ -1,6 +1,7 @@
 import {
   AcpRegistryOperationError,
   AcpRegistryOperationErrorReason,
+  TrimmedNonEmptyString,
   type AcpRegistryManagedBinaryUninstallInput,
   type AcpRegistryManagedBinaryUninstallResult,
   type AcpRegistryPrepareInput,
@@ -49,8 +50,8 @@ const BoundedAgentId = Schema.String.check(
   Schema.isMaxLength(128),
   Schema.isPattern(/^[a-z0-9][a-z0-9._-]*$/u),
 );
-const BoundedName = Schema.String.check(Schema.isMaxLength(160));
-const BoundedVersion = Schema.String.check(Schema.isMaxLength(128));
+const BoundedName = TrimmedNonEmptyString.check(Schema.isMaxLength(160));
+const BoundedVersion = TrimmedNonEmptyString.check(Schema.isMaxLength(128));
 const BoundedDescription = Schema.String.check(Schema.isMaxLength(1_024));
 const BoundedMetadata = Schema.String.check(Schema.isMaxLength(256));
 const BoundedArgument = Schema.String.check(Schema.isMaxLength(1_024));
@@ -207,6 +208,22 @@ export const acpRegistryManagedBinaryDirectories = (input: {
     const target = resolveAcpRegistryPlatformTarget(input.platform, input.architecture);
     if (target === undefined) return [];
     const installsDirectory = input.path.join(input.cacheDir, "acp-registry", "agents");
+    const cachedAgents = yield* input.fileSystem
+      .readFileString(input.path.join(input.cacheDir, "acp-registry", "registry.json"))
+      .pipe(
+        Effect.flatMap(decodeJson),
+        Effect.flatMap(decodeRegistryIndexEnvelope),
+        Effect.map((envelope) =>
+          envelope.agents.flatMap((candidate) => {
+            const decoded = decodeRegistryAgent(candidate);
+            return Option.isSome(decoded) ? [decoded.value] : [];
+          }),
+        ),
+        Effect.orElseSucceed((): ReadonlyArray<AcpRegistryAgent> => []),
+      );
+    const cachedAgentByInstall = new Map(
+      cachedAgents.map((agent) => [`${agent.id}\0${agent.version}`, agent] as const),
+    );
     const listDirectories = (directory: string) =>
       input.fileSystem.readDirectory(directory).pipe(Effect.orElseSucceed((): Array<string> => []));
     const directories: Array<string> = [];
@@ -215,9 +232,19 @@ export const acpRegistryManagedBinaryDirectories = (input: {
         (left, right) => right.localeCompare(left, undefined, { numeric: true }),
       );
       for (const version of versions) {
-        const directory = input.path.join(installsDirectory, agent, version, target);
-        if (yield* input.fileSystem.exists(directory).pipe(Effect.orElseSucceed(() => false))) {
-          directories.push(directory);
+        const installRoot = input.path.join(installsDirectory, agent, version, target);
+        if (yield* input.fileSystem.exists(installRoot).pipe(Effect.orElseSucceed(() => false))) {
+          const binaryTarget = cachedAgentByInstall.get(`${agent}\0${version}`)?.distribution
+            .binary?.[target];
+          const commandSegments =
+            binaryTarget === undefined ? undefined : normalizeRegistryCommandPath(binaryTarget.cmd);
+          const directory =
+            commandSegments === undefined
+              ? installRoot
+              : input.path.join(installRoot, ...commandSegments.slice(0, -1));
+          if (yield* input.fileSystem.exists(directory).pipe(Effect.orElseSucceed(() => false))) {
+            directories.push(directory);
+          }
         }
       }
     }

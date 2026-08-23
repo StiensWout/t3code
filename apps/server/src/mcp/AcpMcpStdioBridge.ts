@@ -31,7 +31,7 @@ export class AcpMcpBridgeError extends Error {
 const bridgeError = (cause: unknown): AcpMcpBridgeError =>
   cause instanceof AcpMcpBridgeError
     ? cause
-    : new AcpMcpBridgeError(cause instanceof Error ? cause.message : String(cause));
+    : new AcpMcpBridgeError(cause instanceof Error ? cause.message : String(cause), { cause });
 
 interface JsonRpcEnvelope {
   readonly id?: unknown;
@@ -391,7 +391,14 @@ export async function runAcpMcpCliFastPath(
     process.exitCode = 2;
     return;
   }
-  const parsed: unknown = JSON.parse(argumentsJson);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(argumentsJson);
+  } catch {
+    process.stderr.write("acp-mcp-call arguments must be valid JSON.\n");
+    process.exitCode = 2;
+    return;
+  }
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     process.stderr.write("acp-mcp-call arguments must be a JSON object.\n");
     process.exitCode = 2;
