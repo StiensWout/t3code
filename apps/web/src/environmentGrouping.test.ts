@@ -12,6 +12,7 @@ import {
   buildPhysicalToLogicalProjectKeyMap,
   buildSidebarProjectPickerEntries,
   buildSidebarProjectSnapshots,
+  countNewThreadDestinations,
 } from "./sidebarProjectGrouping";
 import { orderItemsByPreferredIds } from "./components/Sidebar.logic";
 import { legacyProjectCwdPreferenceKey } from "./uiStateStore";
@@ -63,7 +64,7 @@ describe("environment grouping", () => {
     expect(deriveLogicalProjectKey(remote)).toBe(repositoryIdentity.canonicalKey);
   });
 
-  it("counts cross-environment copies as one new-thread project choice", () => {
+  it("counts each server copy as a new-thread destination", () => {
     const primary = makeProject({ repositoryIdentity });
     const remote = makeProject({
       id: ProjectId.make("project-remote"),
@@ -71,14 +72,15 @@ describe("environment grouping", () => {
       repositoryIdentity,
     });
 
-    const projectGroupCount = buildSidebarProjectSnapshots({
+    const groups = buildSidebarProjectSnapshots({
       projects: [primary, remote],
       settings: defaultGroupingSettings,
       primaryEnvironmentId,
       resolveEnvironmentLabel: () => null,
-    }).length;
+    });
 
-    expect(projectGroupCount).toBe(1);
+    expect(groups).toHaveLength(1);
+    expect(countNewThreadDestinations(groups)).toBe(2);
   });
 
   it("keeps projects without repository identity physically scoped", () => {

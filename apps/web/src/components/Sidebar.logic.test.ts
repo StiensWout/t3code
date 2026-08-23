@@ -462,15 +462,15 @@ describe("isSidebarNestedLinkClick", () => {
 });
 
 describe("shouldCreateNewThreadInCurrentProject", () => {
-  it("creates directly on shift+click in a multi-project setup", () => {
+  it("creates directly on shift+click with multiple destinations", () => {
     expect(shouldCreateNewThreadInCurrentProject(true, 2)).toBe(true);
   });
 
-  it("opens the picker on a plain click in a multi-project setup", () => {
+  it("opens the picker on a plain click with multiple destinations", () => {
     expect(shouldCreateNewThreadInCurrentProject(false, 2)).toBe(false);
   });
 
-  it("creates directly on any click with a single project", () => {
+  it("creates directly on any click with a single destination", () => {
     expect(shouldCreateNewThreadInCurrentProject(false, 1)).toBe(true);
     expect(shouldCreateNewThreadInCurrentProject(true, 1)).toBe(true);
   });

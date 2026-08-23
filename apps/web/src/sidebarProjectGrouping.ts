@@ -31,6 +31,16 @@ export interface SidebarProjectPickerEntry {
   isPreferred: boolean;
 }
 
+export function countNewThreadDestinations(
+  groups: ReadonlyArray<Pick<SidebarProjectSnapshot, "memberProjects">>,
+): number {
+  return groups.reduce(
+    (count, group) =>
+      count + new Set(group.memberProjects.map((project) => project.environmentId)).size,
+    0,
+  );
+}
+
 export function buildPhysicalToLogicalProjectKeyMap(input: {
   projects: ReadonlyArray<Project>;
   settings: ProjectGroupingSettings;

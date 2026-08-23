@@ -42,6 +42,7 @@ import {
   FolderPlusIcon,
   LinkIcon,
   MessageSquareIcon,
+  MonitorIcon,
   PaletteIcon,
   ServerIcon,
   SettingsIcon,
@@ -165,6 +166,7 @@ import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore"
 import {
   buildSidebarProjectPickerEntries,
   buildSidebarProjectSnapshots,
+  type SidebarProjectGroupMember,
 } from "../sidebarProjectGrouping";
 import type { Project } from "../types";
 
@@ -665,7 +667,7 @@ function OpenCommandPaletteDialog(props: {
             {
               kind: isLocal ? "local" : "remote",
               label: isPrimary
-                ? "Local"
+                ? environment.label
                 : isLocal
                   ? `${environment.label} (Local)`
                   : environment.label,
@@ -1024,61 +1026,102 @@ function OpenCommandPaletteDialog(props: {
   const projectThreadItems = useMemo(
     () =>
       enumerateCommandPaletteItems(
-        buildProjectActionItems({
-          projects: pickerProjects,
-          valuePrefix: "new-thread-in",
-          searchTerms: (project) => {
-            const group = projectGroupByTargetKey.get(`${project.environmentId}:${project.id}`);
-            const location = projectEnvironmentLocationById.get(project.environmentId);
-            return [
-              ...(group?.memberProjects.flatMap((member) => [member.title, member.workspaceRoot]) ??
-                []),
-              ...(location ? [location.label] : []),
-            ];
-          },
-          renderDescription: (project) => {
-            const location = projectEnvironmentLocationById.get(project.environmentId) ?? {
-              kind: "remote",
+        projectPickerEntries.map(
+          ({ group, targetProject }): CommandPaletteActionItem | CommandPaletteSubmenuItem => {
+            const projectByEnvironmentId = new Map<EnvironmentId, SidebarProjectGroupMember>();
+            for (const member of group.memberProjects) {
+              if (
+                !projectByEnvironmentId.has(member.environmentId) ||
+                (member.environmentId === targetProject.environmentId &&
+                  member.id === targetProject.id)
+              ) {
+                projectByEnvironmentId.set(member.environmentId, member);
+              }
+            }
+            const locations = [...projectByEnvironmentId.values()].map((member) => {
+              const location = projectEnvironmentLocationById.get(member.environmentId) ?? {
+                kind: "remote" as const,
+                label: member.environmentLabel ?? member.environmentId,
+              };
+              return { location, member };
+            });
+            const searchTerms = group.memberProjects.flatMap((member) => [
+              member.title,
+              member.workspaceRoot,
+              member.environmentLabel ?? member.environmentId,
+            ]);
+            const icon = projectFavicon(targetProject);
+
+            if (locations.length > 1) {
+              return {
+                kind: "submenu",
+                value: `new-thread-in:${targetProject.environmentId}:${targetProject.id}`,
+                searchTerms,
+                title: group.displayName,
+                description: `${locations.length} servers`,
+                icon,
+                addonIcon: <ServerIcon className={ADDON_ICON_CLASS} />,
+                groups: [
+                  {
+                    value: `new-thread-in-servers:${group.projectKey}`,
+                    label: "Run on",
+                    items: locations.map(({ location, member }) => {
+                      const LocationIcon = location.kind === "local" ? MonitorIcon : ServerIcon;
+                      return {
+                        kind: "action" as const,
+                        value: `new-thread-in-server:${member.environmentId}:${member.id}`,
+                        searchTerms: [location.label, member.workspaceRoot, member.title],
+                        title: location.label,
+                        description: member.workspaceRoot,
+                        icon: <LocationIcon className={ITEM_ICON_CLASS} />,
+                        run: async () => {
+                          await handleNewThread(scopeProjectRef(member.environmentId, member.id));
+                        },
+                      };
+                    }),
+                  },
+                ],
+              };
+            }
+
+            const activeLocation = locations[0]?.location ?? {
+              kind: "remote" as const,
               label: "Remote",
             };
-            return (
-              <span className="flex min-w-0 items-center gap-1">
-                <span className="inline-flex min-w-0 items-center gap-1">
-                  {location.kind === "remote" ? (
-                    <ServerIcon aria-hidden className={COMMAND_PALETTE_META_ICON_CLASS} />
-                  ) : null}
-                  <span className="truncate">{location.label}</span>
-                </span>
-                <CommandPaletteMetaDot />
-                <span className="truncate">{project.workspaceRoot}</span>
-              </span>
-            );
-          },
-          icon: projectFavicon,
-          runProject: async (project) => {
-            const group = projectGroupByTargetKey.get(`${project.environmentId}:${project.id}`);
             const contextualRefBelongsToGroup =
               contextualProjectRef !== null &&
-              group?.memberProjectRefs.some(
+              group.memberProjectRefs.some(
                 (projectRef) =>
                   projectRef.environmentId === contextualProjectRef.environmentId &&
                   projectRef.projectId === contextualProjectRef.projectId,
               );
-            await handleNewThread(
-              contextualRefBelongsToGroup
-                ? contextualProjectRef
-                : scopeProjectRef(project.environmentId, project.id),
-            );
+            const LocationIcon = activeLocation.kind === "local" ? MonitorIcon : ServerIcon;
+            return {
+              kind: "action",
+              value: `new-thread-in:${targetProject.environmentId}:${targetProject.id}`,
+              searchTerms,
+              title: group.displayName,
+              description: (
+                <span className="flex min-w-0 items-center gap-1">
+                  <LocationIcon aria-hidden className={COMMAND_PALETTE_META_ICON_CLASS} />
+                  <span className="truncate">{activeLocation.label}</span>
+                  <CommandPaletteMetaDot />
+                  <span className="truncate">{targetProject.workspaceRoot}</span>
+                </span>
+              ),
+              icon,
+              run: async () => {
+                await handleNewThread(
+                  contextualRefBelongsToGroup
+                    ? contextualProjectRef
+                    : scopeProjectRef(targetProject.environmentId, targetProject.id),
+                );
+              },
+            };
           },
-        }),
+        ),
       ),
-    [
-      contextualProjectRef,
-      handleNewThread,
-      pickerProjects,
-      projectEnvironmentLocationById,
-      projectGroupByTargetKey,
-    ],
+    [contextualProjectRef, handleNewThread, projectEnvironmentLocationById, projectPickerEntries],
   );
 
   const allThreadItems = useMemo(

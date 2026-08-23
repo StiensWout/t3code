@@ -126,7 +126,13 @@ export interface CommandPaletteView {
 
 export function enumerateCommandPaletteItems(
   items: ReadonlyArray<CommandPaletteActionItem>,
-): CommandPaletteActionItem[] {
+): CommandPaletteActionItem[];
+export function enumerateCommandPaletteItems(
+  items: ReadonlyArray<CommandPaletteActionItem | CommandPaletteSubmenuItem>,
+): Array<CommandPaletteActionItem | CommandPaletteSubmenuItem>;
+export function enumerateCommandPaletteItems(
+  items: ReadonlyArray<CommandPaletteActionItem | CommandPaletteSubmenuItem>,
+): Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> {
   return items.map((item, index) => {
     const shortcutCommand = THREAD_JUMP_KEYBINDING_COMMANDS[index];
     if (shortcutCommand) return { ...item, shortcutCommand };
