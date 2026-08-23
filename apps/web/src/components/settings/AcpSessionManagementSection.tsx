@@ -15,6 +15,7 @@ import { useState } from "react";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { toastManager } from "../ui/toast";
 
 interface AcpSessionProject {
@@ -161,23 +162,29 @@ export function AcpSessionManagementSection(props: {
         ) : (
           <>
             <div className="flex flex-wrap items-center gap-2">
-              <select
+              <Select
                 value={projectId ?? ""}
                 disabled={props.readOnly || loading}
-                onChange={(event) => {
-                  setProjectId(event.target.value as ProjectId);
+                onValueChange={(value) => {
+                  if (value === null) return;
+                  setProjectId(value as ProjectId);
                   setSessions([]);
                   setNextCursor(null);
                 }}
-                className="h-8 min-w-48 rounded-md border border-border bg-background px-2 text-xs text-foreground"
-                aria-label="Project for ACP sessions"
               >
-                {props.projects.map((project) => (
-                  <option key={project.id} value={project.id}>
-                    {project.title}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger aria-label="Project for ACP sessions" className="min-w-48" size="xs">
+                  <SelectValue>
+                    {props.projects.find((project) => project.id === projectId)?.title}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectPopup>
+                  {props.projects.map((project) => (
+                    <SelectItem key={project.id} value={project.id}>
+                      {project.title}
+                    </SelectItem>
+                  ))}
+                </SelectPopup>
+              </Select>
               <Button
                 type="button"
                 size="xs"

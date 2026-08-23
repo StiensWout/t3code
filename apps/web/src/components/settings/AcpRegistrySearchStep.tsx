@@ -15,7 +15,7 @@ import { serverEnvironment } from "../../state/server";
 import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
-import { Input } from "../ui/input";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "../ui/input-group";
 import { ScrollArea } from "../ui/scroll-area";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { isConfiguredAcpRegistryAgent } from "./AddProviderInstanceDialog.logic";
@@ -143,17 +143,20 @@ export function AcpRegistrySearchStep({
         </p>
       </div>
 
-      <form className="relative flex gap-2" onSubmit={handleSearch}>
-        <SearchIcon className="pointer-events-none absolute top-1/2 left-3 z-10 size-4 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          aria-label="Search ACP Registry"
-          autoFocus
-          className="bg-background [&_input]:pl-9"
-          onChange={(event) => setQuery(event.currentTarget.value)}
-          placeholder="Search by agent, author, or description"
-          type="search"
-          value={query}
-        />
+      <form className="flex gap-2" onSubmit={handleSearch}>
+        <InputGroup>
+          <InputGroupAddon>
+            <SearchIcon />
+          </InputGroupAddon>
+          <InputGroupInput
+            aria-label="Search ACP Registry"
+            autoFocus
+            onChange={(event) => setQuery(event.currentTarget.value)}
+            placeholder="Search by agent, author, or description"
+            type="search"
+            value={query}
+          />
+        </InputGroup>
         <Button
           disabled={search.isPending || preparingId !== null}
           size="sm"
