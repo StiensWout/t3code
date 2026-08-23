@@ -626,8 +626,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
             instanceId,
             (configuration) =>
               liveSnapshotSemaphore.withPermit(
-                invalidateEnrichmentCache.pipe(
-                  Effect.andThen(getSnapshot),
+                getSnapshot.pipe(
                   Effect.flatMap((current) =>
                     publishSnapshot(
                       applyAcpRegistryLiveConfiguration(

@@ -12,6 +12,7 @@ import { AcpRegistryCatalog, type AcpRegistryInspection } from "../acp/AcpRegist
 import {
   acpRegistrySnapshotReadiness,
   applyAcpRegistryAvailableCommands,
+  applyAcpRegistryLiveConfiguration,
   buildCheckedAcpRegistrySnapshot,
   checkAcpRegistryProviderReadiness,
   checkAcpRegistryProviderStatus,
@@ -78,6 +79,55 @@ describe("acpRegistrySnapshotReadiness", () => {
     expect(applyAcpRegistryAvailableCommands(provider, Option.none()).slashCommands).toEqual([
       { name: "stale" },
     ]);
+  });
+
+  it("overlays live configuration without dropping probe-owned session capabilities", () => {
+    const provider = buildCheckedAcpRegistrySnapshot({
+      ...identity,
+      settings: decodeSettings({ agentId: "test-agent" }),
+      checkedAt: "2026-08-13T10:00:00.000Z",
+      inspection: {
+        status: "ready",
+        agentId: "test-agent",
+        version: "1.0.0",
+        distribution: "npx",
+      },
+      probe: {
+        probe: {
+          instanceId: identity.instanceId,
+          ready: true,
+          icon: null,
+          authMethods: [],
+          models: [{ id: "probe-model", name: "Probe model", description: null }],
+          currentModelId: "probe-model",
+          configOptions: [],
+          sessionManagement: {
+            canList: true,
+            canLoad: true,
+            canResume: true,
+            canLogout: true,
+          },
+        },
+        slashCommands: [],
+        skills: [],
+      },
+    });
+
+    expect(
+      applyAcpRegistryLiveConfiguration(
+        provider,
+        {
+          models: [{ id: "live-model", name: "Live model", description: null }],
+          currentModelId: "live-model",
+          configOptions: [],
+        },
+        [],
+      ),
+    ).toMatchObject({
+      auth: { status: "authenticated", canLogout: true },
+      nativeSessions: { canList: true, canLoad: true, canResume: true },
+      models: [{ slug: "live-model", isDefault: true }],
+    });
   });
 
   it("maps registry inspection status to provider readiness", () => {
