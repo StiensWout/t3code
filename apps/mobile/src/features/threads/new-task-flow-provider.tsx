@@ -51,6 +51,11 @@ import {
   updateComposerDraftSettings,
   useComposerDraft,
 } from "../../state/use-composer-drafts";
+import {
+  ensureModelOptionMemoryLoaded,
+  rememberModelOptions,
+  withRememberedModelOptions,
+} from "../../state/use-model-option-memory";
 import { useDebouncedValue, usePaginatedBranches } from "../../state/queries";
 import { vcsEnvironment } from "../../state/vcs";
 import {
@@ -195,6 +200,10 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   const { savedConnectionsById } = useSavedRemoteConnections();
   const groupingSettings = useMobileProjectGroupingSettings();
   const { enabled: planModeEnabled, loaded: planModePreferenceLoaded } = useLegacyPlanModeState();
+
+  useEffect(() => {
+    ensureModelOptionMemoryLoaded();
+  }, []);
   const projectScopes = useMemo(
     () =>
       sortHomeProjectScopes({
@@ -463,7 +472,9 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
         return;
       }
       updateComposerDraftSettings(selectedProjectDraftKey, {
-        modelSelection: options ? { ...option.selection, options } : option.selection,
+        modelSelection: withRememberedModelOptions(
+          options ? { ...option.selection, options } : option.selection,
+        ),
       });
     },
     [modelOptions, selectedProjectDraftKey],
@@ -473,6 +484,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       if (!selectedModel || !selectedProjectDraftKey) {
         return;
       }
+      rememberModelOptions(selectedModel.instanceId, selectedModel.model, options ?? []);
       const nextSelection: ModelSelection = options
         ? { ...selectedModel, options }
         : {
