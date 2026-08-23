@@ -16,6 +16,7 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
@@ -530,6 +531,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         readonly provider: ServerProvider;
         readonly expiresAt: number;
       } | null>(null);
+      const liveSnapshotSemaphore = yield* Semaphore.make(1);
       const enrichProviderCached = (baseSnapshot: ServerProvider) =>
         Effect.gen(function* () {
           const now = yield* Clock.currentTimeMillis;
@@ -576,7 +578,10 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
             Effect.flatMap(
               Option.match({
                 onNone: () => Effect.void,
-                onSome: publishSnapshot,
+                onSome: (provider) =>
+                  liveSnapshotSemaphore.withPermit(
+                    withLiveRuntimeState(provider).pipe(Effect.flatMap(publishSnapshot)),
+                  ),
               }),
             ),
           );
@@ -585,27 +590,31 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
           const publishLiveCommands = runtimeCoordinator.value.watchAvailableCommands(
             instanceId,
             ({ slashCommands, skills }) =>
-              getSnapshot.pipe(
-                Effect.flatMap((current) =>
-                  publishSnapshot({
-                    ...current,
-                    slashCommands,
-                    skills,
-                  }),
+              liveSnapshotSemaphore.withPermit(
+                getSnapshot.pipe(
+                  Effect.flatMap((current) =>
+                    publishSnapshot({
+                      ...current,
+                      slashCommands,
+                      skills,
+                    }),
+                  ),
                 ),
               ),
           );
           const publishLiveConfiguration = runtimeCoordinator.value.watchLiveConfiguration(
             instanceId,
             (configuration) =>
-              Ref.set(enrichmentCache, null).pipe(
-                Effect.andThen(getSnapshot),
-                Effect.flatMap((current) =>
-                  publishSnapshot(
-                    applyAcpRegistryLiveConfiguration(
-                      current,
-                      configuration,
-                      effectiveConfig.customModels,
+              liveSnapshotSemaphore.withPermit(
+                Ref.set(enrichmentCache, null).pipe(
+                  Effect.andThen(getSnapshot),
+                  Effect.flatMap((current) =>
+                    publishSnapshot(
+                      applyAcpRegistryLiveConfiguration(
+                        current,
+                        configuration,
+                        effectiveConfig.customModels,
+                      ),
                     ),
                   ),
                 ),
@@ -614,10 +623,12 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
           const publishUrlAuthAction = runtimeCoordinator.value.watchUrlAuthAction(
             instanceId,
             (action) =>
-              getSnapshot.pipe(
-                Effect.flatMap((current) =>
-                  publishSnapshot(
-                    applyAcpRegistryUrlAuthAction(current, Option.fromNullishOr(action)),
+              liveSnapshotSemaphore.withPermit(
+                getSnapshot.pipe(
+                  Effect.flatMap((current) =>
+                    publishSnapshot(
+                      applyAcpRegistryUrlAuthAction(current, Option.fromNullishOr(action)),
+                    ),
                   ),
                 ),
               ),
@@ -686,6 +697,21 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
               Effect.provideService(AcpRegistryCatalog, catalog),
               Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
               Effect.provideService(Crypto.Crypto, crypto),
+              Effect.tap(() =>
+                Ref.set(enrichmentCache, null).pipe(
+                  Effect.andThen(
+                    Option.isSome(runtimeCoordinator)
+                      ? Effect.all(
+                          [
+                            runtimeCoordinator.value.clearAvailableCommands(instanceId),
+                            runtimeCoordinator.value.clearLiveConfiguration(instanceId),
+                          ],
+                          { concurrency: "unbounded", discard: true },
+                        )
+                      : Effect.void,
+                  ),
+                ),
+              ),
             );
             return Option.isSome(runtimeCoordinator)
               ? logout.pipe(

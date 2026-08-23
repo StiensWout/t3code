@@ -271,7 +271,7 @@ export function acpRegistryProbeFailure(
   const detail = error._tag === "AcpTransportError" && error.detail ? error.detail : error.message;
   const authenticationFailed =
     (error._tag === "AcpRequestError" && error.code === -32000) ||
-    /authenticat|credential|log.?in/iu.test(detail);
+    /\b(?:authenticat(?:e|ed|es|ing|ion)|credentials?|log(?:[\s-]+)?in)\b/iu.test(detail);
   return new AcpRegistryOperationError({
     reason: authenticationFailed ? "authentication_failed" : "probe_failed",
     message: authenticationFailed

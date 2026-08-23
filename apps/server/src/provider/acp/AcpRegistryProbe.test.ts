@@ -425,8 +425,24 @@ describe("ACP Registry probe", () => {
     expect(
       acpRegistryProbeFailure(
         new EffectAcpErrors.AcpTransportError({
+          detail: "Authentication required",
+          cause: "credentials missing",
+        }),
+      ).reason,
+    ).toBe("authentication_failed");
+    expect(
+      acpRegistryProbeFailure(
+        new EffectAcpErrors.AcpTransportError({
           detail: "connection closed",
           cause: "closed",
+        }),
+      ).reason,
+    ).toBe("probe_failed");
+    expect(
+      acpRegistryProbeFailure(
+        new EffectAcpErrors.AcpTransportError({
+          detail: "Failed while logging request",
+          cause: "logging failed",
         }),
       ).reason,
     ).toBe("probe_failed");
