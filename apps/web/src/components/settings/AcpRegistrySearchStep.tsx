@@ -17,6 +17,7 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { ScrollArea } from "../ui/scroll-area";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { isConfiguredAcpRegistryAgent } from "./AddProviderInstanceDialog.logic";
 import { AcpRegistryAgentIcon } from "./AcpRegistryIcon";
 
@@ -259,9 +260,12 @@ export function AcpRegistrySearchStep({
                         <span key={item}>{item}</span>
                       ))}
                       {agent.integrity === "sha256" ? (
-                        <span title="Binary checksum is verified against the registry">
-                          ✓ checksum
-                        </span>
+                        <Tooltip>
+                          <TooltipTrigger render={<span>✓ checksum</span>} />
+                          <TooltipPopup>
+                            Binary checksum is verified against the registry
+                          </TooltipPopup>
+                        </Tooltip>
                       ) : null}
                       {agent.website ? (
                         <a
