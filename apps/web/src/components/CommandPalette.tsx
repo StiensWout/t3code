@@ -42,7 +42,6 @@ import {
   FolderPlusIcon,
   LinkIcon,
   MessageSquareIcon,
-  MonitorIcon,
   PaletteIcon,
   ServerIcon,
   SettingsIcon,
@@ -166,7 +165,7 @@ import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore"
 import {
   buildSidebarProjectPickerEntries,
   buildSidebarProjectSnapshots,
-  type SidebarProjectGroupMember,
+  listNewThreadProjectDestinations,
 } from "../sidebarProjectGrouping";
 import type { Project } from "../types";
 
@@ -667,7 +666,11 @@ function OpenCommandPaletteDialog(props: {
             {
               kind: isLocal ? "local" : "remote",
               label: isPrimary
-                ? environment.label
+                ? resolveEnvironmentOptionLabel({
+                    isPrimary,
+                    environmentId: environment.environmentId,
+                    runtimeLabel: environment.label,
+                  })
                 : isLocal
                   ? `${environment.label} (Local)`
                   : environment.label,
@@ -1028,23 +1031,15 @@ function OpenCommandPaletteDialog(props: {
       enumerateCommandPaletteItems(
         projectPickerEntries.map(
           ({ group, targetProject }): CommandPaletteActionItem | CommandPaletteSubmenuItem => {
-            const projectByEnvironmentId = new Map<EnvironmentId, SidebarProjectGroupMember>();
-            for (const member of group.memberProjects) {
-              if (
-                !projectByEnvironmentId.has(member.environmentId) ||
-                (member.environmentId === targetProject.environmentId &&
-                  member.id === targetProject.id)
-              ) {
-                projectByEnvironmentId.set(member.environmentId, member);
-              }
-            }
-            const locations = [...projectByEnvironmentId.values()].map((member) => {
-              const location = projectEnvironmentLocationById.get(member.environmentId) ?? {
-                kind: "remote" as const,
-                label: member.environmentLabel ?? member.environmentId,
-              };
-              return { location, member };
-            });
+            const locations = listNewThreadProjectDestinations(group, targetProject).map(
+              (member) => {
+                const location = projectEnvironmentLocationById.get(member.environmentId) ?? {
+                  kind: "remote" as const,
+                  label: member.environmentLabel ?? member.environmentId,
+                };
+                return { location, member };
+              },
+            );
             const searchTerms = group.memberProjects.flatMap((member) => [
               member.title,
               member.workspaceRoot,
@@ -1066,14 +1061,13 @@ function OpenCommandPaletteDialog(props: {
                     value: `new-thread-in-servers:${group.projectKey}`,
                     label: "Run on",
                     items: locations.map(({ location, member }) => {
-                      const LocationIcon = location.kind === "local" ? MonitorIcon : ServerIcon;
                       return {
                         kind: "action" as const,
                         value: `new-thread-in-server:${member.environmentId}:${member.id}`,
                         searchTerms: [location.label, member.workspaceRoot, member.title],
                         title: location.label,
                         description: member.workspaceRoot,
-                        icon: <LocationIcon className={ITEM_ICON_CLASS} />,
+                        icon: <ServerIcon className={ITEM_ICON_CLASS} />,
                         run: async () => {
                           await handleNewThread(scopeProjectRef(member.environmentId, member.id));
                         },
@@ -1095,7 +1089,6 @@ function OpenCommandPaletteDialog(props: {
                   projectRef.environmentId === contextualProjectRef.environmentId &&
                   projectRef.projectId === contextualProjectRef.projectId,
               );
-            const LocationIcon = activeLocation.kind === "local" ? MonitorIcon : ServerIcon;
             return {
               kind: "action",
               value: `new-thread-in:${targetProject.environmentId}:${targetProject.id}`,
@@ -1103,7 +1096,7 @@ function OpenCommandPaletteDialog(props: {
               title: group.displayName,
               description: (
                 <span className="flex min-w-0 items-center gap-1">
-                  <LocationIcon aria-hidden className={COMMAND_PALETTE_META_ICON_CLASS} />
+                  <ServerIcon aria-hidden className={COMMAND_PALETTE_META_ICON_CLASS} />
                   <span className="truncate">{activeLocation.label}</span>
                   <CommandPaletteMetaDot />
                   <span className="truncate">{targetProject.workspaceRoot}</span>

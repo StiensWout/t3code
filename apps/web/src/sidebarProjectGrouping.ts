@@ -41,6 +41,33 @@ export function countNewThreadDestinations(
   );
 }
 
+export function listNewThreadProjectDestinations(
+  group: Pick<SidebarProjectSnapshot, "memberProjects">,
+  targetProject: Pick<Project, "environmentId" | "id">,
+): SidebarProjectGroupMember[] {
+  const projectByEnvironmentId = new Map<EnvironmentId, SidebarProjectGroupMember>();
+  for (const member of group.memberProjects) {
+    if (
+      !projectByEnvironmentId.has(member.environmentId) ||
+      (member.environmentId === targetProject.environmentId && member.id === targetProject.id)
+    ) {
+      projectByEnvironmentId.set(member.environmentId, member);
+    }
+  }
+
+  const destinations = [...projectByEnvironmentId.values()];
+  const targetIndex = destinations.findIndex(
+    (project) => project.environmentId === targetProject.environmentId,
+  );
+  if (targetIndex <= 0) return destinations;
+
+  return [
+    destinations[targetIndex]!,
+    ...destinations.slice(0, targetIndex),
+    ...destinations.slice(targetIndex + 1),
+  ];
+}
+
 export function buildPhysicalToLogicalProjectKeyMap(input: {
   projects: ReadonlyArray<Project>;
   settings: ProjectGroupingSettings;

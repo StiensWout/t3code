@@ -13,6 +13,7 @@ import {
   buildSidebarProjectPickerEntries,
   buildSidebarProjectSnapshots,
   countNewThreadDestinations,
+  listNewThreadProjectDestinations,
 } from "./sidebarProjectGrouping";
 import { orderItemsByPreferredIds } from "./components/Sidebar.logic";
 import { legacyProjectCwdPreferenceKey } from "./uiStateStore";
@@ -81,6 +82,9 @@ describe("environment grouping", () => {
 
     expect(groups).toHaveLength(1);
     expect(countNewThreadDestinations(groups)).toBe(2);
+    expect(
+      listNewThreadProjectDestinations(groups[0]!, remote).map((project) => project.id),
+    ).toEqual([remote.id, primary.id]);
   });
 
   it("keeps projects without repository identity physically scoped", () => {
