@@ -525,35 +525,49 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         Effect.provideService(AcpRegistryCatalog, catalog),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Effect.provideService(Crypto.Crypto, crypto),
-        Effect.flatMap(withLiveRuntimeState),
       );
       const enrichmentCache = yield* Ref.make<{
-        readonly provider: ServerProvider;
-        readonly expiresAt: number;
-      } | null>(null);
+        readonly generation: number;
+        readonly entry: {
+          readonly provider: ServerProvider;
+          readonly expiresAt: number;
+        } | null;
+      }>({ generation: 0, entry: null });
       const liveSnapshotSemaphore = yield* Semaphore.make(1);
+      const invalidateEnrichmentCache = Ref.update(enrichmentCache, (current) => ({
+        generation: current.generation + 1,
+        entry: null,
+      }));
       const enrichProviderCached = (baseSnapshot: ServerProvider) =>
         Effect.gen(function* () {
           const now = yield* Clock.currentTimeMillis;
-          const cached = yield* Ref.get(enrichmentCache);
+          const cacheState = yield* Ref.get(enrichmentCache);
+          const cached = cacheState.entry;
           if (
             cached !== null &&
             cached.expiresAt > now &&
             cached.provider.version === baseSnapshot.version
           ) {
-            return yield* withLiveRuntimeState({
-              ...cached.provider,
-              checkedAt: baseSnapshot.checkedAt,
-            });
+            return {
+              provider: { ...cached.provider, checkedAt: baseSnapshot.checkedAt },
+              generation: cacheState.generation,
+            };
           }
           const enriched = yield* enrichProvider;
           if (enriched.auth.status === "authenticated") {
-            yield* Ref.set(enrichmentCache, {
-              provider: enriched,
-              expiresAt: now + PROBE_SUCCESS_TTL_MS,
-            });
+            yield* Ref.update(enrichmentCache, (current) =>
+              current.generation === cacheState.generation
+                ? {
+                    ...current,
+                    entry: {
+                      provider: enriched,
+                      expiresAt: now + PROBE_SUCCESS_TTL_MS,
+                    },
+                  }
+                : current,
+            );
           }
-          return enriched;
+          return { provider: enriched, generation: cacheState.generation };
         });
       const snapshotSettings = makeProviderSnapshotSettingsSource(effectiveConfig, serverSettings);
       const snapshot = yield* makeManagedServerProvider<
@@ -578,9 +592,15 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
             Effect.flatMap(
               Option.match({
                 onNone: () => Effect.void,
-                onSome: (provider) =>
+                onSome: ({ provider, generation }) =>
                   liveSnapshotSemaphore.withPermit(
-                    withLiveRuntimeState(provider).pipe(Effect.flatMap(publishSnapshot)),
+                    Ref.get(enrichmentCache).pipe(
+                      Effect.flatMap((current) =>
+                        current.generation === generation
+                          ? withLiveRuntimeState(provider).pipe(Effect.flatMap(publishSnapshot))
+                          : Effect.void,
+                      ),
+                    ),
                   ),
               }),
             ),
@@ -606,7 +626,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
             instanceId,
             (configuration) =>
               liveSnapshotSemaphore.withPermit(
-                Ref.set(enrichmentCache, null).pipe(
+                invalidateEnrichmentCache.pipe(
                   Effect.andThen(getSnapshot),
                   Effect.flatMap((current) =>
                     publishSnapshot(
@@ -698,17 +718,19 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
               Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
               Effect.provideService(Crypto.Crypto, crypto),
               Effect.tap(() =>
-                Ref.set(enrichmentCache, null).pipe(
-                  Effect.andThen(
-                    Option.isSome(runtimeCoordinator)
-                      ? Effect.all(
-                          [
-                            runtimeCoordinator.value.clearAvailableCommands(instanceId),
-                            runtimeCoordinator.value.clearLiveConfiguration(instanceId),
-                          ],
-                          { concurrency: "unbounded", discard: true },
-                        )
-                      : Effect.void,
+                liveSnapshotSemaphore.withPermit(
+                  invalidateEnrichmentCache.pipe(
+                    Effect.andThen(
+                      Option.isSome(runtimeCoordinator)
+                        ? Effect.all(
+                            [
+                              runtimeCoordinator.value.clearAvailableCommands(instanceId),
+                              runtimeCoordinator.value.clearLiveConfiguration(instanceId),
+                            ],
+                            { concurrency: "unbounded", discard: true },
+                          )
+                        : Effect.void,
+                    ),
                   ),
                 ),
               ),
