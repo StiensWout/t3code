@@ -42,6 +42,7 @@ import {
   FolderPlusIcon,
   LinkIcon,
   MessageSquareIcon,
+  MonitorIcon,
   PaletteIcon,
   ServerIcon,
   SettingsIcon,
@@ -1061,13 +1062,14 @@ function OpenCommandPaletteDialog(props: {
                     value: `new-thread-in-servers:${group.projectKey}`,
                     label: "Run on",
                     items: locations.map(({ location, member }) => {
+                      const LocationIcon = location.kind === "local" ? MonitorIcon : ServerIcon;
                       return {
                         kind: "action" as const,
                         value: `new-thread-in-server:${member.environmentId}:${member.id}`,
                         searchTerms: [location.label, member.workspaceRoot, member.title],
                         title: location.label,
                         description: member.workspaceRoot,
-                        icon: <ServerIcon className={ITEM_ICON_CLASS} />,
+                        icon: <LocationIcon className={ITEM_ICON_CLASS} />,
                         run: async () => {
                           await handleNewThread(scopeProjectRef(member.environmentId, member.id));
                         },
@@ -1082,6 +1084,7 @@ function OpenCommandPaletteDialog(props: {
               kind: "remote" as const,
               label: "Remote",
             };
+            const ActiveLocationIcon = activeLocation.kind === "local" ? MonitorIcon : ServerIcon;
             const contextualRefBelongsToGroup =
               contextualProjectRef !== null &&
               group.memberProjectRefs.some(
@@ -1096,7 +1099,7 @@ function OpenCommandPaletteDialog(props: {
               title: group.displayName,
               description: (
                 <span className="flex min-w-0 items-center gap-1">
-                  <ServerIcon aria-hidden className={COMMAND_PALETTE_META_ICON_CLASS} />
+                  <ActiveLocationIcon aria-hidden className={COMMAND_PALETTE_META_ICON_CLASS} />
                   <span className="truncate">{activeLocation.label}</span>
                   <CommandPaletteMetaDot />
                   <span className="truncate">{targetProject.workspaceRoot}</span>
