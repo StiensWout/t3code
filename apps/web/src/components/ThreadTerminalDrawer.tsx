@@ -1646,7 +1646,10 @@ export default function ThreadTerminalDrawer({
                       )}
 
                       <div
-                        className={showGroupHeaders ? "ml-1 border-l border-border/60 pl-1.5" : ""}
+                        className={cn(
+                          "flex flex-col gap-0.5",
+                          showGroupHeaders && "ml-1 border-l border-border/60 pl-1.5",
+                        )}
                       >
                         {terminalGroup.terminalIds.map((terminalId) => {
                           const isActive = terminalId === resolvedActiveTerminalId;
