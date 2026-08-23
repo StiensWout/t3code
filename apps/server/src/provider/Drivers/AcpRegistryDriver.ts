@@ -658,35 +658,41 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         orchestrationAdapter,
         textGeneration: makeUnsupportedTextGeneration(),
         acpSessionManagement: {
-          listSessions: ({ cwd, cursor }) =>
-            listAcpRegistrySessions({
+          listSessions: ({ cwd, cursor }) => {
+            const list = listAcpRegistrySessions({
               instanceId,
               settings: effectiveConfig,
               cwd,
               environment: processEnvironment,
-              ...(Option.isSome(runtimeCoordinator)
-                ? { runtimeCoordinator: runtimeCoordinator.value }
-                : {}),
               ...(cursor === undefined ? {} : { cursor }),
             }).pipe(
               Effect.provideService(AcpRegistryCatalog, catalog),
               Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
               Effect.provideService(Crypto.Crypto, crypto),
-            ),
-          logout: (cwd) =>
-            logoutAcpRegistry({
+            );
+            return Option.isSome(runtimeCoordinator)
+              ? list.pipe(
+                  Effect.provideService(AcpRegistryRuntimeCoordinator, runtimeCoordinator.value),
+                )
+              : list;
+          },
+          logout: (cwd) => {
+            const logout = logoutAcpRegistry({
               instanceId,
               settings: effectiveConfig,
               cwd,
               environment: processEnvironment,
-              ...(Option.isSome(runtimeCoordinator)
-                ? { runtimeCoordinator: runtimeCoordinator.value }
-                : {}),
             }).pipe(
               Effect.provideService(AcpRegistryCatalog, catalog),
               Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
               Effect.provideService(Crypto.Crypto, crypto),
-            ),
+            );
+            return Option.isSome(runtimeCoordinator)
+              ? logout.pipe(
+                  Effect.provideService(AcpRegistryRuntimeCoordinator, runtimeCoordinator.value),
+                )
+              : logout;
+          },
         },
       } satisfies ProviderInstance;
     }),

@@ -20,10 +20,12 @@ import * as TestClock from "effect/testing/TestClock";
 import * as NodeCrypto from "node:crypto";
 
 import {
+  AcpRegistryError,
   acpRegistryManagedBinaryDirectories,
   makeAcpRegistryCatalog,
   resolveAcpRegistryDistribution,
   resolveAcpRegistryPlatformTarget,
+  toAcpRegistryOperationError,
   type AcpRegistryAgent,
 } from "./AcpRegistrySupport.ts";
 
@@ -67,6 +69,21 @@ function resolverLayer(
 }
 
 describe("AcpRegistrySupport", () => {
+  it("preserves the registry failure when translating it for clients", () => {
+    const cause = new Error("registry unavailable");
+    const failure = new AcpRegistryError({
+      reason: "registry_unavailable",
+      detail: "Could not load the ACP Registry.",
+      cause,
+    });
+
+    expect(toAcpRegistryOperationError(failure)).toMatchObject({
+      reason: "registry_unavailable",
+      message: "Could not load the ACP Registry.",
+      cause: failure,
+    });
+  });
+
   it("maps supported Node platforms to ACP Registry target keys", () => {
     expect(resolveAcpRegistryPlatformTarget("darwin", "arm64")).toBe("darwin-aarch64");
     expect(resolveAcpRegistryPlatformTarget("linux", "x64")).toBe("linux-x86_64");

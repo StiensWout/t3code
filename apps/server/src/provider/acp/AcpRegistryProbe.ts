@@ -277,6 +277,7 @@ export function acpRegistryProbeFailure(
     message: authenticationFailed
       ? `The ACP agent could not complete authentication: ${detail}`
       : `The ACP agent could not create a test session: ${detail}`,
+    cause: error,
     ...(authMethods.length > 0 ? { authMethods } : {}),
     ...(authAction === undefined ? {} : { authAction }),
   });
@@ -289,9 +290,7 @@ export interface AcpRegistryConfigurationProbeInput {
   readonly environment: NodeJS.ProcessEnv;
 }
 
-interface AcpRegistryManagementInput extends AcpRegistryConfigurationProbeInput {
-  readonly runtimeCoordinator?: AcpRegistryRuntimeCoordinator["Service"];
-}
+type AcpRegistryManagementInput = AcpRegistryConfigurationProbeInput;
 
 export interface AcpRegistryConfigurationProbeResult {
   readonly probe: AcpRegistryProbeResult;
@@ -450,6 +449,7 @@ const makeAcpRegistryManagementRuntime = Effect.fn("AcpRegistryProbe.makeManagem
     const catalog = yield* AcpRegistryCatalog;
     const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const crypto = yield* Crypto.Crypto;
+    const runtimeCoordinator = yield* Effect.serviceOption(AcpRegistryRuntimeCoordinator);
     const resolved = yield* catalog
       .resolve(input.settings, input.cwd, input.environment)
       .pipe(Effect.mapError(toAcpRegistryOperationError));
@@ -491,10 +491,10 @@ const makeAcpRegistryManagementRuntime = Effect.fn("AcpRegistryProbe.makeManagem
         url,
         message: boundedText(request.message, MAX_DESCRIPTION_LENGTH),
       };
-      const accepted =
-        input.runtimeCoordinator === undefined
-          ? Effect.succeed(false)
-          : input.runtimeCoordinator.requestUrlAuthentication(input.instanceId, action);
+      const accepted = Option.match(runtimeCoordinator, {
+        onNone: () => Effect.succeed(false),
+        onSome: (coordinator) => coordinator.requestUrlAuthentication(input.instanceId, action),
+      });
       return accepted.pipe(
         Effect.map((accepted) =>
           accepted ? ({ action: "accept" } as const) : ({ action: "decline" } as const),

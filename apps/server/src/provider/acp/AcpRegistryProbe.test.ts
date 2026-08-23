@@ -407,14 +407,13 @@ describe("ACP Registry probe", () => {
     const advertised = normalizeAcpRegistryAuthMethods([
       { id: "grok-login", name: "Log in with Grok" },
     ]);
-    const authFailure = acpRegistryProbeFailure(
-      new EffectAcpErrors.AcpRequestError({
-        code: -32000,
-        errorMessage: "login required",
-      }),
-      advertised,
-    );
+    const cause = new EffectAcpErrors.AcpRequestError({
+      code: -32000,
+      errorMessage: "login required",
+    });
+    const authFailure = acpRegistryProbeFailure(cause, advertised);
     expect(authFailure.reason).toBe("authentication_failed");
+    expect(authFailure.cause).toBe(cause);
     expect(authFailure.authMethods).toEqual([
       {
         id: "grok-login",

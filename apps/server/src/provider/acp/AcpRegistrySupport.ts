@@ -161,7 +161,11 @@ export class AcpRegistryError extends Schema.TaggedErrorClass<AcpRegistryError>(
 }
 
 export function toAcpRegistryOperationError(error: AcpRegistryError): AcpRegistryOperationError {
-  return new AcpRegistryOperationError({ reason: error.reason, message: error.detail });
+  return new AcpRegistryOperationError({
+    reason: error.reason,
+    message: error.detail,
+    cause: error,
+  });
 }
 
 export const isAcpRegistryError = Schema.is(AcpRegistryError);

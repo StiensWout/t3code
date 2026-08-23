@@ -224,5 +224,6 @@ export class AcpRegistryOperationError extends Schema.TaggedErrorClass<AcpRegist
       Schema.Array(AcpRegistryProbeAuthMethod).check(Schema.isMaxLength(32)),
     ),
     authAction: Schema.optionalKey(AcpRegistryUrlAuthAction),
+    cause: Schema.optionalKey(Schema.Defect()),
   },
 ) {}

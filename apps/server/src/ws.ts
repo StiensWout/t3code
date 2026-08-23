@@ -536,10 +536,11 @@ const makeWsRpcLayer = (
       ) {
         const project = yield* projectService.getById(projectId).pipe(
           Effect.mapError(
-            () =>
+            (cause) =>
               new AcpRegistryOperationError({
                 reason: "project_not_found",
                 message: `Project ${projectId} is unavailable.`,
+                cause,
               }),
           ),
         );
@@ -608,10 +609,11 @@ const makeWsRpcLayer = (
                 importedThreadId: thread === null ? null : threadId,
               })),
               Effect.mapError(
-                () =>
+                (cause) =>
                   new AcpRegistryOperationError({
                     reason: "session_import_failed",
                     message: "Could not inspect existing imported ACP sessions.",
+                    cause,
                   }),
               ),
             );
@@ -643,10 +645,11 @@ const makeWsRpcLayer = (
         });
         const existing = yield* threadManagement.getThreadShell(threadId).pipe(
           Effect.mapError(
-            () =>
+            (cause) =>
               new AcpRegistryOperationError({
                 reason: "session_import_failed",
                 message: "Could not inspect the imported ACP session mapping.",
+                cause,
               }),
           ),
         );
@@ -687,10 +690,11 @@ const makeWsRpcLayer = (
           )
           .pipe(
             Effect.mapError(
-              () =>
+              (cause) =>
                 new AcpRegistryOperationError({
                   reason: "session_import_failed",
                   message: "Could not create a T3 thread for the ACP session.",
+                  cause,
                 }),
             ),
           );
@@ -1595,10 +1599,11 @@ const makeWsRpcLayer = (
               }
               yield* providerSessionManager.closeInstance(input.instanceId).pipe(
                 Effect.mapError(
-                  () =>
+                  (cause) =>
                     new AcpRegistryOperationError({
                       reason: "logout_failed",
                       message: "Could not stop live sessions before ACP logout.",
+                      cause,
                     }),
                 ),
               );
