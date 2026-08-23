@@ -62,6 +62,7 @@ import {
   useComposerDraft,
 } from "./use-composer-drafts";
 import { setPendingConnectionError } from "../state/use-remote-environment-registry";
+import { ensureModelOptionMemoryLoaded } from "./use-model-option-memory";
 import {
   useSelectedThreadProjection,
   useSelectedThreadVisibleTurnItems,
@@ -131,6 +132,7 @@ export function useThreadComposerState() {
 
   useEffect(() => {
     ensureComposerDraftsLoaded();
+    ensureModelOptionMemoryLoaded();
   }, []);
 
   const selectedThreadKey = selectedThreadShell

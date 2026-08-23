@@ -465,6 +465,7 @@ async function defaultFlushPendingWrites(): Promise<void> {
   // store cannot keep the others from landing.
   const results = await Promise.allSettled([
     import("../../state/use-composer-drafts").then((drafts) => drafts.flushComposerDrafts()),
+    import("../../state/use-model-option-memory").then((memory) => memory.flushModelOptionMemory()),
     import("../../state/thread-outbox").then((outbox) => outbox.flushThreadOutbox()),
   ]);
   const failed = results.find(
