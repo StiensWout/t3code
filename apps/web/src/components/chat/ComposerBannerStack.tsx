@@ -52,9 +52,17 @@ export interface ComposerBannerStackItem {
 interface ComposerBannerStackProps {
   readonly className?: string;
   readonly items: ReadonlyArray<ComposerBannerStackItem>;
+  // Hero layout floats the stack above the composer instead of docking onto
+  // it: the front banner renders with the detached glass treatment and the
+  // slot drops its attached negative margin.
+  readonly detached?: boolean;
 }
 
-export function ComposerBannerStack({ className, items }: ComposerBannerStackProps) {
+export function ComposerBannerStack({
+  className,
+  items,
+  detached = false,
+}: ComposerBannerStackProps) {
   const [requestedExitingItemId, setExitingItemId] = useState<string | null>(null);
   const dismissTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const exitingItemId =
@@ -99,7 +107,11 @@ export function ComposerBannerStack({ className, items }: ComposerBannerStackPro
 
   return (
     <div
-      className={cn("group/banner-stack chat-composer-drawer-slot", className)}
+      className={cn(
+        "group/banner-stack chat-composer-drawer-slot",
+        detached && "chat-composer-drawer-detached",
+        className,
+      )}
       data-composer-banner-drawer="true"
     >
       <div
@@ -133,7 +145,7 @@ export function ComposerBannerStack({ className, items }: ComposerBannerStackPro
         >
           <ComposerBannerStackAlert
             item={frontItem}
-            attached
+            attached={!detached}
             exiting={exitingItemId === frontItem.id}
             onDismissRequest={() => requestDismiss(frontItem)}
           />

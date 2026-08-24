@@ -6780,7 +6780,8 @@ function ChatViewContent(props: ChatViewProps) {
                         />
                       </div>
                       <ComposerBannerStack
-                        className="relative z-0 chat-composer-drawer-detached"
+                        className="relative z-0"
+                        detached
                         items={composerBannerItems}
                       />
                     </div>
