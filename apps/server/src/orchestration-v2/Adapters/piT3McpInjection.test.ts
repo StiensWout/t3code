@@ -122,6 +122,11 @@ describe("pi T3 MCP injection", () => {
       yield* fs.makeDirectory(`${filteredDir}/src`, { recursive: true });
       yield* fs.makeDirectory(packageSubagentDir, { recursive: true });
       yield* fs.writeFileString(`${extensionsDir}/demo.ts`, "export default () => {}");
+      // Dot entries (macOS AppleDouble sidecars) parse-fail as explicit
+      // `--extension` paths and abort the pi spawn; discovery must skip them.
+      yield* fs.writeFileString(`${extensionsDir}/._demo.ts`, "junk");
+      yield* fs.makeDirectory(`${extensionsDir}/.hidden`, { recursive: true });
+      yield* fs.writeFileString(`${extensionsDir}/.hidden/index.ts`, "export default () => {}");
       yield* fs.writeFileString(`${extensionsDir}/subagent.ts`, "export default () => {}");
       yield* fs.writeFileString(`${extensionsDir}/subagent.js`, "export default () => {}");
       yield* fs.writeFileString(`${extensionsDir}/todos/index.ts`, "export default () => {}");

@@ -260,6 +260,10 @@ export const discoverPiUserExtensions = Effect.fn("discoverPiUserExtensions")(fu
       .readDirectory(root)
       .pipe(Effect.orElseSucceed(() => [] as Array<string>));
     for (const entry of entries.toSorted()) {
+      // Pi's own discovery skips dotfiles, and a parse failure on an explicit
+      // `--extension` path aborts the spawn, so stray dot entries (macOS
+      // AppleDouble `._*.ts` sidecars) must never be passed along.
+      if (entry.startsWith(".")) continue;
       if (entry === "subagent" || entry === "subagent.ts" || entry === "subagent.js") continue;
       const path = `${root}/${entry}`;
       if (entry.endsWith(".ts") || entry.endsWith(".js")) {
