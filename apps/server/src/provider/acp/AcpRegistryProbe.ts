@@ -314,11 +314,14 @@ export const probeAcpRegistryConfiguration = Effect.fn("AcpRegistryProbe.probeCo
     const catalog = yield* AcpRegistryCatalog;
     const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const crypto = yield* Crypto.Crypto;
-    const resolved = yield* catalog
-      .resolve(input.settings, input.cwd, input.environment)
-      .pipe(Effect.mapError(toAcpRegistryOperationError));
 
     const result = yield* Effect.gen(function* () {
+      // Resolution may install a missing registry package. Keep it inside the
+      // probe deadline so a provider refresh cannot inherit the installer's
+      // much longer timeout.
+      const resolved = yield* catalog
+        .resolve(input.settings, input.cwd, input.environment)
+        .pipe(Effect.mapError(toAcpRegistryOperationError));
       const authMethodsRef = yield* Ref.make<ReadonlyArray<AcpRegistryProbeAuthMethod>>([]);
       const authActionRef = yield* Ref.make<AcpRegistryUrlAuthAction | undefined>(undefined);
       const runtimeCoordinator = yield* Effect.serviceOption(AcpRegistryRuntimeCoordinator);
@@ -407,7 +410,7 @@ export const probeAcpRegistryConfiguration = Effect.fn("AcpRegistryProbe.probeCo
       yield* Deferred.await(commandsAdvertised).pipe(
         Effect.timeoutOption(COMMAND_ADVERTISEMENT_GRACE),
       );
-      return { started, commands: yield* Ref.get(commandsRef) };
+      return { resolved, started, commands: yield* Ref.get(commandsRef) };
     }).pipe(
       Effect.scoped,
       Effect.timeoutOrElse({
@@ -416,7 +419,7 @@ export const probeAcpRegistryConfiguration = Effect.fn("AcpRegistryProbe.probeCo
           Effect.fail(
             new AcpRegistryOperationError({
               reason: "probe_failed",
-              message: `The ACP agent did not create a test session within ${PROBE_TIMEOUT_SECONDS} seconds. A first run may still be downloading its package; this check retries on the next provider refresh.`,
+              message: `The ACP agent did not resolve and create a test session within ${PROBE_TIMEOUT_SECONDS} seconds. Package installation or agent startup may be slow; this check retries on the next provider refresh.`,
             }),
           ),
       }),
@@ -425,10 +428,15 @@ export const probeAcpRegistryConfiguration = Effect.fn("AcpRegistryProbe.probeCo
       ),
     );
     return {
-      probe: acpRegistryProbeResult(input.instanceId, result.started, resolved.agent.icon ?? null, {
-        command: resolved.spawn.command,
-        args: resolved.spawn.args,
-      }),
+      probe: acpRegistryProbeResult(
+        input.instanceId,
+        result.started,
+        result.resolved.agent.icon ?? null,
+        {
+          command: result.resolved.spawn.command,
+          args: result.resolved.spawn.args,
+        },
+      ),
       slashCommands: result.commands.slashCommands,
       skills: result.commands.skills,
     };

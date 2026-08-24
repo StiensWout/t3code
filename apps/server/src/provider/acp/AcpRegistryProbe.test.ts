@@ -5,8 +5,11 @@ import * as NodeURL from "node:url";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { AcpRegistrySettings, ProviderInstanceId } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
+import * as TestClock from "effect/testing/TestClock";
 import * as EffectAcpErrors from "effect-acp/errors";
 
 import type { AcpSessionRuntimeStartResult } from "./AcpSessionRuntime.ts";
@@ -349,6 +352,38 @@ describe("ACP Registry probe", () => {
       Effect.provide(NodeServices.layer),
       Effect.scoped,
     ),
+  );
+
+  it.effect("includes package resolution in the probe timeout", () =>
+    Effect.gen(function* () {
+      const resolveStarted = yield* Deferred.make<void>();
+      const catalog = AcpRegistryCatalog.of({
+        search: () => Effect.die("unused search"),
+        prepare: () => Effect.die("unused prepare"),
+        inspect: () => Effect.die("unused inspect"),
+        uninstallManagedBinary: () => Effect.die("unused uninstall"),
+        resolve: () =>
+          Deferred.succeed(resolveStarted, undefined).pipe(Effect.andThen(Effect.never)),
+      });
+      const probe = yield* probeAcpRegistryConfiguration({
+        instanceId,
+        settings: decodeSettings({ agentId: "slow-agent" }),
+        cwd: process.cwd(),
+        environment: process.env,
+      }).pipe(
+        Effect.provideService(AcpRegistryCatalog, catalog),
+        Effect.flip,
+        Effect.forkChild({ startImmediately: true }),
+      );
+
+      yield* Deferred.await(resolveStarted);
+      yield* TestClock.adjust("60 seconds");
+
+      expect(yield* Fiber.join(probe)).toMatchObject({
+        reason: "probe_failed",
+        message: expect.stringContaining("within 60 seconds"),
+      });
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 
   it.effect("lists native sessions and logs out through generic ACP lifecycle methods", () => {
