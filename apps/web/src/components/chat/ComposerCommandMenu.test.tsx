@@ -85,7 +85,7 @@ describe("ComposerCommandMenu", () => {
         ]}
         resolvedTheme="dark"
         isLoading={false}
-        triggerKind="slash-command"
+        triggerKind="slash-skill"
         activeItemId="skill:codex:ask-matt"
         onHighlightedItemChange={() => {}}
         onSelect={() => {}}

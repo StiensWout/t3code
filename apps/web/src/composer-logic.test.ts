@@ -177,6 +177,42 @@ describe("detectComposerTrigger", () => {
     });
   });
 
+  it("keeps a slash command active after an otherwise empty line", () => {
+    const text = "\n/rev";
+    const trigger = detectComposerTrigger(text, text.length);
+
+    expect(trigger).toEqual({
+      kind: "slash-command",
+      query: "rev",
+      rangeStart: 1,
+      rangeEnd: text.length,
+    });
+  });
+
+  it("uses an inline slash to search skills without reopening commands", () => {
+    const text = "Use /capt";
+    const trigger = detectComposerTrigger(text, text.length);
+
+    expect(trigger).toEqual({
+      kind: "slash-skill",
+      query: "capt",
+      rangeStart: "Use ".length,
+      rangeEnd: text.length,
+    });
+  });
+
+  it("keeps later-line slashes skill-only when the draft already has text", () => {
+    const text = "Use a skill\n/";
+    const trigger = detectComposerTrigger(text, text.length);
+
+    expect(trigger).toEqual({
+      kind: "slash-skill",
+      query: "",
+      rangeStart: "Use a skill\n".length,
+      rangeEnd: text.length,
+    });
+  });
+
   it("detects $skill trigger at cursor", () => {
     const text = "Use $gh-fi";
     const trigger = detectComposerTrigger(text, text.length);

@@ -96,9 +96,10 @@ transcription or cancellation; only the message text is sent when you submit.
 
 ## Commands and skills
 
-Type `/` for commands or `$` to add a skill from the selected environment and
-provider. On mobile, both are also available before starting a thread on
-**New task**.
+Type `/` in an empty composer to open the command menu. After other prompt text, `/` opens a
+skill-only menu. Type `$` to find and add a skill anywhere. Skill rows show their source, such as
+System, Personal, Project, or App.
+On mobile, both are also available before starting a thread on **New task**.
 
 The slash menu also includes skills unless you turn off **Settings → General →
 Show skills in slash menu**. Only skills enabled for the provider are listed.
