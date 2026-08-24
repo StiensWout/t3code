@@ -83,6 +83,12 @@ export function AcpSessionManagementSection(props: {
   const canLogout = props.provider.auth.canLogout === true;
   const canDelete = props.provider.nativeSessions?.canDelete === true;
   const canConfigureProviders = props.provider.configurableProviders === true;
+  const projectOperationPending =
+    loading ||
+    importingSessionId !== null ||
+    deletingSessionId !== null ||
+    loadingProviders ||
+    savingProviderId !== null;
 
   if (!canList && !canLogout && !canConfigureProviders) return null;
 
@@ -307,7 +313,7 @@ export function AcpSessionManagementSection(props: {
             <div className="flex flex-wrap items-center gap-2">
               <Select
                 value={projectId ?? ""}
-                disabled={props.readOnly || loading}
+                disabled={props.readOnly || projectOperationPending}
                 onValueChange={(value) => {
                   if (value === null) return;
                   setProjectId(value as ProjectId);
@@ -435,7 +441,7 @@ export function AcpSessionManagementSection(props: {
           {!canList && props.projects.length > 1 ? (
             <Select
               value={projectId ?? ""}
-              disabled={props.readOnly || loadingProviders}
+              disabled={props.readOnly || projectOperationPending}
               onValueChange={(value) => {
                 if (value === null) return;
                 setProjectId(value as ProjectId);

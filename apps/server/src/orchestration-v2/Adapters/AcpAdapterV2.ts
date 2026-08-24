@@ -4865,6 +4865,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               new EffectAcpErrors.AcpRequestError({
                 code: -32603,
                 errorMessage: error.message,
+                cause: error,
               }),
           );
           yield* targetRuntime.handleMcpConnect((request) =>

@@ -239,6 +239,28 @@ describe("AcpSessionManagementSection", () => {
     });
   });
 
+  it("locks the project picker while a project-scoped request is pending", async () => {
+    let resolveProviders!: (result: {
+      readonly _tag: "Success";
+      readonly value: { readonly providers: [] };
+    }) => void;
+    commands.listProviders.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveProviders = resolve;
+      }),
+    );
+    (findByLabel(render(), "List providers").props.onClick as (() => void) | undefined)?.();
+
+    const projectSelect = visitElements(
+      render(),
+      (element) =>
+        element.props.value === projectId && typeof element.props.onValueChange === "function",
+    );
+    expect(projectSelect?.props.disabled).toBe(true);
+    resolveProviders({ _tag: "Success", value: { providers: [] } });
+    await flushPromises();
+  });
+
   it("lists, saves, and disables configurable ACP providers", async () => {
     (findByLabel(render(), "List providers").props.onClick as (() => void) | undefined)?.();
     await flushPromises();
