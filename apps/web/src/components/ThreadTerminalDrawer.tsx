@@ -6,6 +6,7 @@ import {
 import { type TerminalSessionState } from "@t3tools/client-runtime/state/terminal";
 import {
   Plus,
+  Square,
   SquareSplitHorizontal,
   SquareSplitVertical,
   TerminalSquare,
@@ -1622,26 +1623,42 @@ export default function ThreadTerminalDrawer({
               </div>
 
               <div className="min-h-0 flex-1 overflow-y-auto px-1 py-1">
-                {resolvedTerminalGroups.map((terminalGroup, groupIndex) => {
+                {resolvedTerminalGroups.map((terminalGroup) => {
                   const isGroupActive =
                     terminalGroup.terminalIds.includes(resolvedActiveTerminalId);
                   const groupActiveTerminalId = isGroupActive
                     ? resolvedActiveTerminalId
                     : (terminalGroup.terminalIds[0] ?? resolvedActiveTerminalId);
+                  const terminalCount = terminalGroup.terminalIds.length;
+                  const isSplitGroup = terminalCount > 1;
+                  const groupLabel = !isSplitGroup
+                    ? "Single"
+                    : terminalGroup.splitDirection === "vertical"
+                      ? "Stacked"
+                      : "Side by side";
+                  const GroupIcon = !isSplitGroup
+                    ? Square
+                    : terminalGroup.splitDirection === "vertical"
+                      ? SquareSplitVertical
+                      : SquareSplitHorizontal;
 
                   return (
                     <div key={terminalGroup.id} className="pb-0.5">
                       {showGroupHeaders && (
                         <button
                           type="button"
-                          className={`flex w-full items-center rounded px-1 py-0.5 text-[10px] uppercase tracking-[0.08em] ${
+                          className={`flex h-[22px] w-full items-center gap-1 rounded px-1.5 text-[11px] ${
                             isGroupActive
-                              ? "bg-accent/70 text-foreground"
-                              : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
+                              ? "bg-accent/50 text-foreground"
+                              : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
                           }`}
                           onClick={() => onActiveTerminalChange(groupActiveTerminalId)}
                         >
-                          Group {groupIndex + 1}
+                          <GroupIcon className="size-3 shrink-0" />
+                          <span className="min-w-0 flex-1 truncate text-left">{groupLabel}</span>
+                          <span className="text-muted-foreground/70 text-[10px] tabular-nums">
+                            {terminalCount}
+                          </span>
                         </button>
                       )}
 
