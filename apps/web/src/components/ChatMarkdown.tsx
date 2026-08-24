@@ -80,6 +80,7 @@ import {
   resolveInlineCodeFileLinkMeta,
   resolveMarkdownFileLinkMeta,
   rewriteMarkdownFileUriHref,
+  shouldOpenMarkdownFileLinkInBrowserByDefault,
   shouldOpenMarkdownFileLinkInEditor,
   type MarkdownFileLinkMeta,
 } from "../markdown-links";
@@ -1394,7 +1395,7 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
                 handleOpenInEditor();
                 return;
               }
-              if (onOpenInBrowser) {
+              if (onOpenInBrowser && shouldOpenMarkdownFileLinkInBrowserByDefault(iconPath)) {
                 handleOpenInBrowser();
                 return;
               }
