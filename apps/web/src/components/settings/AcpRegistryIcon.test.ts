@@ -177,7 +177,7 @@ describe("ACP Registry icon cache", () => {
       decoding: "async",
       referrerPolicy: "no-referrer",
     });
-    expect(loadingImage?.props.className).toContain("dark:invert");
+    expect(loadingImage?.props.className).not.toContain("dark:invert");
     expect(loadingImage?.props.className).toContain("invisible");
     expect(
       visitElements(loading, (element) => element.props["data-slot"] === "acp-icon-fallback"),

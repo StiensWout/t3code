@@ -13,10 +13,6 @@ const inFlightIcons = new Map<string, Promise<Blob>>();
 
 export { officialAcpRegistryIconUrlForAgentId, resolveOfficialAcpRegistryIconUrl };
 
-function isSvgIconUrl(iconUrl: string): boolean {
-  return new URL(iconUrl).pathname.toLowerCase().endsWith(".svg");
-}
-
 async function checkedIconBlob(response: Response): Promise<Blob> {
   if (!response.ok || response.redirected) throw new Error("ACP registry icon request failed.");
   const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim() ?? "";
@@ -138,7 +134,6 @@ export function AcpRegistryAgentIcon({
           alt=""
           className={cn(
             "size-full object-contain",
-            iconUrl !== null && isSvgIconUrl(iconUrl) && "dark:invert",
             status !== "loaded" && "invisible absolute inset-0",
           )}
           decoding="async"
