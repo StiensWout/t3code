@@ -926,7 +926,11 @@ it.effect(
             state,
             idleTimeoutMs: 1_000,
             mcpConfigs,
-            serverSettingsLayer: ServerSettings.layerTest({ enableAgentBrowserAccess: false }),
+            // orDie: the test layer's settings-normalization error cannot
+            // occur for a literal override and the slot requires error never.
+            serverSettingsLayer: ServerSettings.layerTest({
+              enableAgentBrowserAccess: false,
+            }).pipe(Layer.orDie),
           }),
         ),
       );
