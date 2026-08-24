@@ -153,7 +153,10 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
   const skillSourceKind =
     props.item.type === "skill" ? resolveProviderSkillSourceKind(props.item.skill) : null;
   const isSlashSkill =
-    props.triggerKind === "slash-command" && props.item.type === "skill" ? props.item.skill : null;
+    (props.triggerKind === "slash-command" || props.triggerKind === "slash-skill") &&
+    props.item.type === "skill"
+      ? props.item.skill
+      : null;
   const pullRequestPresentation =
     props.item.type === "pull-request" ? resolvePullRequestState(props.item.pullRequest) : null;
 
