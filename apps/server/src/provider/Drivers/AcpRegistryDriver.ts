@@ -1,6 +1,8 @@
 import {
   AcpRegistrySettings,
+  officialAcpRegistryIconUrlForAgentId,
   ProviderDriverKind,
+  resolveOfficialAcpRegistryIconUrl,
   TextGenerationError,
   type AcpRegistryOperationError,
   type ServerProvider,
@@ -187,11 +189,15 @@ function baseSnapshot(
     readonly probe?: AcpRegistryConfigurationProbeResult;
   },
 ): ServerProvider {
+  const iconUrl =
+    resolveOfficialAcpRegistryIconUrl(input.probe?.probe.icon) ??
+    officialAcpRegistryIconUrlForAgentId(input.settings.agentId);
   return {
     instanceId: input.instanceId,
     driver: DRIVER_KIND,
     ...(input.displayName ? { displayName: input.displayName } : {}),
     ...(input.accentColor ? { accentColor: input.accentColor } : {}),
+    ...(iconUrl ? { iconUrl } : {}),
     continuation: { groupKey: input.continuationKey },
     // The registry driver rejects every application text-generation operation,
     // so selectors must not offer these instances for commit, PR, branch, or

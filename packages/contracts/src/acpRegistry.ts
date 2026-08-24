@@ -10,6 +10,39 @@ const AcpRegistryAgentId = TrimmedNonEmptyString.check(
   Schema.isPattern(/^[a-z0-9][a-z0-9._-]*$/),
 );
 
+const ACP_REGISTRY_CDN_HOSTNAME = "cdn.agentclientprotocol.com";
+const ACP_REGISTRY_AGENT_ID_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
+
+/** Derives the official Registry icon URL without trusting stored URL metadata. */
+export function officialAcpRegistryIconUrlForAgentId(
+  agentId: string | null | undefined,
+): string | null {
+  if (agentId === null || agentId === undefined || !ACP_REGISTRY_AGENT_ID_PATTERN.test(agentId)) {
+    return null;
+  }
+  return `https://${ACP_REGISTRY_CDN_HOSTNAME}/registry/v1/latest/${agentId}.svg`;
+}
+
+/** Allows provider icons only from the credential-free official Registry CDN origin. */
+export function resolveOfficialAcpRegistryIconUrl(icon: string | null | undefined): string | null {
+  if (!icon) return null;
+  try {
+    const url = new URL(icon);
+    if (
+      url.protocol !== "https:" ||
+      url.hostname !== ACP_REGISTRY_CDN_HOSTNAME ||
+      url.port !== "" ||
+      url.username !== "" ||
+      url.password !== ""
+    ) {
+      return null;
+    }
+    return url.href;
+  } catch {
+    return null;
+  }
+}
+
 export const AcpRegistryDistribution = Schema.Literals(["binary", "npx", "uvx"]);
 export type AcpRegistryDistribution = typeof AcpRegistryDistribution.Type;
 

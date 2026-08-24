@@ -1,37 +1,17 @@
 import { useEffect, useState } from "react";
+import {
+  resolveOfficialAcpRegistryIconUrl,
+  officialAcpRegistryIconUrlForAgentId,
+} from "@t3tools/contracts";
 
 import { cn } from "../../lib/utils";
 import { ACPRegistryIcon } from "../Icons";
 
-const ACP_REGISTRY_CDN_HOSTNAME = "cdn.agentclientprotocol.com";
 const ACP_REGISTRY_ICON_CACHE = "t3-acp-registry-icons-v1";
 const MAX_ICON_BYTES = 512 * 1_024;
 const inFlightIcons = new Map<string, Promise<Blob>>();
-const ACP_REGISTRY_AGENT_ID_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
 
-export function officialAcpRegistryIconUrlForAgentId(agentId: string | null): string | null {
-  if (agentId === null || !ACP_REGISTRY_AGENT_ID_PATTERN.test(agentId)) return null;
-  return `https://${ACP_REGISTRY_CDN_HOSTNAME}/registry/v1/latest/${agentId}.svg`;
-}
-
-export function resolveOfficialAcpRegistryIconUrl(icon: string | null): string | null {
-  if (!icon) return null;
-  try {
-    const url = new URL(icon);
-    if (
-      url.protocol !== "https:" ||
-      url.hostname !== ACP_REGISTRY_CDN_HOSTNAME ||
-      url.port !== "" ||
-      url.username !== "" ||
-      url.password !== ""
-    ) {
-      return null;
-    }
-    return url.href;
-  } catch {
-    return null;
-  }
-}
+export { officialAcpRegistryIconUrlForAgentId, resolveOfficialAcpRegistryIconUrl };
 
 function isSvgIconUrl(iconUrl: string): boolean {
   return new URL(iconUrl).pathname.toLowerCase().endsWith(".svg");

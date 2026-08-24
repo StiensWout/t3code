@@ -10,6 +10,8 @@ import {
   AcpRegistryProbeResult,
   AcpRegistrySearchAgent,
   AcpRegistrySearchInput,
+  officialAcpRegistryIconUrlForAgentId,
+  resolveOfficialAcpRegistryIconUrl,
 } from "./acpRegistry.ts";
 
 const decodeSearchInput = Schema.decodeUnknownSync(AcpRegistrySearchInput);
@@ -22,6 +24,28 @@ const decodeProbeResult = Schema.decodeUnknownSync(AcpRegistryProbeResult);
 const decodeOperationError = Schema.decodeUnknownSync(AcpRegistryOperationError);
 
 describe("ACP Registry contracts", () => {
+  it("accepts only official Registry icon URLs and safe agent IDs", () => {
+    expect(officialAcpRegistryIconUrlForAgentId("antigravity-acp")).toBe(
+      "https://cdn.agentclientprotocol.com/registry/v1/latest/antigravity-acp.svg",
+    );
+    expect(officialAcpRegistryIconUrlForAgentId("../antigravity-acp")).toBeNull();
+    expect(
+      resolveOfficialAcpRegistryIconUrl(
+        "https://cdn.agentclientprotocol.com/registry/v1/latest/pi-acp.svg",
+      ),
+    ).toBe("https://cdn.agentclientprotocol.com/registry/v1/latest/pi-acp.svg");
+    expect(
+      resolveOfficialAcpRegistryIconUrl(
+        "https://cdn.agentclientprotocol.com.evil/registry/v1/latest/pi-acp.svg",
+      ),
+    ).toBeNull();
+    expect(
+      resolveOfficialAcpRegistryIconUrl(
+        "https://user@cdn.agentclientprotocol.com/registry/v1/latest/pi-acp.svg",
+      ),
+    ).toBeNull();
+  });
+
   it("decodes bounded search and prepare payloads", () => {
     expect(decodeSearchInput({ query: "  codex  " })).toEqual({
       query: "codex",
