@@ -444,6 +444,50 @@ describe("ACP Registry probe", () => {
     );
   });
 
+  it.effect("preserves the ACP method error for unsupported session management", () => {
+    const catalog = AcpRegistryCatalog.of({
+      search: () => Effect.die("unused search"),
+      prepare: () => Effect.die("unused prepare"),
+      inspect: () => Effect.die("unused inspect"),
+      uninstallManagedBinary: () => Effect.die("unused uninstall"),
+      resolve: () =>
+        Effect.succeed({
+          agent: {
+            id: "mock-agent",
+            name: "Mock Agent",
+            version: "1.0.0",
+            description: "ACP unsupported management test agent",
+            distribution: { npx: { package: "mock-agent@1.0.0" } },
+          },
+          distribution: "npx" as const,
+          spawn: {
+            command: "node",
+            args: [mockAgentPath],
+            env: { ...process.env, T3_ACP_OMIT_SESSION_LIST_HANDLER: "1" },
+          },
+        }),
+    });
+
+    return Effect.gen(function* () {
+      const failure = yield* listAcpRegistrySessions({
+        instanceId,
+        settings: decodeSettings({ agentId: "mock-agent" }),
+        cwd: process.cwd(),
+        environment: process.env,
+      }).pipe(Effect.flip);
+
+      expect(failure).toMatchObject({
+        reason: "session_list_unsupported",
+        message: "The ACP agent does not advertise session listing.",
+        cause: { _tag: "AcpRequestError", code: -32601 },
+      });
+    }).pipe(
+      Effect.provideService(AcpRegistryCatalog, catalog),
+      Effect.provide(NodeServices.layer),
+      Effect.scoped,
+    );
+  });
+
   it("distinguishes authentication failures from generic probe failures", () => {
     const advertised = normalizeAcpRegistryAuthMethods([
       { id: "grok-login", name: "Log in with Grok" },
@@ -454,6 +498,7 @@ describe("ACP Registry probe", () => {
     });
     const authFailure = acpRegistryProbeFailure(cause, advertised);
     expect(authFailure.reason).toBe("authentication_failed");
+    expect(authFailure.message).toBe("The ACP agent could not complete authentication.");
     expect(authFailure.cause).toBe(cause);
     expect(authFailure.authMethods).toEqual([
       {
@@ -471,14 +516,14 @@ describe("ACP Registry probe", () => {
         }),
       ).reason,
     ).toBe("authentication_failed");
-    expect(
-      acpRegistryProbeFailure(
-        new EffectAcpErrors.AcpTransportError({
-          detail: "connection closed",
-          cause: "closed",
-        }),
-      ).reason,
-    ).toBe("probe_failed");
+    const genericCause = new EffectAcpErrors.AcpTransportError({
+      detail: "connection closed",
+      cause: "closed",
+    });
+    const genericFailure = acpRegistryProbeFailure(genericCause);
+    expect(genericFailure.reason).toBe("probe_failed");
+    expect(genericFailure.message).toBe("The ACP agent could not create a test session.");
+    expect(genericFailure.cause).toBe(genericCause);
     expect(
       acpRegistryProbeFailure(
         new EffectAcpErrors.AcpTransportError({

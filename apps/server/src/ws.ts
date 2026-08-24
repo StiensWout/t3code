@@ -669,8 +669,8 @@ const makeWsRpcLayer = (
           provider?.models[0]?.slug ??
           "default";
         const commandId = CommandId.make(NodeCrypto.randomUUID());
-        yield* startup
-          .enqueueCommand(
+        const launched = yield* Effect.result(
+          startup.enqueueCommand(
             threadLaunch.launch({
               commandId,
               threadId,
@@ -694,17 +694,26 @@ const makeWsRpcLayer = (
               createdBy: "user",
               creationSource: "web",
             }),
-          )
-          .pipe(
+          ),
+        );
+        if (Result.isFailure(launched)) {
+          const racedImport = yield* threadManagement.getThreadShell(threadId).pipe(
             Effect.mapError(
               (cause) =>
                 new AcpRegistryOperationError({
                   reason: "session_import_failed",
-                  message: "Could not create a T3 thread for the ACP session.",
+                  message: "Could not inspect the imported ACP session after launch failed.",
                   cause,
                 }),
             ),
           );
+          if (racedImport !== null) return { threadId, imported: false } as const;
+          return yield* new AcpRegistryOperationError({
+            reason: "session_import_failed",
+            message: "Could not create a T3 thread for the ACP session.",
+            cause: launched.failure,
+          });
+        }
         return { threadId, imported: true } as const;
       });
 

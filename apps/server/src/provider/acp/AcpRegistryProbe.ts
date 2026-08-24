@@ -278,8 +278,8 @@ export function acpRegistryProbeFailure(
   return new AcpRegistryOperationError({
     reason: authenticationFailed ? "authentication_failed" : "probe_failed",
     message: authenticationFailed
-      ? `The ACP agent could not complete authentication: ${detail}`
-      : `The ACP agent could not create a test session: ${detail}`,
+      ? "The ACP agent could not complete authentication."
+      : "The ACP agent could not create a test session.",
     cause: error,
     ...(authMethods.length > 0 ? { authMethods } : {}),
     ...(authAction === undefined ? {} : { authAction }),
@@ -444,17 +444,6 @@ export const probeAcpRegistryConfiguration = Effect.fn("AcpRegistryProbe.probeCo
 
 const MANAGEMENT_TIMEOUT = Duration.seconds(60);
 
-function acpRegistryUnsupportedOperation(
-  reason:
-    | "session_list_unsupported"
-    | "session_delete_unsupported"
-    | "providers_unsupported"
-    | "logout_unsupported",
-  message: string,
-) {
-  return new AcpRegistryOperationError({ reason, message });
-}
-
 const makeAcpRegistryManagementRuntime = Effect.fn("AcpRegistryProbe.makeManagementRuntime")(
   function* (input: AcpRegistryManagementInput) {
     const catalog = yield* AcpRegistryCatalog;
@@ -527,27 +516,31 @@ function managementFailure(
   if (error._tag === "AcpRegistryOperationError") return error;
   if (error._tag === "AcpRequestError" && error.code === -32601) {
     if (operation === "list") {
-      return acpRegistryUnsupportedOperation(
-        "session_list_unsupported",
-        "The ACP agent does not advertise session listing.",
-      );
+      return new AcpRegistryOperationError({
+        reason: "session_list_unsupported",
+        message: "The ACP agent does not advertise session listing.",
+        cause: error,
+      });
     }
     if (operation === "delete") {
-      return acpRegistryUnsupportedOperation(
-        "session_delete_unsupported",
-        "The ACP agent does not advertise session deletion.",
-      );
+      return new AcpRegistryOperationError({
+        reason: "session_delete_unsupported",
+        message: "The ACP agent does not advertise session deletion.",
+        cause: error,
+      });
     }
     if (operation.startsWith("providers_")) {
-      return acpRegistryUnsupportedOperation(
-        "providers_unsupported",
-        "The ACP agent does not advertise provider configuration.",
-      );
+      return new AcpRegistryOperationError({
+        reason: "providers_unsupported",
+        message: "The ACP agent does not advertise provider configuration.",
+        cause: error,
+      });
     }
-    return acpRegistryUnsupportedOperation(
-      "logout_unsupported",
-      "The ACP agent does not advertise logout.",
-    );
+    return new AcpRegistryOperationError({
+      reason: "logout_unsupported",
+      message: "The ACP agent does not advertise logout.",
+      cause: error,
+    });
   }
   const classified = acpRegistryProbeFailure(error);
   if (classified.reason === "authentication_failed") return classified;

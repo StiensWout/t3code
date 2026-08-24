@@ -1404,6 +1404,15 @@ describe("AcpAdapterV2", () => {
       const sourceThreadId = ThreadId.make("thread-acp-native-fork-source");
       const targetThreadId = ThreadId.make("thread-acp-native-fork-target");
       McpProviderSession.setMcpProviderSession({
+        environmentId: EnvironmentId.make("environment-acp-native-fork-source"),
+        threadId: sourceThreadId,
+        providerSessionId: "mcp-session-acp-native-fork-source",
+        providerInstanceId: instanceId,
+        endpoint: "http://127.0.0.1:43123/mcp",
+        authorizationHeader: "Bearer source-thread-token",
+        browserToolsAvailable: true,
+      });
+      McpProviderSession.setMcpProviderSession({
         environmentId: EnvironmentId.make("environment-acp-native-fork"),
         threadId: targetThreadId,
         providerSessionId: "mcp-session-acp-native-fork",
@@ -1413,7 +1422,10 @@ describe("AcpAdapterV2", () => {
         browserToolsAvailable: true,
       });
       yield* Effect.addFinalizer(() =>
-        Effect.sync(() => McpProviderSession.clearMcpProviderSession(targetThreadId)),
+        Effect.sync(() => {
+          McpProviderSession.clearMcpProviderSession(sourceThreadId);
+          McpProviderSession.clearMcpProviderSession(targetThreadId);
+        }),
       );
       const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
         runtimeMode: "full-access",
@@ -1494,6 +1506,30 @@ describe("AcpAdapterV2", () => {
       ) {
         return yield* Effect.die("ACP runtime must register terminal handlers");
       }
+      const unknownTerminal = yield* createTerminal(
+        {
+          sessionId: "mock-child-session-without-credential-scope",
+          command: process.execPath,
+          args: ["-e", "process.stdout.write(process.env.T3_ACP_MCP_AUTHORIZATION ?? '')"],
+        },
+        { requestId: "test-unknown-terminal-create", method: "terminal/create" },
+      );
+      yield* waitForTerminalExit(
+        {
+          sessionId: "mock-child-session-without-credential-scope",
+          terminalId: unknownTerminal.terminalId,
+        },
+        { requestId: "test-unknown-terminal-wait", method: "terminal/wait_for_exit" },
+      );
+      const unknownTerminalOutput = yield* readTerminalOutput(
+        {
+          sessionId: "mock-child-session-without-credential-scope",
+          terminalId: unknownTerminal.terminalId,
+        },
+        { requestId: "test-unknown-terminal-output", method: "terminal/output" },
+      );
+      assert.equal(unknownTerminalOutput.output, "");
+
       const terminal = yield* createTerminal(
         {
           sessionId: "mock-session-1-fork",

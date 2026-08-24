@@ -75,6 +75,7 @@ const promptDelayMs = Number(process.env.T3_ACP_PROMPT_DELAY_MS ?? "0");
 const supportsSessionLifecycle = process.env.T3_ACP_SESSION_LIFECYCLE === "1";
 const supportsAcpMcp = process.env.T3_ACP_MCP_ACP === "1";
 const supportsV2Management = process.env.T3_ACP_V2_MANAGEMENT === "1";
+const omitSessionListHandler = process.env.T3_ACP_OMIT_SESSION_LIST_HANDLER === "1";
 const advertisedAuthMethodId = process.env.T3_ACP_AUTH_METHOD_ID?.trim();
 const initializeAuthMethodId =
   advertisedAuthMethodId ?? (supportsSessionLifecycle ? "test" : undefined);
@@ -490,21 +491,23 @@ const program = Effect.gen(function* () {
     }),
   );
 
-  yield* agent.handleListSessions((request) =>
-    Effect.gen(function* () {
-      yield* requireAuthentication();
-      return {
-        sessions: [
-          {
-            sessionId,
-            cwd: request.cwd ?? process.cwd(),
-            title: "Mock session",
-            updatedAt: "1970-01-01T00:00:00.000Z",
-          },
-        ],
-      };
-    }),
-  );
+  if (!omitSessionListHandler) {
+    yield* agent.handleListSessions((request) =>
+      Effect.gen(function* () {
+        yield* requireAuthentication();
+        return {
+          sessions: [
+            {
+              sessionId,
+              cwd: request.cwd ?? process.cwd(),
+              title: "Mock session",
+              updatedAt: "1970-01-01T00:00:00.000Z",
+            },
+          ],
+        };
+      }),
+    );
+  }
 
   yield* agent.handleForkSession((request) =>
     Effect.gen(function* () {
@@ -668,6 +671,15 @@ const program = Effect.gen(function* () {
       promptCount += 1;
 
       if (emitV2Fidelity) {
+        yield* agent.client.sessionUpdate({
+          sessionId: `${requestedSessionId}-child`,
+          update: {
+            sessionUpdate: "terminal_update",
+            terminalId: "standalone-terminal",
+            command: "printf child",
+            output: { data: Buffer.from("child").toString("base64") },
+          },
+        });
         const updates: ReadonlyArray<AcpSchema.SessionUpdate> = [
           {
             sessionUpdate: "user_message_chunk",
@@ -714,7 +726,11 @@ const program = Effect.gen(function* () {
             terminalId: "standalone-terminal",
             command: "printf proof",
             cwd: process.cwd(),
-            output: { data: Buffer.from("proof").toString("base64") },
+          },
+          {
+            sessionUpdate: "terminal_output_chunk",
+            terminalId: "standalone-terminal",
+            data: Buffer.from("proof").toString("base64"),
           },
           {
             sessionUpdate: "terminal_update",

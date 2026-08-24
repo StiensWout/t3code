@@ -1238,16 +1238,39 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
       function* (input: ProviderAdapterV2OpenSessionInput) {
         const sessionScope = yield* Effect.scope;
         const terminalEnvironmentBySessionId = new Map<string, NodeJS.ProcessEnv>();
-        let pendingTerminalEnvironment = acpMcpContext(input.threadId).processEnvironment;
-        const prepareTerminalEnvironment = (threadId: ThreadId | null): void => {
-          pendingTerminalEnvironment = acpMcpContext(threadId).processEnvironment;
+        interface PendingTerminalEnvironment {
+          readonly environment: NodeJS.ProcessEnv | undefined;
+          readonly claimUnknownSession: boolean;
+          readonly sessionId: string | null;
+        }
+        let pendingTerminalEnvironment: PendingTerminalEnvironment | null = {
+          environment: acpMcpContext(input.threadId).processEnvironment,
+          claimUnknownSession: input.initialNativeThreadId === undefined,
+          sessionId: input.initialNativeThreadId ?? null,
+        };
+        const prepareTerminalEnvironment = (
+          threadId: ThreadId | null,
+          sessionId?: string,
+        ): void => {
+          pendingTerminalEnvironment = {
+            environment: acpMcpContext(threadId).processEnvironment,
+            claimUnknownSession: false,
+            sessionId: sessionId ?? null,
+          };
+        };
+        const prepareClaimableTerminalEnvironment = (threadId: ThreadId | null): void => {
+          pendingTerminalEnvironment = {
+            environment: acpMcpContext(threadId).processEnvironment,
+            claimUnknownSession: true,
+            sessionId: null,
+          };
         };
         const rememberTerminalEnvironment = (
           sessionId: string,
           threadId: ThreadId | null,
         ): void => {
           const environment = acpMcpContext(threadId).processEnvironment;
-          pendingTerminalEnvironment = environment;
+          pendingTerminalEnvironment = null;
           if (environment === undefined) {
             terminalEnvironmentBySessionId.delete(sessionId);
           } else {
@@ -1261,39 +1284,75 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                 spawner: options.clientTerminals.childProcessSpawner,
                 defaultCwd: input.runtimePolicy.cwd ?? process.cwd(),
                 environment: options.clientTerminals.environment,
-                environmentForSession: (sessionId) =>
-                  terminalEnvironmentBySessionId.get(sessionId) ?? pendingTerminalEnvironment,
+                environmentForSession: (sessionId) => {
+                  const remembered = terminalEnvironmentBySessionId.get(sessionId);
+                  if (remembered !== undefined) return remembered;
+                  if (pendingTerminalEnvironment === null) return undefined;
+                  if (
+                    pendingTerminalEnvironment.sessionId === null &&
+                    pendingTerminalEnvironment.claimUnknownSession
+                  ) {
+                    pendingTerminalEnvironment = {
+                      ...pendingTerminalEnvironment,
+                      sessionId,
+                    };
+                  }
+                  return pendingTerminalEnvironment.sessionId === sessionId
+                    ? pendingTerminalEnvironment.environment
+                    : undefined;
+                },
               });
         if (clientTerminals !== undefined) {
           yield* Scope.addFinalizer(sessionScope, clientTerminals.disposeAll);
         }
         // Terminal ids embedded in raw tool_call updates, remembered before the
         // content rewrite so emitTool can recover MCP-fallback command lines.
-        const embeddedTerminalsByToolCallId = new Map<string, ReadonlyArray<string>>();
+        const sessionScopedId = (sessionId: string, nativeId: string): string =>
+          JSON.stringify([sessionId, nativeId]);
+        const embeddedTerminalsByToolCallId = new Map<
+          string,
+          {
+            readonly sessionId: string;
+            readonly terminalIds: ReadonlyArray<string>;
+            readonly toolCallId: string;
+          }
+        >();
         const toolCallIdsByAgentTerminalId = new Map<string, Set<string>>();
         const agentTerminalsById = new Map<string, AcpAgentTerminalState>();
         const rememberEmbeddedTerminals = (input: {
+          readonly sessionId: string;
           readonly toolCallId: string;
           readonly terminalIds: ReadonlyArray<string>;
         }): void => {
-          for (const terminalId of embeddedTerminalsByToolCallId.get(input.toolCallId) ?? []) {
-            const toolCallIds = toolCallIdsByAgentTerminalId.get(terminalId);
+          const toolCallKey = sessionScopedId(input.sessionId, input.toolCallId);
+          for (const terminalId of embeddedTerminalsByToolCallId.get(toolCallKey)?.terminalIds ??
+            []) {
+            const terminalKey = sessionScopedId(input.sessionId, terminalId);
+            const toolCallIds = toolCallIdsByAgentTerminalId.get(terminalKey);
             toolCallIds?.delete(input.toolCallId);
-            if (toolCallIds?.size === 0) toolCallIdsByAgentTerminalId.delete(terminalId);
+            if (toolCallIds?.size === 0) toolCallIdsByAgentTerminalId.delete(terminalKey);
           }
-          embeddedTerminalsByToolCallId.delete(input.toolCallId);
-          embeddedTerminalsByToolCallId.set(input.toolCallId, input.terminalIds);
+          embeddedTerminalsByToolCallId.delete(toolCallKey);
+          embeddedTerminalsByToolCallId.set(toolCallKey, {
+            sessionId: input.sessionId,
+            terminalIds: input.terminalIds,
+            toolCallId: input.toolCallId,
+          });
           for (const terminalId of input.terminalIds) {
-            const toolCallIds = toolCallIdsByAgentTerminalId.get(terminalId) ?? new Set<string>();
+            const terminalKey = sessionScopedId(input.sessionId, terminalId);
+            const toolCallIds = toolCallIdsByAgentTerminalId.get(terminalKey) ?? new Set<string>();
             toolCallIds.add(input.toolCallId);
-            toolCallIdsByAgentTerminalId.set(terminalId, toolCallIds);
+            toolCallIdsByAgentTerminalId.set(terminalKey, toolCallIds);
           }
           for (const oldest of embeddedTerminalsByToolCallId.keys()) {
             if (embeddedTerminalsByToolCallId.size <= 256) break;
-            for (const terminalId of embeddedTerminalsByToolCallId.get(oldest) ?? []) {
-              const toolCallIds = toolCallIdsByAgentTerminalId.get(terminalId);
-              toolCallIds?.delete(oldest);
-              if (toolCallIds?.size === 0) toolCallIdsByAgentTerminalId.delete(terminalId);
+            const remembered = embeddedTerminalsByToolCallId.get(oldest);
+            if (remembered === undefined) continue;
+            for (const terminalId of remembered.terminalIds) {
+              const terminalKey = sessionScopedId(remembered.sessionId, terminalId);
+              const toolCallIds = toolCallIdsByAgentTerminalId.get(terminalKey);
+              toolCallIds?.delete(remembered.toolCallId);
+              if (toolCallIds?.size === 0) toolCallIdsByAgentTerminalId.delete(terminalKey);
             }
             embeddedTerminalsByToolCallId.delete(oldest);
           }
@@ -2726,11 +2785,14 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           // item native providers produce (e.g. the T3 orchestration tools).
           const mcpIdentity = extractMcpToolCallIdentity(toolCall, {
             embeddedTerminalCommands: (
-              embeddedTerminalsByToolCallId.get(toolCall.toolCallId) ?? []
+              embeddedTerminalsByToolCallId.get(
+                sessionScopedId(context.nativeThreadId, toolCall.toolCallId),
+              )?.terminalIds ?? []
             ).flatMap((terminalId) => {
               const command =
                 clientTerminals?.readCommandLine(terminalId) ??
-                agentTerminalsById.get(terminalId)?.command;
+                agentTerminalsById.get(sessionScopedId(context.nativeThreadId, terminalId))
+                  ?.command;
               return command === undefined ? [] : [command];
             }),
           });
@@ -3378,11 +3440,9 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           ) {
             return false;
           }
-          const next = applyAcpAgentTerminalUpdate(
-            agentTerminalsById.get(update.terminalId),
-            update,
-          );
-          agentTerminalsById.set(update.terminalId, next);
+          const terminalKey = sessionScopedId(notification.sessionId, update.terminalId);
+          const next = applyAcpAgentTerminalUpdate(agentTerminalsById.get(terminalKey), update);
+          agentTerminalsById.set(terminalKey, next);
           if (context === null || notification.sessionId !== context.nativeThreadId) return true;
           const status =
             next.exitStatus === undefined
@@ -3390,7 +3450,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               : next.exitStatus.exitCode === 0
                 ? ("completed" as const)
                 : ("failed" as const);
-          const embeddedToolCallIds = toolCallIdsByAgentTerminalId.get(update.terminalId);
+          const embeddedToolCallIds = toolCallIdsByAgentTerminalId.get(terminalKey);
           const projectedToolCallIds =
             embeddedToolCallIds === undefined || embeddedToolCallIds.size === 0
               ? [`acp-agent-terminal:${update.terminalId}`]
@@ -4639,7 +4699,12 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           Effect.gen(function* () {
             if (clientTerminals !== undefined) {
               const embedded = embeddedTerminalIdsFromSessionUpdate(rawNotification);
-              if (embedded !== undefined) rememberEmbeddedTerminals(embedded);
+              if (embedded !== undefined) {
+                rememberEmbeddedTerminals({
+                  ...embedded,
+                  sessionId: rawNotification.sessionId,
+                });
+              }
             }
             const notification =
               clientTerminals === undefined
@@ -5255,6 +5320,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                   runtimeScope = replacementScope;
                   runtimeMcpBridge = replacementMcpBridge;
                   yield* Ref.set(runtimeCallbackGeneration, replacementGeneration);
+                  prepareTerminalEnvironment(threadId, replacementExit.value.started.sessionId);
                   yield* wireAcpRuntimeTerminalHandlers(replacementExit.value.replacementRuntime);
                   yield* commitSessionState(replacementExit.value.started);
                   while (true) {
@@ -5327,6 +5393,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                 error: initialStart.failure,
               });
               yield* Ref.set(runtimeRestartRequired, false);
+              prepareClaimableTerminalEnvironment(input.threadId);
               return yield* startAcpRuntime(input.threadId);
             });
         yield* Ref.set(activeSessionId, started.sessionId);
@@ -5353,7 +5420,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
             return yield* initialFailure;
           }
           const activationOptions = acpMcpActivation(threadId);
-          prepareTerminalEnvironment(threadId);
+          prepareTerminalEnvironment(threadId, sessionId);
           const activated = canLoadSession
             ? yield* runtime.loadSession(sessionId, activationOptions)
             : canResumeSession
@@ -6779,7 +6846,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                       loadingMessageId: null,
                       loadingIndex: 0,
                     });
-                    prepareTerminalEnvironment(snapshotInput.providerThread.appThreadId);
+                    prepareTerminalEnvironment(snapshotInput.providerThread.appThreadId, sessionId);
                     const activated = yield* runtime.loadSession(
                       sessionId,
                       acpMcpActivation(snapshotInput.providerThread.appThreadId),
