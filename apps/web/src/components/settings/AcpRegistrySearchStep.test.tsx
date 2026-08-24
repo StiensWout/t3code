@@ -140,6 +140,7 @@ describe("AcpRegistrySearchStep", () => {
     });
 
     const input = findByAriaLabel(initial, "Search ACP Registry");
+    expect(input.props.size).toBe("sm");
     (input.props.onChange as ((event: { currentTarget: { value: string } }) => void) | undefined)?.(
       { currentTarget: { value: "  Gemini  " } },
     );

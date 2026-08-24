@@ -153,6 +153,7 @@ export function AcpRegistrySearchStep({
             autoFocus
             onChange={(event) => setQuery(event.currentTarget.value)}
             placeholder="Search by agent, author, or description"
+            size="sm"
             type="search"
             value={query}
           />

@@ -125,6 +125,15 @@ function findByLabel(
   return found!;
 }
 
+function findByAriaLabel(
+  tree: ReactElement<Record<string, unknown>>,
+  label: string,
+): ReactElement<Record<string, unknown>> {
+  const found = visitElements(tree, (element) => element.props["aria-label"] === label);
+  expect(found).not.toBeNull();
+  return found!;
+}
+
 async function flushPromises(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
@@ -238,7 +247,9 @@ describe("AcpSessionManagementSection", () => {
       environmentId,
       input: { instanceId, projectId },
     });
-    (findByLabel(render(), "Save").props.onClick as (() => void) | undefined)?.();
+    const providers = render();
+    expect(findByAriaLabel(providers, "google protocol").props.size).toBe("sm");
+    (findByLabel(providers, "Save").props.onClick as (() => void) | undefined)?.();
     await flushPromises();
     expect(commands.setProvider).toHaveBeenCalledWith({
       environmentId,
