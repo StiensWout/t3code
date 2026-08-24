@@ -5,6 +5,23 @@ import { describe, expect, it } from "vite-plus/test";
 import { ComposerCommandMenu } from "./ComposerCommandMenu";
 
 describe("ComposerCommandMenu", () => {
+  it("renders a skill-only empty state for an inline slash", () => {
+    const markup = renderToStaticMarkup(
+      <ComposerCommandMenu
+        items={[]}
+        resolvedTheme="dark"
+        isLoading={false}
+        triggerKind="slash-skill"
+        activeItemId={null}
+        onHighlightedItemChange={() => {}}
+        onSelect={() => {}}
+      />,
+    );
+
+    expect(markup).toContain("No skills found.");
+    expect(markup).not.toContain("provider commands");
+  });
+
   it("renders slash commands with their descriptions", () => {
     const markup = renderToStaticMarkup(
       <ComposerCommandMenu

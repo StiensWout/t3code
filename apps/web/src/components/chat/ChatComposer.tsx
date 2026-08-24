@@ -2045,8 +2045,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const isComposerMenuLoading =
     composerTriggerKind === "path" && pathTriggerQuery.length > 0 && workspaceEntries.isPending;
   const composerMenuEmptyState = useMemo(() => {
-    if (composerTriggerKind === "skill" || composerTriggerKind === "slash-skill") {
-      return "No skills found. Try / to browse provider commands.";
+    if (composerTriggerKind === "slash-skill") {
+      return "No skills found.";
+    }
+    if (composerTriggerKind === "skill") {
+      return "No skills found. Try / in an empty composer to browse provider commands.";
     }
     return composerTriggerKind === "path"
       ? "No matching files or folders."
