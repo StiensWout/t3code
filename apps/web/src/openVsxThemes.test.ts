@@ -673,16 +673,13 @@ describe("Open VSX themes", () => {
 
   it("times out a stalled import request", async () => {
     vi.useFakeTimers();
+    const requestSignals: AbortSignal[] = [];
     vi.stubGlobal(
       "fetch",
-      vi.fn(
-        (_input: RequestInfo | URL, init?: RequestInit) =>
-          new Promise<Response>((_resolve, reject) => {
-            init?.signal?.addEventListener("abort", () => {
-              reject(new DOMException("The operation was aborted.", "AbortError"));
-            });
-          }),
-      ),
+      vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+        if (init?.signal) requestSignals.push(init.signal);
+        return new Promise<Response>(() => undefined);
+      }),
     );
 
     const importing = expect(importOpenVsxThemeExtension(selectedExtension())).rejects.toThrow(
@@ -691,6 +688,8 @@ describe("Open VSX themes", () => {
     await vi.advanceTimersByTimeAsync(30_000);
 
     await importing;
+    expect(requestSignals).toHaveLength(1);
+    expect(requestSignals[0]!.aborted).toBe(true);
   });
 
   it("rejects theme paths that escape the extension package", async () => {

@@ -267,14 +267,29 @@ async function withRequestTimeout<T>(
   parentSignal?: AbortSignal,
 ): Promise<T> {
   const controller = new AbortController();
-  const abort = () => controller.abort();
+  let rejectInterruption = (_cause: unknown) => {};
+  const interruption = new Promise<never>((_resolve, reject) => {
+    rejectInterruption = reject;
+  });
+  const abort = () => {
+    const cause =
+      parentSignal?.reason ?? new DOMException("The operation was aborted.", "AbortError");
+    controller.abort(cause);
+    rejectInterruption(cause);
+  };
   if (parentSignal?.aborted) abort();
   else parentSignal?.addEventListener("abort", abort, { once: true });
-  const timeout = setTimeout(abort, timeoutMs);
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    const cause = new Error(timeoutMessage);
+    controller.abort(cause);
+    rejectInterruption(cause);
+  }, timeoutMs);
   try {
-    return await operation(controller.signal);
+    return await Promise.race([operation(controller.signal), interruption]);
   } catch (cause) {
-    if (controller.signal.aborted && !parentSignal?.aborted) {
+    if (timedOut && !parentSignal?.aborted) {
       throw new Error(timeoutMessage, { cause });
     }
     throw cause;
