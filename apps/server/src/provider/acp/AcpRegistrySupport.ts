@@ -244,7 +244,7 @@ function parseNpxPackageSpec(packageSpec: string): ExactPackageSpec {
   const separator = packageSpec.lastIndexOf("@");
   return {
     name: packageSpec.slice(0, separator),
-    version: packageSpec.slice(separator + 1).replace(/^v/u, ""),
+    version: packageSpec.slice(separator + 1).replace(/^v/iu, ""),
   };
 }
 
@@ -254,7 +254,7 @@ function parseUvxPackageSpec(packageSpec: string): ExactPackageSpec {
   const separatorLength = equalsSeparator >= 0 ? 2 : 1;
   return {
     name: packageSpec.slice(0, separator),
-    version: packageSpec.slice(separator + separatorLength).replace(/^v/u, ""),
+    version: packageSpec.slice(separator + separatorLength).replace(/^v/iu, ""),
   };
 }
 
@@ -281,7 +281,10 @@ function readEnvironmentPath(
   platform: NodeJS.Platform,
 ): string | undefined {
   if (platform !== "win32") return environment.PATH;
-  return Object.entries(environment).find(([key]) => key.toLowerCase() === "path")?.[1];
+  return (
+    environment.PATH ??
+    Object.entries(environment).find(([key]) => key.toLowerCase() === "path")?.[1]
+  );
 }
 
 function withPreferredPath(

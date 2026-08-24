@@ -6,6 +6,7 @@ import {
   HostProcessEnvironment,
   HostProcessPlatform,
 } from "@t3tools/shared/hostProcess";
+import { SpawnExecutableResolution } from "@t3tools/shared/shell";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -178,6 +179,7 @@ const makeFakeUvToolchain = Effect.fn("AcpRegistrySupport.test.makeFakeUvToolcha
     executablePath,
     globalBin,
     logPath,
+    uvPath,
   };
 });
 
@@ -301,7 +303,7 @@ describe("AcpRegistrySupport", () => {
 
   it.effect("globally installs a package and launches its exposed command", () => {
     const agent = makeAgent({
-      npx: { package: "@example/acp@1.2.3", args: ["--stdio"] },
+      npx: { package: "@example/acp@V1.2.3", args: ["--stdio"] },
     });
     return Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -324,7 +326,7 @@ describe("AcpRegistrySupport", () => {
       expect(second.spawn.command).toBe(toolchain.executablePath);
       const npmCommands = yield* fileSystem.readFileString(toolchain.logPath);
       expect(npmCommands.match(/^install --global /gmu)).toHaveLength(1);
-      expect(npmCommands).toContain("install --global @example/acp@1.2.3");
+      expect(npmCommands).toContain("install --global @example/acp@V1.2.3");
     }).pipe(
       Effect.scoped,
       Effect.provide(
@@ -369,7 +371,7 @@ describe("AcpRegistrySupport", () => {
 
   it.effect("globally installs a uv tool and launches its exposed command", () => {
     const agent = makeAgent({
-      uvx: { package: "fast-agent-acp==0.10.1", args: ["--acp"] },
+      uvx: { package: "fast-agent-acp==V0.10.1", args: ["--acp"] },
     });
     return Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -387,8 +389,53 @@ describe("AcpRegistrySupport", () => {
         env: { PATH: expect.stringMatching(new RegExp(`^${toolchain.globalBin}:`, "u")) },
       });
       expect(yield* fileSystem.readFileString(toolchain.logPath)).toContain(
-        "tool install --force fast-agent-acp==0.10.1",
+        "tool install --force fast-agent-acp==V0.10.1",
       );
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        resolverLayer((request) =>
+          Effect.succeed(HttpClientResponse.fromWeb(request, new Response(makeRegistry(agent)))),
+        ),
+      ),
+    );
+  });
+
+  it.effect("honors an exact Windows PATH override when launching a global package", () => {
+    const agent = makeAgent({
+      uvx: { package: "fast-agent-acp==0.10.1", args: ["--acp"] },
+    });
+    return Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-acp-registry-windows-package-path-",
+      });
+      const toolchain = yield* makeFakeUvToolchain(cacheDir);
+      const linuxResolver = yield* makeAcpRegistryCatalog({ cacheDir, registryUrl });
+      yield* linuxResolver.resolve(settings(), "/workspace", toolchain.environment);
+
+      const windowsEnvironment = {
+        ...toolchain.environment,
+        Path: "C:\\host\\bin",
+        PATH: "C:\\provider\\bin",
+      };
+      const windowsResolver = yield* makeAcpRegistryCatalog({ cacheDir, registryUrl }).pipe(
+        Effect.provideService(HostProcessPlatform, "win32"),
+        Effect.provideService(SpawnExecutableResolution, (command) => {
+          if (command === "uv") return toolchain.uvPath;
+          if (command === "fast-agent") return toolchain.executablePath;
+          return undefined;
+        }),
+      );
+      const resolved = yield* windowsResolver.resolve(
+        settings(),
+        "C:\\workspace",
+        windowsEnvironment,
+      );
+
+      expect(resolved.spawn).toMatchObject({
+        env: { PATH: `${toolchain.globalBin};C:\\provider\\bin` },
+      });
     }).pipe(
       Effect.scoped,
       Effect.provide(
