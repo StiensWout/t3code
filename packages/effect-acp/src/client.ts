@@ -1,4 +1,5 @@
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Stdio from "effect/Stdio";
 import * as Layer from "effect/Layer";
@@ -13,7 +14,9 @@ import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawne
 import * as AcpError from "./errors.ts";
 import * as AcpProtocol from "./protocol.ts";
 import * as AcpRpcs from "./rpc.ts";
-import * as AcpSchema from "./schema.ts";
+import * as AcpSchema from "./compat.ts";
+import type * as AcpSchemaV1 from "./_generated/schema-v1.gen.ts";
+import type * as AcpSchemaV2 from "./_generated/schema.gen.ts";
 import { AGENT_METHODS, CLIENT_METHODS } from "./_generated/meta.gen.ts";
 import {
   callRpc,
@@ -54,15 +57,15 @@ export class AcpClient extends Context.Service<
         payload: AcpSchema.InitializeRequest,
       ) => Effect.Effect<AcpSchema.InitializeResponse, AcpError.AcpError>;
       /**
-       * Performs ACP authentication when the agent requires it.
-       * @see https://agentclientprotocol.com/protocol/schema#authenticate
+       * Performs authentication with the method negotiated for ACP v1 or v2.
+       * @see https://agentclientprotocol.com/protocol/v2/draft/authentication
        */
       readonly authenticate: (
         payload: AcpSchema.AuthenticateRequest,
       ) => Effect.Effect<AcpSchema.AuthenticateResponse, AcpError.AcpError>;
       /**
-       * Logs out the current ACP identity.
-       * @see https://agentclientprotocol.com/protocol/schema#logout
+       * Logs out the current ACP identity using the negotiated generation.
+       * @see https://agentclientprotocol.com/protocol/v2/draft/authentication
        */
       readonly logout: (
         payload: AcpSchema.LogoutRequest,
@@ -75,8 +78,10 @@ export class AcpClient extends Context.Service<
         payload: AcpSchema.NewSessionRequest,
       ) => Effect.Effect<AcpSchema.NewSessionResponse, AcpError.AcpError>;
       /**
-       * Loads a previously saved ACP session.
-       * @see https://agentclientprotocol.com/protocol/schema#session/load
+       * Resumes a saved ACP session with replay from the beginning.
+       *
+       * This compatibility name maps to ACP v2's `session/resume`; v2 removed
+       * `session/load` and expresses replay with `replayFrom`.
        */
       readonly loadSession: (
         payload: AcpSchema.LoadSessionRequest,
@@ -151,61 +156,34 @@ export class AcpClient extends Context.Service<
         AcpSchema.CreateElicitationResponse
       >,
     ) => Effect.Effect<void>;
-    /**
-     * Registers a handler for `fs/read_text_file`.
-     * @see https://agentclientprotocol.com/protocol/schema#fs/read_text_file
-     */
+    /** Legacy ACP v1 hooks retained for policy compatibility; ACP v2 never advertises them. */
     readonly handleReadTextFile: (
       handler: AcpRequestHandler<AcpSchema.ReadTextFileRequest, AcpSchema.ReadTextFileResponse>,
     ) => Effect.Effect<void>;
-    /**
-     * Registers a handler for `fs/write_text_file`.
-     * @see https://agentclientprotocol.com/protocol/schema#fs/write_text_file
-     */
     readonly handleWriteTextFile: (
       handler: AcpRequestHandler<
         AcpSchema.WriteTextFileRequest,
         AcpSchema.WriteTextFileResponse | void
       >,
     ) => Effect.Effect<void>;
-    /**
-     * Registers a handler for `terminal/create`.
-     * @see https://agentclientprotocol.com/protocol/schema#terminal/create
-     */
     readonly handleCreateTerminal: (
       handler: AcpRequestHandler<AcpSchema.CreateTerminalRequest, AcpSchema.CreateTerminalResponse>,
     ) => Effect.Effect<void>;
-    /**
-     * Registers a handler for `terminal/output`.
-     * @see https://agentclientprotocol.com/protocol/schema#terminal/output
-     */
     readonly handleTerminalOutput: (
       handler: AcpRequestHandler<AcpSchema.TerminalOutputRequest, AcpSchema.TerminalOutputResponse>,
     ) => Effect.Effect<void>;
-    /**
-     * Registers a handler for `terminal/wait_for_exit`.
-     * @see https://agentclientprotocol.com/protocol/schema#terminal/wait_for_exit
-     */
     readonly handleTerminalWaitForExit: (
       handler: AcpRequestHandler<
         AcpSchema.WaitForTerminalExitRequest,
         AcpSchema.WaitForTerminalExitResponse
       >,
     ) => Effect.Effect<void>;
-    /**
-     * Registers a handler for `terminal/kill`.
-     * @see https://agentclientprotocol.com/protocol/schema#terminal/kill
-     */
     readonly handleTerminalKill: (
       handler: AcpRequestHandler<
         AcpSchema.KillTerminalRequest,
         AcpSchema.KillTerminalResponse | void
       >,
     ) => Effect.Effect<void>;
-    /**
-     * Registers a handler for `terminal/release`.
-     * @see https://agentclientprotocol.com/protocol/schema#terminal/release
-     */
     readonly handleTerminalRelease: (
       handler: AcpRequestHandler<
         AcpSchema.ReleaseTerminalRequest,
@@ -315,6 +293,492 @@ interface BufferedNotificationHandler<A> {
   readonly pending: Array<A>;
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+function normalizeContentBlock(
+  content: AcpSchemaV2.ContentBlock,
+): AcpSchema.ContentBlock | undefined {
+  switch (content.type) {
+    case "text":
+    case "image":
+    case "audio":
+    case "resource_link":
+    case "resource":
+      return content as AcpSchema.ContentBlock;
+    default:
+      return undefined;
+  }
+}
+
+function normalizeToolCallContent(
+  content: AcpSchemaV2.ToolCallContent,
+): ReadonlyArray<AcpSchema.ToolCallContent> {
+  if (content.type === "content") {
+    const known = content as Extract<AcpSchemaV2.ToolCallContent, { readonly type: "content" }>;
+    const normalized = normalizeContentBlock(known.content);
+    return normalized === undefined ? [] : [{ ...known, content: normalized }];
+  }
+  if (content.type === "terminal") {
+    return [content as Extract<AcpSchemaV2.ToolCallContent, { readonly type: "terminal" }>];
+  }
+  if (content.type !== "diff") return [];
+
+  const known = content as Extract<AcpSchemaV2.ToolCallContent, { readonly type: "diff" }>;
+  const patch = known.patch?.text ?? "";
+  return known.changes.flatMap((change) => {
+    if (!("path" in change) || typeof change.path !== "string") return [];
+    return [
+      {
+        type: "diff" as const,
+        path: change.path,
+        ...(change.operation === "add" ? { oldText: null } : {}),
+        newText: patch,
+        ...(known._meta === undefined ? {} : { _meta: known._meta }),
+      },
+    ];
+  });
+}
+
+function normalizeToolCallUpdate(update: AcpSchemaV2.ToolCallUpdate): AcpSchema.ToolCallUpdate {
+  return {
+    toolCallId: update.toolCallId,
+    ...(update.name === undefined ? {} : { name: update.name }),
+    ...(update.title === undefined ? {} : { title: update.title }),
+    ...(update.kind === undefined ? {} : { kind: update.kind }),
+    ...(update.status === undefined ? {} : { status: update.status }),
+    ...(update.content === undefined
+      ? {}
+      : {
+          content:
+            update.content === null
+              ? null
+              : update.content.flatMap((content) => normalizeToolCallContent(content)),
+        }),
+    ...(update.locations === undefined ? {} : { locations: update.locations }),
+    ...(update.rawInput === undefined ? {} : { rawInput: update.rawInput }),
+    ...(update.rawOutput === undefined ? {} : { rawOutput: update.rawOutput }),
+    ...(update._meta === undefined ? {} : { _meta: update._meta }),
+  };
+}
+
+function normalizeConfigOption(
+  option: AcpSchemaV2.SessionConfigOption,
+): AcpSchema.SessionConfigOption | undefined {
+  if (option.type === "boolean") {
+    const known = option as Extract<AcpSchemaV2.SessionConfigOption, { readonly type: "boolean" }>;
+    return {
+      type: "boolean",
+      id: known.configId,
+      name: known.name,
+      currentValue: known.currentValue,
+      ...(known.description === undefined ? {} : { description: known.description }),
+      ...(known.category === undefined ? {} : { category: known.category }),
+      ...(known._meta === undefined ? {} : { _meta: known._meta }),
+    };
+  }
+  if (option.type === "select") {
+    const known = option as Extract<AcpSchemaV2.SessionConfigOption, { readonly type: "select" }>;
+    return {
+      type: "select",
+      id: known.configId,
+      name: known.name,
+      currentValue: known.currentValue,
+      options: known.options,
+      ...(known.description === undefined ? {} : { description: known.description }),
+      ...(known.category === undefined ? {} : { category: known.category }),
+      ...(known._meta === undefined ? {} : { _meta: known._meta }),
+    };
+  }
+  return undefined;
+}
+
+function normalizeConfigOptions(
+  options: ReadonlyArray<AcpSchemaV2.SessionConfigOption> | undefined,
+): ReadonlyArray<AcpSchema.SessionConfigOption> | undefined {
+  return options?.flatMap((option) => {
+    const normalized = normalizeConfigOption(option);
+    return normalized === undefined ? [] : [normalized];
+  });
+}
+
+function normalizeSessionUpdate(
+  notification: AcpSchemaV2.UpdateSessionNotification,
+): AcpSchema.SessionNotification | undefined {
+  const update = notification.update;
+  const base = {
+    sessionId: notification.sessionId,
+    ...(notification._meta === undefined ? {} : { _meta: notification._meta }),
+  };
+
+  switch (update.sessionUpdate) {
+    case "user_message_chunk":
+    case "agent_message_chunk":
+    case "agent_thought_chunk": {
+      const known = update as Extract<
+        AcpSchemaV2.SessionUpdate,
+        {
+          readonly sessionUpdate:
+            | "user_message_chunk"
+            | "agent_message_chunk"
+            | "agent_thought_chunk";
+        }
+      >;
+      const content = normalizeContentBlock(known.content);
+      return content === undefined ? undefined : { ...base, update: { ...known, content } };
+    }
+    case "user_message":
+    case "agent_message":
+    case "agent_thought": {
+      const known = update as Extract<
+        AcpSchemaV2.SessionUpdate,
+        { readonly sessionUpdate: "user_message" | "agent_message" | "agent_thought" }
+      >;
+      const content = known.content;
+      return {
+        ...base,
+        update: {
+          ...known,
+          ...(content === undefined
+            ? {}
+            : {
+                content:
+                  content === null
+                    ? null
+                    : (content as ReadonlyArray<AcpSchemaV2.ContentBlock>).flatMap((item) => {
+                        const normalized = normalizeContentBlock(item);
+                        return normalized === undefined ? [] : [normalized];
+                      }),
+              }),
+        },
+      } as AcpSchema.SessionNotification;
+    }
+    case "tool_call_update": {
+      const known = update as Extract<
+        AcpSchemaV2.SessionUpdate,
+        { readonly sessionUpdate: "tool_call_update" }
+      >;
+      return {
+        ...base,
+        update: { sessionUpdate: "tool_call_update", ...normalizeToolCallUpdate(known) },
+      };
+    }
+    case "tool_call_content_chunk": {
+      const known = update as Extract<
+        AcpSchemaV2.SessionUpdate,
+        { readonly sessionUpdate: "tool_call_content_chunk" }
+      >;
+      const [content] = normalizeToolCallContent(known.content);
+      return content === undefined
+        ? undefined
+        : {
+            ...base,
+            update: {
+              sessionUpdate: "tool_call_content_chunk",
+              toolCallId: known.toolCallId,
+              content,
+              ...(known._meta === undefined ? {} : { _meta: known._meta }),
+            },
+          };
+    }
+    case "config_option_update": {
+      const known = update as Extract<
+        AcpSchemaV2.SessionUpdate,
+        { readonly sessionUpdate: "config_option_update" }
+      >;
+      return {
+        ...base,
+        update: {
+          sessionUpdate: "config_option_update",
+          configOptions: known.configOptions.flatMap((option) => {
+            const normalized = normalizeConfigOption(option);
+            return normalized === undefined ? [] : [normalized];
+          }),
+          ...(known._meta === undefined ? {} : { _meta: known._meta }),
+        },
+      };
+    }
+    case "state_update":
+    case "terminal_update":
+    case "terminal_output_chunk":
+    case "plan_update":
+    case "plan_removed":
+    case "session_info_update":
+    case "usage_update":
+    case "compaction_update":
+    case "compaction_summary_chunk":
+      return { ...base, update } as AcpSchema.SessionNotification;
+    case "available_commands_update": {
+      const known = update as Extract<
+        AcpSchemaV2.SessionUpdate,
+        { readonly sessionUpdate: "available_commands_update" }
+      >;
+      return {
+        ...base,
+        update: {
+          ...known,
+          availableCommands: known.availableCommands.map((command) => ({
+            ...command,
+            ...(command.input?.type === "text"
+              ? {
+                  input: command.input as Extract<
+                    AcpSchemaV2.AvailableCommandInput,
+                    { readonly type: "text" }
+                  >,
+                }
+              : { input: null }),
+          })),
+        },
+      };
+    }
+    default:
+      return undefined;
+  }
+}
+
+function normalizeV1SessionUpdate(
+  notification: AcpSchemaV1.SessionNotification,
+): AcpSchema.SessionNotification {
+  if (notification.update.sessionUpdate !== "available_commands_update") {
+    return notification as unknown as AcpSchema.SessionNotification;
+  }
+  return {
+    ...notification,
+    update: {
+      ...notification.update,
+      availableCommands: notification.update.availableCommands.map((command) => {
+        const { input, ...rest } = command;
+        return {
+          ...rest,
+          ...(input == null ? {} : { input: { type: "text" as const, hint: input.hint } }),
+        };
+      }),
+    },
+  };
+}
+
+function toV2McpServer(server: AcpSchema.McpServer): AcpSchemaV2.McpServer {
+  if ("type" in server) return server;
+  return {
+    type: "stdio",
+    name: server.name,
+    command: server.command,
+    ...(server.args === undefined ? {} : { args: server.args }),
+    ...(server.env === undefined ? {} : { env: server.env }),
+    ...(server._meta === undefined ? {} : { _meta: server._meta }),
+  };
+}
+
+function toV2ResumeRequest(
+  request: AcpSchema.ResumeSessionRequest,
+  replayFrom?: AcpSchemaV2.ReplayFrom,
+): AcpSchemaV2.ResumeSessionRequest {
+  const { mcpServers, ...rest } = request;
+  return {
+    ...rest,
+    ...(mcpServers === undefined ? {} : { mcpServers: mcpServers.map(toV2McpServer) }),
+    ...(replayFrom === undefined ? {} : { replayFrom }),
+  };
+}
+
+function toV2ForkRequest(request: AcpSchema.ForkSessionRequest): AcpSchemaV2.ForkSessionRequest {
+  const { mcpServers, ...rest } = request;
+  return {
+    ...rest,
+    ...(mcpServers === undefined ? {} : { mcpServers: mcpServers.map(toV2McpServer) }),
+  };
+}
+
+function normalizeInitializeResponse(
+  response: AcpSchemaV2.InitializeResponse,
+): AcpSchema.InitializeResponse {
+  const session = response.capabilities?.session;
+  const prompt = session?.prompt;
+  const mcp = session?.mcp;
+  return {
+    protocolVersion: response.protocolVersion,
+    agentInfo: response.info,
+    agentCapabilities: {
+      loadSession: session !== undefined && session !== null,
+      promptCapabilities: {
+        image: prompt?.image != null,
+        audio: prompt?.audio != null,
+        embeddedContext: prompt?.embeddedContext != null,
+      },
+      mcpCapabilities: {
+        stdio: mcp?.stdio != null,
+        http: mcp?.http != null,
+        acp: mcp?.acp != null,
+      },
+      ...(session == null
+        ? {}
+        : {
+            sessionCapabilities: {
+              list: {},
+              resume: {},
+              close: {},
+              ...(session.fork == null ? {} : { fork: {} }),
+              ...(session.additionalDirectories == null ? {} : { additionalDirectories: {} }),
+            },
+          }),
+      ...(response.capabilities?.providers == null ? {} : { providers: {} }),
+      ...(response.authMethods === undefined || response.authMethods.length === 0
+        ? {}
+        : { auth: { logout: {} } }),
+    },
+    ...(response.authMethods === undefined
+      ? {}
+      : {
+          authMethods: response.authMethods.map((method) => {
+            const record = method as AcpSchemaV2.AuthMethod;
+            const base = {
+              id: record.methodId,
+              name: record.name,
+              ...(record.description === undefined ? {} : { description: record.description }),
+              ...(record._meta === undefined ? {} : { _meta: record._meta }),
+            };
+            if (
+              record.type === "env_var" &&
+              Array.isArray(record.vars) &&
+              record.vars.every(
+                (variable) =>
+                  typeof variable === "object" &&
+                  variable !== null &&
+                  typeof (variable as { readonly name?: unknown }).name === "string",
+              )
+            ) {
+              return {
+                ...base,
+                type: "env_var" as const,
+                vars: record.vars.map((variable) => {
+                  const value = variable as { readonly name: string; readonly label?: unknown };
+                  return {
+                    name: value.name,
+                    ...(typeof value.label === "string" ? { label: value.label } : {}),
+                  };
+                }),
+                ...(typeof record.link === "string" ? { link: record.link } : {}),
+              };
+            }
+            if (record.type !== "terminal") return { ...base, type: "agent" as const };
+            return {
+              ...base,
+              type: "terminal" as const,
+              ...(Array.isArray(record.args)
+                ? {
+                    args: record.args.filter(
+                      (argument): argument is string => typeof argument === "string",
+                    ),
+                  }
+                : {}),
+              ...(Array.isArray(record.env)
+                ? {
+                    env: Object.fromEntries(
+                      (record.env as ReadonlyArray<AcpSchemaV2.EnvVariable>).map((variable) => [
+                        variable.name,
+                        variable.value,
+                      ]),
+                    ),
+                  }
+                : {}),
+            };
+          }),
+        }),
+    ...(response._meta === undefined ? {} : { _meta: response._meta }),
+  };
+}
+
+function toV2InitializeRequest(
+  request: AcpSchema.InitializeRequest,
+): AcpSchemaV2.InitializeRequest {
+  const capabilities = request.clientCapabilities;
+  return {
+    protocolVersion: 2,
+    info: request.clientInfo ?? { name: "t3-code", version: "unknown" },
+    capabilities: {
+      ...(capabilities?.auth?.terminal === true ? { auth: { terminal: {} } } : {}),
+      ...(capabilities?.elicitation == null ? {} : { elicitation: capabilities.elicitation }),
+      ...(capabilities?._meta === undefined ? {} : { _meta: capabilities._meta }),
+    },
+    ...(request._meta === undefined ? {} : { _meta: request._meta }),
+  };
+}
+
+function toNegotiatingInitializeRequest(
+  request: AcpSchema.InitializeRequest,
+): AcpSchemaV1.InitializeRequest | AcpSchemaV2.InitializeRequest {
+  return {
+    ...toV2InitializeRequest(request),
+    clientCapabilities: request.clientCapabilities ?? {},
+    ...(request.clientInfo === undefined ? {} : { clientInfo: request.clientInfo }),
+  } as unknown as AcpSchemaV1.InitializeRequest | AcpSchemaV2.InitializeRequest;
+}
+
+function isV2InitializeResponse(
+  response: AcpSchemaV1.InitializeResponse | AcpSchemaV2.InitializeResponse,
+): response is AcpSchemaV2.InitializeResponse {
+  return "info" in response;
+}
+
+function isV2SessionSetupResponse(
+  response:
+    | AcpSchemaV1.NewSessionResponse
+    | AcpSchemaV1.LoadSessionResponse
+    | AcpSchemaV1.ForkSessionResponse
+    | AcpSchemaV1.ResumeSessionResponse
+    | AcpSchemaV2.NewSessionResponse
+    | AcpSchemaV2.ResumeSessionResponse
+    | AcpSchemaV2.ForkSessionResponse,
+): response is
+  | AcpSchemaV2.NewSessionResponse
+  | AcpSchemaV2.ResumeSessionResponse
+  | AcpSchemaV2.ForkSessionResponse {
+  return response.configOptions?.some((option) => "configId" in option) === true;
+}
+
+function normalizeV2SessionSetupResponse(
+  response:
+    | AcpSchemaV2.NewSessionResponse
+    | AcpSchemaV2.ResumeSessionResponse
+    | AcpSchemaV2.ForkSessionResponse,
+) {
+  const configOptions = normalizeConfigOptions(response.configOptions);
+  return {
+    ...("sessionId" in response ? { sessionId: response.sessionId } : {}),
+    ...(configOptions === undefined ? {} : { configOptions }),
+    ...(response._meta === undefined ? {} : { _meta: response._meta }),
+  };
+}
+
+function normalizePermissionRequest(
+  request: AcpSchemaV2.RequestPermissionRequest,
+  context: AcpProtocol.AcpRequestContext,
+): AcpSchema.RequestPermissionRequest {
+  const subject = request.subject;
+  const toolCall =
+    subject?.type === "tool_call" && "toolCall" in subject
+      ? normalizeToolCallUpdate(subject.toolCall as AcpSchemaV2.ToolCallUpdate)
+      : {
+          toolCallId:
+            subject?.type === "command" &&
+            "toolCallId" in subject &&
+            typeof subject.toolCallId === "string"
+              ? subject.toolCallId
+              : context.requestId,
+          title: request.title,
+          kind: subject?.type === "command" ? ("execute" as const) : ("other" as const),
+        };
+  return {
+    sessionId: request.sessionId,
+    title: request.title,
+    ...(request.description === undefined ? {} : { description: request.description }),
+    ...(subject === undefined ? {} : { subject }),
+    toolCall,
+    options: request.options,
+    ...(request._meta === undefined ? {} : { _meta: request._meta }),
+  };
+}
+
 export const make = Effect.fn("effect-acp/AcpClient.make")(function* (
   stdio: Stdio.Stdio,
   options: AcpClientOptions = {},
@@ -325,6 +789,10 @@ export const make = Effect.fn("effect-acp/AcpClient.make")(function* (
     sessionUpdate: { handlers: [], pending: [] },
     elicitationComplete: { handlers: [], pending: [] },
   };
+  const promptCompletions = new Map<
+    string,
+    Deferred.Deferred<AcpSchema.PromptResponse, AcpError.AcpError>
+  >();
   const extRequestHandlers = new Map<string, AcpRequestHandler<unknown, unknown>>();
   const extNotificationHandlers = new Map<
     string,
@@ -340,6 +808,7 @@ export const make = Effect.fn("effect-acp/AcpClient.make")(function* (
   let unknownExtNotificationHandler:
     | ((method: string, params: unknown) => Effect.Effect<void, AcpError.AcpError>)
     | undefined;
+  let negotiatedProtocolGeneration: 1 | 2 | undefined;
 
   const runNotificationHandlers = <A>(
     registration: BufferedNotificationHandler<A>,
@@ -369,11 +838,37 @@ export const make = Effect.fn("effect-acp/AcpClient.make")(function* (
   const dispatchNotification = (notification: AcpProtocol.AcpIncomingNotification) => {
     switch (notification._tag) {
       case "SessionUpdate": {
+        const normalized: AcpSchema.SessionNotification | undefined =
+          negotiatedProtocolGeneration === 1
+            ? normalizeV1SessionUpdate(notification.params as AcpSchemaV1.SessionNotification)
+            : normalizeSessionUpdate(notification.params as AcpSchemaV2.UpdateSessionNotification);
+        if (normalized === undefined) return Effect.void;
+        const state = normalized.update;
+        const completePrompt =
+          state.sessionUpdate === "state_update" && state.state === "idle"
+            ? Effect.suspend(() => {
+                const idle = state as Extract<
+                  AcpSchema.SessionUpdate,
+                  { readonly sessionUpdate: "state_update"; readonly state: "idle" }
+                >;
+                const completion = promptCompletions.get(normalized.sessionId);
+                if (completion === undefined) return Effect.void;
+                promptCompletions.delete(normalized.sessionId);
+                return Deferred.succeed(completion, {
+                  stopReason: idle.stopReason ?? "end_turn",
+                  ...(idle.usage === undefined ? {} : { usage: idle.usage }),
+                  ...(idle._meta === undefined ? {} : { _meta: idle._meta }),
+                }).pipe(Effect.asVoid);
+              })
+            : Effect.void;
         if (notificationHandlers.sessionUpdate.handlers.length === 0) {
-          notificationHandlers.sessionUpdate.pending.push(notification.params);
-          return Effect.void;
+          notificationHandlers.sessionUpdate.pending.push(normalized);
+          return completePrompt;
         }
-        return runNotificationHandlers(notificationHandlers.sessionUpdate, notification.params);
+        return Effect.all(
+          [completePrompt, runNotificationHandlers(notificationHandlers.sessionUpdate, normalized)],
+          { discard: true },
+        );
       }
       case "ElicitationComplete": {
         if (notificationHandlers.elicitationComplete.handlers.length === 0) {
@@ -414,12 +909,27 @@ export const make = Effect.fn("effect-acp/AcpClient.make")(function* (
   const transport = yield* AcpProtocol.makeAcpPatchedProtocol({
     stdio: stdio,
     ...(terminationError ? { terminationError } : {}),
-    serverRequestMethods: new Set(AcpRpcs.ClientRpcs.requests.keys()),
+    serverRequestMethods: new Set(AcpRpcs.CompatClientRpcs.requests.keys()),
     ...(options.logIncoming !== undefined ? { logIncoming: options.logIncoming } : {}),
     ...(options.logOutgoing !== undefined ? { logOutgoing: options.logOutgoing } : {}),
     ...(options.logger ? { logger: options.logger } : {}),
     ...(options.onIncomingRequest ? { onIncomingRequest: options.onIncomingRequest } : {}),
-    ...(options.onTermination ? { onTermination: options.onTermination } : {}),
+    onTermination: (error) =>
+      Effect.all(
+        [
+          ...Array.from(promptCompletions.values(), (completion) =>
+            Deferred.fail(completion, error).pipe(Effect.asVoid),
+          ),
+          options.onTermination?.(error) ?? Effect.void,
+        ],
+        { discard: true },
+      ).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            promptCompletions.clear();
+          }),
+        ),
+      ),
     ...(options.onOutgoingResponseFailure
       ? { onOutgoingResponseFailure: options.onOutgoingResponseFailure }
       : {}),
@@ -436,12 +946,17 @@ export const make = Effect.fn("effect-acp/AcpClient.make")(function* (
     method,
   });
 
-  const clientHandlerLayer = AcpRpcs.ClientRpcs.toLayer(
-    AcpRpcs.ClientRpcs.of({
+  const clientHandlerLayer = AcpRpcs.CompatClientRpcs.toLayer(
+    AcpRpcs.CompatClientRpcs.of({
       [CLIENT_METHODS.session_request_permission]: (payload, { requestId }) =>
         runHandler(
           coreHandlers.requestPermission,
-          payload,
+          "toolCall" in payload
+            ? (payload as AcpSchema.RequestPermissionRequest)
+            : normalizePermissionRequest(
+                payload,
+                requestContext(requestId, CLIENT_METHODS.session_request_permission),
+              ),
           CLIENT_METHODS.session_request_permission,
           requestContext(requestId, CLIENT_METHODS.session_request_permission),
         ),
@@ -452,66 +967,66 @@ export const make = Effect.fn("effect-acp/AcpClient.make")(function* (
           CLIENT_METHODS.elicitation_create,
           requestContext(requestId, CLIENT_METHODS.elicitation_create),
         ),
-      [CLIENT_METHODS.fs_read_text_file]: (payload, { requestId }) =>
+      [AcpRpcs.V1_CLIENT_METHODS.fs_read_text_file]: (payload, { requestId }) =>
         runHandler(
           coreHandlers.readTextFile,
           payload,
-          CLIENT_METHODS.fs_read_text_file,
-          requestContext(requestId, CLIENT_METHODS.fs_read_text_file),
+          AcpRpcs.V1_CLIENT_METHODS.fs_read_text_file,
+          requestContext(requestId, AcpRpcs.V1_CLIENT_METHODS.fs_read_text_file),
         ),
-      [CLIENT_METHODS.fs_write_text_file]: (payload, { requestId }) =>
+      [AcpRpcs.V1_CLIENT_METHODS.fs_write_text_file]: (payload, { requestId }) =>
         runHandler(
           coreHandlers.writeTextFile,
           payload,
-          CLIENT_METHODS.fs_write_text_file,
-          requestContext(requestId, CLIENT_METHODS.fs_write_text_file),
+          AcpRpcs.V1_CLIENT_METHODS.fs_write_text_file,
+          requestContext(requestId, AcpRpcs.V1_CLIENT_METHODS.fs_write_text_file),
         ).pipe(Effect.map((result) => result ?? {})),
-      [CLIENT_METHODS.terminal_create]: (payload, { requestId }) =>
+      [AcpRpcs.V1_CLIENT_METHODS.terminal_create]: (payload, { requestId }) =>
         runHandler(
           coreHandlers.createTerminal,
           payload,
-          CLIENT_METHODS.terminal_create,
-          requestContext(requestId, CLIENT_METHODS.terminal_create),
+          AcpRpcs.V1_CLIENT_METHODS.terminal_create,
+          requestContext(requestId, AcpRpcs.V1_CLIENT_METHODS.terminal_create),
         ),
-      [CLIENT_METHODS.terminal_output]: (payload, { requestId }) =>
+      [AcpRpcs.V1_CLIENT_METHODS.terminal_output]: (payload, { requestId }) =>
         runHandler(
           coreHandlers.terminalOutput,
           payload,
-          CLIENT_METHODS.terminal_output,
-          requestContext(requestId, CLIENT_METHODS.terminal_output),
+          AcpRpcs.V1_CLIENT_METHODS.terminal_output,
+          requestContext(requestId, AcpRpcs.V1_CLIENT_METHODS.terminal_output),
         ),
-      [CLIENT_METHODS.terminal_wait_for_exit]: (payload, { requestId }) =>
+      [AcpRpcs.V1_CLIENT_METHODS.terminal_wait_for_exit]: (payload, { requestId }) =>
         runHandler(
           coreHandlers.terminalWaitForExit,
           payload,
-          CLIENT_METHODS.terminal_wait_for_exit,
-          requestContext(requestId, CLIENT_METHODS.terminal_wait_for_exit),
+          AcpRpcs.V1_CLIENT_METHODS.terminal_wait_for_exit,
+          requestContext(requestId, AcpRpcs.V1_CLIENT_METHODS.terminal_wait_for_exit),
         ),
-      [CLIENT_METHODS.terminal_kill]: (payload, { requestId }) =>
+      [AcpRpcs.V1_CLIENT_METHODS.terminal_kill]: (payload, { requestId }) =>
         runHandler(
           coreHandlers.terminalKill,
           payload,
-          CLIENT_METHODS.terminal_kill,
-          requestContext(requestId, CLIENT_METHODS.terminal_kill),
+          AcpRpcs.V1_CLIENT_METHODS.terminal_kill,
+          requestContext(requestId, AcpRpcs.V1_CLIENT_METHODS.terminal_kill),
         ).pipe(Effect.map((result) => result ?? {})),
-      [CLIENT_METHODS.terminal_release]: (payload, { requestId }) =>
+      [AcpRpcs.V1_CLIENT_METHODS.terminal_release]: (payload, { requestId }) =>
         runHandler(
           coreHandlers.terminalRelease,
           payload,
-          CLIENT_METHODS.terminal_release,
-          requestContext(requestId, CLIENT_METHODS.terminal_release),
+          AcpRpcs.V1_CLIENT_METHODS.terminal_release,
+          requestContext(requestId, AcpRpcs.V1_CLIENT_METHODS.terminal_release),
         ).pipe(Effect.map((result) => result ?? {})),
     }),
   );
 
-  yield* RpcServer.make(AcpRpcs.ClientRpcs).pipe(
+  yield* RpcServer.make(AcpRpcs.CompatClientRpcs).pipe(
     Effect.provideService(RpcServer.Protocol, transport.serverProtocol),
     Effect.provide(clientHandlerLayer),
     Effect.forkScoped,
   );
 
   let nextRpcRequestId = 2 ** 32;
-  const rpc = yield* RpcClient.make(AcpRpcs.AgentRpcs, {
+  const rpc = yield* RpcClient.make(AcpRpcs.CompatAgentRpcs, {
     generateRequestId: () => RpcMessage.RequestId(nextRpcRequestId++),
   }).pipe(Effect.provideService(RpcClient.Protocol, transport.clientProtocol));
 
@@ -523,29 +1038,169 @@ export const make = Effect.fn("effect-acp/AcpClient.make")(function* (
     },
     agent: {
       initialize: (payload) =>
-        callRpc(AGENT_METHODS.initialize, rpc[AGENT_METHODS.initialize](payload)),
-      authenticate: (payload) =>
-        callRpc(AGENT_METHODS.authenticate, rpc[AGENT_METHODS.authenticate](payload)),
-      logout: (payload) => callRpc(AGENT_METHODS.logout, rpc[AGENT_METHODS.logout](payload)),
-      createSession: (payload) =>
-        callRpc(AGENT_METHODS.session_new, rpc[AGENT_METHODS.session_new](payload)),
-      loadSession: (payload) =>
-        callRpc(AGENT_METHODS.session_load, rpc[AGENT_METHODS.session_load](payload)),
-      listSessions: (payload) =>
-        callRpc(AGENT_METHODS.session_list, rpc[AGENT_METHODS.session_list](payload)),
-      forkSession: (payload) =>
-        callRpc(AGENT_METHODS.session_fork, rpc[AGENT_METHODS.session_fork](payload)),
-      resumeSession: (payload) =>
-        callRpc(AGENT_METHODS.session_resume, rpc[AGENT_METHODS.session_resume](payload)),
-      closeSession: (payload) =>
-        callRpc(AGENT_METHODS.session_close, rpc[AGENT_METHODS.session_close](payload)),
-      setSessionConfigOption: (payload) =>
         callRpc(
-          AGENT_METHODS.session_set_config_option,
-          rpc[AGENT_METHODS.session_set_config_option](payload),
+          AGENT_METHODS.initialize,
+          rpc[AGENT_METHODS.initialize](toNegotiatingInitializeRequest(payload)),
+        ).pipe(
+          Effect.map((response) => {
+            // ACP v1 protocolVersion values were not generation identifiers in
+            // every shipped agent. Antigravity, for example, reports version 2
+            // with the v1 agentInfo/agentCapabilities response shape. The
+            // response discriminator determines the wire generation reliably.
+            if (isV2InitializeResponse(response)) {
+              negotiatedProtocolGeneration = 2;
+              return normalizeInitializeResponse(response);
+            }
+            negotiatedProtocolGeneration = 1;
+            return response as AcpSchema.InitializeResponse;
+          }),
         ),
+      authenticate: (payload) =>
+        negotiatedProtocolGeneration === 1
+          ? callRpc(
+              AcpRpcs.V1_AGENT_METHODS.authenticate,
+              rpc[AcpRpcs.V1_AGENT_METHODS.authenticate](payload),
+            )
+          : callRpc(AGENT_METHODS.auth_login, rpc[AGENT_METHODS.auth_login](payload)),
+      logout: (payload) =>
+        negotiatedProtocolGeneration === 1
+          ? callRpc(AcpRpcs.V1_AGENT_METHODS.logout, rpc[AcpRpcs.V1_AGENT_METHODS.logout](payload))
+          : callRpc(AGENT_METHODS.auth_logout, rpc[AGENT_METHODS.auth_logout](payload)),
+      createSession: (payload) =>
+        negotiatedProtocolGeneration === 1
+          ? callRpc(
+              AGENT_METHODS.session_new,
+              rpc[AGENT_METHODS.session_new](payload as AcpSchemaV1.NewSessionRequest),
+            ).pipe(Effect.map((response) => response as AcpSchema.NewSessionResponse))
+          : callRpc(
+              AGENT_METHODS.session_new,
+              rpc[AGENT_METHODS.session_new]({
+                ...payload,
+                mcpServers: payload.mcpServers.map(toV2McpServer),
+              }),
+            ).pipe(
+              Effect.map(
+                (response) =>
+                  normalizeV2SessionSetupResponse(
+                    response as AcpSchemaV2.NewSessionResponse,
+                  ) as AcpSchema.NewSessionResponse,
+              ),
+            ),
+      loadSession: (payload) =>
+        negotiatedProtocolGeneration === 1
+          ? callRpc(
+              AcpRpcs.V1_AGENT_METHODS.session_load,
+              rpc[AcpRpcs.V1_AGENT_METHODS.session_load](payload as AcpSchemaV1.LoadSessionRequest),
+            ).pipe(Effect.map((response) => response as AcpSchema.LoadSessionResponse))
+          : callRpc(
+              AGENT_METHODS.session_resume,
+              rpc[AGENT_METHODS.session_resume](toV2ResumeRequest(payload, { type: "start" })),
+            ).pipe(
+              Effect.map(
+                (response) =>
+                  normalizeV2SessionSetupResponse(
+                    response as AcpSchemaV2.ResumeSessionResponse,
+                  ) as AcpSchema.LoadSessionResponse,
+              ),
+            ),
+      listSessions: (payload) =>
+        callRpc(AGENT_METHODS.session_list, rpc[AGENT_METHODS.session_list](payload)).pipe(
+          Effect.map((response) => response as AcpSchema.ListSessionsResponse),
+        ),
+      forkSession: (payload) =>
+        negotiatedProtocolGeneration === 1
+          ? callRpc(
+              AGENT_METHODS.session_fork,
+              rpc[AGENT_METHODS.session_fork](payload as AcpSchemaV1.ForkSessionRequest),
+            ).pipe(Effect.map((response) => response as AcpSchema.ForkSessionResponse))
+          : callRpc(
+              AGENT_METHODS.session_fork,
+              rpc[AGENT_METHODS.session_fork](toV2ForkRequest(payload)),
+            ).pipe(
+              Effect.map(
+                (response) =>
+                  normalizeV2SessionSetupResponse(
+                    response as AcpSchemaV2.ForkSessionResponse,
+                  ) as AcpSchema.ForkSessionResponse,
+              ),
+            ),
+      resumeSession: (payload) =>
+        negotiatedProtocolGeneration === 1
+          ? callRpc(
+              AGENT_METHODS.session_resume,
+              rpc[AGENT_METHODS.session_resume](payload as AcpSchemaV1.ResumeSessionRequest),
+            ).pipe(Effect.map((response) => response as AcpSchema.ResumeSessionResponse))
+          : callRpc(
+              AGENT_METHODS.session_resume,
+              rpc[AGENT_METHODS.session_resume](
+                toV2ResumeRequest(payload, payload.replayFrom ?? undefined),
+              ),
+            ).pipe(
+              Effect.map(
+                (response) =>
+                  normalizeV2SessionSetupResponse(
+                    response as AcpSchemaV2.ResumeSessionResponse,
+                  ) as AcpSchema.ResumeSessionResponse,
+              ),
+            ),
+      closeSession: (payload) =>
+        callRpc(AGENT_METHODS.session_close, rpc[AGENT_METHODS.session_close](payload)).pipe(
+          Effect.map((response) => response as AcpSchema.CloseSessionResponse),
+        ),
+      setSessionConfigOption: (payload) =>
+        negotiatedProtocolGeneration === 1
+          ? callRpc(
+              AGENT_METHODS.session_set_config_option,
+              rpc[AGENT_METHODS.session_set_config_option](
+                payload as AcpSchemaV1.SetSessionConfigOptionRequest,
+              ),
+            ).pipe(Effect.map((response) => response as AcpSchema.SetSessionConfigOptionResponse))
+          : callRpc(
+              AGENT_METHODS.session_set_config_option,
+              rpc[AGENT_METHODS.session_set_config_option]({
+                ...payload,
+                type: "type" in payload && payload.type === "boolean" ? "boolean" : "id",
+              }),
+            ).pipe(
+              Effect.map((response) => ({
+                configOptions:
+                  normalizeConfigOptions(
+                    (response as AcpSchemaV2.SetSessionConfigOptionResponse).configOptions,
+                  ) ?? [],
+              })),
+            ),
       prompt: (payload) =>
-        callRpc(AGENT_METHODS.session_prompt, rpc[AGENT_METHODS.session_prompt](payload)),
+        negotiatedProtocolGeneration === 1
+          ? callRpc(
+              AGENT_METHODS.session_prompt,
+              rpc[AGENT_METHODS.session_prompt](payload as AcpSchemaV1.PromptRequest),
+            ).pipe(Effect.map((response) => response as AcpSchema.PromptResponse))
+          : Effect.gen(function* () {
+              const existing = promptCompletions.get(payload.sessionId);
+              if (existing !== undefined) {
+                return yield* AcpError.AcpRequestError.internalError(
+                  `ACP session '${payload.sessionId}' already has an active prompt.`,
+                );
+              }
+              const completion = yield* Deferred.make<
+                AcpSchema.PromptResponse,
+                AcpError.AcpError
+              >();
+              promptCompletions.set(payload.sessionId, completion);
+              return yield* callRpc(
+                AGENT_METHODS.session_prompt,
+                rpc[AGENT_METHODS.session_prompt](payload as AcpSchemaV2.PromptRequest),
+              ).pipe(
+                Effect.andThen(Deferred.await(completion)),
+                Effect.ensuring(
+                  Effect.sync(() => {
+                    if (promptCompletions.get(payload.sessionId) === completion) {
+                      promptCompletions.delete(payload.sessionId);
+                    }
+                  }),
+                ),
+              );
+            }),
       cancel: (payload) => transport.notify(AGENT_METHODS.session_cancel, payload),
     },
     handleRequestPermission: (handler) =>
@@ -559,39 +1214,32 @@ export const make = Effect.fn("effect-acp/AcpClient.make")(function* (
         return Effect.void;
       }),
     handleReadTextFile: (handler) =>
-      Effect.suspend(() => {
+      Effect.sync(() => {
         coreHandlers.readTextFile = handler;
-        return Effect.void;
       }),
     handleWriteTextFile: (handler) =>
-      Effect.suspend(() => {
+      Effect.sync(() => {
         coreHandlers.writeTextFile = handler;
-        return Effect.void;
       }),
     handleCreateTerminal: (handler) =>
-      Effect.suspend(() => {
+      Effect.sync(() => {
         coreHandlers.createTerminal = handler;
-        return Effect.void;
       }),
     handleTerminalOutput: (handler) =>
-      Effect.suspend(() => {
+      Effect.sync(() => {
         coreHandlers.terminalOutput = handler;
-        return Effect.void;
       }),
     handleTerminalWaitForExit: (handler) =>
-      Effect.suspend(() => {
+      Effect.sync(() => {
         coreHandlers.terminalWaitForExit = handler;
-        return Effect.void;
       }),
     handleTerminalKill: (handler) =>
-      Effect.suspend(() => {
+      Effect.sync(() => {
         coreHandlers.terminalKill = handler;
-        return Effect.void;
       }),
     handleTerminalRelease: (handler) =>
-      Effect.suspend(() => {
+      Effect.sync(() => {
         coreHandlers.terminalRelease = handler;
-        return Effect.void;
       }),
     handleSessionUpdate: (handler) =>
       Effect.suspend(() => {

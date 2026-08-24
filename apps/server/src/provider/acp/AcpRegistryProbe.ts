@@ -20,7 +20,7 @@ import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import type * as EffectAcpErrors from "effect-acp/errors";
-import type * as EffectAcpSchema from "effect-acp/schema";
+import type * as EffectAcpSchema from "effect-acp/compat";
 
 import { AcpRegistryCatalog, toAcpRegistryOperationError } from "./AcpRegistrySupport.ts";
 import { parseSessionModeState } from "./AcpRuntimeModel.ts";

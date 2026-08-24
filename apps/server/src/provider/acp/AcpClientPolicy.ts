@@ -1,6 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import type { ProviderRequestKind, RuntimeMode } from "@t3tools/contracts";
-import type * as EffectAcpSchema from "effect-acp/schema";
+import type * as EffectAcpSchema from "effect-acp/compat";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 

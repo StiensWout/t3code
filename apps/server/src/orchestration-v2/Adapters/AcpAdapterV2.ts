@@ -48,12 +48,13 @@ import * as Stream from "effect/Stream";
 import type { ChildProcessSpawner } from "effect/unstable/process";
 import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpProtocol from "effect-acp/protocol";
-import type * as EffectAcpSchema from "effect-acp/schema";
+import type * as EffectAcpSchema from "effect-acp/compat";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import {
+  applyAcpAgentTerminalUpdate,
   acpContentBlockDisplayText,
   embeddedTerminalIdsFromSessionUpdate,
   extractMcpToolCallIdentity,
@@ -61,6 +62,7 @@ import {
   parsePermissionRequest,
   parseSessionUpdateEvent,
   type AcpPlanUpdate,
+  type AcpAgentTerminalState,
   type AcpSessionModeState,
   type AcpToolCallState,
 } from "../../provider/acp/AcpRuntimeModel.ts";
@@ -918,9 +920,18 @@ export function acpRootSessionUpdateIngestsOutput(
     case "agent_message_chunk":
     case "agent_thought_chunk":
       return (acpContentBlockDisplayText(update.content)?.length ?? 0) > 0;
+    case "agent_message":
+    case "agent_thought":
+      return (update.content ?? []).some(
+        (content) => (acpContentBlockDisplayText(content)?.length ?? 0) > 0,
+      );
     case "tool_call":
     case "tool_call_update":
     case "plan":
+    case "plan_update":
+    case "plan_removed":
+    case "compaction_update":
+    case "compaction_summary_chunk":
       return parseSessionUpdateEvent(notification).events.some(
         (event) => event._tag === "ToolCallUpdated" || event._tag === "PlanUpdated",
       );
@@ -1192,14 +1203,31 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
         // Terminal ids embedded in raw tool_call updates, remembered before the
         // content rewrite so emitTool can recover MCP-fallback command lines.
         const embeddedTerminalsByToolCallId = new Map<string, ReadonlyArray<string>>();
+        const toolCallIdsByAgentTerminalId = new Map<string, Set<string>>();
+        const agentTerminalsById = new Map<string, AcpAgentTerminalState>();
         const rememberEmbeddedTerminals = (input: {
           readonly toolCallId: string;
           readonly terminalIds: ReadonlyArray<string>;
         }): void => {
+          for (const terminalId of embeddedTerminalsByToolCallId.get(input.toolCallId) ?? []) {
+            const toolCallIds = toolCallIdsByAgentTerminalId.get(terminalId);
+            toolCallIds?.delete(input.toolCallId);
+            if (toolCallIds?.size === 0) toolCallIdsByAgentTerminalId.delete(terminalId);
+          }
           embeddedTerminalsByToolCallId.delete(input.toolCallId);
           embeddedTerminalsByToolCallId.set(input.toolCallId, input.terminalIds);
+          for (const terminalId of input.terminalIds) {
+            const toolCallIds = toolCallIdsByAgentTerminalId.get(terminalId) ?? new Set<string>();
+            toolCallIds.add(input.toolCallId);
+            toolCallIdsByAgentTerminalId.set(terminalId, toolCallIds);
+          }
           for (const oldest of embeddedTerminalsByToolCallId.keys()) {
             if (embeddedTerminalsByToolCallId.size <= 256) break;
+            for (const terminalId of embeddedTerminalsByToolCallId.get(oldest) ?? []) {
+              const toolCallIds = toolCallIdsByAgentTerminalId.get(terminalId);
+              toolCallIds?.delete(oldest);
+              if (toolCallIds?.size === 0) toolCallIdsByAgentTerminalId.delete(terminalId);
+            }
             embeddedTerminalsByToolCallId.delete(oldest);
           }
         };
@@ -1887,6 +1915,31 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           yield* emitTextSegment(context, kind, false);
         });
 
+        const replaceText = Effect.fnUntraced(function* (
+          context: ActiveAcpTurn,
+          kind: "assistant" | "reasoning",
+          text: string,
+          messageId: string,
+        ) {
+          const other = kind === "assistant" ? "reasoning" : "assistant";
+          yield* closeTextStream(context, other);
+          const stream = kind === "assistant" ? context.assistant : context.reasoning;
+          if (stream.current?.sourceMessageId !== messageId) {
+            yield* closeTextStream(context, kind);
+            const now = yield* DateTime.now;
+            stream.current = {
+              nativeItemId: `${context.nativeTurnId}:${kind}:message:${messageId}`,
+              startedAt: now,
+              sourceMessageId: messageId,
+              text,
+            };
+            stream.nextSegment += 1;
+          } else {
+            stream.current.text = text;
+          }
+          yield* emitTextSegment(context, kind, false);
+        });
+
         const emitSubagentAssistant = Effect.fnUntraced(function* (
           subagent: ActiveAcpSubagent,
           text: string,
@@ -1926,6 +1979,15 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
             if (text !== undefined) {
               yield* emitSubagentAssistant(subagent, text);
             }
+          } else if (update.sessionUpdate === "agent_message") {
+            subagent.assistantText = "";
+            const text = (update.content ?? [])
+              .flatMap((content) => {
+                const display = acpContentBlockDisplayText(content);
+                return display === undefined ? [] : [display];
+              })
+              .join("\n");
+            yield* emitSubagentAssistant(subagent, text);
           }
         });
 
@@ -2545,7 +2607,9 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
             embeddedTerminalCommands: (
               embeddedTerminalsByToolCallId.get(toolCall.toolCallId) ?? []
             ).flatMap((terminalId) => {
-              const command = clientTerminals?.readCommandLine(terminalId);
+              const command =
+                clientTerminals?.readCommandLine(terminalId) ??
+                agentTerminalsById.get(terminalId)?.command;
               return command === undefined ? [] : [command];
             }),
           });
@@ -2759,6 +2823,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           notification: EffectAcpSchema.SessionNotification,
           role: "user" | "assistant",
           text: string,
+          replace = false,
         ) =>
           Effect.gen(function* () {
             if (text.length === 0) return;
@@ -2768,7 +2833,10 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               const sourceMessageId =
                 (update.sessionUpdate === "user_message_chunk" ||
                   update.sessionUpdate === "agent_message_chunk" ||
-                  update.sessionUpdate === "agent_thought_chunk") &&
+                  update.sessionUpdate === "agent_thought_chunk" ||
+                  update.sessionUpdate === "user_message" ||
+                  update.sessionUpdate === "agent_message" ||
+                  update.sessionUpdate === "agent_thought") &&
                 update.messageId
                   ? update.messageId
                   : null;
@@ -2792,7 +2860,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                 runId: null,
                 nodeId: null,
                 role,
-                text: `${previous?.text ?? ""}${text}`,
+                text: replace ? text : `${previous?.text ?? ""}${text}`,
                 attachments: [],
                 streaming: false,
                 createdAt: previous?.createdAt ?? now,
@@ -3113,14 +3181,68 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           notification: EffectAcpSchema.SessionNotification,
         ) => Effect.Effect<boolean> = () => Effect.succeed(false);
 
+        const projectAgentTerminalUpdate = Effect.fnUntraced(function* (
+          notification: EffectAcpSchema.SessionNotification,
+          context: ActiveAcpTurn | null,
+        ) {
+          const update = notification.update;
+          if (
+            update.sessionUpdate !== "terminal_update" &&
+            update.sessionUpdate !== "terminal_output_chunk"
+          ) {
+            return false;
+          }
+          const next = applyAcpAgentTerminalUpdate(
+            agentTerminalsById.get(update.terminalId),
+            update,
+          );
+          agentTerminalsById.set(update.terminalId, next);
+          if (context === null || notification.sessionId !== context.nativeThreadId) return true;
+          const status =
+            next.exitStatus === undefined
+              ? ("inProgress" as const)
+              : next.exitStatus.exitCode === 0
+                ? ("completed" as const)
+                : ("failed" as const);
+          for (const toolCallId of toolCallIdsByAgentTerminalId.get(update.terminalId) ?? []) {
+            const existing = context.tools.get(toolCallId);
+            const seeded: AcpToolCallState =
+              existing ??
+              ({
+                toolCallId,
+                kind: "execute",
+                title: next.command ?? "Terminal",
+                status,
+                ...(next.command === undefined ? {} : { command: next.command }),
+                data: { toolCallId },
+              } satisfies AcpToolCallState);
+            yield* emitTool(
+              context,
+              setToolOutputText(
+                {
+                  ...seeded,
+                  status,
+                  ...(next.command === undefined ? {} : { command: next.command }),
+                },
+                next.output,
+              ),
+            );
+          }
+          return true;
+        });
+
         const handleSessionUpdate = Effect.fnUntraced(function* (
           notification: EffectAcpSchema.SessionNotification,
         ) {
           const context = yield* Ref.get(activeTurn);
           const update = notification.update;
+          if (yield* projectAgentTerminalUpdate(notification, context)) return;
           if (
             update.sessionUpdate === "usage_update" ||
-            update.sessionUpdate === "session_info_update"
+            update.sessionUpdate === "session_info_update" ||
+            (update.sessionUpdate === "state_update" &&
+              update.state === "idle" &&
+              update.usage != null)
           ) {
             const stateEvent = parseSessionUpdateEvent(notification).events.find(
               (event) => event._tag === "UsageUpdated" || event._tag === "SessionInfoUpdated",
@@ -3346,6 +3468,22 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                 );
               }
             } else if (
+              update.sessionUpdate === "user_message" ||
+              update.sessionUpdate === "agent_message"
+            ) {
+              const text = (update.content ?? [])
+                .flatMap((content) => {
+                  const display = acpContentBlockDisplayText(content);
+                  return display === undefined ? [] : [display];
+                })
+                .join("\n");
+              yield* appendLoadedHistory(
+                notification,
+                update.sessionUpdate === "user_message" ? "user" : "assistant",
+                text,
+                true,
+              );
+            } else if (
               update.sessionUpdate === "tool_call" ||
               update.sessionUpdate === "tool_call_update" ||
               update.sessionUpdate === "plan"
@@ -3436,6 +3574,54 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               const text = acpContentBlockDisplayText(update.content);
               if (text !== undefined) {
                 yield* appendText(context, "reasoning", text, update.messageId);
+              }
+              break;
+            }
+            case "agent_message":
+            case "agent_thought": {
+              const text = (update.content ?? [])
+                .flatMap((content) => {
+                  const display = acpContentBlockDisplayText(content);
+                  return display === undefined ? [] : [display];
+                })
+                .join("\n");
+              yield* replaceText(
+                context,
+                update.sessionUpdate === "agent_message" ? "assistant" : "reasoning",
+                text,
+                update.messageId,
+              );
+              break;
+            }
+            case "tool_call_content_chunk": {
+              const text =
+                update.content.type === "content"
+                  ? acpContentBlockDisplayText(update.content.content)
+                  : update.content.type === "diff"
+                    ? update.content.newText
+                    : undefined;
+              if (text !== undefined) {
+                const previous = context.tools.get(update.toolCallId) ?? {
+                  toolCallId: update.toolCallId,
+                  status: "inProgress" as const,
+                  data: { toolCallId: update.toolCallId },
+                };
+                yield* emitTool(context, appendToolOutputText(previous, text));
+              }
+              break;
+            }
+            case "compaction_summary_chunk": {
+              const text = acpContentBlockDisplayText(update.content);
+              if (text !== undefined) {
+                const toolCallId = `acp-compaction:${update.compactionId}`;
+                const previous = context.tools.get(toolCallId) ?? {
+                  toolCallId,
+                  kind: "think",
+                  title: "Compact context",
+                  status: "inProgress" as const,
+                  data: { toolCallId },
+                };
+                yield* emitTool(context, appendToolOutputText(previous, text));
               }
               break;
             }
@@ -4955,6 +5141,21 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               (mode) => mode.id === "plan" || mode.id === "architect",
             );
             if (planMode !== undefined) yield* runtime.setMode(planMode.id);
+          }
+          const modeOption = configOptions.find(
+            (option) => option.type === "select" && option.category === "mode",
+          );
+          if (modeOption !== undefined && modeOption.type === "select") {
+            const modeChoices = modeOption.options.flatMap((entry) =>
+              "value" in entry ? [entry.value] : entry.options.map((option) => option.value),
+            );
+            const requestedMode =
+              runtimePolicy.interactionMode === "plan"
+                ? modeChoices.find((choice) => choice === "plan" || choice === "architect")
+                : modeChoices.find((choice) => choice === "code" || choice === "default");
+            if (requestedMode !== undefined && modeOption.currentValue !== requestedMode) {
+              yield* runtime.setConfigOption(modeOption.id, requestedMode);
+            }
           }
           // T3's plan/build interaction mode also drives an agent-advertised
           // collaboration-mode option (codex-acp: "default"/"plan"), so the

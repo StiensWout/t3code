@@ -1,6 +1,6 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import type * as EffectAcpSchema from "effect-acp/schema";
+import type * as EffectAcpSchema from "effect-acp/compat";
 
 import { ProviderAdapterV2RuntimePolicy } from "../ProviderAdapter.ts";
 import { acpPermissionDisposition } from "../../provider/acp/AcpClientPolicy.ts";

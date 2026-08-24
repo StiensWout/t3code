@@ -54,7 +54,7 @@ the client explicitly accepts the exact elicitation ID; stale consent cannot rel
 request. Authentication credentials remain owned by the agent and user.
 
 Session management starts a scoped runtime with `initialize` only. `session/list` therefore does
-not create a throwaway native conversation. Capability-gated list, load/resume import, and logout
+not create a throwaway native conversation. Capability-gated list, resume/replay import, and logout
 RPCs are routed to the owning environment. Imported session IDs deterministically derive both the
 app thread and provider-thread IDs using the provider instance ID, making repeated and concurrent
 imports idempotent without a mapping table. Logout first closes every live runtime for the instance.
@@ -66,10 +66,14 @@ fetch.
 
 ### ACP runtime boundary
 
-`packages/effect-acp` carries the original JSON-RPC request ID and method beside every decoded core
-or extension request. The generic V2 ACP adapter uses that identity for response admission and
-acknowledgement. It never attempts to rediscover an ID by comparing decoded payloads with raw wire
-payloads; schema defaults and provider extension fields make payload correlation inherently lossy.
+`packages/effect-acp` prefers the pinned ACP v2 alpha.3 schema and retains the pinned v1.21 schema
+as a compatibility surface. Initialization carries both generations' capability fields, then
+normalizes the negotiated generation behind one provider-neutral client. This keeps Registry
+agents on independent migration schedules without weakening v2 feature detection. The package
+also carries the original JSON-RPC request ID and method beside every decoded core or extension
+request. The generic V2 ACP adapter uses that identity for response admission and acknowledgement.
+It never attempts to rediscover an ID by comparing decoded payloads with raw wire payloads; schema
+defaults and provider extension fields make payload correlation inherently lossy.
 
 All registry agents share the same client capabilities, stdio MCP bridge, session configuration,
 T3 interaction instructions, permission policy, and response lifecycle. Agents that accept but
@@ -80,17 +84,20 @@ explicitly tagged MCP approval elicitations both resolve through the thread's ru
 policy. Runtime generation checks quarantine late requests and responses after Stop or restart
 without allowing them to mutate the replacement turn.
 
-ACP `messageId` values form assistant and history message boundaries when present; bounded synthetic
-identities remain the fallback for older agents. `usage_update` and `session_info_update` project
-onto the provider thread, keeping provider metadata separate from the user-owned app-thread title.
-Non-text assistant blocks are converted to displayable links, text resources, or explicit unsupported
-binary placeholders without retaining base64 payloads.
+ACP `messageId` values form assistant and history message boundaries, and authoritative message
+upserts replace matching streamed content during replay. Prompt RPCs acknowledge work while
+`state_update` reports completion and usage. Agent-owned terminal snapshots and chunks update the
+associated tool row, and compaction updates appear as context-compaction activity. `usage_update`
+and `session_info_update` project onto the provider thread, keeping provider metadata separate from
+the user-owned app-thread title. Non-text assistant blocks are converted to displayable links, text
+resources, or explicit unsupported binary placeholders without retaining base64 payloads.
 
-Runtime policy enforcement for ACP is `client-boundary`: T3 mediates permission requests and its own
-filesystem and terminal handlers, but it cannot sandbox provider-owned execution. Checkpoint rollback
-restores the workspace and replaces the ACP native session because the protocol has no conversation
-truncation method. Registry providers intentionally reject app-owned text-generation operations.
-Portable native subagent lineage is also not claimed; provider extensions may add it.
+Runtime policy enforcement for ACP is `client-boundary`: T3 mediates permission requests and ACP v1
+client filesystem and terminal calls, while ACP v2 terminals are agent-owned display state. T3
+cannot sandbox provider-owned execution in either generation. Checkpoint rollback restores the
+workspace and replaces the ACP native session because the protocol has no conversation truncation
+method. Registry providers intentionally reject app-owned text-generation operations. Portable
+native subagent lineage is also not claimed; provider extensions may add it.
 
 The opt-in live orchestrator fixture accepts any Registry agent. Setting
 `T3_ACP_ANTIGRAVITY_LIVE=1` pins it to Google's official `antigravity-acp` entry and verifies two

@@ -540,9 +540,13 @@ it.layer(NodeServices.layer)("effect-acp protocol", (it) => {
           method: "session/request_permission",
           params: {
             sessionId: "session-1",
-            toolCall: {
-              toolCallId: "tool-1",
-              title: "Allow mock action",
+            title: "Allow mock action",
+            subject: {
+              type: "tool_call",
+              toolCall: {
+                toolCallId: "tool-1",
+                title: "Allow mock action",
+              },
             },
             options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }],
           },
@@ -557,9 +561,13 @@ it.layer(NodeServices.layer)("effect-acp protocol", (it) => {
         tag: "session/request_permission",
         payload: {
           sessionId: "session-1",
-          toolCall: {
-            toolCallId: "tool-1",
-            title: "Allow mock action",
+          title: "Allow mock action",
+          subject: {
+            type: "tool_call",
+            toolCall: {
+              toolCallId: "tool-1",
+              title: "Allow mock action",
+            },
           },
           options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }],
         },

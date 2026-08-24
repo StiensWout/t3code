@@ -70,7 +70,6 @@ const omitModelConfigOption = process.env.T3_ACP_OMIT_MODEL_CONFIG_OPTION === "1
 const promptResponseText = process.env.T3_ACP_PROMPT_RESPONSE_TEXT;
 const promptDelayMs = Number(process.env.T3_ACP_PROMPT_DELAY_MS ?? "0");
 const supportsSessionLifecycle = process.env.T3_ACP_SESSION_LIFECYCLE === "1";
-const supportsLoadSession = process.env.T3_ACP_DISABLE_LOAD_SESSION !== "1";
 const advertisedAuthMethodId = process.env.T3_ACP_AUTH_METHOD_ID?.trim();
 const requiresAuthentication = process.env.T3_ACP_REQUIRE_AUTH === "1";
 const commandAdvertisementDelayMs = Number(
@@ -142,7 +141,7 @@ function configOptions(): ReadonlyArray<AcpSchema.SessionConfigOption> {
   if (parameterizedModelPicker) {
     const baseOptions: Array<AcpSchema.SessionConfigOption> = [
       {
-        id: "mode",
+        configId: "mode",
         name: "Mode",
         category: "mode",
         type: "select",
@@ -154,7 +153,7 @@ function configOptions(): ReadonlyArray<AcpSchema.SessionConfigOption> {
         })),
       },
       {
-        id: "model",
+        configId: "model",
         name: "Model",
         category: "model",
         type: "select",
@@ -173,7 +172,7 @@ function configOptions(): ReadonlyArray<AcpSchema.SessionConfigOption> {
         return [
           ...baseOptions,
           {
-            id: "reasoning",
+            configId: "reasoning",
             name: "Reasoning",
             category: "thought_level",
             type: "select",
@@ -187,7 +186,7 @@ function configOptions(): ReadonlyArray<AcpSchema.SessionConfigOption> {
             ],
           },
           {
-            id: "context",
+            configId: "context",
             name: "Context",
             category: "model_config",
             type: "select",
@@ -198,7 +197,7 @@ function configOptions(): ReadonlyArray<AcpSchema.SessionConfigOption> {
             ],
           },
           {
-            id: "fast",
+            configId: "fast",
             name: "Fast",
             category: "model_config",
             type: "select",
@@ -213,7 +212,7 @@ function configOptions(): ReadonlyArray<AcpSchema.SessionConfigOption> {
         return [
           ...baseOptions,
           {
-            id: "fast",
+            configId: "fast",
             name: "Fast",
             category: "model_config",
             type: "select",
@@ -228,7 +227,7 @@ function configOptions(): ReadonlyArray<AcpSchema.SessionConfigOption> {
         return [
           ...baseOptions,
           {
-            id: "reasoning",
+            configId: "reasoning",
             name: "Reasoning",
             category: "thought_level",
             type: "select",
@@ -240,7 +239,7 @@ function configOptions(): ReadonlyArray<AcpSchema.SessionConfigOption> {
             ],
           },
           {
-            id: "thinking",
+            configId: "thinking",
             name: "Thinking",
             category: "model_config",
             type: "boolean",
@@ -254,7 +253,19 @@ function configOptions(): ReadonlyArray<AcpSchema.SessionConfigOption> {
 
   return [
     {
-      id: "model",
+      configId: "mode",
+      name: "Mode",
+      category: "mode",
+      type: "select" as const,
+      currentValue: currentModeId,
+      options: availableModes.map((mode) => ({
+        value: mode.id,
+        name: mode.name,
+        ...(mode.description ? { description: mode.description } : {}),
+      })),
+    },
+    {
+      configId: "model",
       name: "Model",
       category: "model",
       type: "select" as const,
@@ -269,7 +280,7 @@ function configOptions(): ReadonlyArray<AcpSchema.SessionConfigOption> {
   ];
 }
 
-const availableModes: ReadonlyArray<AcpSchema.SessionMode> = [
+const availableModes = [
   {
     id: "ask",
     name: "Ask",
@@ -285,43 +296,40 @@ const availableModes: ReadonlyArray<AcpSchema.SessionMode> = [
     name: "Code",
     description: "Write and modify code with full tool access",
   },
-];
-
-function modeState(): AcpSchema.SessionModeState {
-  return {
-    currentModeId,
-    availableModes,
-  };
-}
+] as const;
 
 const program = Effect.gen(function* () {
   const agent = yield* EffectAcpAgent.AcpAgent;
 
+  const finishPrompt = (
+    targetSessionId: string,
+    stopReason: AcpSchema.StopReason,
+    _meta?: NonNullable<AcpSchema.PromptResponse["_meta"]>,
+  ) =>
+    agent.client
+      .sessionUpdate({
+        sessionId: targetSessionId,
+        update: { sessionUpdate: "state_update", state: "idle", stopReason },
+      })
+      .pipe(Effect.as(_meta === undefined ? {} : { _meta }));
+
   yield* agent.handleInitialize((request) =>
     Effect.sync(() => {
-      parameterizedModelPicker =
-        request.clientCapabilities?._meta?.parameterizedModelPicker === true;
+      parameterizedModelPicker = request.capabilities?._meta?.parameterizedModelPicker === true;
       return {
-        protocolVersion: 1,
-        agentCapabilities: {
-          ...(supportsLoadSession ? { loadSession: true } : {}),
-          ...(supportsSessionLifecycle
-            ? {
-                auth: { logout: {} },
-                sessionCapabilities: {
-                  list: {},
-                  fork: {},
-                  resume: {},
-                  close: {},
-                },
-              }
-            : {}),
+        protocolVersion: 2,
+        info: { name: "t3-acp-mock-agent", version: "0.0.0" },
+        capabilities: {
+          session: {
+            ...(supportsSessionLifecycle ? { fork: {}, additionalDirectories: {} } : {}),
+          },
         },
         ...(advertisedAuthMethodId
           ? {
               authMethods: [
                 {
-                  id: advertisedAuthMethodId,
+                  type: "agent" as const,
+                  methodId: advertisedAuthMethodId,
                   name: "Mock agent authentication",
                 },
               ],
@@ -370,7 +378,7 @@ const program = Effect.gen(function* () {
                   {
                     name: "review",
                     description: "Review the current changes",
-                    input: { hint: "focus" },
+                    input: { type: "text", hint: "focus" },
                   },
                   {
                     name: "$workspace-skill",
@@ -386,7 +394,6 @@ const program = Effect.gen(function* () {
       }
       return {
         sessionId,
-        modes: modeState(),
         configOptions: configOptions(),
       };
     }),
@@ -397,7 +404,7 @@ const program = Effect.gen(function* () {
       _meta: { isReplay: true },
       sessionId: requestedSessionId,
       update: {
-        sessionUpdate: "tool_call",
+        sessionUpdate: "tool_call_update",
         toolCallId: "replay-tool-1",
         title: "Replay tool",
         kind: "search",
@@ -409,6 +416,7 @@ const program = Effect.gen(function* () {
       sessionId: requestedSessionId,
       update: {
         sessionUpdate: "agent_message_chunk",
+        messageId: "mock-agent-message",
         content: { type: "text", text: "replayed assistant text" },
       },
     });
@@ -426,12 +434,12 @@ const program = Effect.gen(function* () {
           sessionId: requestedSessionId,
           update: {
             sessionUpdate: "user_message_chunk",
+            messageId: "mock-user-message",
             content: { type: "text", text: "replay-tail" },
           },
         });
         yield* Effect.sleep(loadSessionDelayMs);
         return {
-          modes: modeState(),
           configOptions: configOptions(),
         };
       }
@@ -442,11 +450,11 @@ const program = Effect.gen(function* () {
         sessionId: requestedSessionId,
         update: {
           sessionUpdate: "user_message_chunk",
+          messageId: "mock-user-message",
           content: { type: "text", text: "replay" },
         },
       });
       return {
-        modes: modeState(),
         configOptions: configOptions(),
       };
     }),
@@ -473,7 +481,6 @@ const program = Effect.gen(function* () {
       yield* requireAuthentication();
       return {
         sessionId: `${request.sessionId}-fork`,
-        modes: modeState(),
         configOptions: configOptions(),
       };
     }),
@@ -483,7 +490,6 @@ const program = Effect.gen(function* () {
     Effect.gen(function* () {
       yield* requireAuthentication();
       return {
-        modes: modeState(),
         configOptions: configOptions(),
       };
     }),
@@ -547,6 +553,7 @@ const program = Effect.gen(function* () {
             sessionId: cancelledSessionId,
             update: {
               sessionUpdate: "agent_message_chunk",
+              messageId: "mock-agent-message",
               content: { type: "text", text: "late after cancel" },
             },
           });
@@ -601,13 +608,14 @@ const program = Effect.gen(function* () {
               sessionId: requestedSessionId,
               update: {
                 sessionUpdate: "agent_message_chunk",
+                messageId: "mock-agent-message",
                 content: { type: "text", text: "residual assistant callback" },
               },
             });
             writeJsonRpcNotification("session/update", {
               sessionId: requestedSessionId,
               update: {
-                sessionUpdate: "tool_call",
+                sessionUpdate: "tool_call_update",
                 toolCallId: "residual-tool-call",
                 title: "Residual tool callback",
                 kind: "other",
@@ -618,19 +626,27 @@ const program = Effect.gen(function* () {
             writeJsonRpcNotification("session/update", {
               sessionId: requestedSessionId,
               update: {
-                sessionUpdate: "plan",
-                entries: [
-                  { content: "Residual plan callback", priority: "high", status: "pending" },
-                ],
+                sessionUpdate: "plan_update",
+                plan: {
+                  type: "items",
+                  planId: "mock-plan",
+                  entries: [
+                    { content: "Residual plan callback", priority: "high", status: "pending" },
+                  ],
+                },
               },
             });
           });
           yield* agent.client
             .requestPermission({
               sessionId: requestedSessionId,
-              toolCall: {
-                toolCallId: "residual-permission",
-                title: "Residual permission callback",
+              title: "Residual permission callback",
+              subject: {
+                type: "tool_call",
+                toolCall: {
+                  toolCallId: "residual-permission",
+                  title: "Residual permission callback",
+                },
               },
               options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }],
             })
@@ -674,13 +690,10 @@ const program = Effect.gen(function* () {
       }
 
       if (emitStaleXAiPromptCompleteBeforeSecondHang && promptCount === 1) {
-        return {
-          stopReason: "end_turn",
-          _meta: {
-            promptId: "mock-stale-xai-prompt-1",
-            requestId: "mock-stale-xai-prompt-1",
-          },
-        };
+        return yield* finishPrompt(requestedSessionId, "end_turn", {
+          promptId: "mock-stale-xai-prompt-1",
+          requestId: "mock-stale-xai-prompt-1",
+        });
       }
 
       if (emitStaleXAiPromptCompleteBeforeSecondHang && promptCount === 2) {
@@ -770,7 +783,7 @@ const program = Effect.gen(function* () {
         yield* agent.client.sessionUpdate({
           sessionId: requestedSessionId,
           update: {
-            sessionUpdate: "tool_call",
+            sessionUpdate: "tool_call_update",
             toolCallId,
             title: "Terminal",
             kind: "execute",
@@ -798,7 +811,7 @@ const program = Effect.gen(function* () {
         yield* agent.client.sessionUpdate({
           sessionId: requestedSessionId,
           update: {
-            sessionUpdate: "tool_call",
+            sessionUpdate: "tool_call_update",
             toolCallId: "tool-call-output-1",
             title: "get_command_or_subagent_output",
             kind: "other",
@@ -824,7 +837,7 @@ const program = Effect.gen(function* () {
           yield* Effect.sleep("25 millis");
         }
         cancelledSessions.delete(requestedSessionId);
-        return { stopReason: "cancelled" };
+        return yield* finishPrompt(requestedSessionId, "cancelled");
       }
 
       if (emitEmptySuccessfulBash || (emitEmptySuccessfulBashThenHang && promptCount === 1)) {
@@ -843,7 +856,7 @@ const program = Effect.gen(function* () {
         yield* agent.client.sessionUpdate(update);
         yield* Effect.sleep("25 millis");
         yield* agent.client.sessionUpdate(update);
-        return { stopReason: "end_turn" };
+        return yield* finishPrompt(requestedSessionId, "end_turn");
       }
 
       if (emitXAiPromptCompleteThenHang) {
@@ -851,6 +864,7 @@ const program = Effect.gen(function* () {
           sessionId: requestedSessionId,
           update: {
             sessionUpdate: "agent_message_chunk",
+            messageId: "mock-agent-message",
             content: { type: "text", text: "hello from " },
           },
         });
@@ -860,6 +874,7 @@ const program = Effect.gen(function* () {
             sessionId: "mock-child-session-1",
             update: {
               sessionUpdate: "agent_message_chunk",
+              messageId: "mock-agent-message",
               content: { type: "text", text: "child before completion" },
             },
           });
@@ -876,7 +891,7 @@ const program = Effect.gen(function* () {
           writeJsonRpcNotification("session/update", {
             sessionId: "mock-child-session-1",
             update: {
-              sessionUpdate: "tool_call",
+              sessionUpdate: "tool_call_update",
               toolCallId: "child-tool-call-1",
               title: "Child-only tool",
               kind: "other",
@@ -888,6 +903,7 @@ const program = Effect.gen(function* () {
             sessionId: "mock-child-session-1",
             update: {
               sessionUpdate: "agent_message_chunk",
+              messageId: "mock-agent-message",
               content: { type: "text", text: "child after completion" },
             },
           });
@@ -897,6 +913,7 @@ const program = Effect.gen(function* () {
           sessionId: requestedSessionId,
           update: {
             sessionUpdate: "agent_message_chunk",
+            messageId: "mock-agent-message",
             content: { type: "text", text: "mock" },
           },
         });
@@ -911,6 +928,7 @@ const program = Effect.gen(function* () {
           sessionId: requestedSessionId,
           update: {
             sessionUpdate: "agent_message_chunk",
+            messageId: "mock-agent-message",
             content: { type: "text", text: "before tool" },
           },
         });
@@ -918,7 +936,7 @@ const program = Effect.gen(function* () {
         yield* agent.client.sessionUpdate({
           sessionId: requestedSessionId,
           update: {
-            sessionUpdate: "tool_call",
+            sessionUpdate: "tool_call_update",
             toolCallId,
             title: "Terminal",
             kind: "execute",
@@ -947,11 +965,12 @@ const program = Effect.gen(function* () {
           sessionId: requestedSessionId,
           update: {
             sessionUpdate: "agent_message_chunk",
+            messageId: "mock-agent-message",
             content: { type: "text", text: "after tool" },
           },
         });
 
-        return { stopReason: "end_turn" };
+        return yield* finishPrompt(requestedSessionId, "end_turn");
       }
 
       if (emitElicitation || emitMcpToolApprovalElicitation) {
@@ -969,7 +988,7 @@ const program = Effect.gen(function* () {
             ? { _meta: { codex_approval_kind: "mcp_tool_call" } }
             : {}),
         });
-        return { stopReason: "end_turn" };
+        return yield* finishPrompt(requestedSessionId, "end_turn");
       }
 
       if (emitUrlElicitation) {
@@ -980,7 +999,7 @@ const program = Effect.gen(function* () {
           url: "https://example.com/auth",
           elicitationId: "url-elicitation-1",
         });
-        return { stopReason: "end_turn" };
+        return yield* finishPrompt(requestedSessionId, "end_turn");
       }
 
       if (emitToolCalls) {
@@ -989,7 +1008,7 @@ const program = Effect.gen(function* () {
         yield* agent.client.sessionUpdate({
           sessionId: requestedSessionId,
           update: {
-            sessionUpdate: "tool_call",
+            sessionUpdate: "tool_call_update",
             toolCallId,
             title: "Terminal",
             kind: "execute",
@@ -1011,20 +1030,24 @@ const program = Effect.gen(function* () {
 
         const permission = yield* agent.client.requestPermission({
           sessionId: requestedSessionId,
-          toolCall: {
-            toolCallId,
-            title: "`cat server/package.json`",
-            kind: "execute",
-            status: "pending",
-            content: [
-              {
-                type: "content",
-                content: {
-                  type: "text",
-                  text: "Not in allowlist: cat server/package.json",
+          title: "`cat server/package.json`",
+          subject: {
+            type: "tool_call",
+            toolCall: {
+              toolCallId,
+              title: "`cat server/package.json`",
+              kind: "execute",
+              status: "pending",
+              content: [
+                {
+                  type: "content",
+                  content: {
+                    type: "text",
+                    text: "Not in allowlist: cat server/package.json",
+                  },
                 },
-              },
-            ],
+              ],
+            },
           },
           options: [
             { optionId: permissionOptionIds.allowOnce, name: "Allow once", kind: "allow_once" },
@@ -1065,11 +1088,12 @@ const program = Effect.gen(function* () {
           sessionId: requestedSessionId,
           update: {
             sessionUpdate: "agent_message_chunk",
+            messageId: "mock-agent-message",
             content: { type: "text", text: "hello from mock" },
           },
         });
 
-        return { stopReason: cancelled ? "cancelled" : "end_turn" };
+        return yield* finishPrompt(requestedSessionId, cancelled ? "cancelled" : "end_turn");
       }
 
       if (emitGenericToolPlaceholders) {
@@ -1078,7 +1102,7 @@ const program = Effect.gen(function* () {
         yield* agent.client.sessionUpdate({
           sessionId: requestedSessionId,
           update: {
-            sessionUpdate: "tool_call",
+            sessionUpdate: "tool_call_update",
             toolCallId,
             title: "Read File",
             kind: "read",
@@ -1108,7 +1132,7 @@ const program = Effect.gen(function* () {
           },
         });
 
-        return { stopReason: "end_turn" };
+        return yield* finishPrompt(requestedSessionId, "end_turn");
       }
 
       // In-turn monitor + TaskOutput hydrate, then a late post-finalize
@@ -1119,7 +1143,7 @@ const program = Effect.gen(function* () {
         yield* agent.client.sessionUpdate({
           sessionId: requestedSessionId,
           update: {
-            sessionUpdate: "tool_call",
+            sessionUpdate: "tool_call_update",
             toolCallId: monitorToolCallId,
             title: "Monitor: mock background task",
             kind: "execute",
@@ -1138,7 +1162,7 @@ const program = Effect.gen(function* () {
         yield* agent.client.sessionUpdate({
           sessionId: requestedSessionId,
           update: {
-            sessionUpdate: "tool_call",
+            sessionUpdate: "tool_call_update",
             toolCallId: "tool-call-fetch-1",
             title: "get_command_or_subagent_output",
             kind: "other",
@@ -1159,6 +1183,7 @@ const program = Effect.gen(function* () {
           sessionId: requestedSessionId,
           update: {
             sessionUpdate: "agent_message_chunk",
+            messageId: "mock-agent-message",
             content: { type: "text", text: "Monitor listing ready in-turn." },
           },
         });
@@ -1181,7 +1206,7 @@ const program = Effect.gen(function* () {
             });
           });
         }).pipe(Effect.forkDetach);
-        return { stopReason: "end_turn" };
+        return yield* finishPrompt(requestedSessionId, "end_turn");
       }
 
       if (emitPostSettleMonitorFlow) {
@@ -1190,7 +1215,7 @@ const program = Effect.gen(function* () {
         yield* agent.client.sessionUpdate({
           sessionId: requestedSessionId,
           update: {
-            sessionUpdate: "tool_call",
+            sessionUpdate: "tool_call_update",
             toolCallId: monitorToolCallId,
             title: "Monitor: mock background task",
             kind: "execute",
@@ -1219,6 +1244,7 @@ const program = Effect.gen(function* () {
               sessionId: requestedSessionId,
               update: {
                 sessionUpdate: "user_message_chunk",
+                messageId: "mock-user-message",
                 content: {
                   type: "text",
                   text: 'Monitor "task-monitor-1" ended: [monitor ended: exit 0]',
@@ -1228,7 +1254,7 @@ const program = Effect.gen(function* () {
             writeJsonRpcNotification("session/update", {
               sessionId: requestedSessionId,
               update: {
-                sessionUpdate: "tool_call",
+                sessionUpdate: "tool_call_update",
                 toolCallId: "tool-call-fetch-1",
                 title: "get_command_or_subagent_output",
                 kind: "other",
@@ -1255,13 +1281,14 @@ const program = Effect.gen(function* () {
               sessionId: requestedSessionId,
               update: {
                 sessionUpdate: "agent_message_chunk",
+                messageId: "mock-agent-message",
                 content: { type: "text", text: "Monitor finished. MONITOR_REPORT_TOKEN" },
               },
             });
           });
         }).pipe(Effect.forkDetach);
 
-        return { stopReason: "end_turn" };
+        return yield* finishPrompt(requestedSessionId, "end_turn");
       }
 
       if (emitAskQuestion) {
@@ -1280,7 +1307,7 @@ const program = Effect.gen(function* () {
           ],
         });
 
-        return { stopReason: "end_turn" };
+        return yield* finishPrompt(requestedSessionId, "end_turn");
       }
 
       if (emitXAiAskUserQuestion) {
@@ -1306,7 +1333,7 @@ const program = Effect.gen(function* () {
           throw new Error("Expected _x.ai/ask_user_question response outcome.");
         }
         if (result.outcome === "cancelled") {
-          return { stopReason: "end_turn" };
+          return yield* finishPrompt(requestedSessionId, "end_turn");
         }
         if (
           result.outcome !== "accepted" ||
@@ -1317,7 +1344,7 @@ const program = Effect.gen(function* () {
           throw new Error("Expected accepted _x.ai/ask_user_question response answers.");
         }
 
-        return { stopReason: "end_turn" };
+        return yield* finishPrompt(requestedSessionId, "end_turn");
       }
 
       if (emitForeignSessionUpdates) {
@@ -1325,6 +1352,7 @@ const program = Effect.gen(function* () {
           sessionId: requestedSessionId,
           update: {
             sessionUpdate: "agent_message_chunk",
+            messageId: "mock-agent-message",
             content: { type: "text", text: "root before child" },
           },
         });
@@ -1332,13 +1360,14 @@ const program = Effect.gen(function* () {
           sessionId: "mock-child-session-1",
           update: {
             sessionUpdate: "agent_message_chunk",
+            messageId: "mock-agent-message",
             content: { type: "text", text: "child content" },
           },
         });
         yield* agent.client.sessionUpdate({
           sessionId: "mock-child-session-1",
           update: {
-            sessionUpdate: "tool_call",
+            sessionUpdate: "tool_call_update",
             toolCallId: "child-tool-call-1",
             title: "Child-only tool",
             kind: "other",
@@ -1350,28 +1379,33 @@ const program = Effect.gen(function* () {
           sessionId: requestedSessionId,
           update: {
             sessionUpdate: "agent_message_chunk",
+            messageId: "mock-agent-message",
             content: { type: "text", text: " root after child" },
           },
         });
-        return { stopReason: "end_turn" };
+        return yield* finishPrompt(requestedSessionId, "end_turn");
       }
 
       yield* agent.client.sessionUpdate({
         sessionId: requestedSessionId,
         update: {
-          sessionUpdate: "plan",
-          entries: [
-            {
-              content: "Inspect mock ACP state",
-              priority: "high",
-              status: "completed",
-            },
-            {
-              content: "Implement the requested change",
-              priority: "high",
-              status: "in_progress",
-            },
-          ],
+          sessionUpdate: "plan_update",
+          plan: {
+            type: "items",
+            planId: "mock-plan",
+            entries: [
+              {
+                content: "Inspect mock ACP state",
+                priority: "high",
+                status: "completed",
+              },
+              {
+                content: "Implement the requested change",
+                priority: "high",
+                status: "in_progress",
+              },
+            ],
+          },
         },
       });
 
@@ -1379,11 +1413,12 @@ const program = Effect.gen(function* () {
         sessionId: requestedSessionId,
         update: {
           sessionUpdate: "agent_message_chunk",
+          messageId: "mock-agent-message",
           content: { type: "text", text: promptResponseText ?? "hello from mock" },
         },
       });
 
-      return { stopReason: "end_turn" };
+      return yield* finishPrompt(requestedSessionId, "end_turn");
     }),
   );
 

@@ -30,7 +30,7 @@ const InitializeResponse = jsonRpcResponse(AcpSchema.InitializeResponse);
 const RequestPermissionResponse = jsonRpcResponse(AcpSchema.RequestPermissionResponse);
 const SessionCancelNotification = jsonRpcNotification(
   "session/cancel",
-  AcpSchema.CancelNotification,
+  AcpSchema.CancelSessionNotification,
 );
 const ExtPingNotification = jsonRpcNotification("x/ping", Schema.Struct({ count: Schema.Number }));
 const ExtRequest = jsonRpcRequest("x/test", Schema.Struct({ hello: Schema.String }));
@@ -58,9 +58,9 @@ it.effect("effect-acp agent handles core agent requests and outbound client requ
       yield* agent.handleInitialize((_request, requestContext) =>
         Ref.update(requestContexts, (current) => [...current, requestContext]).pipe(
           Effect.as({
-            protocolVersion: 1,
-            agentCapabilities: {},
-            agentInfo: {
+            protocolVersion: 2,
+            capabilities: {},
+            info: {
               name: "mock-agent",
               version: "0.0.0",
             },
@@ -92,9 +92,13 @@ it.effect("effect-acp agent handles core agent requests and outbound client requ
       const permissionFiber = yield* agent.client
         .requestPermission({
           sessionId: "session-1",
-          toolCall: {
-            toolCallId: "tool-1",
-            title: "Allow mock action",
+          title: "Allow mock action",
+          subject: {
+            type: "tool_call",
+            toolCall: {
+              toolCallId: "tool-1",
+              title: "Allow mock action",
+            },
           },
           options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }],
         })
@@ -105,9 +109,13 @@ it.effect("effect-acp agent handles core agent requests and outbound client requ
       assert.equal(permissionRequest.method, "session/request_permission");
       assert.deepEqual(permissionRequest.params, {
         sessionId: "session-1",
-        toolCall: {
-          toolCallId: "tool-1",
-          title: "Allow mock action",
+        title: "Allow mock action",
+        subject: {
+          type: "tool_call",
+          toolCall: {
+            toolCallId: "tool-1",
+            title: "Allow mock action",
+          },
         },
         options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }],
       });
@@ -137,12 +145,9 @@ it.effect("effect-acp agent handles core agent requests and outbound client requ
           id: 2,
           method: "initialize",
           params: {
-            protocolVersion: 1,
-            clientCapabilities: {
-              fs: { readTextFile: false, writeTextFile: false },
-              terminal: false,
-            },
-            clientInfo: {
+            protocolVersion: 2,
+            capabilities: {},
+            info: {
               name: "effect-acp-test",
               version: "0.0.0",
             },
@@ -156,9 +161,9 @@ it.effect("effect-acp agent handles core agent requests and outbound client requ
         jsonrpc: "2.0",
         id: 2,
         result: {
-          protocolVersion: 1,
-          agentCapabilities: {},
-          agentInfo: {
+          protocolVersion: 2,
+          capabilities: {},
+          info: {
             name: "mock-agent",
             version: "0.0.0",
           },
@@ -225,9 +230,13 @@ it.effect("effect-acp agent uses distinct ids for RPC calls and extension reques
       const permissionFiber = yield* agent.client
         .requestPermission({
           sessionId: "session-1",
-          toolCall: {
-            toolCallId: "tool-1",
-            title: "Allow mock action",
+          title: "Allow mock action",
+          subject: {
+            type: "tool_call",
+            toolCall: {
+              toolCallId: "tool-1",
+              title: "Allow mock action",
+            },
           },
           options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }],
         })

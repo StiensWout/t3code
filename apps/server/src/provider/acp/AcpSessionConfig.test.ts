@@ -89,7 +89,7 @@ describe("acpProviderOptionDescriptors", () => {
           currentValue: "workspace",
           options: [
             {
-              group: "standard",
+              groupId: "standard",
               name: "Standard",
               options: [
                 { value: "workspace", name: "Workspace" },
@@ -97,7 +97,7 @@ describe("acpProviderOptionDescriptors", () => {
               ],
             },
             {
-              group: "extra",
+              groupId: "extra",
               name: "Extra",
               options: [
                 { value: "workspace", name: "Duplicate" },

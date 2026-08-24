@@ -15,6 +15,7 @@ import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization";
 import * as RpcServer from "effect/unstable/rpc/RpcServer";
 
 import * as AcpSchema from "./schema.ts";
+import * as AcpSchemaV1 from "./_generated/schema-v1.gen.ts";
 import { CLIENT_METHODS } from "./_generated/meta.gen.ts";
 import * as AcpError from "./errors.ts";
 const isAcpError = Schema.is(AcpError.AcpError);
@@ -47,7 +48,7 @@ export type AcpIncomingNotification =
   | {
       readonly _tag: "SessionUpdate";
       readonly method: typeof CLIENT_METHODS.session_update;
-      readonly params: AcpSchema.SessionNotification;
+      readonly params: AcpSchema.UpdateSessionNotification | AcpSchemaV1.SessionNotification;
     }
   | {
       readonly _tag: "ElicitationComplete";
@@ -119,7 +120,9 @@ interface AcpOutgoingWriterState {
   readonly terminalError?: AcpError.AcpError;
 }
 
-const decodeSessionUpdate = Schema.decodeUnknownEffect(AcpSchema.SessionNotification);
+const decodeSessionUpdate = Schema.decodeUnknownEffect(
+  Schema.Union([AcpSchema.UpdateSessionNotification, AcpSchemaV1.SessionNotification]),
+);
 const decodeElicitationComplete = Schema.decodeUnknownEffect(
   AcpSchema.CompleteElicitationNotification,
 );

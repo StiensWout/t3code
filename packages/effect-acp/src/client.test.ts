@@ -16,6 +16,7 @@ import { it, assert } from "@effect/vitest";
 
 import * as AcpClient from "./client.ts";
 import * as AcpSchema from "./_generated/schema.gen.ts";
+import * as AcpSchemaV1 from "./_generated/schema-v1.gen.ts";
 import * as AcpError from "./errors.ts";
 import type * as AcpProtocol from "./protocol.ts";
 import {
@@ -28,10 +29,20 @@ import { makeInMemoryStdio } from "./_internal/stdio.ts";
 
 const InitializeRequest = jsonRpcRequest("initialize", AcpSchema.InitializeRequest);
 const InitializeResponse = jsonRpcResponse(AcpSchema.InitializeResponse);
+const InitializeRequestV1 = jsonRpcRequest("initialize", AcpSchemaV1.InitializeRequest);
+const InitializeResponseV1 = jsonRpcResponse(AcpSchemaV1.InitializeResponse);
+const NewSessionRequestV1 = jsonRpcRequest("session/new", AcpSchemaV1.NewSessionRequest);
+const NewSessionResponseV1 = jsonRpcResponse(AcpSchemaV1.NewSessionResponse);
+const PromptRequestV1 = jsonRpcRequest("session/prompt", AcpSchemaV1.PromptRequest);
+const PromptResponseV1 = jsonRpcResponse(AcpSchemaV1.PromptResponse);
 const ExtRequest = jsonRpcRequest("x/test", Schema.Struct({ hello: Schema.String }));
 const ExtResponse = jsonRpcResponse(Schema.Struct({ ok: Schema.Boolean }));
 const PromptRequest = jsonRpcRequest("session/prompt", AcpSchema.PromptRequest);
 const PromptResponse = jsonRpcResponse(AcpSchema.PromptResponse);
+const SessionUpdateNotification = jsonRpcNotification(
+  "session/update",
+  AcpSchema.UpdateSessionNotification,
+);
 const PermissionRequest = jsonRpcRequest(
   "session/request_permission",
   AcpSchema.RequestPermissionRequest,
@@ -162,7 +173,7 @@ it.layer(NodeServices.layer)("effect-acp client", (it) => {
             version: "0.0.0",
           },
         });
-        assert.equal(init.protocolVersion, 1);
+        assert.equal(init.protocolVersion, 2);
 
         yield* acp.agent.authenticate({ methodId: "cursor_login" });
 
@@ -182,7 +193,7 @@ it.layer(NodeServices.layer)("effect-acp client", (it) => {
         assert.equal(streamed.length, 2);
         assert.equal(streamed[0]?._tag, "SessionUpdate");
         assert.equal(streamed[1]?._tag, "ElicitationComplete");
-        assert.equal((yield* Ref.get(updates)).length, 1);
+        assert.equal((yield* Ref.get(updates)).length, 2);
         assert.equal((yield* Ref.get(elicitationCompletions)).length, 1);
         assert.deepEqual(yield* Ref.get(typedRequests), [{ message: "hello from typed request" }]);
         assert.deepEqual(yield* Ref.get(typedNotifications), [{ count: 2 }]);
@@ -280,6 +291,29 @@ it.layer(NodeServices.layer)("effect-acp client", (it) => {
       }),
   );
 
+  it.effect("preserves registry env-var authentication extensions", () =>
+    Effect.gen(function* () {
+      const handle = yield* makeHandle({ ACP_MOCK_ENV_VAR_AUTH: "1" });
+      const scope = yield* Scope.make();
+      const context = yield* Layer.buildWithScope(AcpClient.layerChildProcess(handle), scope);
+
+      const response = yield* Effect.gen(function* () {
+        const acp = yield* AcpClient.AcpClient;
+        return yield* acp.agent.initialize({ protocolVersion: 2 });
+      }).pipe(Effect.provide(context), Effect.ensuring(Scope.close(scope, Exit.void)));
+
+      assert.deepEqual(response.authMethods, [
+        {
+          id: "api_key",
+          name: "API key",
+          type: "env_var",
+          vars: [{ name: "MOCK_API_KEY", label: "Mock API key" }],
+          link: "https://example.test/keys",
+        },
+      ]);
+    }),
+  );
+
   it.effect("replays buffered notifications to handlers registered after they arrive", () =>
     Effect.gen(function* () {
       const updates = yield* Ref.make<Array<unknown>>([]);
@@ -356,7 +390,7 @@ it.layer(NodeServices.layer)("effect-acp client", (it) => {
           Ref.update(elicitationCompletions, (current) => [...current, notification]),
         );
 
-        assert.equal((yield* Ref.get(updates)).length, 1);
+        assert.equal((yield* Ref.get(updates)).length, 2);
         assert.equal((yield* Ref.get(elicitationCompletions)).length, 1);
         assert.deepEqual(yield* Ref.get(typedRequests), [{ message: "hello from typed request" }]);
         assert.deepEqual(yield* Ref.get(typedNotifications), [{ count: 2 }]);
@@ -428,7 +462,7 @@ it.layer(NodeServices.layer)("effect-acp client", (it) => {
           prompt: [{ type: "text", text: "hello" }],
         });
 
-        assert.equal(yield* Ref.get(successfulHandlers), 1);
+        assert.equal(yield* Ref.get(successfulHandlers), 2);
       }).pipe(Effect.provide(context), Effect.ensuring(Scope.close(scope, Exit.void)));
     }),
   );
@@ -481,9 +515,9 @@ it.layer(NodeServices.layer)("effect-acp client", (it) => {
           jsonrpc: "2.0",
           id: initializeRequest.id,
           result: {
-            protocolVersion: 1,
-            agentCapabilities: {},
-            agentInfo: {
+            protocolVersion: 2,
+            capabilities: {},
+            info: {
               name: "mock-agent",
               version: "0.0.0",
             },
@@ -505,6 +539,148 @@ it.layer(NodeServices.layer)("effect-acp client", (it) => {
     }),
   );
 
+  it.effect("classifies a legacy response by shape when its protocol version is 2", () =>
+    Effect.gen(function* () {
+      const { stdio, input, output } = yield* makeInMemoryStdio();
+      const scope = yield* Scope.make();
+      const acp = yield* AcpClient.make(stdio).pipe(Effect.provideService(Scope.Scope, scope));
+      const initializeFiber = yield* acp.agent
+        .initialize({
+          protocolVersion: 2,
+          clientInfo: { name: "effect-acp-test", version: "0.0.0" },
+        })
+        .pipe(Effect.forkScoped);
+      const decodeInitialize = Schema.decodeEffect(Schema.fromJsonString(InitializeRequestV1));
+      const initializeRequest = yield* decodeInitialize(yield* Queue.take(output));
+      yield* Queue.offer(
+        input,
+        yield* encodeJsonl(InitializeResponseV1, {
+          jsonrpc: "2.0",
+          id: initializeRequest.id,
+          result: {
+            protocolVersion: 2,
+            agentInfo: { name: "antigravity", version: "1.0.0" },
+            agentCapabilities: {},
+          },
+        }),
+      );
+
+      const initialized = yield* Fiber.join(initializeFiber);
+      assert.equal(initialized.protocolVersion, 2);
+      assert.equal(initialized.agentInfo?.name, "antigravity");
+      yield* Scope.close(scope, Exit.void);
+    }),
+  );
+
+  it.effect("negotiates ACP v1 for registry agents while preferring v2", () =>
+    Effect.gen(function* () {
+      const { stdio, input, output } = yield* makeInMemoryStdio();
+      const scope = yield* Scope.make();
+      const acp = yield* AcpClient.make(stdio).pipe(Effect.provideService(Scope.Scope, scope));
+      const updates = yield* Ref.make<Array<unknown>>([]);
+      yield* acp.handleSessionUpdate((notification) =>
+        Ref.update(updates, (current) => [...current, notification]),
+      );
+
+      const initializeFiber = yield* acp.agent
+        .initialize({
+          protocolVersion: 2,
+          clientInfo: { name: "effect-acp-test", version: "0.0.0" },
+          clientCapabilities: { _meta: { "terminal-auth": true } },
+        })
+        .pipe(Effect.forkScoped);
+      const initializeRequest = yield* Queue.take(output).pipe(
+        Effect.flatMap(Schema.decodeEffect(Schema.fromJsonString(InitializeRequestV1))),
+      );
+      assert.equal(initializeRequest.params.protocolVersion, 2);
+      assert.equal(initializeRequest.params.clientCapabilities?._meta?.["terminal-auth"], true);
+      yield* Queue.offer(
+        input,
+        yield* encodeJsonl(InitializeResponseV1, {
+          jsonrpc: "2.0",
+          id: initializeRequest.id,
+          result: {
+            protocolVersion: 1,
+            agentInfo: { name: "pi-acp", version: "0.0.33" },
+            agentCapabilities: { loadSession: true },
+          },
+        }),
+      );
+      const initialized = yield* Fiber.join(initializeFiber);
+      assert.equal(initialized.protocolVersion, 1);
+      assert.equal(initialized.agentInfo?.name, "pi-acp");
+
+      const sessionFiber = yield* acp.agent
+        .createSession({ cwd: process.cwd(), mcpServers: [] })
+        .pipe(Effect.forkScoped);
+      const sessionRequest = yield* Queue.take(output).pipe(
+        Effect.flatMap(Schema.decodeEffect(Schema.fromJsonString(NewSessionRequestV1))),
+      );
+      yield* Queue.offer(
+        input,
+        yield* encodeJsonl(NewSessionResponseV1, {
+          jsonrpc: "2.0",
+          id: sessionRequest.id,
+          result: { sessionId: "pi-session-1" },
+        }),
+      );
+      assert.equal((yield* Fiber.join(sessionFiber)).sessionId, "pi-session-1");
+
+      const promptFiber = yield* acp.agent
+        .prompt({
+          sessionId: "pi-session-1",
+          prompt: [{ type: "text", text: "hello" }],
+        })
+        .pipe(Effect.forkScoped);
+      const promptRequest = yield* Queue.take(output).pipe(
+        Effect.flatMap(Schema.decodeEffect(Schema.fromJsonString(PromptRequestV1))),
+      );
+      yield* Queue.offer(
+        input,
+        concatBytes([
+          yield* encodeJsonl(
+            jsonRpcNotification("session/update", AcpSchemaV1.SessionNotification),
+            {
+              jsonrpc: "2.0",
+              method: "session/update",
+              params: {
+                sessionId: "pi-session-1",
+                update: {
+                  sessionUpdate: "available_commands_update",
+                  availableCommands: [
+                    { name: "review", description: "Review changes", input: { hint: "scope" } },
+                  ],
+                },
+              },
+            },
+          ),
+          yield* encodeJsonl(PromptResponseV1, {
+            jsonrpc: "2.0",
+            id: promptRequest.id,
+            result: { stopReason: "end_turn" },
+          }),
+        ]),
+      );
+      assert.deepEqual(yield* Fiber.join(promptFiber), { stopReason: "end_turn" });
+      assert.deepEqual(yield* Ref.get(updates), [
+        {
+          sessionId: "pi-session-1",
+          update: {
+            sessionUpdate: "available_commands_update",
+            availableCommands: [
+              {
+                name: "review",
+                description: "Review changes",
+                input: { type: "text", hint: "scope" },
+              },
+            ],
+          },
+        },
+      ]);
+      yield* Scope.close(scope, Exit.void);
+    }),
+  );
+
   it.effect("preserves exact ids for parallel requests with identical payloads", () =>
     Effect.gen(function* () {
       const { stdio, input, output } = yield* makeInMemoryStdio();
@@ -518,7 +694,11 @@ it.layer(NodeServices.layer)("effect-acp client", (it) => {
       );
       const payload = {
         sessionId: "session-1",
-        toolCall: { toolCallId: "shared-tool", title: "Shared tool" },
+        title: "Shared tool",
+        subject: {
+          type: "tool_call" as const,
+          toolCall: { toolCallId: "shared-tool", title: "Shared tool" },
+        },
         options: [{ optionId: "allow", name: "Allow", kind: "allow_once" as const }],
       };
       yield* Queue.offer(
@@ -657,13 +837,23 @@ it.layer(NodeServices.layer)("effect-acp client", (it) => {
             encodeJsonl(PromptResponse, {
               jsonrpc: "2.0",
               id: decodedPrompt.id,
-              result: {
-                stopReason: "end_turn",
-                _meta: {
-                  sessionId: "grok-session-1",
-                  requestId: "prompt-1",
-                  promptId: "prompt-1",
-                  modelId: "grok-composer-2.5-fast",
+              result: {},
+            }),
+            encodeJsonl(SessionUpdateNotification, {
+              jsonrpc: "2.0",
+              method: "session/update",
+              params: {
+                sessionId: "grok-session-1",
+                update: {
+                  sessionUpdate: "state_update",
+                  state: "idle",
+                  stopReason: "end_turn",
+                  _meta: {
+                    sessionId: "grok-session-1",
+                    requestId: "prompt-1",
+                    promptId: "prompt-1",
+                    modelId: "grok-composer-2.5-fast",
+                  },
                 },
               },
             }),

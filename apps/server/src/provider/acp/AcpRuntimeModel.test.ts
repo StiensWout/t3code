@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import type * as EffectAcpSchema from "effect-acp/schema";
+import type * as EffectAcpSchema from "effect-acp/compat";
 
 import {
+  applyAcpAgentTerminalUpdate,
   acpContentBlockDisplayText,
   embeddedTerminalIdsFromSessionUpdate,
   extractMcpToolCallIdentity,
@@ -490,6 +491,119 @@ describe("AcpRuntimeModel", () => {
         title: "Native session",
         updatedAt: "2026-08-23T00:00:00Z",
       },
+    });
+  });
+
+  it("projects ACP v2 plan replacement and removal updates", () => {
+    const replaced = parseSessionUpdateEvent({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "plan_update",
+        plan: {
+          type: "items",
+          planId: "plan-1",
+          entries: [
+            { content: " Inspect schema ", priority: "high", status: "completed" },
+            { content: "Ship integration", priority: "high", status: "in_progress" },
+          ],
+        },
+      },
+    } satisfies EffectAcpSchema.SessionNotification);
+    const removed = parseSessionUpdateEvent({
+      sessionId: "session-1",
+      update: { sessionUpdate: "plan_removed", planId: "plan-1" },
+    } satisfies EffectAcpSchema.SessionNotification);
+
+    expect(replaced.events[0]).toMatchObject({
+      _tag: "PlanUpdated",
+      payload: {
+        plan: [
+          { step: "Inspect schema", status: "completed" },
+          { step: "Ship integration", status: "inProgress" },
+        ],
+      },
+    });
+    expect(removed.events[0]).toMatchObject({
+      _tag: "PlanUpdated",
+      payload: { plan: [] },
+    });
+  });
+
+  it("projects ACP v2 compaction lifecycle and prompt usage", () => {
+    const compacting = parseSessionUpdateEvent({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "compaction_update",
+        compactionId: "compact-1",
+        status: "in_progress",
+      },
+    } satisfies EffectAcpSchema.SessionNotification);
+    const compacted = parseSessionUpdateEvent({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "compaction_update",
+        compactionId: "compact-1",
+        status: "completed",
+        summary: [{ type: "text", text: "Retained the implementation decisions." }],
+      },
+    } satisfies EffectAcpSchema.SessionNotification);
+    const idle = parseSessionUpdateEvent({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "state_update",
+        state: "idle",
+        stopReason: "end_turn",
+        usage: { totalTokens: 420, inputTokens: 300, outputTokens: 100, thoughtTokens: 20 },
+      },
+    } satisfies EffectAcpSchema.SessionNotification);
+
+    expect(compacting.events[0]).toMatchObject({
+      _tag: "ToolCallUpdated",
+      toolCall: {
+        toolCallId: "acp-compaction:compact-1",
+        kind: "think",
+        title: "Compact context",
+        status: "inProgress",
+      },
+    });
+    expect(compacted.events[0]).toMatchObject({
+      _tag: "ToolCallUpdated",
+      toolCall: {
+        toolCallId: "acp-compaction:compact-1",
+        status: "completed",
+        data: { rawOutput: "Retained the implementation decisions." },
+      },
+    });
+    expect(idle.events[0]).toMatchObject({
+      _tag: "UsageUpdated",
+      usage: { usedTokens: 420 },
+    });
+  });
+
+  it("applies ACP v2 agent-owned terminal snapshots and output chunks", () => {
+    const snapshot = applyAcpAgentTerminalUpdate(undefined, {
+      sessionUpdate: "terminal_update",
+      terminalId: "terminal-1",
+      command: "pnpm test",
+      cwd: "/workspace",
+      output: { data: Buffer.from("first line\n").toString("base64") },
+    });
+    const chunked = applyAcpAgentTerminalUpdate(snapshot, {
+      sessionUpdate: "terminal_output_chunk",
+      terminalId: "terminal-1",
+      data: Buffer.from("second line\n").toString("base64"),
+    });
+    const completed = applyAcpAgentTerminalUpdate(chunked, {
+      sessionUpdate: "terminal_update",
+      terminalId: "terminal-1",
+      exitStatus: { exitCode: 0 },
+    });
+
+    expect(completed).toEqual({
+      command: "pnpm test",
+      cwd: "/workspace",
+      output: "first line\nsecond line\n",
+      exitStatus: { exitCode: 0 },
     });
   });
 

@@ -252,7 +252,7 @@ describe("ACP Registry probe", () => {
       {
         name: "create_plan",
         description: " Create a plan ",
-        input: { hint: " topic " },
+        input: { type: "text", hint: " topic " },
       },
       { name: "CREATE_PLAN", description: "duplicate" },
       ...Array.from({ length: 140 }, (_, index) => ({
@@ -405,7 +405,11 @@ describe("ACP Registry probe", () => {
           spawn: {
             command: "node",
             args: [mockAgentPath],
-            env: { ...process.env, T3_ACP_SESSION_LIFECYCLE: "1" },
+            env: {
+              ...process.env,
+              T3_ACP_SESSION_LIFECYCLE: "1",
+              T3_ACP_AUTH_METHOD_ID: "mock-login",
+            },
           },
         }),
     });

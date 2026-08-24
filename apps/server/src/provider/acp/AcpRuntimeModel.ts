@@ -3,7 +3,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
-import type * as EffectAcpSchema from "effect-acp/schema";
+import type * as EffectAcpSchema from "effect-acp/compat";
 import { deriveToolActivityPresentation } from "@t3tools/shared/toolActivity";
 import { T3_MCP_TOOL_NAMES } from "@t3tools/shared/t3McpToolPresentation";
 import type {
@@ -51,6 +51,67 @@ export interface AcpToolCallState {
   readonly command?: string;
   readonly detail?: string;
   readonly data: Record<string, unknown>;
+}
+
+export interface AcpAgentTerminalState {
+  readonly command?: string;
+  readonly cwd?: string;
+  readonly output: string;
+  readonly exitStatus?: EffectAcpSchema.TerminalExitStatus;
+}
+
+type AcpAgentTerminalUpdate = Extract<
+  EffectAcpSchema.SessionUpdate,
+  { readonly sessionUpdate: "terminal_update" | "terminal_output_chunk" }
+>;
+
+const MAX_ACP_TERMINAL_OUTPUT_BYTES = 16 * 1024 * 1024;
+
+/** Applies an ACP v2 agent-owned terminal snapshot or chunk to display state. */
+export function applyAcpAgentTerminalUpdate(
+  previous: AcpAgentTerminalState | undefined,
+  update: AcpAgentTerminalUpdate,
+): AcpAgentTerminalState {
+  const current = previous ?? { output: "" };
+  if (update.sessionUpdate === "terminal_output_chunk") {
+    return {
+      ...current,
+      output: `${current.output}${Buffer.from(update.data, "base64").toString("utf8")}`.slice(
+        -MAX_ACP_TERMINAL_OUTPUT_BYTES,
+      ),
+    };
+  }
+  let next: AcpAgentTerminalState = current;
+  if (update.command === null) {
+    const { command: _command, ...withoutCommand } = next;
+    next = withoutCommand;
+  } else if (update.command !== undefined) {
+    next = { ...next, command: update.command };
+  }
+  if (update.cwd === null) {
+    const { cwd: _cwd, ...withoutCwd } = next;
+    next = withoutCwd;
+  } else if (update.cwd !== undefined) {
+    next = { ...next, cwd: update.cwd };
+  }
+  if (update.output !== undefined) {
+    next = {
+      ...next,
+      output:
+        update.output === null
+          ? ""
+          : Buffer.from(update.output.data, "base64")
+              .toString("utf8")
+              .slice(-MAX_ACP_TERMINAL_OUTPUT_BYTES),
+    };
+  }
+  if (update.exitStatus === null) {
+    const { exitStatus: _exitStatus, ...withoutExitStatus } = next;
+    next = withoutExitStatus;
+  } else if (update.exitStatus !== undefined) {
+    next = { ...next, exitStatus: update.exitStatus };
+  }
+  return next;
 }
 
 export interface AcpPlanUpdate {
@@ -723,14 +784,23 @@ export function sessionUpdateCountsAsLoadReplayActivity(
     case "agent_message_chunk":
     case "agent_thought_chunk":
       return (acpContentBlockDisplayText(update.content)?.length ?? 0) > 0;
+    case "agent_message":
+    case "agent_thought":
+      return (update.content ?? []).some(
+        (content) => (acpContentBlockDisplayText(content)?.length ?? 0) > 0,
+      );
     case "tool_call":
     case "tool_call_update":
     case "plan":
+    case "plan_update":
+    case "plan_removed":
     case "available_commands_update":
     case "current_mode_update":
     case "config_option_update":
     case "session_info_update":
     case "usage_update":
+    case "compaction_update":
+    case "compaction_summary_chunk":
       return true;
     default:
       return false;
@@ -818,6 +888,32 @@ export function parseSessionUpdateEvent(params: EffectAcpSchema.SessionNotificat
       }
       break;
     }
+    case "plan_update": {
+      if (
+        upd.plan.type !== "items" ||
+        !("entries" in upd.plan) ||
+        !Array.isArray(upd.plan.entries)
+      ) {
+        break;
+      }
+      const entries: ReadonlyArray<unknown> = upd.plan.entries;
+      const plan = entries.flatMap((entry, index) => {
+        if (!isRecord(entry) || typeof entry.content !== "string") return [];
+        const status = typeof entry.status === "string" ? entry.status : "pending";
+        return [
+          {
+            step: entry.content.trim().length > 0 ? entry.content.trim() : `Step ${index + 1}`,
+            status: normalizePlanStepStatus(status),
+          },
+        ];
+      });
+      events.push({ _tag: "PlanUpdated", payload: { plan }, rawPayload: params });
+      break;
+    }
+    case "plan_removed": {
+      events.push({ _tag: "PlanUpdated", payload: { plan: [] }, rawPayload: params });
+      break;
+    }
     case "tool_call": {
       const toolCall = parseTypedToolCallState(upd, {
         fallbackStatus: "pending",
@@ -849,6 +945,57 @@ export function parseSessionUpdateEvent(params: EffectAcpSchema.SessionNotificat
           _tag: "ContentDelta",
           ...(upd.messageId ? { messageId: upd.messageId } : {}),
           text,
+          rawPayload: params,
+        });
+      }
+      break;
+    }
+    case "compaction_update": {
+      const summary = (upd.summary ?? [])
+        .flatMap((content) => {
+          const text = acpContentBlockDisplayText(content);
+          return text === undefined || text.length === 0 ? [] : [text];
+        })
+        .join("\n");
+      const status =
+        upd.status === "completed"
+          ? ("completed" as const)
+          : upd.status === "failed" || upd.status === "cancelled"
+            ? ("failed" as const)
+            : ("inProgress" as const);
+      const toolCall = makeToolCallState({
+        toolCallId: `acp-compaction:${upd.compactionId}`,
+        title: "Compact context",
+        kind: "think",
+        status,
+        rawOutput: (upd.error ?? summary) || undefined,
+        _meta: upd._meta,
+      });
+      if (toolCall !== undefined) {
+        events.push({ _tag: "ToolCallUpdated", toolCall, rawPayload: params });
+      }
+      break;
+    }
+    case "compaction_summary_chunk": {
+      const text = acpContentBlockDisplayText(upd.content);
+      const toolCall = makeToolCallState({
+        toolCallId: `acp-compaction:${upd.compactionId}`,
+        title: "Compact context",
+        kind: "think",
+        status: "inProgress",
+        ...(text === undefined ? {} : { rawOutput: text }),
+        _meta: upd._meta,
+      });
+      if (toolCall !== undefined) {
+        events.push({ _tag: "ToolCallUpdated", toolCall, rawPayload: params });
+      }
+      break;
+    }
+    case "state_update": {
+      if (upd.state === "idle" && upd.usage !== undefined && upd.usage !== null) {
+        events.push({
+          _tag: "UsageUpdated",
+          usage: { usedTokens: upd.usage.totalTokens },
           rawPayload: params,
         });
       }

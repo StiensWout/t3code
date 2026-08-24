@@ -22,16 +22,27 @@ const program = Effect.gen(function* () {
 
   yield* agent.handleInitialize(() =>
     Effect.succeed({
-      protocolVersion: 1,
-      agentCapabilities: {
-        sessionCapabilities: {
-          list: {},
-        },
+      protocolVersion: 2,
+      capabilities: {
+        session: {},
       },
-      agentInfo: {
+      info: {
         name: "mock-agent",
         version: "0.0.0",
       },
+      ...(process.env.ACP_MOCK_ENV_VAR_AUTH === "1"
+        ? {
+            authMethods: [
+              {
+                type: "env_var",
+                methodId: "api_key",
+                name: "API key",
+                vars: [{ name: "MOCK_API_KEY", label: "Mock API key" }],
+                link: "https://example.test/keys",
+              },
+            ],
+          }
+        : {}),
     }),
   );
 
@@ -58,6 +69,7 @@ const program = Effect.gen(function* () {
     Effect.gen(function* () {
       yield* agent.client.requestPermission({
         sessionId,
+        title: "Read project files",
         options: [
           {
             optionId: "allow",
@@ -65,9 +77,12 @@ const program = Effect.gen(function* () {
             kind: "allow_once",
           },
         ],
-        toolCall: {
-          toolCallId: "tool-1",
-          title: "Read project files",
+        subject: {
+          type: "tool_call",
+          toolCall: {
+            toolCallId: "tool-1",
+            title: "Read project files",
+          },
         },
       });
 
@@ -91,14 +106,18 @@ const program = Effect.gen(function* () {
       yield* agent.client.sessionUpdate({
         sessionId,
         update: {
-          sessionUpdate: "plan",
-          entries: [
-            {
-              content: "Inspect the repository",
-              priority: "high",
-              status: "in_progress",
-            },
-          ],
+          sessionUpdate: "plan_update",
+          plan: {
+            type: "items",
+            planId: "mock-plan",
+            entries: [
+              {
+                content: "Inspect the repository",
+                priority: "high",
+                status: "in_progress",
+              },
+            ],
+          },
         },
       });
 
@@ -114,9 +133,11 @@ const program = Effect.gen(function* () {
         count: 2,
       });
 
-      return {
-        stopReason: "end_turn" as const,
-      };
+      yield* agent.client.sessionUpdate({
+        sessionId,
+        update: { sessionUpdate: "state_update", state: "idle", stopReason: "end_turn" },
+      });
+      return {};
     }),
   );
 

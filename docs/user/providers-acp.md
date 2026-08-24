@@ -8,6 +8,11 @@ delegation.
 Google Antigravity is available through its official `antigravity-acp` Registry entry. Add it like
 any other Registry agent; it does not need an Antigravity-specific T3 Code provider.
 
+T3 Code prefers the current ACP v2 preview protocol and uses its richer messages, usage, plans,
+configuration, compaction, and agent-terminal updates when the agent supports them. It also
+negotiates ACP v1 for Registry agents that have not migrated yet, so agents such as Pi continue to
+work through the same generic integration.
+
 ## Add an agent
 
 1. Open **Settings → Providers**.
@@ -65,7 +70,7 @@ running. Commands the agent names with a `$` prefix appear in T3 Code's `$` skil
 
 ## Native sessions
 
-When an agent advertises ACP session listing and load or resume support, expand its provider card,
+When an agent advertises ACP session listing and import support, expand its provider card,
 choose a project, and select **List sessions**. Importing one creates a deterministic T3 thread
 backed by that native session. Importing the same agent session again returns the existing thread,
 including when another client performs the import.
@@ -80,7 +85,9 @@ instead of disappearing.
 
 Registry agents follow the thread's approval mode at the T3 client boundary: full-access threads
 approve mediated permission requests automatically, while approval-required threads keep asking.
-The same policy applies to file and terminal operations the agent routes through T3 Code.
+For ACP v1 agents, T3 can mediate the file and terminal requests they send through the client. ACP
+v2 terminals are instead owned by the agent; T3 displays their command, output, and exit state when
+the agent publishes them, but does not execute or control those terminals.
 
 ACP does not let T3 Code confine tools the agent executes inside its own process. An agent may run
 provider-owned commands or file operations without passing through T3's handlers, so an ACP thread

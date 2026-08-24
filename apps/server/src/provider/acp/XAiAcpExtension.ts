@@ -6,7 +6,7 @@ import * as Fiber from "effect/Fiber";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import type * as EffectAcpErrors from "effect-acp/errors";
-import type * as EffectAcpSchema from "effect-acp/schema";
+import type * as EffectAcpSchema from "effect-acp/compat";
 
 import type * as AcpSessionRuntime from "./AcpSessionRuntime.ts";
 import type { AcpToolCallState } from "./AcpRuntimeModel.ts";

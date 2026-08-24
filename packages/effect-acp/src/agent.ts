@@ -20,7 +20,6 @@ import {
   decodeExtRequestRegistration,
   runHandler,
 } from "./_internal/shared.ts";
-import * as AcpTerminal from "./terminal.ts";
 
 export interface AcpAgentOptions {
   readonly logIncoming?: boolean;
@@ -67,27 +66,6 @@ export class AcpAgent extends Context.Service<
       readonly elicit: (
         payload: AcpSchema.CreateElicitationRequest,
       ) => Effect.Effect<AcpSchema.CreateElicitationResponse, AcpError.AcpError>;
-      /**
-       * Requests file contents from the client.
-       * @see https://agentclientprotocol.com/protocol/schema#fs/read_text_file
-       */
-      readonly readTextFile: (
-        payload: AcpSchema.ReadTextFileRequest,
-      ) => Effect.Effect<AcpSchema.ReadTextFileResponse, AcpError.AcpError>;
-      /**
-       * Writes a text file through the client.
-       * @see https://agentclientprotocol.com/protocol/schema#fs/write_text_file
-       */
-      readonly writeTextFile: (
-        payload: AcpSchema.WriteTextFileRequest,
-      ) => Effect.Effect<AcpSchema.WriteTextFileResponse, AcpError.AcpError>;
-      /**
-       * Creates a terminal on the client side.
-       * @see https://agentclientprotocol.com/protocol/schema#terminal/create
-       */
-      readonly createTerminal: (
-        payload: AcpSchema.CreateTerminalRequest,
-      ) => Effect.Effect<AcpTerminal.AcpTerminal, AcpError.AcpError>;
       /**
        * Sends a `session/update` notification to the client.
        * @see https://agentclientprotocol.com/protocol/schema#session/update
@@ -306,19 +284,19 @@ export const make = Effect.fn("effect-acp/AcpAgent.make")(function* (
           AGENT_METHODS.initialize,
           requestContext(requestId, AGENT_METHODS.initialize),
         ),
-      [AGENT_METHODS.authenticate]: (payload, { requestId }) =>
+      [AGENT_METHODS.auth_login]: (payload, { requestId }) =>
         runHandler(
           coreHandlers.authenticate,
           payload,
-          AGENT_METHODS.authenticate,
-          requestContext(requestId, AGENT_METHODS.authenticate),
+          AGENT_METHODS.auth_login,
+          requestContext(requestId, AGENT_METHODS.auth_login),
         ),
-      [AGENT_METHODS.logout]: (payload, { requestId }) =>
+      [AGENT_METHODS.auth_logout]: (payload, { requestId }) =>
         runHandler(
           coreHandlers.logout,
           payload,
-          AGENT_METHODS.logout,
-          requestContext(requestId, AGENT_METHODS.logout),
+          AGENT_METHODS.auth_logout,
+          requestContext(requestId, AGENT_METHODS.auth_logout),
         ),
       [AGENT_METHODS.session_new]: (payload, { requestId }) =>
         runHandler(
@@ -326,13 +304,6 @@ export const make = Effect.fn("effect-acp/AcpAgent.make")(function* (
           payload,
           AGENT_METHODS.session_new,
           requestContext(requestId, AGENT_METHODS.session_new),
-        ),
-      [AGENT_METHODS.session_load]: (payload, { requestId }) =>
-        runHandler(
-          coreHandlers.loadSession,
-          payload,
-          AGENT_METHODS.session_load,
-          requestContext(requestId, AGENT_METHODS.session_load),
         ),
       [AGENT_METHODS.session_list]: (payload, { requestId }) =>
         runHandler(
@@ -350,7 +321,9 @@ export const make = Effect.fn("effect-acp/AcpAgent.make")(function* (
         ),
       [AGENT_METHODS.session_resume]: (payload, { requestId }) =>
         runHandler(
-          coreHandlers.resumeSession,
+          payload.replayFrom?.type === "start"
+            ? (coreHandlers.loadSession ?? coreHandlers.resumeSession)
+            : (coreHandlers.resumeSession ?? coreHandlers.loadSession),
           payload,
           AGENT_METHODS.session_resume,
           requestContext(requestId, AGENT_METHODS.session_resume),
@@ -404,48 +377,6 @@ export const make = Effect.fn("effect-acp/AcpAgent.make")(function* (
         ),
       elicit: (payload) =>
         callRpc(CLIENT_METHODS.elicitation_create, rpc[CLIENT_METHODS.elicitation_create](payload)),
-      readTextFile: (payload) =>
-        callRpc(CLIENT_METHODS.fs_read_text_file, rpc[CLIENT_METHODS.fs_read_text_file](payload)),
-      writeTextFile: (payload) =>
-        callRpc(CLIENT_METHODS.fs_write_text_file, rpc[CLIENT_METHODS.fs_write_text_file](payload)),
-      createTerminal: (payload) =>
-        callRpc(CLIENT_METHODS.terminal_create, rpc[CLIENT_METHODS.terminal_create](payload)).pipe(
-          Effect.map(
-            (response) =>
-              ({
-                sessionId: payload.sessionId,
-                terminalId: response.terminalId,
-                output: callRpc(
-                  CLIENT_METHODS.terminal_output,
-                  rpc[CLIENT_METHODS.terminal_output]({
-                    sessionId: payload.sessionId,
-                    terminalId: response.terminalId,
-                  }),
-                ),
-                waitForExit: callRpc(
-                  CLIENT_METHODS.terminal_wait_for_exit,
-                  rpc[CLIENT_METHODS.terminal_wait_for_exit]({
-                    sessionId: payload.sessionId,
-                    terminalId: response.terminalId,
-                  }),
-                ),
-                kill: callRpc(
-                  CLIENT_METHODS.terminal_kill,
-                  rpc[CLIENT_METHODS.terminal_kill]({
-                    sessionId: payload.sessionId,
-                    terminalId: response.terminalId,
-                  }),
-                ),
-                release: callRpc(
-                  CLIENT_METHODS.terminal_release,
-                  rpc[CLIENT_METHODS.terminal_release]({
-                    sessionId: payload.sessionId,
-                    terminalId: response.terminalId,
-                  }),
-                ),
-              }) satisfies AcpTerminal.AcpTerminal,
-          ),
-        ),
       sessionUpdate: (payload) => transport.notify(CLIENT_METHODS.session_update, payload),
       elicitationComplete: (payload) =>
         transport.notify(CLIENT_METHODS.elicitation_complete, payload),

@@ -45,7 +45,7 @@ import * as TestClock from "effect/testing/TestClock";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpProtocol from "effect-acp/protocol";
-import type * as EffectAcpSchema from "effect-acp/schema";
+import type * as EffectAcpSchema from "effect-acp/compat";
 
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
@@ -699,72 +699,12 @@ describe("AcpAdapterV2", () => {
 
         assert.equal(providerThread.nativeThreadRef?.nativeId, "persisted-session");
         const startupMethods = yield* pollProtocolMethods(protocolEvents);
-        assert.include(startupMethods, "session/load");
+        assert.include(startupMethods, "session/resume");
         assert.notInclude(startupMethods, "session/new");
 
         yield* runtime.resumeThread({ providerThread, modelSelection, runtimePolicy });
-        assert.notInclude(yield* pollProtocolMethods(protocolEvents), "session/load");
+        assert.notInclude(yield* pollProtocolMethods(protocolEvents), "session/resume");
       }).pipe(Effect.provide(testLayer), Effect.scoped),
-  );
-
-  it.live("resumes a persisted ACP session when session/load is unavailable", () =>
-    Effect.gen(function* () {
-      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const fileSystem = yield* FileSystem.FileSystem;
-      const idAllocator = yield* IdAllocatorV2;
-      const path = yield* Path.Path;
-      const serverConfig = yield* ServerConfig;
-      const mockAgentPath = yield* path.fromFileUrl(
-        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-      );
-      const protocolEvents = yield* Queue.unbounded<EffectAcpProtocol.AcpProtocolLogEvent>();
-      const instanceId = ProviderInstanceId.make("acp-test-resume-only");
-      const adapter = makeAcpAdapterV2({
-        crypto: yield* Crypto.Crypto,
-        instanceId,
-        flavor: {
-          driver: ACP_TEST_DRIVER,
-          capabilities: AcpProviderCapabilitiesV2,
-          makeRuntime: makeMockRuntime({
-            childProcessSpawner,
-            mockAgentPath,
-            protocolEvents,
-            environment: () => ({
-              T3_ACP_DISABLE_LOAD_SESSION: "1",
-              T3_ACP_SESSION_LIFECYCLE: "1",
-            }),
-          }),
-        },
-        fileSystem,
-        idAllocator,
-        serverConfig,
-      });
-      const threadId = ThreadId.make("thread-acp-resume-only");
-      const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        cwd: process.cwd(),
-      });
-      const modelSelection = { instanceId, model: "default" } as const;
-      const runtime = yield* adapter.openSession({
-        threadId,
-        providerSessionId: ProviderSessionId.make("provider-session-acp-resume-only"),
-        modelSelection,
-        runtimePolicy,
-        initialNativeThreadId: "persisted-resume-only-session",
-      });
-      const providerThread = yield* runtime.ensureThread({
-        threadId,
-        modelSelection,
-        runtimePolicy,
-      });
-
-      assert.equal(providerThread.nativeThreadRef?.nativeId, "persisted-resume-only-session");
-      const startupMethods = yield* pollProtocolMethods(protocolEvents);
-      assert.include(startupMethods, "session/resume");
-      assert.notInclude(startupMethods, "session/load");
-      assert.notInclude(startupMethods, "session/new");
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 
   it.live("preserves new-session fallback when an eager ACP session load is stale", () =>
@@ -826,14 +766,14 @@ describe("AcpAdapterV2", () => {
       };
 
       const startupMethods = yield* pollProtocolMethods(protocolEvents);
-      assert.equal(startupMethods.filter((method) => method === "session/load").length, 1);
+      assert.equal(startupMethods.filter((method) => method === "session/resume").length, 1);
       assert.equal(startupMethods.filter((method) => method === "session/new").length, 1);
 
       const resumeError = yield* runtime
         .resumeThread({ providerThread: staleThread, modelSelection, runtimePolicy })
         .pipe(Effect.flip);
       assert.equal(resumeError._tag, "ProviderAdapterResumeThreadError");
-      assert.notInclude(yield* pollProtocolMethods(protocolEvents), "session/load");
+      assert.notInclude(yield* pollProtocolMethods(protocolEvents), "session/resume");
       assert.notEqual(replacementThread.nativeThreadRef?.nativeId, "stale-session");
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
@@ -1288,6 +1228,7 @@ describe("AcpAdapterV2", () => {
         cwd: process.cwd(),
         mcpServers: [
           {
+            type: "stdio",
             name: "t3-code",
             command: process.execPath,
             args: [
@@ -1600,12 +1541,15 @@ describe("AcpAdapterV2", () => {
         "Bearer rollback-target-token",
       );
       const replacementMcpServer = runtimeInputs[1]?.mcpServers[0];
+      const replacementMcpEnvironment =
+        replacementMcpServer !== undefined &&
+        "env" in replacementMcpServer &&
+        Array.isArray(replacementMcpServer.env)
+          ? replacementMcpServer.env
+          : undefined;
       assert.equal(
-        replacementMcpServer !== undefined && "env" in replacementMcpServer
-          ? replacementMcpServer.env?.find(
-              (variable) => variable.name === "T3_ACP_MCP_AUTHORIZATION",
-            )?.value
-          : undefined,
+        replacementMcpEnvironment?.find((variable) => variable.name === "T3_ACP_MCP_AUTHORIZATION")
+          ?.value,
         "Bearer rollback-target-token",
       );
       const snapshotAfterRollback = yield* runtime.readThreadSnapshot({
@@ -2254,7 +2198,8 @@ describe("AcpAdapterV2", () => {
       );
       const loadAfterRestart = yield* Stream.fromQueue(protocolEvents).pipe(
         Stream.filter(
-          (event) => event.direction === "outgoing" && rawProtocolMethod(event) === "session/load",
+          (event) =>
+            event.direction === "outgoing" && rawProtocolMethod(event) === "session/resume",
         ),
         Stream.runHead,
       );
@@ -7069,14 +7014,15 @@ describe("AcpAdapterV2", () => {
       // Effect 4 Queue.takeAll waits for at least one element when empty. After
       // the session/prompt stream drain the protocol queue is often empty, so
       // takeAll would hang forever. Use clear (non-blocking drain) instead so
-      // the session/load wait cannot match residual pre-restart traffic.
+      // the session/resume wait cannot match residual pre-restart traffic.
       yield* Queue.clear(protocolEvents);
       yield* runtime.startTurn(
         makeTurnInput({ threadId, providerThread, instanceId, runtimePolicy, now, ordinal: 2 }),
       );
       const loadAfterRestart = yield* Stream.fromQueue(protocolEvents).pipe(
         Stream.filter(
-          (event) => event.direction === "outgoing" && rawProtocolMethod(event) === "session/load",
+          (event) =>
+            event.direction === "outgoing" && rawProtocolMethod(event) === "session/resume",
         ),
         Stream.runHead,
       );
@@ -7358,7 +7304,7 @@ describe("AcpAdapterV2", () => {
           Stream.filter(
             (event) =>
               event.direction === "outgoing" &&
-              (rawProtocolMethod(event) === "session/load" ||
+              (rawProtocolMethod(event) === "session/resume" ||
                 rawProtocolMethod(event) === "session/new"),
           ),
           Stream.runHead,
@@ -10650,13 +10596,14 @@ describe("AcpAdapterV2", () => {
       );
       const loadAfterRestart = yield* Stream.fromQueue(protocolEvents).pipe(
         Stream.filter(
-          (event) => event.direction === "outgoing" && rawProtocolMethod(event) === "session/load",
+          (event) =>
+            event.direction === "outgoing" && rawProtocolMethod(event) === "session/resume",
         ),
         Stream.runHead,
       );
       assert.isTrue(
         Option.isSome(loadAfterRestart),
-        "post-interrupt startTurn should respawn the runtime and replay session/load",
+        "post-interrupt startTurn should respawn the runtime and replay session/resume",
       );
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
@@ -10935,7 +10882,7 @@ describe("AcpAdapterV2", () => {
       assert.isUndefined(startFiber.pollUnsafe());
       const methodsDuringTeardown = yield* pollProtocolMethods(protocolEvents);
       yield* Deferred.succeed(releaseTeardown, undefined);
-      assert.notInclude(methodsDuringTeardown, "session/load");
+      assert.notInclude(methodsDuringTeardown, "session/resume");
       assert.notInclude(methodsDuringTeardown, "session/prompt");
 
       const interruptExit = yield* Fiber.join(interruptFiber);
@@ -11010,7 +10957,7 @@ describe("AcpAdapterV2", () => {
       assert.notInclude(methodsAfterPoison, "initialize");
       assert.notInclude(methodsAfterPoison, "session/cancel");
       assert.notInclude(methodsAfterPoison, "session/fork");
-      assert.notInclude(methodsAfterPoison, "session/load");
+      assert.notInclude(methodsAfterPoison, "session/resume");
       assert.notInclude(methodsAfterPoison, "session/prompt");
       assert.isTrue(processExists(commandRootPid!));
       assert.isTrue(processExists(commandSleepPid!));
@@ -11203,7 +11150,7 @@ describe("AcpAdapterV2", () => {
       assert.isUndefined(startFiber.pollUnsafe());
       assert.equal(runtimeOrdinalSeen, 1);
       const methodsDuringTeardown = yield* pollProtocolMethods(protocolEvents);
-      assert.notInclude(methodsDuringTeardown, "session/load");
+      assert.notInclude(methodsDuringTeardown, "session/resume");
       assert.notInclude(methodsDuringTeardown, "session/prompt");
 
       yield* Deferred.succeed(releaseTeardown, undefined);
@@ -11211,7 +11158,7 @@ describe("AcpAdapterV2", () => {
       yield* Fiber.join(startFiber);
       assert.equal(runtimeOrdinalSeen, 2);
       const replacementMethods = yield* pollProtocolMethods(protocolEvents);
-      assert.equal(replacementMethods.filter((method) => method === "session/load").length, 1);
+      assert.equal(replacementMethods.filter((method) => method === "session/resume").length, 1);
       if (!replacementMethods.includes("session/prompt")) {
         yield* Stream.fromQueue(protocolEvents).pipe(
           Stream.filter(
@@ -11819,7 +11766,7 @@ describe("AcpAdapterV2", () => {
       assert.isUndefined(forkFiber.pollUnsafe());
       assert.equal(runtimeOrdinalSeen, 1);
       const methodsDuringTeardown = yield* pollProtocolMethods(protocolEvents);
-      assert.notInclude(methodsDuringTeardown, "session/load");
+      assert.notInclude(methodsDuringTeardown, "session/resume");
       assert.notInclude(methodsDuringTeardown, "session/fork");
       const cancelInterruptOwner = yield* Fiber.interrupt(interruptFiber).pipe(Effect.forkScoped);
       yield* Effect.yieldNow;
@@ -11833,7 +11780,7 @@ describe("AcpAdapterV2", () => {
       yield* Fiber.join(forkFiber);
       assert.equal(runtimeOrdinalSeen, 2);
       const methodsAfterRestart = yield* pollProtocolMethods(protocolEvents);
-      assert.equal(methodsAfterRestart.filter((method) => method === "session/load").length, 2);
+      assert.equal(methodsAfterRestart.filter((method) => method === "session/resume").length, 2);
       assert.equal(methodsAfterRestart.filter((method) => method === "session/fork").length, 1);
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
@@ -12075,7 +12022,8 @@ describe("AcpAdapterV2", () => {
       );
       const loadAfterRestart = yield* Stream.fromQueue(protocolEvents).pipe(
         Stream.filter(
-          (event) => event.direction === "outgoing" && rawProtocolMethod(event) === "session/load",
+          (event) =>
+            event.direction === "outgoing" && rawProtocolMethod(event) === "session/resume",
         ),
         Stream.runHead,
       );
@@ -12425,10 +12373,10 @@ describe("AcpAdapterV2", () => {
         const event = yield* Queue.take(protocolEvents);
         if (event.direction !== "outgoing") continue;
         const method = rawProtocolMethod(event);
-        loadSeen ||= method === "session/load";
+        loadSeen ||= method === "session/resume";
         promptSeen ||= method === "session/prompt";
       }
-      assert.isTrue(loadSeen, "restart_active must replay session/load on a new ACP process");
+      assert.isTrue(loadSeen, "restart_active must replay session/resume on a new ACP process");
       assert.isTrue(promptSeen, "replacement prompt must start after reload");
       const secondProviderTurnId = idAllocator.derive.providerTurn({
         driver: ACP_TEST_DRIVER,
