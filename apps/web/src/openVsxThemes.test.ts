@@ -20,6 +20,8 @@ function extensionDetail(overrides: Record<string, unknown> = {}) {
     version: "1.0.0",
     downloadCount: 123456,
     license: "MIT",
+    verified: true,
+    publishedBy: { loginName: "demo-publisher" },
     repository: "https://github.com/demo/theme",
     files: {
       icon: `${ASSET_ROOT}/icon.png`,
@@ -31,13 +33,122 @@ function extensionDetail(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function selectedExtension(overrides: Partial<OpenVsxThemeExtension> = {}): OpenVsxThemeExtension {
+  return {
+    collectionId: "open-vsx:demo.theme",
+    id: "demo.theme",
+    extensionName: "theme",
+    name: "Demo Theme",
+    publisher: "demo",
+    publishedBy: "demo-publisher",
+    description: "",
+    downloadCount: 1,
+    iconUrl: null,
+    repositoryUrl: "https://github.com/demo/theme",
+    sourceUrl: "https://github.com/demo/theme",
+    license: "MIT",
+    manifestUrl: `${ASSET_ROOT}/package.json`,
+    sha256Url: `${ASSET_ROOT}/demo.theme-1.0.0.sha256`,
+    version: "1.0.0",
+    verified: true,
+    vsixUrl: `${ASSET_ROOT}/demo.theme-1.0.0.vsix`,
+    ...overrides,
+  };
+}
+
+function responseAt(response: Response, url?: string): Response {
+  if (url) Object.defineProperty(response, "url", { value: url });
+  return response;
+}
+
+function packageChecksum(bytes: Uint8Array): string {
+  return [...sha256(bytes)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function buildThemePackage({
+  contributionPath = "./themes/theme.json",
+  files = {
+    "themes/theme.json": JSON.stringify({ colors: { "editor.background": "#181818" } }),
+  },
+  compression = "STORE",
+}: {
+  contributionPath?: string;
+  files?: Readonly<Record<string, string>>;
+  compression?: "STORE" | "DEFLATE";
+} = {}): Promise<{ bytes: Uint8Array; checksum: string }> {
+  const zip = new JSZip();
+  zip.file(
+    "extension/package.json",
+    JSON.stringify({
+      publisher: "demo",
+      name: "theme",
+      version: "1.0.0",
+      license: "MIT",
+      contributes: {
+        themes: [{ label: "Demo", uiTheme: "vs-dark", path: contributionPath }],
+      },
+    }),
+  );
+  for (const [path, source] of Object.entries(files)) zip.file(`extension/${path}`, source);
+  const bytes = await zip.generateAsync({
+    type: "uint8array",
+    compression,
+    ...(compression === "DEFLATE" ? { compressionOptions: { level: 9 } } : {}),
+  });
+  return { bytes, checksum: packageChecksum(bytes) };
+}
+
+function stubThemeImport(
+  fixture: { bytes: Uint8Array; checksum: string },
+  {
+    detail = extensionDetail(),
+    finalUrls = {},
+  }: {
+    detail?: unknown;
+    finalUrls?: Partial<Record<"manifest" | "package" | "checksum", string>>;
+  } = {},
+): void {
+  const extension = selectedExtension();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url === "https://open-vsx.org/api/demo/theme/1.0.0") {
+        return new Response(JSON.stringify(detail), { status: 200 });
+      }
+      if (url === extension.manifestUrl) {
+        return responseAt(
+          new Response(
+            JSON.stringify({ license: "MIT", contributes: { themes: [{ path: "./theme.json" }] } }),
+            { status: 200 },
+          ),
+          finalUrls.manifest,
+        );
+      }
+      if (url === extension.sha256Url) {
+        return responseAt(new Response(fixture.checksum), finalUrls.checksum);
+      }
+      if (url === extension.vsixUrl) {
+        return responseAt(
+          new Response(new Uint8Array(fixture.bytes).buffer, {
+            status: 200,
+            headers: { "Content-Length": String(fixture.bytes.byteLength) },
+          }),
+          finalUrls.package,
+        );
+      }
+      return new Response(null, { status: 404 });
+    }),
+  );
+}
+
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
 describe("Open VSX themes", () => {
-  it("searches theme extensions and keeps only supported open-source licenses", async () => {
+  it("searches theme extensions and keeps only verified open-source results", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes("/-/search?")) {
@@ -50,6 +161,7 @@ describe("Open VSX themes", () => {
               { namespace: "unlicensed", name: "theme" },
               { namespace: "unavailable", name: "theme" },
               { namespace: "closed", name: "theme" },
+              { namespace: "unverified", name: "theme" },
               { namespace: "huge", name: "theme" },
             ],
           }),
@@ -119,6 +231,12 @@ describe("Open VSX themes", () => {
           { status: 200 },
         );
       }
+      if (url.endsWith("/unverified/theme")) {
+        return new Response(
+          JSON.stringify(extensionDetail({ namespace: "unverified", verified: false })),
+          { status: 200 },
+        );
+      }
       if (url.endsWith("/huge/theme")) {
         return new Response(JSON.stringify({ padding: "x".repeat(256 * 1024) }), { status: 200 });
       }
@@ -170,6 +288,8 @@ describe("Open VSX themes", () => {
         iconUrl: `${ASSET_ROOT}/icon.png`,
         sourceUrl: "https://github.com/demo/theme",
         license: "MIT",
+        publishedBy: "demo-publisher",
+        verified: true,
       }),
     ]);
     const searchUrl = new URL(String(fetchMock.mock.calls[0]![0]));
@@ -365,25 +485,14 @@ describe("Open VSX themes", () => {
     const manifest = {
       contributes: { themes: [{ label: "Wrong", path: "./themes/missing.json" }] },
     };
-    const extension: OpenVsxThemeExtension = {
-      collectionId: "open-vsx:demo.theme",
-      id: "demo.theme",
-      name: "Demo Theme",
-      publisher: "demo",
-      description: "",
-      downloadCount: 1,
-      iconUrl: null,
-      sourceUrl: null,
-      license: "MIT",
-      manifestUrl: `${ASSET_ROOT}/package.json`,
-      sha256Url: `${ASSET_ROOT}/demo.theme-1.0.0.sha256`,
-      version: "1.0.0",
-      vsixUrl: `${ASSET_ROOT}/demo.theme-1.0.0.vsix`,
-    };
+    const extension = selectedExtension();
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: string | URL | Request) => {
         const url = String(input);
+        if (url === "https://open-vsx.org/api/demo/theme/1.0.0") {
+          return new Response(JSON.stringify(extensionDetail()), { status: 200 });
+        }
         if (url === extension.manifestUrl) {
           return new Response(JSON.stringify(manifest), { status: 200 });
         }
@@ -459,25 +568,14 @@ describe("Open VSX themes", () => {
       .map((byte) => byte.toString(16).padStart(2, "0"))
       .join("");
     const controller = new AbortController();
-    const extension: OpenVsxThemeExtension = {
-      collectionId: "open-vsx:demo.theme",
-      id: "demo.theme",
-      name: "Demo Theme",
-      publisher: "demo",
-      description: "",
-      downloadCount: 1,
-      iconUrl: null,
-      sourceUrl: null,
-      license: "MIT",
-      manifestUrl: `${ASSET_ROOT}/package.json`,
-      sha256Url: `${ASSET_ROOT}/demo.theme-1.0.0.sha256`,
-      version: "1.0.0",
-      vsixUrl: `${ASSET_ROOT}/demo.theme-1.0.0.vsix`,
-    };
+    const extension = selectedExtension();
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: string | URL | Request) => {
         const url = String(input);
+        if (url === "https://open-vsx.org/api/demo/theme/1.0.0") {
+          return new Response(JSON.stringify(extensionDetail()), { status: 200 });
+        }
         if (url === extension.manifestUrl) {
           return new Response(
             JSON.stringify({ contributes: { themes: [{ path: "./theme.json" }] } }),
@@ -497,25 +595,14 @@ describe("Open VSX themes", () => {
   });
 
   it("rejects a package whose Open VSX checksum does not match", async () => {
-    const extension: OpenVsxThemeExtension = {
-      collectionId: "open-vsx:demo.theme",
-      id: "demo.theme",
-      name: "Demo Theme",
-      publisher: "demo",
-      description: "",
-      downloadCount: 1,
-      iconUrl: null,
-      sourceUrl: null,
-      license: "MIT",
-      manifestUrl: `${ASSET_ROOT}/package.json`,
-      sha256Url: `${ASSET_ROOT}/demo.theme-1.0.0.sha256`,
-      version: "1.0.0",
-      vsixUrl: `${ASSET_ROOT}/demo.theme-1.0.0.vsix`,
-    };
+    const extension = selectedExtension();
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: string | URL | Request) => {
         const url = String(input);
+        if (url === "https://open-vsx.org/api/demo/theme/1.0.0") {
+          return new Response(JSON.stringify(extensionDetail()), { status: 200 });
+        }
         if (url === extension.manifestUrl) {
           return new Response(
             JSON.stringify({ contributes: { themes: [{ path: "./theme.json" }] } }),
@@ -527,5 +614,150 @@ describe("Open VSX themes", () => {
     );
 
     await expect(importOpenVsxThemeExtension(extension)).rejects.toThrow("integrity check");
+  });
+
+  it("revalidates publisher identity before downloading an extension", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify(extensionDetail({ publishedBy: { loginName: "replacement-publisher" } })),
+          { status: 200 },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(importOpenVsxThemeExtension(selectedExtension())).rejects.toThrow(
+      "changed publisher identity",
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects an extension that is no longer verified", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify(extensionDetail({ verified: false })), { status: 200 }),
+      ),
+    );
+
+    await expect(importOpenVsxThemeExtension(selectedExtension())).rejects.toThrow(
+      "no longer published by a verified source",
+    );
+  });
+
+  it("rejects resources redirected outside official Open VSX origins", async () => {
+    const fixture = await buildThemePackage();
+    stubThemeImport(fixture, {
+      finalUrls: { manifest: "https://packages.example/extension/package.json" },
+    });
+
+    await expect(importOpenVsxThemeExtension(selectedExtension())).rejects.toThrow(
+      "redirected to an untrusted resource URL",
+    );
+  });
+
+  it("accepts package redirects to the official Open VSX asset origin", async () => {
+    const fixture = await buildThemePackage();
+    const cdnRoot = "https://openvsx.eclipsecontent.org/demo/theme/1.0.0";
+    stubThemeImport(fixture, {
+      finalUrls: {
+        manifest: `${cdnRoot}/package.json`,
+        package: `${cdnRoot}/demo.theme-1.0.0.vsix`,
+        checksum: `${cdnRoot}/demo.theme-1.0.0.sha256`,
+      },
+    });
+
+    await expect(importOpenVsxThemeExtension(selectedExtension())).resolves.toHaveLength(1);
+  });
+
+  it("times out a stalled import request", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        (_input: RequestInfo | URL, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => {
+              reject(new DOMException("The operation was aborted.", "AbortError"));
+            });
+          }),
+      ),
+    );
+
+    const importing = expect(importOpenVsxThemeExtension(selectedExtension())).rejects.toThrow(
+      "took too long to import",
+    );
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    await importing;
+  });
+
+  it("rejects theme paths that escape the extension package", async () => {
+    const fixture = await buildThemePackage({ contributionPath: "../../theme.json" });
+    stubThemeImport(fixture);
+
+    await expect(importOpenVsxThemeExtension(selectedExtension())).rejects.toThrow(
+      "could not be imported safely",
+    );
+  });
+
+  it("rejects cyclic theme includes", async () => {
+    const fixture = await buildThemePackage({
+      contributionPath: "./themes/a.json",
+      files: {
+        "themes/a.json": JSON.stringify({ include: "./b.json" }),
+        "themes/b.json": JSON.stringify({ include: "./a.json" }),
+      },
+    });
+    stubThemeImport(fixture);
+
+    await expect(importOpenVsxThemeExtension(selectedExtension())).rejects.toThrow(
+      "could not be imported safely",
+    );
+  });
+
+  it("rejects oversized theme files", async () => {
+    const fixture = await buildThemePackage({
+      files: {
+        "themes/theme.json": JSON.stringify({
+          colors: { "editor.background": "#181818" },
+          padding: "x".repeat(256 * 1024),
+        }),
+      },
+    });
+    stubThemeImport(fixture);
+
+    await expect(importOpenVsxThemeExtension(selectedExtension())).rejects.toThrow(
+      "could not be imported safely",
+    );
+  });
+
+  it("rejects packages with an unsafe compression ratio", async () => {
+    const fixture = await buildThemePackage({
+      files: {
+        "themes/theme.json": JSON.stringify({ colors: { "editor.background": "#181818" } }),
+        "padding.txt": "x".repeat(300_000),
+      },
+      compression: "DEFLATE",
+    });
+    stubThemeImport(fixture);
+
+    await expect(importOpenVsxThemeExtension(selectedExtension())).rejects.toThrow(
+      "unsafe compression ratio",
+    );
+  });
+
+  it("rejects packages with too many files", async () => {
+    const files = Object.fromEntries([
+      ["themes/theme.json", JSON.stringify({ colors: { "editor.background": "#181818" } })],
+      ...Array.from({ length: 4_999 }, (_, index) => [`unused/${index}.txt`, ""]),
+    ]);
+    const fixture = await buildThemePackage({ files });
+    stubThemeImport(fixture);
+
+    await expect(importOpenVsxThemeExtension(selectedExtension())).rejects.toThrow(
+      "too many files",
+    );
   });
 });
