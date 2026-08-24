@@ -18,6 +18,7 @@ import * as AcpClient from "./client.ts";
 import * as AcpSchema from "./_generated/schema.gen.ts";
 import * as AcpSchemaV1 from "./_generated/schema-v1.gen.ts";
 import * as AcpError from "./errors.ts";
+import type * as AcpCompat from "./compat.ts";
 import type * as AcpProtocol from "./protocol.ts";
 import {
   encodeJsonl,
@@ -289,6 +290,67 @@ it.layer(NodeServices.layer)("effect-acp client", (it) => {
         assert.include(rendered, "Invalid payload for ACP extension method 'x/typed_request'.");
         assert.notInclude(rendered, "Expected string, got 123");
       }),
+  );
+
+  it.effect("preserves ACP v2 structured diff semantics", () =>
+    Effect.gen(function* () {
+      const updates = yield* Ref.make<Array<AcpCompat.SessionNotification>>([]);
+      const handle = yield* makeHandle({ ACP_MOCK_V2_DIFF: "1" });
+      const scope = yield* Scope.make();
+      const context = yield* Layer.buildWithScope(AcpClient.layerChildProcess(handle), scope);
+
+      yield* Effect.gen(function* () {
+        const acp = yield* AcpClient.AcpClient;
+        yield* acp.handleRequestPermission(() =>
+          Effect.succeed({ outcome: { outcome: "selected", optionId: "allow" } }),
+        );
+        yield* acp.handleElicitation(() =>
+          Effect.succeed({ action: "accept", content: { approved: true } }),
+        );
+        yield* acp.handleExtRequest(
+          "x/typed_request",
+          Schema.Struct({ message: Schema.String }),
+          () => Effect.succeed({ ok: true }),
+        );
+        yield* acp.handleSessionUpdate((notification) =>
+          Ref.update(updates, (current) => [...current, notification]),
+        );
+
+        yield* acp.agent.initialize({ protocolVersion: 2 });
+        yield* acp.agent.authenticate({ methodId: "cursor_login" });
+        const session = yield* acp.agent.createSession({ cwd: process.cwd(), mcpServers: [] });
+        yield* acp.agent.prompt({
+          sessionId: session.sessionId,
+          prompt: [{ type: "text", text: "show the diff" }],
+        });
+      }).pipe(Effect.provide(context), Effect.ensuring(Scope.close(scope, Exit.void)));
+
+      const diffUpdate = (yield* Ref.get(updates)).find(
+        (notification) => notification.update.sessionUpdate === "tool_call_update",
+      );
+      assert.deepEqual(diffUpdate?.update, {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "tool-diff",
+        content: [
+          {
+            type: "diff",
+            changes: [
+              {
+                operation: "move",
+                oldPath: "/workspace/old.ts",
+                path: "/workspace/new.ts",
+                fileType: "text",
+                mimeType: "text/typescript",
+              },
+            ],
+            patch: {
+              format: "git_patch",
+              text: "diff --git a/old.ts b/new.ts\nsimilarity index 100%\nrename from old.ts\nrename to new.ts\n",
+            },
+          },
+        ],
+      });
+    }),
   );
 
   it.effect("preserves registry env-var authentication extensions", () =>

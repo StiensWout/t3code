@@ -45,7 +45,7 @@ describe("AcpSessionRuntime", () => {
         (event) => event.method === "initialize" && event.status === "started",
       );
       expect(initializeStarted?.payload).toMatchObject({
-        protocolVersion: 1,
+        protocolVersion: 2,
         clientCapabilities: {
           fs: { readTextFile: false, writeTextFile: false },
           terminal: false,
@@ -109,16 +109,19 @@ describe("AcpSessionRuntime", () => {
     );
   });
 
-  it.effect("authenticates and retries once after session creation returns auth_required", () => {
+  it.effect("requires an interactive handoff for v2 agent-managed authentication", () => {
     const requestEvents: Array<AcpSessionRuntime.AcpSessionRequestLogEvent> = [];
     return Effect.gen(function* () {
       const runtime = yield* AcpSessionRuntime.AcpSessionRuntime;
-      const started = yield* runtime.start();
+      const error = yield* runtime.start().pipe(Effect.flip);
 
-      expect(started.sessionId).toBe("mock-session-1");
+      expect(error._tag).toBe("AcpTransportError");
+      if (error._tag === "AcpTransportError") {
+        expect(error.detail).toContain("requires agent authentication");
+      }
       expect(
         requestEvents.filter((event) => event.status === "started").map((event) => event.method),
-      ).toEqual(["initialize", "session/new", "authenticate", "session/new"]);
+      ).toEqual(["initialize", "session/new"]);
       expect(
         requestEvents.filter(
           (event) => event.method === "session/new" && event.status === "failed",
@@ -128,7 +131,7 @@ describe("AcpSessionRuntime", () => {
         requestEvents.filter(
           (event) => event.method === "session/new" && event.status === "succeeded",
         ),
-      ).toHaveLength(1);
+      ).toHaveLength(0);
     }).pipe(
       Effect.provide(
         AcpSessionRuntime.layer({
@@ -201,7 +204,7 @@ describe("AcpSessionRuntime", () => {
       const runtime = yield* AcpSessionRuntime.AcpSessionRuntime;
       const started = yield* runtime.start();
 
-      expect(started.initializeResult).toMatchObject({ protocolVersion: 1 });
+      expect(started.initializeResult).toMatchObject({ protocolVersion: 2 });
       expect(started.sessionId).toBe("mock-session-1");
 
       const promptResult = yield* runtime.prompt({
@@ -819,6 +822,37 @@ describe("AcpSessionRuntime", () => {
           },
           cwd: process.cwd(),
           resumeSessionId: "stale-session-id",
+          clientInfo: { name: "t3-test", version: "0.0.0" },
+        }),
+      ),
+      Effect.scoped,
+      Effect.provide(NodeServices.layer),
+    ),
+  );
+
+  it.effect("keeps active configuration after a candidate session load fails", () =>
+    Effect.gen(function* () {
+      const runtime = yield* AcpSessionRuntime.AcpSessionRuntime;
+      yield* runtime.start();
+      const before = yield* runtime.getConfigOptions;
+
+      const error = yield* runtime.loadSession("candidate-session").pipe(Effect.flip);
+
+      expect(error._tag).toBe("AcpRequestError");
+      expect(yield* runtime.getConfigOptions).toEqual(before);
+      expect(before.some((option) => option.id === "candidate-only")).toBe(false);
+    }).pipe(
+      Effect.provide(
+        AcpSessionRuntime.layer({
+          authMethodId: "test",
+          spawn: {
+            command: mockAgentCommand,
+            args: mockAgentArgs,
+            env: {
+              T3_ACP_FAIL_LOAD_SESSION_AFTER_CONFIG_REPLAY: "1",
+            },
+          },
+          cwd: process.cwd(),
           clientInfo: { name: "t3-test", version: "0.0.0" },
         }),
       ),

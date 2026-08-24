@@ -1622,19 +1622,29 @@ export const make = (
           gate.value.active &&
           notification.sessionId === gate.value.sessionId
         ) {
-          if (sessionUpdateCountsAsLoadReplayActivity(notification, gate.value.sessionId)) {
-            const lastActivityAtMillis = yield* Clock.currentTimeMillis;
-            yield* Ref.set(
-              sessionLoadGateRef,
-              Option.some({
-                ...gate.value,
-                lastActivityAtMillis,
-              }),
-            );
-          }
-          if (notification.update.sessionUpdate === "config_option_update") {
-            yield* Ref.set(configOptionsRef, notification.update.configOptions);
-          }
+          const countsAsReplayActivity = sessionUpdateCountsAsLoadReplayActivity(
+            notification,
+            gate.value.sessionId,
+          );
+          const activityAtMillis = countsAsReplayActivity
+            ? yield* Clock.currentTimeMillis
+            : undefined;
+          yield* Ref.update(sessionLoadGateRef, (current) =>
+            Option.isSome(current) &&
+            current.value.active &&
+            current.value.sessionId === notification.sessionId
+              ? Option.some({
+                  ...current.value,
+                  lastActivityAtMillis:
+                    activityAtMillis === undefined
+                      ? current.value.lastActivityAtMillis
+                      : Math.max(current.value.lastActivityAtMillis ?? 0, activityAtMillis),
+                  ...(notification.update.sessionUpdate === "config_option_update"
+                    ? { candidateConfigOptions: notification.update.configOptions }
+                    : {}),
+                })
+              : current,
+          );
           return;
         }
         if (sessionUpdateIsReplay(notification)) {
@@ -1870,7 +1880,13 @@ export const make = (
               ),
             );
 
-            return loaded;
+            const gate = yield* Ref.get(sessionLoadGateRef);
+            const candidateConfigOptions = Option.isSome(gate)
+              ? gate.value.candidateConfigOptions
+              : undefined;
+            return loaded.configOptions == null && candidateConfigOptions !== undefined
+              ? { ...loaded, configOptions: candidateConfigOptions }
+              : loaded;
           }).pipe(Effect.ensuring(Ref.set(sessionLoadGateRef, Option.none())));
         }),
       );

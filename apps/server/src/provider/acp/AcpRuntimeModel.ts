@@ -58,6 +58,8 @@ export interface AcpAgentTerminalState {
   readonly cwd?: string;
   readonly output: string;
   readonly exitStatus?: EffectAcpSchema.TerminalExitStatus;
+  /** Incomplete trailing UTF-8 bytes retained until the next output update. */
+  readonly pendingOutputBytes?: Uint8Array;
 }
 
 type AcpAgentTerminalUpdate = Extract<
@@ -67,6 +69,48 @@ type AcpAgentTerminalUpdate = Extract<
 
 const MAX_ACP_TERMINAL_OUTPUT_BYTES = 16 * 1024 * 1024;
 
+function trailingIncompleteUtf8Start(bytes: Uint8Array): number {
+  if (bytes.length === 0) return bytes.length;
+  let leadIndex = bytes.length - 1;
+  while (leadIndex >= 0 && (bytes[leadIndex]! & 0xc0) === 0x80) {
+    leadIndex -= 1;
+  }
+  if (leadIndex < 0) return bytes.length;
+  const lead = bytes[leadIndex]!;
+  const expectedLength =
+    lead >= 0xc2 && lead <= 0xdf
+      ? 2
+      : lead >= 0xe0 && lead <= 0xef
+        ? 3
+        : lead >= 0xf0 && lead <= 0xf4
+          ? 4
+          : 1;
+  return bytes.length - leadIndex < expectedLength ? leadIndex : bytes.length;
+}
+
+function decodeTerminalOutputChunk(
+  pending: Uint8Array | undefined,
+  encoded: string,
+): { readonly text: string; readonly pendingOutputBytes?: Uint8Array } {
+  const bytes = Buffer.concat([
+    ...(pending === undefined ? [] : [Buffer.from(pending)]),
+    Buffer.from(encoded, "base64"),
+  ]);
+  const completeEnd = trailingIncompleteUtf8Start(bytes);
+  const text = bytes.subarray(0, completeEnd).toString("utf8");
+  return completeEnd === bytes.length
+    ? { text }
+    : { text, pendingOutputBytes: Uint8Array.from(bytes.subarray(completeEnd)) };
+}
+
+function truncateTerminalOutput(output: string): string {
+  const bytes = Buffer.from(output, "utf8");
+  if (bytes.length <= MAX_ACP_TERMINAL_OUTPUT_BYTES) return output;
+  let start = bytes.length - MAX_ACP_TERMINAL_OUTPUT_BYTES;
+  while (start < bytes.length && (bytes[start]! & 0xc0) === 0x80) start += 1;
+  return bytes.subarray(start).toString("utf8");
+}
+
 /** Applies an ACP v2 agent-owned terminal snapshot or chunk to display state. */
 export function applyAcpAgentTerminalUpdate(
   previous: AcpAgentTerminalState | undefined,
@@ -74,11 +118,14 @@ export function applyAcpAgentTerminalUpdate(
 ): AcpAgentTerminalState {
   const current = previous ?? { output: "" };
   if (update.sessionUpdate === "terminal_output_chunk") {
+    const decoded = decodeTerminalOutputChunk(current.pendingOutputBytes, update.data);
+    const { pendingOutputBytes: _pendingOutputBytes, ...withoutPendingOutputBytes } = current;
     return {
-      ...current,
-      output: `${current.output}${Buffer.from(update.data, "base64").toString("utf8")}`.slice(
-        -MAX_ACP_TERMINAL_OUTPUT_BYTES,
-      ),
+      ...withoutPendingOutputBytes,
+      output: truncateTerminalOutput(`${current.output}${decoded.text}`),
+      ...(decoded.pendingOutputBytes === undefined
+        ? {}
+        : { pendingOutputBytes: decoded.pendingOutputBytes }),
     };
   }
   let next: AcpAgentTerminalState = current;
@@ -95,21 +142,33 @@ export function applyAcpAgentTerminalUpdate(
     next = { ...next, cwd: update.cwd };
   }
   if (update.output !== undefined) {
+    const decoded =
+      update.output === null
+        ? { text: "" }
+        : decodeTerminalOutputChunk(undefined, update.output.data);
+    const { pendingOutputBytes: _pendingOutputBytes, ...withoutPendingOutputBytes } = next;
     next = {
-      ...next,
-      output:
-        update.output === null
-          ? ""
-          : Buffer.from(update.output.data, "base64")
-              .toString("utf8")
-              .slice(-MAX_ACP_TERMINAL_OUTPUT_BYTES),
+      ...withoutPendingOutputBytes,
+      output: truncateTerminalOutput(decoded.text),
+      ...(decoded.pendingOutputBytes === undefined
+        ? {}
+        : { pendingOutputBytes: decoded.pendingOutputBytes }),
     };
   }
   if (update.exitStatus === null) {
     const { exitStatus: _exitStatus, ...withoutExitStatus } = next;
     next = withoutExitStatus;
   } else if (update.exitStatus !== undefined) {
-    next = { ...next, exitStatus: update.exitStatus };
+    const pendingText =
+      next.pendingOutputBytes === undefined
+        ? ""
+        : Buffer.from(next.pendingOutputBytes).toString("utf8");
+    const { pendingOutputBytes: _pendingOutputBytes, ...withoutPendingOutputBytes } = next;
+    next = {
+      ...withoutPendingOutputBytes,
+      output: truncateTerminalOutput(`${next.output}${pendingText}`),
+      exitStatus: update.exitStatus,
+    };
   }
   return next;
 }
@@ -227,6 +286,13 @@ function sanitizeAcpToolCallContent(
           },
         };
       case "diff":
+        if ("changes" in entry) {
+          return {
+            type: "diff",
+            changes: entry.changes,
+            ...(entry.patch === undefined ? {} : { patch: entry.patch }),
+          };
+        }
         return {
           type: "diff",
           path: entry.path,
@@ -814,6 +880,7 @@ export interface SessionLoadGate {
   readonly lastActivityAtMillis: number | undefined;
   readonly idleGap: Duration.Duration;
   readonly initializeResult: EffectAcpSchema.InitializeResponse;
+  readonly candidateConfigOptions?: ReadonlyArray<EffectAcpSchema.SessionConfigOption>;
 }
 
 export const waitForSessionLoadReplayIdle = (input: {

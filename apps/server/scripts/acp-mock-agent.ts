@@ -55,6 +55,8 @@ const exitAfterRunningCommandLaunch = process.env.T3_ACP_EXIT_AFTER_RUNNING_COMM
 const omitXAiPromptCompleteStopReason =
   process.env.T3_ACP_OMIT_XAI_PROMPT_COMPLETE_STOP_REASON === "1";
 const failLoadSession = process.env.T3_ACP_FAIL_LOAD_SESSION === "1";
+const failLoadSessionAfterConfigReplay =
+  process.env.T3_ACP_FAIL_LOAD_SESSION_AFTER_CONFIG_REPLAY === "1";
 const emitLoadReplay = process.env.T3_ACP_EMIT_LOAD_REPLAY === "1";
 const hangLoadSessionAfterReplay = process.env.T3_ACP_HANG_LOAD_SESSION_AFTER_REPLAY === "1";
 const delayLoadSessionAfterReplay = process.env.T3_ACP_DELAY_LOAD_SESSION_AFTER_REPLAY === "1";
@@ -71,6 +73,8 @@ const promptResponseText = process.env.T3_ACP_PROMPT_RESPONSE_TEXT;
 const promptDelayMs = Number(process.env.T3_ACP_PROMPT_DELAY_MS ?? "0");
 const supportsSessionLifecycle = process.env.T3_ACP_SESSION_LIFECYCLE === "1";
 const advertisedAuthMethodId = process.env.T3_ACP_AUTH_METHOD_ID?.trim();
+const initializeAuthMethodId =
+  advertisedAuthMethodId ?? (supportsSessionLifecycle ? "test" : undefined);
 const requiresAuthentication = process.env.T3_ACP_REQUIRE_AUTH === "1";
 const commandAdvertisementDelayMs = Number(
   process.env.T3_ACP_COMMAND_ADVERTISEMENT_DELAY_MS ?? "-1",
@@ -324,12 +328,12 @@ const program = Effect.gen(function* () {
             ...(supportsSessionLifecycle ? { fork: {}, additionalDirectories: {} } : {}),
           },
         },
-        ...(advertisedAuthMethodId
+        ...(initializeAuthMethodId
           ? {
               authMethods: [
                 {
                   type: "agent" as const,
-                  methodId: advertisedAuthMethodId,
+                  methodId: initializeAuthMethodId,
                   name: "Mock agent authentication",
                 },
               ],
@@ -427,6 +431,25 @@ const program = Effect.gen(function* () {
       const requestedSessionId = String(request.sessionId ?? sessionId);
       if (failLoadSession) {
         return yield* AcpError.AcpRequestError.internalError("Mock load session failure");
+      }
+      if (failLoadSessionAfterConfigReplay) {
+        yield* agent.client.sessionUpdate({
+          sessionId: requestedSessionId,
+          update: {
+            sessionUpdate: "config_option_update",
+            configOptions: [
+              {
+                configId: "candidate-only",
+                name: "Candidate only",
+                type: "boolean",
+                currentValue: true,
+              },
+            ],
+          },
+        });
+        return yield* AcpError.AcpRequestError.internalError(
+          "Mock load session failure after config replay",
+        );
       }
       if (hangLoadSessionAfterReplay || delayLoadSessionAfterReplay) {
         emitLoadReplayNotifications(requestedSessionId);

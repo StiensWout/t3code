@@ -231,6 +231,12 @@ export type ToolCallContent =
       readonly newText: string;
       readonly _meta?: Meta;
     }
+  | {
+      readonly type: "diff";
+      readonly changes: ReadonlyArray<V2.DiffChange>;
+      readonly patch?: V2.DiffPatch | null;
+      readonly _meta?: Meta;
+    }
   | { readonly type: "terminal"; readonly terminalId: string; readonly _meta?: Meta };
 
 export interface ToolCallUpdate {

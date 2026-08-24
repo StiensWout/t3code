@@ -324,20 +324,7 @@ function normalizeToolCallContent(
   }
   if (content.type !== "diff") return [];
 
-  const known = content as Extract<AcpSchemaV2.ToolCallContent, { readonly type: "diff" }>;
-  const patch = known.patch?.text ?? "";
-  return known.changes.flatMap((change) => {
-    if (!("path" in change) || typeof change.path !== "string") return [];
-    return [
-      {
-        type: "diff" as const,
-        path: change.path,
-        ...(change.operation === "add" ? { oldText: null } : {}),
-        newText: patch,
-        ...(known._meta === undefined ? {} : { _meta: known._meta }),
-      },
-    ];
-  });
+  return [content as Extract<AcpSchemaV2.ToolCallContent, { readonly type: "diff" }>];
 }
 
 function normalizeToolCallUpdate(update: AcpSchemaV2.ToolCallUpdate): AcpSchema.ToolCallUpdate {

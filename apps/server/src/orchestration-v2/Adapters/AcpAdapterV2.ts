@@ -1943,9 +1943,10 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
         const emitSubagentAssistant = Effect.fnUntraced(function* (
           subagent: ActiveAcpSubagent,
           text: string,
+          mode: "append" | "replace" = "append",
         ) {
-          if (text.length === 0) return;
-          subagent.assistantText += text;
+          if (text.length === 0 && mode === "append") return;
+          subagent.assistantText = mode === "replace" ? text : `${subagent.assistantText}${text}`;
           const now = yield* DateTime.now;
           const nativeItemId = `${subagent.task.nativeTaskRef?.nativeId ?? subagent.task.id}:result`;
           const artifacts = makeSubagentConversationArtifacts({
@@ -1980,14 +1981,14 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               yield* emitSubagentAssistant(subagent, text);
             }
           } else if (update.sessionUpdate === "agent_message") {
-            subagent.assistantText = "";
+            if (update.content === undefined) return;
             const text = (update.content ?? [])
               .flatMap((content) => {
                 const display = acpContentBlockDisplayText(content);
                 return display === undefined ? [] : [display];
               })
               .join("\n");
-            yield* emitSubagentAssistant(subagent, text);
+            yield* emitSubagentAssistant(subagent, text, "replace");
           }
         });
 
@@ -3486,7 +3487,9 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
             } else if (
               update.sessionUpdate === "tool_call" ||
               update.sessionUpdate === "tool_call_update" ||
-              update.sessionUpdate === "plan"
+              update.sessionUpdate === "plan" ||
+              update.sessionUpdate === "plan_update" ||
+              update.sessionUpdate === "plan_removed"
             ) {
               yield* Ref.update(snapshot, (current) => ({
                 ...current,
@@ -3524,10 +3527,11 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               }
               return;
             }
-            if (
-              update.sessionUpdate !== "agent_message_chunk" ||
-              acpContentBlockDisplayText(update.content) === undefined
-            ) {
+            const isDisplayableAssistantUpdate =
+              (update.sessionUpdate === "agent_message_chunk" &&
+                acpContentBlockDisplayText(update.content) !== undefined) ||
+              (update.sessionUpdate === "agent_message" && update.content !== undefined);
+            if (!isDisplayableAssistantUpdate) {
               return;
             }
             if (subagent !== undefined) {
@@ -3598,7 +3602,9 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                 update.content.type === "content"
                   ? acpContentBlockDisplayText(update.content.content)
                   : update.content.type === "diff"
-                    ? update.content.newText
+                    ? "changes" in update.content
+                      ? update.content.patch?.text
+                      : update.content.newText
                     : undefined;
               if (text !== undefined) {
                 const previous = context.tools.get(update.toolCallId) ?? {
@@ -5152,7 +5158,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
             const requestedMode =
               runtimePolicy.interactionMode === "plan"
                 ? modeChoices.find((choice) => choice === "plan" || choice === "architect")
-                : modeChoices.find((choice) => choice === "code" || choice === "default");
+                : undefined;
             if (requestedMode !== undefined && modeOption.currentValue !== requestedMode) {
               yield* runtime.setConfigOption(modeOption.id, requestedMode);
             }

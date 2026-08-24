@@ -623,10 +623,15 @@ describe("AcpAdapterV2", () => {
         }
       });
 
-      const firstDefault = (yield* runTurn(1, defaultPolicy, "First default request.")).prompt;
-      assert.include(firstDefault, "T3 Code interaction mode: Default");
-      assert.include(firstDefault, "T3 Code collaborative browser");
-      assert.include(firstDefault, "T3 Code orchestration");
+      const firstDefault = yield* runTurn(1, defaultPolicy, "First default request.");
+      assert.include(firstDefault.prompt, "T3 Code interaction mode: Default");
+      assert.include(firstDefault.prompt, "T3 Code collaborative browser");
+      assert.include(firstDefault.prompt, "T3 Code orchestration");
+      assert.notInclude(
+        firstDefault.methods,
+        "session/set_config_option",
+        "Build should preserve the agent's advertised mode default",
+      );
       assert.equal(
         (yield* runTurn(2, defaultPolicy, "Second default request.")).prompt,
         "Second default request.",
@@ -643,6 +648,95 @@ describe("AcpAdapterV2", () => {
       assert.include(
         (yield* runTurn(5, defaultPolicy, "Implement the change.")).prompt,
         "T3 Code interaction mode: Default",
+      );
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
+  it.effect("starts a new replay message after ACP v2 plan boundaries", () =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const idAllocator = yield* IdAllocatorV2;
+      const path = yield* Path.Path;
+      const serverConfig = yield* ServerConfig;
+      const mockAgentPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+      type RuntimeService = AcpSessionRuntime.AcpSessionRuntime["Service"];
+      let sessionUpdateHandler: Parameters<RuntimeService["handleSessionUpdate"]>[0] | undefined;
+      const instanceId = ProviderInstanceId.make("acp-test-v2-plan-replay-boundary");
+      const adapter = makeAcpAdapterV2({
+        crypto: yield* Crypto.Crypto,
+        instanceId,
+        flavor: {
+          driver: ACP_TEST_DRIVER,
+          capabilities: AcpProviderCapabilitiesV2,
+          makeRuntime: makeMockRuntime({
+            childProcessSpawner,
+            mockAgentPath,
+            wrapRuntime: (runtime) => ({
+              ...runtime,
+              handleSessionUpdate: (handler) =>
+                Effect.sync(() => {
+                  sessionUpdateHandler = handler;
+                }).pipe(Effect.andThen(runtime.handleSessionUpdate(handler))),
+            }),
+          }),
+        },
+        fileSystem,
+        idAllocator,
+        serverConfig,
+      });
+      const threadId = ThreadId.make("thread-acp-v2-plan-replay-boundary");
+      const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+      });
+      const modelSelection = { instanceId, model: "default" } as const;
+      const runtime = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("provider-session-acp-v2-plan-replay-boundary"),
+        modelSelection,
+        runtimePolicy,
+      });
+      const providerThread = yield* runtime.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy,
+      });
+      assert.isDefined(sessionUpdateHandler);
+
+      yield* sessionUpdateHandler!({
+        sessionId: "mock-session-1",
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "before plan" },
+        },
+      });
+      yield* sessionUpdateHandler!({
+        sessionId: "mock-session-1",
+        update: {
+          sessionUpdate: "plan_update",
+          plan: {
+            type: "items",
+            planId: "plan-1",
+            entries: [{ content: "Continue", priority: "medium", status: "in_progress" }],
+          },
+        },
+      });
+      yield* sessionUpdateHandler!({
+        sessionId: "mock-session-1",
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "after plan" },
+        },
+      });
+
+      const snapshot = yield* runtime.readThreadSnapshot({ providerThread });
+      assert.deepEqual(
+        snapshot.messages.map((message) => message.text),
+        ["before plan", "after plan"],
       );
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
@@ -7059,7 +7153,7 @@ describe("AcpAdapterV2", () => {
         let cancelCalled = false;
         let runtimeOrdinalSeen = 0;
         const childSessionId = "mock-child-session-1";
-        const streamedSubagentText = "streamed subagent carryover text";
+        const authoritativeSubagentText = "authoritative subagent carryover text";
         type RuntimeService = AcpSessionRuntime.AcpSessionRuntime["Service"];
         let sessionUpdateHandler: Parameters<RuntimeService["handleSessionUpdate"]>[0] | undefined;
         const adapter = makeAcpAdapterV2({
@@ -7164,18 +7258,19 @@ describe("AcpAdapterV2", () => {
         yield* Effect.yieldNow;
         yield* Effect.yieldNow;
 
-        // Stream assistant text onto the carryover subagent while the deferred
-        // turn is still active so assistantText races ahead of task.result.
+        // Project an authoritative v2 assistant-message upsert onto the carryover
+        // subagent while the deferred turn is still active.
         assert.isDefined(sessionUpdateHandler, "session update handler must be wired");
         yield* sessionUpdateHandler!({
           sessionId: childSessionId,
           update: {
-            sessionUpdate: "agent_message_chunk",
-            content: { type: "text", text: streamedSubagentText },
+            sessionUpdate: "agent_message",
+            messageId: "child-message-1",
+            content: [{ type: "text", text: authoritativeSubagentText }],
           },
         });
         let subagentTurnItemId: string | null = null;
-        let streamedTextSeen = false;
+        let authoritativeTextSeen = false;
         for (let attempt = 0; attempt < 64; attempt += 1) {
           const maybeEvent = yield* Queue.take(events).pipe(Effect.timeoutOption("50 millis"));
           if (Option.isNone(maybeEvent)) break;
@@ -7185,15 +7280,15 @@ describe("AcpAdapterV2", () => {
           }
           if (
             event.type === "message.updated" &&
-            event.message.text.includes(streamedSubagentText)
+            event.message.text.includes(authoritativeSubagentText)
           ) {
-            streamedTextSeen = true;
+            authoritativeTextSeen = true;
             break;
           }
         }
         assert.isTrue(
-          streamedTextSeen,
-          "pre-steer child session chunk must project as subagent assistant text",
+          authoritativeTextSeen,
+          "pre-steer child session upsert must project as subagent assistant text",
         );
 
         const firstProviderTurnId = idAllocator.derive.providerTurn({
@@ -7262,7 +7357,7 @@ describe("AcpAdapterV2", () => {
           if (
             event.type === "subagent.updated" &&
             event.subagent.status === "interrupted" &&
-            event.subagent.result === streamedSubagentText
+            event.subagent.result === authoritativeSubagentText
           ) {
             subagentUpdatedResult = event.subagent.result;
           }
@@ -7274,8 +7369,8 @@ describe("AcpAdapterV2", () => {
         );
         assert.equal(
           subagentStopResult,
-          streamedSubagentText,
-          "orphan Stop must merge streamed assistantText into the interrupted result",
+          authoritativeSubagentText,
+          "orphan Stop must merge authoritative assistant text into the interrupted result",
         );
         assert.equal(
           subagentStopProviderThreadId,
@@ -7284,8 +7379,8 @@ describe("AcpAdapterV2", () => {
         );
         assert.equal(
           subagentUpdatedResult,
-          streamedSubagentText,
-          "orphan Stop subagent.updated must also carry the streamed result",
+          authoritativeSubagentText,
+          "orphan Stop subagent.updated must also carry the authoritative result",
         );
 
         yield* Queue.clear(protocolEvents);

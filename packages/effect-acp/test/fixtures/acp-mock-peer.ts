@@ -121,6 +121,34 @@ const program = Effect.gen(function* () {
         },
       });
 
+      if (process.env.ACP_MOCK_V2_DIFF === "1") {
+        yield* agent.client.sessionUpdate({
+          sessionId,
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "tool-diff",
+            content: [
+              {
+                type: "diff",
+                changes: [
+                  {
+                    operation: "move",
+                    oldPath: "/workspace/old.ts",
+                    path: "/workspace/new.ts",
+                    fileType: "text",
+                    mimeType: "text/typescript",
+                  },
+                ],
+                patch: {
+                  format: "git_patch",
+                  text: "diff --git a/old.ts b/new.ts\nsimilarity index 100%\nrename from old.ts\nrename to new.ts\n",
+                },
+              },
+            ],
+          },
+        });
+      }
+
       yield* agent.client.elicitationComplete({
         elicitationId: "elicitation-1",
       });

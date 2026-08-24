@@ -607,6 +607,25 @@ describe("AcpRuntimeModel", () => {
     });
   });
 
+  it("preserves UTF-8 characters split across ACP terminal output chunks", () => {
+    const bytes = Buffer.from("A🙂B", "utf8");
+    const first = applyAcpAgentTerminalUpdate(undefined, {
+      sessionUpdate: "terminal_output_chunk",
+      terminalId: "terminal-utf8",
+      data: bytes.subarray(0, 3).toString("base64"),
+    });
+    const second = applyAcpAgentTerminalUpdate(first, {
+      sessionUpdate: "terminal_output_chunk",
+      terminalId: "terminal-utf8",
+      data: bytes.subarray(3).toString("base64"),
+    });
+
+    expect(first.output).toBe("A");
+    expect(first.pendingOutputBytes).toBeDefined();
+    expect(second.output).toBe("A🙂B");
+    expect(second.pendingOutputBytes).toBeUndefined();
+  });
+
   it("projects binary ACP content without retaining encoded payloads", () => {
     const encodedPayload = "sensitive-base64-payload";
     const binary = acpContentBlockDisplayText({
