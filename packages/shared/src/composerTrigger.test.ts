@@ -25,6 +25,20 @@ describe("detectComposerTrigger", () => {
     });
   });
 
+  it("ignores caller-defined whitespace before a slash command", () => {
+    const placeholder = "\uFFFC";
+    const text = `${placeholder} /rev`;
+    const isWhitespaceChar = (char: string) =>
+      char === placeholder || char === " " || char === "\n" || char === "\t" || char === "\r";
+
+    expect(detectComposerTrigger(text, text.length, isWhitespaceChar)).toEqual({
+      kind: "slash-command",
+      query: "rev",
+      rangeStart: 2,
+      rangeEnd: text.length,
+    });
+  });
+
   it("uses an inline slash as a skill-only trigger", () => {
     const text = "Use /capt";
 

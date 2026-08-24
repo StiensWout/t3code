@@ -189,6 +189,18 @@ describe("detectComposerTrigger", () => {
     });
   });
 
+  it("keeps commands available when only terminal context precedes the slash", () => {
+    const text = `${INLINE_TERMINAL_CONTEXT_PLACEHOLDER}\n/rev`;
+    const trigger = detectComposerTrigger(text, text.length);
+
+    expect(trigger).toEqual({
+      kind: "slash-command",
+      query: "rev",
+      rangeStart: 2,
+      rangeEnd: text.length,
+    });
+  });
+
   it("uses an inline slash to search skills without reopening commands", () => {
     const text = "Use /capt";
     const trigger = detectComposerTrigger(text, text.length);
