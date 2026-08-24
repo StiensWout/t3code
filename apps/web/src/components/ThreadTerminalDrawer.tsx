@@ -1647,7 +1647,7 @@ export default function ThreadTerminalDrawer({
                       {showGroupHeaders && (
                         <button
                           type="button"
-                          className={`flex h-[22px] w-full items-center gap-1 rounded px-1.5 text-[11px] ${
+                          className={`flex h-[22px] w-full cursor-pointer items-center gap-1 rounded px-1.5 text-[11px] ${
                             isGroupActive
                               ? "bg-accent/50 text-foreground"
                               : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
@@ -1682,6 +1682,7 @@ export default function ThreadTerminalDrawer({
                               <PanelTabCloseButton
                                 label={closeTerminalLabel}
                                 onClick={() => confirmCloseTerminal(terminalId)}
+                                tooltip={closeTerminalLabel}
                               >
                                 <TerminalSquare className="size-3 shrink-0" />
                               </PanelTabCloseButton>
