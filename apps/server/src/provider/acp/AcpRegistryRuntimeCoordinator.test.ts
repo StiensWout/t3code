@@ -280,4 +280,33 @@ describe("AcpRegistryRuntimeCoordinator", () => {
       yield* Fiber.interrupt(consumer);
     }).pipe(Effect.provide(AcpRegistryRuntimeCoordinator.layer), Effect.scoped),
   );
+
+  it.effect("clears a published URL action when its request is interrupted", () =>
+    Effect.gen(function* () {
+      const coordinator = yield* AcpRegistryRuntimeCoordinator;
+      const instanceId = ProviderInstanceId.make("acpRegistry_interrupted");
+      const actionSeen = yield* Deferred.make<void>();
+      const cleared = yield* Deferred.make<void>();
+      const consumer = yield* coordinator
+        .watchUrlAuthAction(instanceId, (current) =>
+          current === null
+            ? Deferred.succeed(cleared, undefined).pipe(Effect.asVoid)
+            : Deferred.succeed(actionSeen, undefined).pipe(Effect.asVoid),
+        )
+        .pipe(Effect.forkChild);
+      const request = yield* coordinator
+        .requestUrlAuthentication(instanceId, {
+          elicitationId: "interrupted-login",
+          url: "https://accounts.example.com/interrupted",
+          message: "Continue with login",
+        })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(actionSeen);
+
+      yield* Fiber.interrupt(request);
+      yield* Deferred.await(cleared);
+      expect(Option.isNone(yield* coordinator.getUrlAuthAction(instanceId))).toBe(true);
+      yield* Fiber.interrupt(consumer);
+    }).pipe(Effect.provide(AcpRegistryRuntimeCoordinator.layer), Effect.scoped),
+  );
 });

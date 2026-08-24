@@ -2745,7 +2745,6 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               ...(context.contextUsage?.usedTokens === undefined
                 ? {}
                 : { beforeTokenCount: context.contextUsage.usedTokens }),
-              ...(status === "completed" ? { afterTokenCount: 0 } : {}),
             };
             if (status === "completed") {
               context.contextUsage = null;
@@ -3669,6 +3668,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               update.sessionUpdate === "agent_message" ||
               update.sessionUpdate === "agent_thought"
             ) {
+              if (update.content === undefined) return;
               const text = (update.content ?? [])
                 .flatMap((content) => {
                   const display = acpContentBlockDisplayText(content);
@@ -3805,6 +3805,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
             case "user_message":
             case "agent_message":
             case "agent_thought": {
+              if (update.content === undefined) break;
               const text = (update.content ?? [])
                 .flatMap((content) => {
                   const display = acpContentBlockDisplayText(content);

@@ -266,40 +266,40 @@ export const make = Effect.gen(function* () {
           createdAt: DateTime.formatIso(createdAt),
           expiresAt: DateTime.formatIso(expiresAt),
         } satisfies AcpRegistryUrlAuthAction;
-        yield* urlAuthActionPermit.withPermits(1)(
-          Effect.gen(function* () {
-            const previous = yield* Ref.modify(pendingUrlAuthActions, (current) => {
-              const next = new Map(current);
-              const existing = next.get(instanceId);
-              next.set(instanceId, { action: publishedAction, consent, expiresAt });
-              return [existing, next] as const;
-            });
-            if (previous !== undefined) {
-              yield* Deferred.succeed(previous.consent, false).pipe(Effect.ignore);
-            }
-            yield* publishUrlAuthAction(instanceId, publishedAction);
-          }),
-        );
-        return yield* Deferred.await(consent).pipe(
-          Effect.timeoutOrElse({
-            duration: URL_AUTH_ACTION_TTL,
-            orElse: () => Effect.succeed(false),
-          }),
-          Effect.ensuring(
-            Ref.modify(pendingUrlAuthActions, (current) => {
-              if (current.get(instanceId)?.consent !== consent) {
-                return [false, current] as const;
-              }
-              const next = new Map(current);
-              next.delete(instanceId);
-              return [true, next] as const;
-            }).pipe(
-              Effect.flatMap((removed) =>
-                removed ? publishUrlAuthAction(instanceId, null) : Effect.void,
-              ),
-            ),
+        const cleanup = Ref.modify(pendingUrlAuthActions, (current) => {
+          if (current.get(instanceId)?.consent !== consent) {
+            return [false, current] as const;
+          }
+          const next = new Map(current);
+          next.delete(instanceId);
+          return [true, next] as const;
+        }).pipe(
+          Effect.flatMap((removed) =>
+            removed ? publishUrlAuthAction(instanceId, null) : Effect.void,
           ),
         );
+        return yield* Effect.gen(function* () {
+          yield* urlAuthActionPermit.withPermits(1)(
+            Effect.gen(function* () {
+              const previous = yield* Ref.modify(pendingUrlAuthActions, (current) => {
+                const next = new Map(current);
+                const existing = next.get(instanceId);
+                next.set(instanceId, { action: publishedAction, consent, expiresAt });
+                return [existing, next] as const;
+              });
+              if (previous !== undefined) {
+                yield* Deferred.succeed(previous.consent, false).pipe(Effect.ignore);
+              }
+              yield* publishUrlAuthAction(instanceId, publishedAction);
+            }),
+          );
+          return yield* Deferred.await(consent).pipe(
+            Effect.timeoutOrElse({
+              duration: URL_AUTH_ACTION_TTL,
+              orElse: () => Effect.succeed(false),
+            }),
+          );
+        }).pipe(Effect.ensuring(cleanup));
       },
     );
 

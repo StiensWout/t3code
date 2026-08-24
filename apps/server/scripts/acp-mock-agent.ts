@@ -686,6 +686,12 @@ const program = Effect.gen(function* () {
             content: { type: "text", text: "interleaved answer" },
           },
           {
+            sessionUpdate: "agent_message",
+            messageId: "assistant-1",
+            content: [{ type: "text", text: "authoritative answer" }],
+          },
+          { sessionUpdate: "agent_message", messageId: "assistant-1" },
+          {
             sessionUpdate: "agent_thought",
             messageId: "thought-1",
             content: [{ type: "text", text: "final thought" }],

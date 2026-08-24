@@ -754,6 +754,8 @@ describe("AcpAdapterV2", () => {
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
+      type RuntimeService = AcpSessionRuntime.AcpSessionRuntime["Service"];
+      let sessionUpdateHandler: Parameters<RuntimeService["handleSessionUpdate"]>[0] | undefined;
       const instanceId = ProviderInstanceId.make("acp-test-v2-fidelity");
       const adapter = makeAcpAdapterV2({
         crypto: yield* Crypto.Crypto,
@@ -765,6 +767,13 @@ describe("AcpAdapterV2", () => {
             childProcessSpawner,
             mockAgentPath,
             environment: { T3_ACP_EMIT_V2_FIDELITY: "1" },
+            wrapRuntime: (runtime) => ({
+              ...runtime,
+              handleSessionUpdate: (handler) =>
+                Effect.sync(() => {
+                  sessionUpdateHandler = handler;
+                }).pipe(Effect.andThen(runtime.handleSessionUpdate(handler))),
+            }),
           }),
         },
         fileSystem,
@@ -819,6 +828,10 @@ describe("AcpAdapterV2", () => {
         event.type === "turn_item.updated" ? [event.turnItem] : [],
       );
       assert.isTrue(items.some((item) => item.type === "user_message" && item.text.length === 0));
+      assert.equal(
+        items.filter((item) => item.type === "assistant_message").at(-1)?.text,
+        "authoritative answer",
+      );
       assert.isTrue(
         items.some((item) => item.type === "reasoning" && item.text === "final thought"),
       );
@@ -839,13 +852,35 @@ describe("AcpAdapterV2", () => {
             item.changes[0]?.oldPath === "/workspace/old.ts",
         ),
       );
+      const completedCompaction = items.find(
+        (item) =>
+          item.type === "compaction" &&
+          item.status === "completed" &&
+          item.summary === "Retained decisions.",
+      );
+      assert.isDefined(completedCompaction);
+      assert.notProperty(completedCompaction!, "afterTokenCount");
+
+      assert.isDefined(sessionUpdateHandler);
+      yield* sessionUpdateHandler!({
+        sessionId: "mock-session-1",
+        update: {
+          sessionUpdate: "agent_message",
+          messageId: "late-authoritative-message",
+          content: [{ type: "text", text: "late authoritative text" }],
+        },
+      });
+      yield* sessionUpdateHandler!({
+        sessionId: "mock-session-1",
+        update: {
+          sessionUpdate: "agent_message",
+          messageId: "late-authoritative-message",
+        },
+      });
+      const afterOmittedPatch = yield* runtime.readThreadSnapshot({ providerThread });
       assert.isTrue(
-        items.some(
-          (item) =>
-            item.type === "compaction" &&
-            item.status === "completed" &&
-            item.summary === "Retained decisions.",
-        ),
+        afterOmittedPatch.messages.some((message) => message.text === "late authoritative text"),
+        "omitted late message content must preserve the authoritative text",
       );
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
