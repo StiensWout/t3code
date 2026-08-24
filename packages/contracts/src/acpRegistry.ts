@@ -124,6 +124,10 @@ export const AcpRegistryUrlAuthAction = Schema.Struct({
   elicitationId: AcpRegistryProbeText,
   url: AcpRegistryUrl,
   message: Schema.String.check(Schema.isMaxLength(1_024)),
+  // Optional for mixed-version clients. New servers include both timestamps
+  // so a pending browser login remains understandable on another device.
+  createdAt: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(128))),
+  expiresAt: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(128))),
 });
 export type AcpRegistryUrlAuthAction = typeof AcpRegistryUrlAuthAction.Type;
 
@@ -163,6 +167,7 @@ export const AcpRegistryListSessionsResult = Schema.Struct({
   nextCursor: Schema.NullOr(Schema.String.check(Schema.isMaxLength(2_048))),
   canLoad: Schema.Boolean,
   canResume: Schema.Boolean,
+  canDelete: Schema.Boolean,
 });
 export type AcpRegistryListSessionsResult = typeof AcpRegistryListSessionsResult.Type;
 
@@ -182,6 +187,72 @@ export const AcpRegistryImportSessionResult = Schema.Struct({
   imported: Schema.Boolean,
 });
 export type AcpRegistryImportSessionResult = typeof AcpRegistryImportSessionResult.Type;
+
+export const AcpRegistryDeleteSessionInput = Schema.Struct({
+  instanceId: ProviderInstanceId,
+  projectId: ProjectId,
+  sessionId: AcpRegistrySessionId,
+});
+export type AcpRegistryDeleteSessionInput = typeof AcpRegistryDeleteSessionInput.Type;
+
+export const AcpRegistryDeleteSessionResult = Schema.Struct({ deleted: Schema.Literal(true) });
+export type AcpRegistryDeleteSessionResult = typeof AcpRegistryDeleteSessionResult.Type;
+
+const AcpRegistryProviderId = TrimmedNonEmptyString.check(Schema.isMaxLength(256));
+const AcpRegistryProviderProtocol = TrimmedNonEmptyString.check(Schema.isMaxLength(64));
+
+export const AcpRegistryConfigurableProvider = Schema.Struct({
+  providerId: AcpRegistryProviderId,
+  supported: Schema.Array(AcpRegistryProviderProtocol).check(Schema.isMaxLength(16)),
+  required: Schema.Boolean,
+  current: Schema.NullOr(
+    Schema.Struct({
+      apiType: AcpRegistryProviderProtocol,
+      baseUrl: AcpRegistryUrl,
+    }),
+  ),
+});
+export type AcpRegistryConfigurableProvider = typeof AcpRegistryConfigurableProvider.Type;
+
+export const AcpRegistryListProvidersInput = Schema.Struct({
+  instanceId: ProviderInstanceId,
+  projectId: ProjectId,
+});
+export type AcpRegistryListProvidersInput = typeof AcpRegistryListProvidersInput.Type;
+
+export const AcpRegistryListProvidersResult = Schema.Struct({
+  providers: Schema.Array(AcpRegistryConfigurableProvider).check(Schema.isMaxLength(64)),
+});
+export type AcpRegistryListProvidersResult = typeof AcpRegistryListProvidersResult.Type;
+
+export const AcpRegistrySetProviderInput = Schema.Struct({
+  instanceId: ProviderInstanceId,
+  projectId: ProjectId,
+  providerId: AcpRegistryProviderId,
+  apiType: AcpRegistryProviderProtocol,
+  baseUrl: AcpRegistryUrl,
+  // Write-only secrets. Provider list responses intentionally cannot carry headers.
+  headers: Schema.optionalKey(
+    Schema.Record(
+      TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
+      Schema.String.check(Schema.isMaxLength(8_192)),
+    ),
+  ),
+});
+export type AcpRegistrySetProviderInput = typeof AcpRegistrySetProviderInput.Type;
+
+export const AcpRegistrySetProviderResult = Schema.Struct({ configured: Schema.Literal(true) });
+export type AcpRegistrySetProviderResult = typeof AcpRegistrySetProviderResult.Type;
+
+export const AcpRegistryDisableProviderInput = Schema.Struct({
+  instanceId: ProviderInstanceId,
+  projectId: ProjectId,
+  providerId: AcpRegistryProviderId,
+});
+export type AcpRegistryDisableProviderInput = typeof AcpRegistryDisableProviderInput.Type;
+
+export const AcpRegistryDisableProviderResult = Schema.Struct({ disabled: Schema.Literal(true) });
+export type AcpRegistryDisableProviderResult = typeof AcpRegistryDisableProviderResult.Type;
 
 export const AcpRegistryLogoutInput = Schema.Struct({
   instanceId: ProviderInstanceId,
@@ -217,9 +288,18 @@ export const AcpRegistryProbeResult = Schema.Struct({
     canLoad: Schema.Boolean,
     canResume: Schema.Boolean,
     canLogout: Schema.Boolean,
+    canDelete: Schema.Boolean,
+    canConfigureProviders: Schema.Boolean,
   }).pipe(
     Schema.withDecodingDefault(
-      Effect.succeed({ canList: false, canLoad: false, canResume: false, canLogout: false }),
+      Effect.succeed({
+        canList: false,
+        canLoad: false,
+        canResume: false,
+        canLogout: false,
+        canDelete: false,
+        canConfigureProviders: false,
+      }),
     ),
   ),
 });
@@ -241,8 +321,13 @@ export const AcpRegistryOperationErrorReason = Schema.Literals([
   "registry_unavailable",
   "runner_unavailable",
   "session_import_failed",
+  "session_delete_unsupported",
+  "session_delete_failed",
   "session_list_unsupported",
   "session_resume_unsupported",
+  "providers_unsupported",
+  "providers_list_failed",
+  "provider_configuration_failed",
   "unsupported_distribution",
   "unsupported_platform",
 ]);

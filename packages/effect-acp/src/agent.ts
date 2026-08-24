@@ -80,6 +80,18 @@ export class AcpAgent extends Context.Service<
       readonly elicitationComplete: (
         payload: AcpSchema.CompleteElicitationNotification,
       ) => Effect.Effect<void, AcpError.AcpError>;
+      readonly connectMcp: (
+        payload: AcpSchema.ConnectMcpRequest,
+      ) => Effect.Effect<AcpSchema.ConnectMcpResponse, AcpError.AcpError>;
+      readonly messageMcp: (
+        payload: AcpSchema.MessageMcpRequest,
+      ) => Effect.Effect<AcpSchema.MessageMcpResponse, AcpError.AcpError>;
+      readonly disconnectMcp: (
+        payload: AcpSchema.DisconnectMcpRequest,
+      ) => Effect.Effect<AcpSchema.DisconnectMcpResponse, AcpError.AcpError>;
+      readonly notifyMcp: (
+        payload: AcpSchema.MessageMcpNotification,
+      ) => Effect.Effect<void, AcpError.AcpError>;
       /**
        * Sends an ACP extension request to the client.
        * @see https://agentclientprotocol.com/protocol/extensibility
@@ -131,6 +143,21 @@ export class AcpAgent extends Context.Service<
     ) => Effect.Effect<void>;
     readonly handleCloseSession: (
       handler: AcpRequestHandler<AcpSchema.CloseSessionRequest, AcpSchema.CloseSessionResponse>,
+    ) => Effect.Effect<void>;
+    readonly handleDeleteSession: (
+      handler: AcpRequestHandler<AcpSchema.DeleteSessionRequest, AcpSchema.DeleteSessionResponse>,
+    ) => Effect.Effect<void>;
+    readonly handleListProviders: (
+      handler: AcpRequestHandler<AcpSchema.ListProvidersRequest, AcpSchema.ListProvidersResponse>,
+    ) => Effect.Effect<void>;
+    readonly handleSetProvider: (
+      handler: AcpRequestHandler<AcpSchema.SetProviderRequest, AcpSchema.SetProviderResponse>,
+    ) => Effect.Effect<void>;
+    readonly handleDisableProvider: (
+      handler: AcpRequestHandler<
+        AcpSchema.DisableProviderRequest,
+        AcpSchema.DisableProviderResponse
+      >,
     ) => Effect.Effect<void>;
     readonly handleSetSessionConfigOption: (
       handler: AcpRequestHandler<
@@ -186,6 +213,19 @@ interface AcpCoreAgentRequestHandlers {
     AcpSchema.ResumeSessionResponse
   >;
   closeSession?: AcpRequestHandler<AcpSchema.CloseSessionRequest, AcpSchema.CloseSessionResponse>;
+  deleteSession?: AcpRequestHandler<
+    AcpSchema.DeleteSessionRequest,
+    AcpSchema.DeleteSessionResponse
+  >;
+  listProviders?: AcpRequestHandler<
+    AcpSchema.ListProvidersRequest,
+    AcpSchema.ListProvidersResponse
+  >;
+  setProvider?: AcpRequestHandler<AcpSchema.SetProviderRequest, AcpSchema.SetProviderResponse>;
+  disableProvider?: AcpRequestHandler<
+    AcpSchema.DisableProviderRequest,
+    AcpSchema.DisableProviderResponse
+  >;
   setSessionConfigOption?: AcpRequestHandler<
     AcpSchema.SetSessionConfigOptionRequest,
     AcpSchema.SetSessionConfigOptionResponse
@@ -335,6 +375,34 @@ export const make = Effect.fn("effect-acp/AcpAgent.make")(function* (
           AGENT_METHODS.session_close,
           requestContext(requestId, AGENT_METHODS.session_close),
         ),
+      [AGENT_METHODS.session_delete]: (payload, { requestId }) =>
+        runHandler(
+          coreHandlers.deleteSession,
+          payload,
+          AGENT_METHODS.session_delete,
+          requestContext(requestId, AGENT_METHODS.session_delete),
+        ),
+      [AGENT_METHODS.providers_list]: (payload, { requestId }) =>
+        runHandler(
+          coreHandlers.listProviders,
+          payload,
+          AGENT_METHODS.providers_list,
+          requestContext(requestId, AGENT_METHODS.providers_list),
+        ),
+      [AGENT_METHODS.providers_set]: (payload, { requestId }) =>
+        runHandler(
+          coreHandlers.setProvider,
+          payload,
+          AGENT_METHODS.providers_set,
+          requestContext(requestId, AGENT_METHODS.providers_set),
+        ),
+      [AGENT_METHODS.providers_disable]: (payload, { requestId }) =>
+        runHandler(
+          coreHandlers.disableProvider,
+          payload,
+          AGENT_METHODS.providers_disable,
+          requestContext(requestId, AGENT_METHODS.providers_disable),
+        ),
       [AGENT_METHODS.session_set_config_option]: (payload, { requestId }) =>
         runHandler(
           coreHandlers.setSessionConfigOption,
@@ -380,6 +448,13 @@ export const make = Effect.fn("effect-acp/AcpAgent.make")(function* (
       sessionUpdate: (payload) => transport.notify(CLIENT_METHODS.session_update, payload),
       elicitationComplete: (payload) =>
         transport.notify(CLIENT_METHODS.elicitation_complete, payload),
+      connectMcp: (payload) =>
+        callRpc(CLIENT_METHODS.mcp_connect, rpc[CLIENT_METHODS.mcp_connect](payload)),
+      messageMcp: (payload) =>
+        callRpc(CLIENT_METHODS.mcp_message, rpc[CLIENT_METHODS.mcp_message](payload)),
+      disconnectMcp: (payload) =>
+        callRpc(CLIENT_METHODS.mcp_disconnect, rpc[CLIENT_METHODS.mcp_disconnect](payload)),
+      notifyMcp: (payload) => transport.notify(CLIENT_METHODS.mcp_message, payload),
       extRequest: transport.request,
       extNotification: transport.notify,
     },
@@ -426,6 +501,26 @@ export const make = Effect.fn("effect-acp/AcpAgent.make")(function* (
     handleCloseSession: (handler) =>
       Effect.suspend(() => {
         coreHandlers.closeSession = handler;
+        return Effect.void;
+      }),
+    handleDeleteSession: (handler) =>
+      Effect.suspend(() => {
+        coreHandlers.deleteSession = handler;
+        return Effect.void;
+      }),
+    handleListProviders: (handler) =>
+      Effect.suspend(() => {
+        coreHandlers.listProviders = handler;
+        return Effect.void;
+      }),
+    handleSetProvider: (handler) =>
+      Effect.suspend(() => {
+        coreHandlers.setProvider = handler;
+        return Effect.void;
+      }),
+    handleDisableProvider: (handler) =>
+      Effect.suspend(() => {
+        coreHandlers.disableProvider = handler;
         return Effect.void;
       }),
     handleSetSessionConfigOption: (handler) =>

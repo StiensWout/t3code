@@ -19,6 +19,7 @@ const exitLogPath = process.env.T3_ACP_EXIT_LOG_PATH;
 const emitToolCalls = process.env.T3_ACP_EMIT_TOOL_CALLS === "1";
 const emitInterleavedAssistantToolCalls =
   process.env.T3_ACP_EMIT_INTERLEAVED_ASSISTANT_TOOL_CALLS === "1";
+const emitV2Fidelity = process.env.T3_ACP_EMIT_V2_FIDELITY === "1";
 const emitGenericToolPlaceholders = process.env.T3_ACP_EMIT_GENERIC_TOOL_PLACEHOLDERS === "1";
 const emitPostSettleMonitorFlow = process.env.T3_ACP_EMIT_POST_SETTLE_MONITOR_FLOW === "1";
 const emitInTurnTaskOutputThenLateDuplicate =
@@ -72,6 +73,8 @@ const omitModelConfigOption = process.env.T3_ACP_OMIT_MODEL_CONFIG_OPTION === "1
 const promptResponseText = process.env.T3_ACP_PROMPT_RESPONSE_TEXT;
 const promptDelayMs = Number(process.env.T3_ACP_PROMPT_DELAY_MS ?? "0");
 const supportsSessionLifecycle = process.env.T3_ACP_SESSION_LIFECYCLE === "1";
+const supportsAcpMcp = process.env.T3_ACP_MCP_ACP === "1";
+const supportsV2Management = process.env.T3_ACP_V2_MANAGEMENT === "1";
 const advertisedAuthMethodId = process.env.T3_ACP_AUTH_METHOD_ID?.trim();
 const initializeAuthMethodId =
   advertisedAuthMethodId ?? (supportsSessionLifecycle ? "test" : undefined);
@@ -96,6 +99,7 @@ let authenticated = !requiresAuthentication;
 let promptCount = 0;
 let overlappingFirstPromptId: string | undefined;
 const cancelledSessions = new Set<string>();
+let configuredProvider: AcpSchema.ProviderCurrentConfig | null = null;
 
 function promptIdFromRequestMeta(
   request: Pick<AcpSchema.PromptRequest, "_meta">,
@@ -326,7 +330,10 @@ const program = Effect.gen(function* () {
         capabilities: {
           session: {
             ...(supportsSessionLifecycle ? { fork: {}, additionalDirectories: {} } : {}),
+            ...(supportsV2Management ? { delete: {} } : {}),
+            ...(supportsAcpMcp ? { mcp: { acp: {} } } : {}),
           },
+          ...(supportsV2Management ? { providers: {} } : {}),
         },
         ...(initializeAuthMethodId
           ? {
@@ -525,6 +532,45 @@ const program = Effect.gen(function* () {
     }),
   );
 
+  yield* agent.handleDeleteSession(() =>
+    Effect.gen(function* () {
+      yield* requireAuthentication();
+      return {};
+    }),
+  );
+
+  yield* agent.handleListProviders(() =>
+    Effect.gen(function* () {
+      yield* requireAuthentication();
+      return {
+        providers: [
+          {
+            providerId: "mock-provider",
+            supported: ["openai", "anthropic"],
+            required: false,
+            current: configuredProvider,
+          },
+        ],
+      };
+    }),
+  );
+
+  yield* agent.handleSetProvider((request) =>
+    Effect.gen(function* () {
+      yield* requireAuthentication();
+      configuredProvider = { apiType: request.apiType, baseUrl: request.baseUrl };
+      return {};
+    }),
+  );
+
+  yield* agent.handleDisableProvider(() =>
+    Effect.gen(function* () {
+      yield* requireAuthentication();
+      configuredProvider = null;
+      return {};
+    }),
+  );
+
   yield* agent.handleSetSessionConfigOption((request) =>
     Effect.gen(function* () {
       if (exitOnSetConfigOption) {
@@ -620,6 +666,104 @@ const program = Effect.gen(function* () {
       const requestedSessionId = String(request.sessionId ?? sessionId);
       beginAcpMockPrompt(cancelledSessions, requestedSessionId);
       promptCount += 1;
+
+      if (emitV2Fidelity) {
+        const updates: ReadonlyArray<AcpSchema.SessionUpdate> = [
+          {
+            sessionUpdate: "user_message_chunk",
+            messageId: "user-1",
+            content: { type: "text", text: "stale user text" },
+          },
+          { sessionUpdate: "user_message", messageId: "user-1", content: null },
+          {
+            sessionUpdate: "agent_thought_chunk",
+            messageId: "thought-1",
+            content: { type: "text", text: "stale thought" },
+          },
+          {
+            sessionUpdate: "agent_message_chunk",
+            messageId: "assistant-1",
+            content: { type: "text", text: "interleaved answer" },
+          },
+          {
+            sessionUpdate: "agent_thought",
+            messageId: "thought-1",
+            content: [{ type: "text", text: "final thought" }],
+          },
+          {
+            sessionUpdate: "plan_update",
+            plan: { type: "markdown", planId: "plan-a", content: "# Plan A" },
+          },
+          {
+            sessionUpdate: "plan_update",
+            plan: {
+              type: "items",
+              planId: "plan-b",
+              entries: [{ content: "Ship B", priority: "high", status: "in_progress" }],
+            },
+          },
+          { sessionUpdate: "plan_removed", planId: "plan-a" },
+          {
+            sessionUpdate: "terminal_update",
+            terminalId: "standalone-terminal",
+            command: "printf proof",
+            cwd: process.cwd(),
+            output: { data: Buffer.from("proof").toString("base64") },
+          },
+          {
+            sessionUpdate: "terminal_update",
+            terminalId: "standalone-terminal",
+            exitStatus: { exitCode: 0 },
+          },
+          { sessionUpdate: "state_update", state: "requires_action" },
+          { sessionUpdate: "state_update", state: "running" },
+          {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "structured-diff",
+            title: "Edit files",
+            kind: "edit",
+            status: "completed",
+            content: [
+              {
+                type: "diff",
+                changes: [
+                  {
+                    operation: "move",
+                    oldPath: "/workspace/old.ts",
+                    path: "/workspace/new.ts",
+                    fileType: "text",
+                    mimeType: "text/typescript",
+                  },
+                ],
+                patch: {
+                  format: "git_patch",
+                  text: "diff --git a/old.ts b/new.ts\nrename from old.ts\nrename to new.ts\n",
+                },
+              },
+            ],
+          },
+          {
+            sessionUpdate: "compaction_update",
+            compactionId: "compact-1",
+            status: "in_progress",
+          },
+          {
+            sessionUpdate: "compaction_summary_chunk",
+            compactionId: "compact-1",
+            content: { type: "text", text: "Retained decisions." },
+          },
+          {
+            sessionUpdate: "compaction_update",
+            compactionId: "compact-1",
+            status: "completed",
+            summary: [{ type: "text", text: "Retained decisions." }],
+          },
+        ];
+        for (const update of updates) {
+          yield* agent.client.sessionUpdate({ sessionId: requestedSessionId, update });
+        }
+        return yield* finishPrompt(requestedSessionId, "end_turn");
+      }
 
       if (residualCallbackTriggerPath !== undefined) {
         yield* Effect.gen(function* () {

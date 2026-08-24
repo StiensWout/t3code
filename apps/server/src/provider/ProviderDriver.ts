@@ -23,7 +23,9 @@
  */
 import type {
   AcpRegistryListSessionsResult,
+  AcpRegistryListProvidersResult,
   AcpRegistryOperationError,
+  AcpRegistrySetProviderInput,
   ProviderDriverKind,
   ProviderInstanceEnvironment,
   ProviderInstanceId,
@@ -79,6 +81,22 @@ export interface ProviderInstance {
       readonly cursor?: string;
     }) => Effect.Effect<AcpRegistryListSessionsResult, AcpRegistryOperationError>;
     readonly logout: (cwd: string) => Effect.Effect<void, AcpRegistryOperationError>;
+    readonly deleteSession: (input: {
+      readonly cwd: string;
+      readonly sessionId: string;
+    }) => Effect.Effect<void, AcpRegistryOperationError>;
+    readonly listProviders: (
+      cwd: string,
+    ) => Effect.Effect<AcpRegistryListProvidersResult, AcpRegistryOperationError>;
+    readonly setProvider: (
+      input: Omit<AcpRegistrySetProviderInput, "instanceId" | "projectId"> & {
+        readonly cwd: string;
+      },
+    ) => Effect.Effect<void, AcpRegistryOperationError>;
+    readonly disableProvider: (input: {
+      readonly cwd: string;
+      readonly providerId: string;
+    }) => Effect.Effect<void, AcpRegistryOperationError>;
   };
 }
 

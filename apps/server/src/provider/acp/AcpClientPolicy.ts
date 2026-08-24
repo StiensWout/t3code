@@ -229,6 +229,14 @@ export function acpClientWriteDisposition(
   return acpOperationDisposition(runtimePolicy, { kind: "edit", locations: [{ path }] });
 }
 
+/** Disposition of a client-mediated `fs/read_text_file` from one path. */
+export function acpClientReadDisposition(
+  runtimePolicy: AcpRuntimePolicy,
+  path: string,
+): AcpPermissionDisposition {
+  return acpOperationDisposition(runtimePolicy, { kind: "read", locations: [{ path }] });
+}
+
 /** Disposition of a client-mediated `terminal/create`. */
 export function acpClientExecuteDisposition(
   runtimePolicy: AcpRuntimePolicy,
@@ -248,6 +256,11 @@ export interface AcpApprovalGrantInput {
 
 export interface AcpClientPolicyGrants {
   readonly recordApproval: (input: AcpApprovalGrantInput) => void;
+  readonly allowsRead: (input: {
+    readonly path: string;
+    readonly cwd: string | null;
+    readonly turnKey: string | null;
+  }) => boolean;
   readonly allowsWrite: (input: {
     readonly path: string;
     readonly cwd: string | null;
@@ -265,18 +278,23 @@ export interface AcpClientPolicyGrants {
  * requests the agent issues to carry it out, so grants are scoped as tightly as
  * the protocol allows: an accepted file change authorizes client writes to its
  * canonical reported locations (or the whole scope when the agent reported
- * none), and an accepted command authorizes client terminals. Grants last for
- * the approving turn, or for the session on accept-for-session.
+ * none), an accepted file read does the same for reads, and an accepted command
+ * authorizes client terminals. Grants last for the approving turn, or for the
+ * session on accept-for-session.
  */
 export function makeAcpClientPolicyGrants(): AcpClientPolicyGrants {
   interface ScopeGrants {
     execute: boolean;
+    unscopedRead: boolean;
     unscopedWrite: boolean;
+    readRoots: Array<string>;
     writeRoots: Array<string>;
   }
   const emptyScope = (): ScopeGrants => ({
     execute: false,
+    unscopedRead: false,
     unscopedWrite: false,
+    readRoots: [],
     writeRoots: [],
   });
   const session = emptyScope();
@@ -293,6 +311,34 @@ export function makeAcpClientPolicyGrants(): AcpClientPolicyGrants {
   const activeScopes = (turnKey: string | null): Array<ScopeGrants> =>
     turn !== null && turnKey !== null && turn.key === turnKey ? [session, turn.grants] : [session];
 
+  const recordPathGrant = (roots: Array<string>, input: AcpApprovalGrantInput): void => {
+    for (const location of input.locations) {
+      const resolved = resolveAcpPermissionPath(location, input.cwd);
+      const canonical =
+        resolved === undefined ? undefined : acpCanonicalPathForContainment(resolved);
+      if (canonical === undefined) continue;
+      roots.push(canonical);
+      if (roots.length > MAX_GRANTED_WRITE_ROOTS) roots.shift();
+    }
+  };
+
+  const allowsPath = (input: {
+    readonly path: string;
+    readonly cwd: string | null;
+    readonly turnKey: string | null;
+    readonly unscoped: keyof Pick<ScopeGrants, "unscopedRead" | "unscopedWrite">;
+    readonly roots: keyof Pick<ScopeGrants, "readRoots" | "writeRoots">;
+  }): boolean => {
+    const scopes = activeScopes(input.turnKey);
+    if (scopes.some((scope) => scope[input.unscoped])) return true;
+    const resolved = resolveAcpPermissionPath(input.path, input.cwd);
+    const canonical = resolved === undefined ? undefined : acpCanonicalPathForContainment(resolved);
+    if (canonical === undefined) return false;
+    return scopes.some((scope) =>
+      scope[input.roots].some((root) => acpPathIsWithinRoot(canonical, root)),
+    );
+  };
+
   return {
     recordApproval: (input) => {
       const grants = scopeFor(input);
@@ -300,31 +346,25 @@ export function makeAcpClientPolicyGrants(): AcpClientPolicyGrants {
         grants.execute = true;
         return;
       }
+      if (input.kind === "file-read") {
+        if (input.locations.length === 0) {
+          grants.unscopedRead = true;
+          return;
+        }
+        recordPathGrant(grants.readRoots, input);
+        return;
+      }
       if (input.kind !== "file-change") return;
       if (input.locations.length === 0) {
         grants.unscopedWrite = true;
         return;
       }
-      for (const location of input.locations) {
-        const resolved = resolveAcpPermissionPath(location, input.cwd);
-        const canonical =
-          resolved === undefined ? undefined : acpCanonicalPathForContainment(resolved);
-        if (canonical === undefined) continue;
-        grants.writeRoots.push(canonical);
-        if (grants.writeRoots.length > MAX_GRANTED_WRITE_ROOTS) grants.writeRoots.shift();
-      }
+      recordPathGrant(grants.writeRoots, input);
     },
-    allowsWrite: ({ path, cwd, turnKey }) => {
-      const scopes = activeScopes(turnKey);
-      if (scopes.some((scope) => scope.unscopedWrite)) return true;
-      const resolved = resolveAcpPermissionPath(path, cwd);
-      const canonical =
-        resolved === undefined ? undefined : acpCanonicalPathForContainment(resolved);
-      if (canonical === undefined) return false;
-      return scopes.some((scope) =>
-        scope.writeRoots.some((root) => acpPathIsWithinRoot(canonical, root)),
-      );
-    },
+    allowsRead: ({ path, cwd, turnKey }) =>
+      allowsPath({ path, cwd, turnKey, unscoped: "unscopedRead", roots: "readRoots" }),
+    allowsWrite: ({ path, cwd, turnKey }) =>
+      allowsPath({ path, cwd, turnKey, unscoped: "unscopedWrite", roots: "writeRoots" }),
     allowsExecute: (turnKey) => activeScopes(turnKey).some((scope) => scope.execute),
   };
 }

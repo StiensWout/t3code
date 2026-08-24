@@ -16,7 +16,7 @@ import * as AcpProtocol from "./protocol.ts";
 import * as AcpRpcs from "./rpc.ts";
 import * as AcpSchema from "./compat.ts";
 import type * as AcpSchemaV1 from "./_generated/schema-v1.gen.ts";
-import type * as AcpSchemaV2 from "./_generated/schema.gen.ts";
+import * as AcpSchemaV2 from "./_generated/schema.gen.ts";
 import { AGENT_METHODS, CLIENT_METHODS } from "./_generated/meta.gen.ts";
 import {
   callRpc,
@@ -114,6 +114,18 @@ export class AcpClient extends Context.Service<
       readonly closeSession: (
         payload: AcpSchema.CloseSessionRequest,
       ) => Effect.Effect<AcpSchema.CloseSessionResponse, AcpError.AcpError>;
+      readonly deleteSession: (
+        payload: AcpSchema.DeleteSessionRequest,
+      ) => Effect.Effect<AcpSchema.DeleteSessionResponse, AcpError.AcpError>;
+      readonly listProviders: (
+        payload: AcpSchema.ListProvidersRequest,
+      ) => Effect.Effect<AcpSchema.ListProvidersResponse, AcpError.AcpError>;
+      readonly setProvider: (
+        payload: AcpSchema.SetProviderRequest,
+      ) => Effect.Effect<AcpSchema.SetProviderResponse, AcpError.AcpError>;
+      readonly disableProvider: (
+        payload: AcpSchema.DisableProviderRequest,
+      ) => Effect.Effect<AcpSchema.DisableProviderResponse, AcpError.AcpError>;
       /**
        * Updates a session configuration option.
        * @see https://agentclientprotocol.com/protocol/schema#session/set_config_option
@@ -155,6 +167,20 @@ export class AcpClient extends Context.Service<
         AcpSchema.CreateElicitationRequest,
         AcpSchema.CreateElicitationResponse
       >,
+    ) => Effect.Effect<void>;
+    readonly handleMcpConnect: (
+      handler: AcpRequestHandler<AcpSchema.ConnectMcpRequest, AcpSchema.ConnectMcpResponse>,
+    ) => Effect.Effect<void>;
+    readonly handleMcpMessage: (
+      handler: AcpRequestHandler<AcpSchema.MessageMcpRequest, AcpSchema.MessageMcpResponse>,
+    ) => Effect.Effect<void>;
+    readonly handleMcpDisconnect: (
+      handler: AcpRequestHandler<AcpSchema.DisconnectMcpRequest, AcpSchema.DisconnectMcpResponse>,
+    ) => Effect.Effect<void>;
+    readonly handleMcpNotification: (
+      handler: (
+        notification: AcpSchema.MessageMcpNotification,
+      ) => Effect.Effect<void, AcpError.AcpError>,
     ) => Effect.Effect<void>;
     /** Legacy ACP v1 hooks retained for policy compatibility; ACP v2 never advertises them. */
     readonly handleReadTextFile: (
@@ -256,6 +282,12 @@ interface AcpCoreRequestHandlers {
     AcpSchema.CreateElicitationRequest,
     AcpSchema.CreateElicitationResponse
   >;
+  mcpConnect?: AcpRequestHandler<AcpSchema.ConnectMcpRequest, AcpSchema.ConnectMcpResponse>;
+  mcpMessage?: AcpRequestHandler<AcpSchema.MessageMcpRequest, AcpSchema.MessageMcpResponse>;
+  mcpDisconnect?: AcpRequestHandler<
+    AcpSchema.DisconnectMcpRequest,
+    AcpSchema.DisconnectMcpResponse
+  >;
   readTextFile?: AcpRequestHandler<AcpSchema.ReadTextFileRequest, AcpSchema.ReadTextFileResponse>;
   writeTextFile?: AcpRequestHandler<
     AcpSchema.WriteTextFileRequest,
@@ -296,9 +328,7 @@ interface BufferedNotificationHandler<A> {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
-function normalizeContentBlock(
-  content: AcpSchemaV2.ContentBlock,
-): AcpSchema.ContentBlock | undefined {
+function normalizeContentBlock(content: AcpSchemaV2.ContentBlock): AcpSchema.ContentBlock {
   switch (content.type) {
     case "text":
     case "image":
@@ -307,24 +337,23 @@ function normalizeContentBlock(
     case "resource":
       return content as AcpSchema.ContentBlock;
     default:
-      return undefined;
+      return { type: "_t3_unknown", originalType: content.type, raw: content };
   }
 }
 
-function normalizeToolCallContent(
-  content: AcpSchemaV2.ToolCallContent,
-): ReadonlyArray<AcpSchema.ToolCallContent> {
+function normalizeToolCallContent(content: AcpSchemaV2.ToolCallContent): AcpSchema.ToolCallContent {
   if (content.type === "content") {
     const known = content as Extract<AcpSchemaV2.ToolCallContent, { readonly type: "content" }>;
-    const normalized = normalizeContentBlock(known.content);
-    return normalized === undefined ? [] : [{ ...known, content: normalized }];
+    return { ...known, content: normalizeContentBlock(known.content) };
   }
   if (content.type === "terminal") {
-    return [content as Extract<AcpSchemaV2.ToolCallContent, { readonly type: "terminal" }>];
+    return content as Extract<AcpSchemaV2.ToolCallContent, { readonly type: "terminal" }>;
   }
-  if (content.type !== "diff") return [];
+  if (content.type !== "diff") {
+    return { type: "_t3_unknown", originalType: content.type, raw: content };
+  }
 
-  return [content as Extract<AcpSchemaV2.ToolCallContent, { readonly type: "diff" }>];
+  return content as Extract<AcpSchemaV2.ToolCallContent, { readonly type: "diff" }>;
 }
 
 function normalizeToolCallUpdate(update: AcpSchemaV2.ToolCallUpdate): AcpSchema.ToolCallUpdate {
@@ -337,10 +366,7 @@ function normalizeToolCallUpdate(update: AcpSchemaV2.ToolCallUpdate): AcpSchema.
     ...(update.content === undefined
       ? {}
       : {
-          content:
-            update.content === null
-              ? null
-              : update.content.flatMap((content) => normalizeToolCallContent(content)),
+          content: update.content === null ? null : update.content.map(normalizeToolCallContent),
         }),
     ...(update.locations === undefined ? {} : { locations: update.locations }),
     ...(update.rawInput === undefined ? {} : { rawInput: update.rawInput }),
@@ -412,7 +438,7 @@ function normalizeSessionUpdate(
         }
       >;
       const content = normalizeContentBlock(known.content);
-      return content === undefined ? undefined : { ...base, update: { ...known, content } };
+      return { ...base, update: { ...known, content } };
     }
     case "user_message":
     case "agent_message":
@@ -432,10 +458,9 @@ function normalizeSessionUpdate(
                 content:
                   content === null
                     ? null
-                    : (content as ReadonlyArray<AcpSchemaV2.ContentBlock>).flatMap((item) => {
-                        const normalized = normalizeContentBlock(item);
-                        return normalized === undefined ? [] : [normalized];
-                      }),
+                    : (content as ReadonlyArray<AcpSchemaV2.ContentBlock>).map(
+                        normalizeContentBlock,
+                      ),
               }),
         },
       } as AcpSchema.SessionNotification;
@@ -455,18 +480,15 @@ function normalizeSessionUpdate(
         AcpSchemaV2.SessionUpdate,
         { readonly sessionUpdate: "tool_call_content_chunk" }
       >;
-      const [content] = normalizeToolCallContent(known.content);
-      return content === undefined
-        ? undefined
-        : {
-            ...base,
-            update: {
-              sessionUpdate: "tool_call_content_chunk",
-              toolCallId: known.toolCallId,
-              content,
-              ...(known._meta === undefined ? {} : { _meta: known._meta }),
-            },
-          };
+      return {
+        ...base,
+        update: {
+          sessionUpdate: "tool_call_content_chunk",
+          toolCallId: known.toolCallId,
+          content: normalizeToolCallContent(known.content),
+          ...(known._meta === undefined ? {} : { _meta: known._meta }),
+        },
+      };
     }
     case "config_option_update": {
       const known = update as Extract<
@@ -519,7 +541,14 @@ function normalizeSessionUpdate(
       };
     }
     default:
-      return undefined;
+      return {
+        ...base,
+        update: {
+          sessionUpdate: "_t3_unknown",
+          originalSessionUpdate: update.sessionUpdate,
+          raw: update,
+        },
+      };
   }
 }
 
@@ -604,6 +633,7 @@ function normalizeInitializeResponse(
               list: {},
               resume: {},
               close: {},
+              ...(session.delete == null ? {} : { delete: {} }),
               ...(session.fork == null ? {} : { fork: {} }),
               ...(session.additionalDirectories == null ? {} : { additionalDirectories: {} }),
             },
@@ -954,6 +984,27 @@ export const make = Effect.fn("effect-acp/AcpClient.make")(function* (
           CLIENT_METHODS.elicitation_create,
           requestContext(requestId, CLIENT_METHODS.elicitation_create),
         ),
+      [CLIENT_METHODS.mcp_connect]: (payload, { requestId }) =>
+        runHandler(
+          coreHandlers.mcpConnect,
+          payload,
+          CLIENT_METHODS.mcp_connect,
+          requestContext(requestId, CLIENT_METHODS.mcp_connect),
+        ),
+      [CLIENT_METHODS.mcp_message]: (payload, { requestId }) =>
+        runHandler(
+          coreHandlers.mcpMessage,
+          payload,
+          CLIENT_METHODS.mcp_message,
+          requestContext(requestId, CLIENT_METHODS.mcp_message),
+        ),
+      [CLIENT_METHODS.mcp_disconnect]: (payload, { requestId }) =>
+        runHandler(
+          coreHandlers.mcpDisconnect,
+          payload,
+          CLIENT_METHODS.mcp_disconnect,
+          requestContext(requestId, CLIENT_METHODS.mcp_disconnect),
+        ),
       [AcpRpcs.V1_CLIENT_METHODS.fs_read_text_file]: (payload, { requestId }) =>
         runHandler(
           coreHandlers.readTextFile,
@@ -1134,6 +1185,22 @@ export const make = Effect.fn("effect-acp/AcpClient.make")(function* (
         callRpc(AGENT_METHODS.session_close, rpc[AGENT_METHODS.session_close](payload)).pipe(
           Effect.map((response) => response as AcpSchema.CloseSessionResponse),
         ),
+      deleteSession: (payload) =>
+        negotiatedProtocolGeneration === 1
+          ? Effect.fail(AcpError.AcpRequestError.methodNotFound(AGENT_METHODS.session_delete))
+          : callRpc(AGENT_METHODS.session_delete, rpc[AGENT_METHODS.session_delete](payload)),
+      listProviders: (payload) =>
+        negotiatedProtocolGeneration === 1
+          ? Effect.fail(AcpError.AcpRequestError.methodNotFound(AGENT_METHODS.providers_list))
+          : callRpc(AGENT_METHODS.providers_list, rpc[AGENT_METHODS.providers_list](payload)),
+      setProvider: (payload) =>
+        negotiatedProtocolGeneration === 1
+          ? Effect.fail(AcpError.AcpRequestError.methodNotFound(AGENT_METHODS.providers_set))
+          : callRpc(AGENT_METHODS.providers_set, rpc[AGENT_METHODS.providers_set](payload)),
+      disableProvider: (payload) =>
+        negotiatedProtocolGeneration === 1
+          ? Effect.fail(AcpError.AcpRequestError.methodNotFound(AGENT_METHODS.providers_disable))
+          : callRpc(AGENT_METHODS.providers_disable, rpc[AGENT_METHODS.providers_disable](payload)),
       setSessionConfigOption: (payload) =>
         negotiatedProtocolGeneration === 1
           ? callRpc(
@@ -1199,6 +1266,27 @@ export const make = Effect.fn("effect-acp/AcpClient.make")(function* (
       Effect.suspend(() => {
         coreHandlers.elicitation = handler;
         return Effect.void;
+      }),
+    handleMcpConnect: (handler) =>
+      Effect.sync(() => {
+        coreHandlers.mcpConnect = handler;
+      }),
+    handleMcpMessage: (handler) =>
+      Effect.sync(() => {
+        coreHandlers.mcpMessage = handler;
+      }),
+    handleMcpDisconnect: (handler) =>
+      Effect.sync(() => {
+        coreHandlers.mcpDisconnect = handler;
+      }),
+    handleMcpNotification: (handler) =>
+      Effect.sync(() => {
+        extNotificationHandlers.set(CLIENT_METHODS.mcp_message, (params) =>
+          Schema.decodeUnknownEffect(AcpSchemaV2.MessageMcpNotification)(params).pipe(
+            Effect.mapError(() => AcpError.AcpRequestError.invalidParams()),
+            Effect.flatMap(handler),
+          ),
+        );
       }),
     handleReadTextFile: (handler) =>
       Effect.sync(() => {

@@ -24,7 +24,11 @@ import {
   type GitManagerServiceError,
   type MessageId,
   type AcpRegistryImportSessionInput,
+  type AcpRegistryDeleteSessionInput,
+  type AcpRegistryDisableProviderInput,
+  type AcpRegistryListProvidersInput,
   type AcpRegistryListSessionsInput,
+  type AcpRegistrySetProviderInput,
   OrchestrationGetFullThreadDiffError,
   OrchestrationSearchThreadsError,
   OrchestrationGetTurnDiffError,
@@ -699,6 +703,136 @@ const makeWsRpcLayer = (
             ),
           );
         return { threadId, imported: true } as const;
+      });
+
+      const deleteAcpRegistrySession = Effect.fn("ws.acpRegistry.deleteSession")(function* (
+        input: AcpRegistryDeleteSessionInput,
+      ) {
+        const project = yield* acpRegistryProject(input.projectId);
+        const { instance, manager } = yield* acpSessionManager(input.instanceId);
+        const snapshot = yield* instance.snapshot.getSnapshot;
+        if (snapshot.nativeSessions?.canDelete !== true) {
+          return yield* new AcpRegistryOperationError({
+            reason: "session_delete_unsupported",
+            message: "The ACP agent does not advertise session deletion.",
+          });
+        }
+        const threadId = importedAcpThreadId({
+          driver: instance.driverKind,
+          instanceId: input.instanceId,
+          sessionId: input.sessionId,
+        });
+        const importedThread = yield* threadManagement.getThreadShell(threadId).pipe(
+          Effect.mapError(
+            (cause) =>
+              new AcpRegistryOperationError({
+                reason: "session_delete_failed",
+                message: "Could not inspect the imported ACP session mapping.",
+                cause,
+              }),
+          ),
+        );
+        if (importedThread !== null) {
+          return yield* new AcpRegistryOperationError({
+            reason: "session_delete_failed",
+            message: "Delete the imported T3 thread before deleting its native ACP session.",
+          });
+        }
+        yield* manager.deleteSession({ cwd: project.workspaceRoot, sessionId: input.sessionId });
+        return { deleted: true } as const;
+      });
+
+      const listAcpRegistryProviders = Effect.fn("ws.acpRegistry.listProviders")(function* (
+        input: AcpRegistryListProvidersInput,
+      ) {
+        const project = yield* acpRegistryProject(input.projectId);
+        const { instance, manager } = yield* acpSessionManager(input.instanceId);
+        const snapshot = yield* instance.snapshot.getSnapshot;
+        if (snapshot.configurableProviders !== true) {
+          return yield* new AcpRegistryOperationError({
+            reason: "providers_unsupported",
+            message: "The ACP agent does not advertise provider configuration.",
+          });
+        }
+        return yield* manager.listProviders(project.workspaceRoot);
+      });
+
+      const setAcpRegistryProvider = Effect.fn("ws.acpRegistry.setProvider")(function* (
+        input: AcpRegistrySetProviderInput,
+      ) {
+        const project = yield* acpRegistryProject(input.projectId);
+        const { manager } = yield* acpSessionManager(input.instanceId);
+        if (input.headers !== undefined && Object.keys(input.headers).length > 32) {
+          return yield* new AcpRegistryOperationError({
+            reason: "provider_configuration_failed",
+            message: "ACP provider configuration accepts at most 32 headers.",
+          });
+        }
+        const listed = yield* manager.listProviders(project.workspaceRoot);
+        const provider = listed.providers.find(
+          (candidate) => candidate.providerId === input.providerId,
+        );
+        if (provider === undefined || !provider.supported.includes(input.apiType)) {
+          return yield* new AcpRegistryOperationError({
+            reason: "provider_configuration_failed",
+            message: `Provider ${input.providerId} does not support ${input.apiType}.`,
+          });
+        }
+        yield* providerSessionManager.closeInstance(input.instanceId).pipe(
+          Effect.mapError(
+            (cause) =>
+              new AcpRegistryOperationError({
+                reason: "provider_configuration_failed",
+                message: "Could not stop live sessions before updating the ACP provider.",
+                cause,
+              }),
+          ),
+        );
+        yield* manager.setProvider({
+          cwd: project.workspaceRoot,
+          providerId: input.providerId,
+          apiType: input.apiType,
+          baseUrl: input.baseUrl,
+          ...(input.headers === undefined ? {} : { headers: input.headers }),
+        });
+        yield* providerRegistry.refreshInstance(input.instanceId);
+        return { configured: true } as const;
+      });
+
+      const disableAcpRegistryProvider = Effect.fn("ws.acpRegistry.disableProvider")(function* (
+        input: AcpRegistryDisableProviderInput,
+      ) {
+        const project = yield* acpRegistryProject(input.projectId);
+        const { manager } = yield* acpSessionManager(input.instanceId);
+        const listed = yield* manager.listProviders(project.workspaceRoot);
+        const provider = listed.providers.find(
+          (candidate) => candidate.providerId === input.providerId,
+        );
+        if (provider === undefined || provider.required) {
+          return yield* new AcpRegistryOperationError({
+            reason: "provider_configuration_failed",
+            message:
+              provider === undefined
+                ? `Provider ${input.providerId} was not advertised by the ACP agent.`
+                : `Provider ${input.providerId} is required and cannot be disabled.`,
+          });
+        }
+        yield* providerSessionManager.closeInstance(input.instanceId).pipe(
+          Effect.mapError(
+            (cause) =>
+              new AcpRegistryOperationError({
+                reason: "provider_configuration_failed",
+                message: "Could not stop live sessions before disabling the ACP provider.",
+                cause,
+              }),
+          ),
+        );
+        yield* manager.disableProvider({
+          cwd: project.workspaceRoot,
+          providerId: input.providerId,
+        });
+        yield* providerRegistry.refreshInstance(input.instanceId);
+        return { disabled: true } as const;
       });
       const observeRpcEffect = <A, E, R>(
         method: string,
@@ -1579,6 +1713,42 @@ const makeWsRpcLayer = (
           observeRpcEffect(
             WS_METHODS.serverImportAcpRegistrySession,
             importAcpRegistrySession(input),
+            {
+              "rpc.aggregate": "server",
+              "provider.instance_id": input.instanceId,
+              "project.id": input.projectId,
+            },
+          ),
+        [WS_METHODS.serverDeleteAcpRegistrySession]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverDeleteAcpRegistrySession,
+            deleteAcpRegistrySession(input),
+            {
+              "rpc.aggregate": "server",
+              "provider.instance_id": input.instanceId,
+              "project.id": input.projectId,
+            },
+          ),
+        [WS_METHODS.serverListAcpRegistryProviders]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverListAcpRegistryProviders,
+            listAcpRegistryProviders(input),
+            {
+              "rpc.aggregate": "server",
+              "provider.instance_id": input.instanceId,
+              "project.id": input.projectId,
+            },
+          ),
+        [WS_METHODS.serverSetAcpRegistryProvider]: (input) =>
+          observeRpcEffect(WS_METHODS.serverSetAcpRegistryProvider, setAcpRegistryProvider(input), {
+            "rpc.aggregate": "server",
+            "provider.instance_id": input.instanceId,
+            "project.id": input.projectId,
+          }),
+        [WS_METHODS.serverDisableAcpRegistryProvider]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverDisableAcpRegistryProvider,
+            disableAcpRegistryProvider(input),
             {
               "rpc.aggregate": "server",
               "provider.instance_id": input.instanceId,

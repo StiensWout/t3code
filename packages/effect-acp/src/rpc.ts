@@ -70,6 +70,30 @@ export const CloseSessionRpc = Rpc.make(AGENT_METHODS.session_close, {
   error: AcpSchema.Error,
 });
 
+export const DeleteSessionRpc = Rpc.make(AGENT_METHODS.session_delete, {
+  payload: AcpSchema.DeleteSessionRequest,
+  success: AcpSchema.DeleteSessionResponse,
+  error: AcpSchema.Error,
+});
+
+export const ListProvidersRpc = Rpc.make(AGENT_METHODS.providers_list, {
+  payload: AcpSchema.ListProvidersRequest,
+  success: AcpSchema.ListProvidersResponse,
+  error: AcpSchema.Error,
+});
+
+export const SetProviderRpc = Rpc.make(AGENT_METHODS.providers_set, {
+  payload: AcpSchema.SetProviderRequest,
+  success: AcpSchema.SetProviderResponse,
+  error: AcpSchema.Error,
+});
+
+export const DisableProviderRpc = Rpc.make(AGENT_METHODS.providers_disable, {
+  payload: AcpSchema.DisableProviderRequest,
+  success: AcpSchema.DisableProviderResponse,
+  error: AcpSchema.Error,
+});
+
 export const PromptRpc = Rpc.make(AGENT_METHODS.session_prompt, {
   payload: AcpSchema.PromptRequest,
   success: AcpSchema.PromptResponse,
@@ -103,11 +127,13 @@ export const AgentRpcs = RpcGroup.make(
   ForkSessionRpc,
   ResumeSessionRpc,
   CloseSessionRpc,
+  DeleteSessionRpc,
+  ListProvidersRpc,
+  SetProviderRpc,
+  DisableProviderRpc,
   PromptRpc,
   SetSessionConfigOptionRpc,
 );
-
-export const ClientRpcs = RpcGroup.make(RequestPermissionRpc, ElicitationRpc);
 
 // Registry agents transition independently. The compatibility groups accept
 // both protocol generations on the wire while the public client normalizes
@@ -169,6 +195,30 @@ const CompatCloseSessionRpc = Rpc.make(AGENT_METHODS.session_close, {
   error: AcpSchema.Error,
 });
 
+const CompatDeleteSessionRpc = Rpc.make(AGENT_METHODS.session_delete, {
+  payload: AcpSchema.DeleteSessionRequest,
+  success: AcpSchema.DeleteSessionResponse,
+  error: AcpSchema.Error,
+});
+
+const CompatListProvidersRpc = Rpc.make(AGENT_METHODS.providers_list, {
+  payload: AcpSchema.ListProvidersRequest,
+  success: AcpSchema.ListProvidersResponse,
+  error: AcpSchema.Error,
+});
+
+const CompatSetProviderRpc = Rpc.make(AGENT_METHODS.providers_set, {
+  payload: AcpSchema.SetProviderRequest,
+  success: AcpSchema.SetProviderResponse,
+  error: AcpSchema.Error,
+});
+
+const CompatDisableProviderRpc = Rpc.make(AGENT_METHODS.providers_disable, {
+  payload: AcpSchema.DisableProviderRequest,
+  success: AcpSchema.DisableProviderResponse,
+  error: AcpSchema.Error,
+});
+
 const CompatPromptRpc = Rpc.make(AGENT_METHODS.session_prompt, {
   payload: Schema.Union([AcpSchema.PromptRequest, AcpSchemaV1.PromptRequest]),
   success: Schema.Union([AcpSchemaV1.PromptResponse, AcpSchema.PromptResponse]),
@@ -199,6 +249,10 @@ export const CompatAgentRpcs = RpcGroup.make(
   CompatForkSessionRpc,
   CompatResumeSessionRpc,
   CompatCloseSessionRpc,
+  CompatDeleteSessionRpc,
+  CompatListProvidersRpc,
+  CompatSetProviderRpc,
+  CompatDisableProviderRpc,
   CompatPromptRpc,
   CompatSetSessionConfigOptionRpc,
 );
@@ -220,6 +274,32 @@ const CompatElicitationRpc = Rpc.make(CLIENT_METHODS.elicitation_create, {
   ]),
   error: AcpSchema.Error,
 });
+
+const ConnectMcpRpc = Rpc.make(CLIENT_METHODS.mcp_connect, {
+  payload: AcpSchema.ConnectMcpRequest,
+  success: AcpSchema.ConnectMcpResponse,
+  error: AcpSchema.Error,
+});
+
+const MessageMcpRpc = Rpc.make(CLIENT_METHODS.mcp_message, {
+  payload: AcpSchema.MessageMcpRequest,
+  success: AcpSchema.MessageMcpResponse,
+  error: AcpSchema.Error,
+});
+
+const DisconnectMcpRpc = Rpc.make(CLIENT_METHODS.mcp_disconnect, {
+  payload: AcpSchema.DisconnectMcpRequest,
+  success: AcpSchema.DisconnectMcpResponse,
+  error: AcpSchema.Error,
+});
+
+export const ClientRpcs = RpcGroup.make(
+  RequestPermissionRpc,
+  ElicitationRpc,
+  ConnectMcpRpc,
+  MessageMcpRpc,
+  DisconnectMcpRpc,
+);
 
 const ReadTextFileV1Rpc = Rpc.make(V1_CLIENT_METHODS.fs_read_text_file, {
   payload: AcpSchemaV1.ReadTextFileRequest,
@@ -266,6 +346,9 @@ const KillTerminalV1Rpc = Rpc.make(V1_CLIENT_METHODS.terminal_kill, {
 export const CompatClientRpcs = RpcGroup.make(
   CompatRequestPermissionRpc,
   CompatElicitationRpc,
+  ConnectMcpRpc,
+  MessageMcpRpc,
+  DisconnectMcpRpc,
   ReadTextFileV1Rpc,
   WriteTextFileV1Rpc,
   CreateTerminalV1Rpc,

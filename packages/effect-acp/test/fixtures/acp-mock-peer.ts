@@ -16,6 +16,9 @@ if (process.env.ACP_MOCK_EXIT_IMMEDIATELY_CODE !== undefined) {
 }
 
 const sessionId = "mock-session-1";
+const v2Management = process.env.ACP_MOCK_V2_MANAGEMENT === "1";
+const unknownVariants = process.env.ACP_MOCK_UNKNOWN_VARIANTS === "1";
+const mcpOverAcp = process.env.ACP_MOCK_MCP_OVER_ACP === "1";
 
 const program = Effect.gen(function* () {
   const agent = yield* AcpAgent.AcpAgent;
@@ -24,7 +27,11 @@ const program = Effect.gen(function* () {
     Effect.succeed({
       protocolVersion: 2,
       capabilities: {
-        session: {},
+        session: {
+          ...(v2Management ? { delete: {} } : {}),
+          ...(mcpOverAcp ? { mcp: { acp: {} } } : {}),
+        },
+        ...(v2Management ? { providers: {} } : {}),
       },
       info: {
         name: "mock-agent",
@@ -64,9 +71,52 @@ const program = Effect.gen(function* () {
       ],
     }),
   );
+  yield* agent.handleDeleteSession(() => Effect.succeed({}));
+  yield* agent.handleListProviders(() =>
+    Effect.succeed({
+      providers: [
+        {
+          providerId: "mock-provider",
+          supported: ["openai"],
+          required: false,
+          current: null,
+        },
+      ],
+    }),
+  );
+  yield* agent.handleSetProvider(() => Effect.succeed({}));
+  yield* agent.handleDisableProvider(() => Effect.succeed({}));
 
   yield* agent.handlePrompt(() =>
     Effect.gen(function* () {
+      if (mcpOverAcp) {
+        const connected = yield* agent.client.connectMcp({ serverId: "t3-code" });
+        yield* agent.client.messageMcp({
+          connectionId: connected.connectionId,
+          method: "tools/list",
+        });
+        yield* agent.client.notifyMcp({
+          connectionId: connected.connectionId,
+          method: "notifications/initialized",
+        });
+        yield* agent.client.disconnectMcp({ connectionId: connected.connectionId });
+      }
+
+      if (unknownVariants) {
+        yield* agent.client.sessionUpdate({
+          sessionId,
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            messageId: "future-content",
+            content: { type: "chart", points: [] },
+          },
+        });
+        yield* agent.client.sessionUpdate({
+          sessionId,
+          update: { sessionUpdate: "timeline_update", entries: [] },
+        });
+      }
+
       yield* agent.client.requestPermission({
         sessionId,
         title: "Read project files",

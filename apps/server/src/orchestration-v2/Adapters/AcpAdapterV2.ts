@@ -52,6 +52,10 @@ import type * as EffectAcpSchema from "effect-acp/compat";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import {
+  makeAcpMcpOverAcpBridge,
+  type AcpMcpOverAcpBridge,
+} from "../../mcp/AcpMcpOverAcpBridge.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import {
   applyAcpAgentTerminalUpdate,
@@ -73,6 +77,7 @@ import type {
 import { acpReadTextFile, acpWriteTextFile } from "../../provider/acp/AcpClientFs.ts";
 import {
   acpClientExecuteDisposition,
+  acpClientReadDisposition,
   acpClientWriteDisposition,
   acpMcpToolApprovalElicitationDisposition,
   acpPermissionDisposition,
@@ -127,6 +132,7 @@ export const ACP_PROTOCOL = "acp.ndjson-jsonrpc" as const;
 export interface AcpAdapterV2RuntimeInput {
   readonly cwd: string;
   readonly mcpServers: ReadonlyArray<EffectAcpSchema.McpServer>;
+  readonly acpMcpServers?: ReadonlyArray<EffectAcpSchema.McpServer>;
   /** Scoped credentials for terminal fallback when an ACP agent drops `mcpServers`. */
   readonly processEnvironment?: NodeJS.ProcessEnv;
   readonly resumeSessionId?: string;
@@ -517,14 +523,17 @@ function negotiatedCapabilities(
 
 interface AcpMcpContext {
   readonly servers: ReadonlyArray<EffectAcpSchema.McpServer>;
+  readonly acpServers: ReadonlyArray<EffectAcpSchema.McpServer>;
   readonly processEnvironment?: NodeJS.ProcessEnv;
+  readonly endpoint?: string;
+  readonly authorization?: string;
 }
 
 function acpMcpContext(threadId: ThreadId | null): AcpMcpContext {
-  if (threadId === null) return { servers: [] };
+  if (threadId === null) return { servers: [], acpServers: [] };
   const session = McpProviderSession.readMcpProviderSession(threadId);
   if (session === undefined) {
-    return { servers: [] };
+    return { servers: [], acpServers: [] };
   }
   // Stdio is ACP's required baseline MCP transport. Agents that advertise
   // optional http support still routinely fail to wire injected http servers
@@ -547,6 +556,9 @@ function acpMcpContext(threadId: ThreadId | null): AcpMcpContext {
         ],
       },
     ],
+    acpServers: [{ type: "acp", name: "t3-code", serverId: "t3-code" }],
+    endpoint: session.endpoint,
+    authorization: session.authorizationHeader,
     processEnvironment: {
       T3_ACP_MCP_ENDPOINT: session.endpoint,
       T3_ACP_MCP_AUTHORIZATION: session.authorizationHeader,
@@ -558,6 +570,11 @@ function acpMcpContext(threadId: ThreadId | null): AcpMcpContext {
 
 function acpMcpServers(threadId: ThreadId | null): ReadonlyArray<EffectAcpSchema.McpServer> {
   return acpMcpContext(threadId).servers;
+}
+
+function acpMcpActivation(threadId: ThreadId | null) {
+  const context = acpMcpContext(threadId);
+  return { mcpServers: context.servers, acpMcpServers: context.acpServers };
 }
 
 function nativeThreadId(
@@ -721,13 +738,51 @@ function commandExitCode(value: unknown): number | undefined {
  * interrupted tools must not retain that stale success code.
  */
 export function acpProjectedCommandExitCode(
-  status: "pending" | "running" | "completed" | "failed" | "interrupted",
+  status: "pending" | "running" | "waiting" | "completed" | "failed" | "interrupted",
   rawOutput: unknown,
 ): number | undefined {
   if (status !== "completed" && status !== "failed") {
     return undefined;
   }
   return commandExitCode(rawOutput);
+}
+
+function structuredFileChanges(toolCall: AcpToolCallState) {
+  const content = toolCall.data.content;
+  if (!Array.isArray(content)) return [];
+  return content.flatMap((entry) => {
+    const diff = unknownRecord(entry);
+    if (diff?.type !== "diff" || !Array.isArray(diff.changes)) return [];
+    return diff.changes.flatMap((candidate) => {
+      const change = unknownRecord(candidate);
+      const operation = typeof change?.operation === "string" ? change.operation.trim() : "";
+      const path = typeof change?.path === "string" ? change.path.trim() : "";
+      if (operation.length === 0 || path.length === 0) return [];
+      const oldPath = typeof change?.oldPath === "string" ? change.oldPath.trim() : "";
+      const fileType = typeof change?.fileType === "string" ? change.fileType.trim() : "";
+      const mimeType = typeof change?.mimeType === "string" ? change.mimeType.trim() : "";
+      return [
+        {
+          operation,
+          path,
+          ...(oldPath.length === 0 ? {} : { oldPath }),
+          ...(fileType.length === 0 ? {} : { fileType }),
+          ...(mimeType.length === 0 ? {} : { mimeType }),
+        },
+      ];
+    });
+  });
+}
+
+function structuredDiffPatch(toolCall: AcpToolCallState): string | undefined {
+  const content = toolCall.data.content;
+  if (!Array.isArray(content)) return undefined;
+  for (const entry of content) {
+    const diff = unknownRecord(entry);
+    const patch = unknownRecord(diff?.patch);
+    if (diff?.type === "diff" && typeof patch?.text === "string") return patch.text;
+  }
+  return undefined;
 }
 
 function pathFromToolCall(toolCall: AcpToolCallState): string | undefined {
@@ -769,7 +824,7 @@ function providerRequestKind(kind: string | "unknown"): ProviderRequestKind {
 
 function toolStatus(
   status: AcpToolCallState["status"],
-): "pending" | "running" | "completed" | "failed" {
+): "pending" | "running" | "waiting" | "completed" | "failed" {
   switch (status) {
     case "completed":
       return "completed";
@@ -777,6 +832,8 @@ function toolStatus(
       return "failed";
     case "pending":
       return "pending";
+    case "requiresAction":
+      return "waiting";
     default:
       return "running";
   }
@@ -842,6 +899,11 @@ interface ActiveTextStream {
   nextSegment: number;
 }
 
+interface AcpNativeBuildConfiguration {
+  readonly modeId?: string;
+  readonly configOptions: ReadonlyArray<{ readonly id: string; readonly value: string }>;
+}
+
 interface ActiveAcpTurn {
   readonly input: ProviderAdapterV2TurnInput;
   readonly providerTurnId: OrchestrationV2ProviderTurn["id"];
@@ -849,6 +911,7 @@ interface ActiveAcpTurn {
   readonly nativeTurnId: string;
   readonly startedAt: DateTime.Utc;
   readonly completed: Deferred.Deferred<void, never>;
+  readonly user: ActiveTextStream;
   readonly assistant: ActiveTextStream;
   readonly reasoning: ActiveTextStream;
   contextUsage: ThreadTokenUsageSnapshot | null;
@@ -884,10 +947,14 @@ interface ActiveAcpTurn {
    * re-arming, the task's pre-settle completion marker.
    */
   earlyInjectedReportObserved: boolean;
-  plan: {
-    readonly id: OrchestrationV2PlanArtifact["id"];
-    readonly startedAt: DateTime.Utc;
-  } | null;
+  readonly plans: Map<
+    string,
+    {
+      readonly id: OrchestrationV2PlanArtifact["id"];
+      readonly startedAt: DateTime.Utc;
+      latest: OrchestrationV2PlanArtifact | null;
+    }
+  >;
   interrupted: boolean;
   finalized: boolean;
   finalizedStatus: "completed" | "interrupted" | "failed" | "cancelled" | null;
@@ -1132,7 +1199,7 @@ type PendingRuntimeRequest = {
 interface SnapshotMessageState {
   readonly order: Array<string>;
   readonly messages: Map<string, OrchestrationV2ConversationMessage>;
-  loadingRole: "user" | "assistant" | null;
+  loadingRole: "user" | "assistant" | "thought" | null;
   loadingMessageId: string | null;
   loadingIndex: number;
 }
@@ -1248,6 +1315,9 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
         const providerThreadByNativeSessionId = yield* Ref.make(
           new Map<string, OrchestrationV2ProviderThread>(),
         );
+        // T3 only owns the temporary Plan override. Remember the agent's
+        // effective native configuration on entry and restore it on Build.
+        const nativeBuildConfigurationBySessionId = new Map<string, AcpNativeBuildConfiguration>();
         const initialSessionActivationFailure = yield* Ref.make<{
           readonly sessionId: string;
           readonly error: EffectAcpErrors.AcpError;
@@ -1631,6 +1701,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           return {
             cwd: input.runtimePolicy.cwd ?? process.cwd(),
             mcpServers: mcpContext.servers,
+            acpMcpServers: mcpContext.acpServers,
             ...(mcpContext.processEnvironment === undefined
               ? {}
               : { processEnvironment: mcpContext.processEnvironment }),
@@ -1713,6 +1784,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
         };
         let runtimeScope: Scope.Closeable | undefined;
         let runtime!: AcpSessionRuntime.AcpSessionRuntime["Service"];
+        let runtimeMcpBridge: AcpMcpOverAcpBridge | undefined;
         yield* Effect.addFinalizer(() =>
           runtimeScope === undefined
             ? Effect.void
@@ -1753,14 +1825,24 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
             };
           });
 
+        const textStreamFor = (
+          context: ActiveAcpTurn,
+          kind: "user" | "assistant" | "reasoning",
+        ): ActiveTextStream =>
+          kind === "user"
+            ? context.user
+            : kind === "assistant"
+              ? context.assistant
+              : context.reasoning;
+
         const emitTextSegment = Effect.fnUntraced(function* (
           context: ActiveAcpTurn,
-          kind: "assistant" | "reasoning",
+          kind: "user" | "assistant" | "reasoning",
           completed: boolean,
         ) {
-          const stream = kind === "assistant" ? context.assistant : context.reasoning;
+          const stream = textStreamFor(context, kind);
           const segment = stream.current;
-          if (segment === null || segment.text.length === 0) return;
+          if (segment === null) return;
           const now = yield* DateTime.now;
           const ordinal = yield* resolveItemOrdinal(context, segment.nativeItemId);
           const nodeId = providerNodeId(segment.nativeItemId);
@@ -1770,37 +1852,40 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
             nativeId: segment.nativeItemId,
             strength: "weak" as const,
           };
-          yield* emitProviderEvent({
-            type: "node.updated",
-            driver,
-            node: {
-              id: nodeId,
-              threadId: context.input.threadId,
-              runId: context.input.runId,
-              parentNodeId: context.input.rootNodeId,
-              rootNodeId: context.input.rootNodeId,
-              kind: kind === "assistant" ? "assistant_message" : "reasoning",
-              status: completed ? "completed" : "running",
-              countsForRun: false,
-              providerThreadId: context.input.providerThread.id,
-              providerTurnId: context.providerTurnId,
-              nativeItemRef,
-              runtimeRequestId: null,
-              checkpointScopeId: null,
-              startedAt: segment.startedAt,
-              completedAt: completed ? now : null,
-            },
-          });
-          if (kind === "assistant") {
+          if (kind !== "user") {
+            yield* emitProviderEvent({
+              type: "node.updated",
+              driver,
+              node: {
+                id: nodeId,
+                threadId: context.input.threadId,
+                runId: context.input.runId,
+                parentNodeId: context.input.rootNodeId,
+                rootNodeId: context.input.rootNodeId,
+                kind: kind === "assistant" ? "assistant_message" : "reasoning",
+                status: completed ? "completed" : "running",
+                countsForRun: false,
+                providerThreadId: context.input.providerThread.id,
+                providerTurnId: context.providerTurnId,
+                nativeItemRef,
+                runtimeRequestId: null,
+                checkpointScopeId: null,
+                startedAt: segment.startedAt,
+                completedAt: completed ? now : null,
+              },
+            });
+          }
+          if (kind !== "reasoning") {
             const messageId = providerMessageId(segment.nativeItemId);
+            const messageNodeId = kind === "user" ? context.input.rootNodeId : nodeId;
             const message: OrchestrationV2ConversationMessage = {
-              createdBy: "agent",
+              createdBy: kind === "user" ? "user" : "agent",
               creationSource: "provider",
               id: messageId,
               threadId: context.input.threadId,
               runId: context.input.runId,
-              nodeId,
-              role: "assistant",
+              nodeId: messageNodeId,
+              role: kind,
               text: segment.text,
               attachments: [],
               streaming: !completed,
@@ -1808,30 +1893,60 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               updatedAt: now,
             };
             yield* emitProviderEvent({ type: "message.updated", driver, message });
-            yield* emitProviderEvent({
-              type: "turn_item.updated",
-              driver,
-              turnItem: {
-                id: turnItemId,
-                threadId: context.input.threadId,
-                runId: context.input.runId,
-                nodeId,
-                providerThreadId: context.input.providerThread.id,
-                providerTurnId: context.providerTurnId,
-                nativeItemRef,
-                parentItemId: null,
-                ordinal,
-                status: completed ? "completed" : "running",
-                title: null,
-                startedAt: segment.startedAt,
-                completedAt: completed ? now : null,
-                updatedAt: now,
-                type: "assistant_message",
-                messageId,
-                text: segment.text,
-                streaming: !completed,
-              },
-            });
+            yield* emitProviderEvent(
+              kind === "user"
+                ? {
+                    type: "turn_item.updated",
+                    driver,
+                    turnItem: {
+                      createdBy: "user",
+                      creationSource: "provider",
+                      id: turnItemId,
+                      threadId: context.input.threadId,
+                      runId: context.input.runId,
+                      nodeId: messageNodeId,
+                      providerThreadId: context.input.providerThread.id,
+                      providerTurnId: context.providerTurnId,
+                      nativeItemRef,
+                      parentItemId: null,
+                      ordinal,
+                      status: completed ? "completed" : "running",
+                      title: null,
+                      startedAt: segment.startedAt,
+                      completedAt: completed ? now : null,
+                      updatedAt: now,
+                      type: "user_message",
+                      messageId,
+                      inputIntent: "turn_start",
+                      text: segment.text,
+                      attachments: [],
+                    },
+                  }
+                : {
+                    type: "turn_item.updated",
+                    driver,
+                    turnItem: {
+                      id: turnItemId,
+                      threadId: context.input.threadId,
+                      runId: context.input.runId,
+                      nodeId,
+                      providerThreadId: context.input.providerThread.id,
+                      providerTurnId: context.providerTurnId,
+                      nativeItemRef,
+                      parentItemId: null,
+                      ordinal,
+                      status: completed ? "completed" : "running",
+                      title: null,
+                      startedAt: segment.startedAt,
+                      completedAt: completed ? now : null,
+                      updatedAt: now,
+                      type: "assistant_message",
+                      messageId,
+                      text: segment.text,
+                      streaming: !completed,
+                    },
+                  },
+            );
             if (completed) yield* rememberSnapshotMessage(message);
             return;
           }
@@ -1862,29 +1977,31 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
 
         const closeTextStream = Effect.fnUntraced(function* (
           context: ActiveAcpTurn,
-          kind: "assistant" | "reasoning",
+          kind: "user" | "assistant" | "reasoning",
         ) {
-          const stream = kind === "assistant" ? context.assistant : context.reasoning;
+          const stream = textStreamFor(context, kind);
           if (stream.current === null) return;
           yield* emitTextSegment(context, kind, true);
           stream.current = null;
         });
 
         const closeTextStreams = Effect.fnUntraced(function* (context: ActiveAcpTurn) {
+          yield* closeTextStream(context, "user");
           yield* closeTextStream(context, "reasoning");
           yield* closeTextStream(context, "assistant");
         });
 
         const appendText = Effect.fnUntraced(function* (
           context: ActiveAcpTurn,
-          kind: "assistant" | "reasoning",
+          kind: "user" | "assistant" | "reasoning",
           text: string,
           messageId?: string | null,
         ) {
           if (text.length === 0) return;
-          const other = kind === "assistant" ? "reasoning" : "assistant";
-          yield* closeTextStream(context, other);
-          const stream = kind === "assistant" ? context.assistant : context.reasoning;
+          for (const other of ["user", "reasoning", "assistant"] as const) {
+            if (other !== kind) yield* closeTextStream(context, other);
+          }
+          const stream = textStreamFor(context, kind);
           const sourceMessageId = messageId?.trim() || null;
           if (
             stream.current !== null &&
@@ -1917,13 +2034,14 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
 
         const replaceText = Effect.fnUntraced(function* (
           context: ActiveAcpTurn,
-          kind: "assistant" | "reasoning",
+          kind: "user" | "assistant" | "reasoning",
           text: string,
           messageId: string,
         ) {
-          const other = kind === "assistant" ? "reasoning" : "assistant";
-          yield* closeTextStream(context, other);
-          const stream = kind === "assistant" ? context.assistant : context.reasoning;
+          for (const other of ["user", "reasoning", "assistant"] as const) {
+            if (other !== kind) yield* closeTextStream(context, other);
+          }
+          const stream = textStreamFor(context, kind);
           if (stream.current?.sourceMessageId !== messageId) {
             yield* closeTextStream(context, kind);
             const now = yield* DateTime.now;
@@ -2576,7 +2694,9 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           } as const;
           const rawInput = toolCall.data.rawInput;
           const rawOutput = toolCall.data.rawOutput ?? toolCall.data.content;
-          const path = pathFromToolCall(toolCall);
+          const changes = structuredFileChanges(toolCall);
+          const path = changes[0]?.path ?? pathFromToolCall(toolCall);
+          const diffText = structuredDiffPatch(toolCall) ?? textFromUnknown(rawOutput);
           const rawInputRecord = unknownRecord(rawInput);
           const inputVariant =
             typeof rawInputRecord?.variant === "string"
@@ -2615,7 +2735,27 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
             }),
           });
           let turnItem: OrchestrationV2TurnItem;
-          if (mcpIdentity !== undefined) {
+          if (toolCall.toolCallId.startsWith("acp-compaction:")) {
+            const summary = textFromUnknown(rawOutput);
+            turnItem = {
+              ...base,
+              type: "compaction",
+              driver,
+              ...(summary === undefined ? {} : { summary }),
+              ...(context.contextUsage?.usedTokens === undefined
+                ? {}
+                : { beforeTokenCount: context.contextUsage.usedTokens }),
+              ...(status === "completed" ? { afterTokenCount: 0 } : {}),
+            };
+            if (status === "completed") {
+              context.contextUsage = null;
+              yield* Ref.update(contextUsageBySessionId, (current) => {
+                const updated = new Map(current);
+                updated.delete(context.nativeThreadId);
+                return updated;
+              });
+            }
+          } else if (mcpIdentity !== undefined) {
             turnItem = {
               ...base,
               // Identity lives in toolName, like native Codex MCP items; the
@@ -2633,97 +2773,104 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
             yield* emitProviderEvent({ type: "turn_item.updated", driver, turnItem });
             yield* rearmDeferredFinalize(context);
             return;
-          }
-          switch (toolCall.kind) {
-            case "read":
-            case "search":
-              turnItem = {
-                ...base,
-                type: "file_search",
-                ...(path === undefined ? {} : { pattern: path }),
-                ...(path === undefined
-                  ? {}
-                  : {
-                      results: [
-                        {
-                          fileName: path,
-                          ...(textFromUnknown(rawOutput) === undefined
-                            ? {}
-                            : { preview: textFromUnknown(rawOutput) }),
-                        },
-                      ],
-                    }),
-              };
-              break;
-            case "execute": {
-              const exitCode = acpProjectedCommandExitCode(status, rawOutput);
-              turnItem = {
-                ...base,
-                type: "command_execution",
-                input: toolCall.command ?? monitorCommand ?? toolCall.title ?? "Command",
-                ...(textFromUnknown(rawOutput) === undefined
-                  ? {}
-                  : { output: textFromUnknown(rawOutput) }),
-                ...(exitCode === undefined ? {} : { exitCode }),
-              };
-              break;
-            }
-            case "edit":
-            case "delete":
-            case "move":
-              turnItem = {
-                ...base,
-                type: "file_change",
-                fileName: path ?? toolCall.title ?? "File change",
-                ...(textFromUnknown(rawOutput) === undefined
-                  ? {}
-                  : { diffStr: textFromUnknown(rawOutput) }),
-              };
-              break;
-            case "fetch":
-              turnItem = {
-                ...base,
-                type: "web_search",
-                ...(path === undefined ? {} : { patterns: [path] }),
-                ...(path === undefined
-                  ? {}
-                  : {
-                      results: [
-                        {
-                          url: path,
-                          ...(textFromUnknown(rawOutput) === undefined
-                            ? {}
-                            : { snippet: textFromUnknown(rawOutput) }),
-                        },
-                      ],
-                    }),
-              };
-              break;
-            default:
-              if (projectAsCommandExecution) {
+          } else if (changes.length > 0) {
+            turnItem = {
+              ...base,
+              type: "file_change",
+              fileName: changes[0]!.path,
+              changes,
+              ...(diffText === undefined ? {} : { diffStr: diffText }),
+            };
+          } else {
+            switch (toolCall.kind) {
+              case "read":
+              case "search":
+                turnItem = {
+                  ...base,
+                  type: "file_search",
+                  ...(path === undefined ? {} : { pattern: path }),
+                  ...(path === undefined
+                    ? {}
+                    : {
+                        results: [
+                          {
+                            fileName: path,
+                            ...(textFromUnknown(rawOutput) === undefined
+                              ? {}
+                              : { preview: textFromUnknown(rawOutput) }),
+                          },
+                        ],
+                      }),
+                };
+                break;
+              case "execute": {
                 const exitCode = acpProjectedCommandExitCode(status, rawOutput);
                 turnItem = {
                   ...base,
                   type: "command_execution",
-                  input:
-                    toolCall.command ??
-                    monitorCommand ??
-                    toolCall.title ??
-                    (inputVariant === "monitor" ? "Monitor" : "Command"),
+                  input: toolCall.command ?? monitorCommand ?? toolCall.title ?? "Command",
                   ...(textFromUnknown(rawOutput) === undefined
                     ? {}
                     : { output: textFromUnknown(rawOutput) }),
                   ...(exitCode === undefined ? {} : { exitCode }),
                 };
-              } else {
+                break;
+              }
+              case "edit":
+              case "delete":
+              case "move":
                 turnItem = {
                   ...base,
-                  type: "dynamic_tool",
-                  toolName: toolCall.title ?? toolCall.kind ?? null,
-                  input: rawInput ?? {},
-                  ...(rawOutput === undefined ? {} : { output: rawOutput }),
+                  type: "file_change",
+                  fileName: path ?? toolCall.title ?? "File change",
+                  ...(diffText === undefined ? {} : { diffStr: diffText }),
                 };
-              }
+                break;
+              case "fetch":
+                turnItem = {
+                  ...base,
+                  type: "web_search",
+                  ...(path === undefined ? {} : { patterns: [path] }),
+                  ...(path === undefined
+                    ? {}
+                    : {
+                        results: [
+                          {
+                            url: path,
+                            ...(textFromUnknown(rawOutput) === undefined
+                              ? {}
+                              : { snippet: textFromUnknown(rawOutput) }),
+                          },
+                        ],
+                      }),
+                };
+                break;
+              default:
+                if (projectAsCommandExecution) {
+                  const exitCode = acpProjectedCommandExitCode(status, rawOutput);
+                  turnItem = {
+                    ...base,
+                    type: "command_execution",
+                    input:
+                      toolCall.command ??
+                      monitorCommand ??
+                      toolCall.title ??
+                      (inputVariant === "monitor" ? "Monitor" : "Command"),
+                    ...(textFromUnknown(rawOutput) === undefined
+                      ? {}
+                      : { output: textFromUnknown(rawOutput) }),
+                    ...(exitCode === undefined ? {} : { exitCode }),
+                  };
+                } else {
+                  turnItem = {
+                    ...base,
+                    type: "dynamic_tool",
+                    toolName: toolCall.title ?? toolCall.kind ?? null,
+                    input: rawInput ?? {},
+                    ...(rawOutput === undefined ? {} : { output: rawOutput }),
+                  };
+                }
+            }
           }
           yield* emitProviderEvent({ type: "turn_item.updated", driver, turnItem });
           yield* rearmDeferredFinalize(context);
@@ -2734,44 +2881,74 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           update: AcpPlanUpdate,
         ) {
           yield* closeTextStreams(context);
-          const nativeItemId = `${context.nativeTurnId}:plan`;
+          const existing = context.plans.get(update.nativePlanId);
+          if (update.kind === "removed" && existing === undefined) return;
+          const nativeItemId = `${context.nativeTurnId}:plan:${encodeURIComponent(update.nativePlanId)}`;
           const ordinal = yield* resolveItemOrdinal(context, nativeItemId);
           const now = yield* DateTime.now;
           const nodeId = providerNodeId(nativeItemId);
           const turnItemId = providerTurnItemId(nativeItemId);
-          if (context.plan === null) {
-            context.plan = {
-              id: yield* idAllocator.allocate.plan({
-                threadId: context.input.threadId,
-                runId: context.input.runId,
-                driver,
-              }),
-              startedAt: now,
-            };
-          }
-          const planId = context.plan.id;
-          const steps: ReadonlyArray<OrchestrationV2PlanStep> = update.plan.map((step, index) => ({
-            id: `acp-step-${index + 1}`,
-            text: nonEmptyText(step.step, `Step ${index + 1}`),
-            status:
-              step.status === "inProgress"
-                ? "running"
-                : step.status === "completed"
-                  ? "completed"
-                  : "pending",
-          }));
-          const completed = steps.length > 0 && steps.every((step) => step.status === "completed");
+          const planState = existing ?? {
+            id: yield* idAllocator.allocate.plan({
+              threadId: context.input.threadId,
+              runId: context.input.runId,
+              driver,
+            }),
+            startedAt: now,
+            latest: null,
+          };
+          const planId = planState.id;
           const nativeItemRef = { driver, nativeId: nativeItemId, strength: "weak" as const };
-          const plan: OrchestrationV2PlanArtifact = {
+          const base = {
             id: planId,
             threadId: context.input.threadId,
             runId: context.input.runId,
             nodeId,
-            status: completed ? "completed" : "active",
-            kind: "todo_list",
-            steps,
-            ...(update.explanation == null ? {} : { explanation: update.explanation }),
-          };
+          } as const;
+          let plan: OrchestrationV2PlanArtifact;
+          if (update.kind === "removed") {
+            if (planState.latest === null) return;
+            plan = { ...planState.latest, status: "superseded" };
+          } else if (update.kind === "items") {
+            const steps: ReadonlyArray<OrchestrationV2PlanStep> = update.plan.map(
+              (step, index) => ({
+                id: `acp-step-${index + 1}`,
+                text: nonEmptyText(step.step, `Step ${index + 1}`),
+                status:
+                  step.status === "inProgress"
+                    ? "running"
+                    : step.status === "completed"
+                      ? "completed"
+                      : "pending",
+              }),
+            );
+            const completed =
+              steps.length > 0 && steps.every((step) => step.status === "completed");
+            plan = {
+              ...base,
+              status: completed ? "completed" : "active",
+              kind: "todo_list",
+              steps,
+              ...(update.explanation == null ? {} : { explanation: update.explanation }),
+            };
+          } else {
+            const markdown =
+              update.kind === "markdown"
+                ? update.markdown
+                : update.kind === "file"
+                  ? `Plan file: ${update.uri}`
+                  : `[Unsupported ACP plan content: ${update.contentType}]`;
+            plan = {
+              ...base,
+              status: "active",
+              kind: "proposed_plan",
+              markdown,
+            };
+          }
+          planState.latest = plan;
+          context.plans.set(update.nativePlanId, planState);
+          const completed = plan.status === "completed" || plan.status === "superseded";
+          const nodeKind = plan.kind === "todo_list" ? "todo_list" : "plan";
           yield* emitProviderEvent({
             type: "node.updated",
             driver,
@@ -2781,7 +2958,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               runId: context.input.runId,
               parentNodeId: context.input.rootNodeId,
               rootNodeId: context.input.rootNodeId,
-              kind: "todo_list",
+              kind: nodeKind,
               status: completed ? "completed" : "running",
               countsForRun: false,
               providerThreadId: context.input.providerThread.id,
@@ -2789,7 +2966,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               nativeItemRef,
               runtimeRequestId: null,
               checkpointScopeId: null,
-              startedAt: context.plan.startedAt,
+              startedAt: planState.startedAt,
               completedAt: completed ? now : null,
             },
           });
@@ -2809,25 +2986,34 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               ordinal,
               status: completed ? "completed" : "running",
               title: null,
-              startedAt: context.plan.startedAt,
+              startedAt: planState.startedAt,
               completedAt: completed ? now : null,
               updatedAt: now,
-              type: "todo_list",
-              planId,
-              steps,
-              ...(update.explanation == null ? {} : { explanation: update.explanation }),
+              ...(plan.kind === "todo_list"
+                ? {
+                    type: "todo_list" as const,
+                    planId,
+                    steps: plan.steps,
+                    ...(plan.explanation === undefined ? {} : { explanation: plan.explanation }),
+                  }
+                : {
+                    type: "proposed_plan" as const,
+                    planId,
+                    markdown: plan.markdown,
+                    streaming: !completed,
+                  }),
             },
           });
         });
 
         const appendLoadedHistory = (
           notification: EffectAcpSchema.SessionNotification,
-          role: "user" | "assistant",
+          role: "user" | "assistant" | "thought",
           text: string,
           replace = false,
         ) =>
           Effect.gen(function* () {
-            if (text.length === 0) return;
+            if (text.length === 0 && !replace) return;
             const now = yield* DateTime.now;
             yield* Ref.update(snapshot, (current) => {
               const update = notification.update;
@@ -2860,7 +3046,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                 threadId: input.threadId,
                 runId: null,
                 nodeId: null,
-                role,
+                role: role === "user" ? "user" : "assistant",
                 text: replace ? text : `${previous?.text ?? ""}${text}`,
                 attachments: [],
                 streaming: false,
@@ -3205,7 +3391,12 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               : next.exitStatus.exitCode === 0
                 ? ("completed" as const)
                 : ("failed" as const);
-          for (const toolCallId of toolCallIdsByAgentTerminalId.get(update.terminalId) ?? []) {
+          const embeddedToolCallIds = toolCallIdsByAgentTerminalId.get(update.terminalId);
+          const projectedToolCallIds =
+            embeddedToolCallIds === undefined || embeddedToolCallIds.size === 0
+              ? [`acp-agent-terminal:${update.terminalId}`]
+              : [...embeddedToolCallIds];
+          for (const toolCallId of projectedToolCallIds) {
             const existing = context.tools.get(toolCallId);
             const seeded: AcpToolCallState =
               existing ??
@@ -3441,7 +3632,8 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
             }
             if (
               update.sessionUpdate === "user_message_chunk" ||
-              update.sessionUpdate === "agent_message_chunk"
+              update.sessionUpdate === "agent_message_chunk" ||
+              update.sessionUpdate === "agent_thought_chunk"
             ) {
               // Late monitor end/event reminders must not become ghost user/assistant
               // history (or OS-facing chatter) after the root turn already finalized.
@@ -3464,13 +3656,18 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               ) {
                 yield* appendLoadedHistory(
                   notification,
-                  update.sessionUpdate === "user_message_chunk" ? "user" : "assistant",
+                  update.sessionUpdate === "user_message_chunk"
+                    ? "user"
+                    : update.sessionUpdate === "agent_thought_chunk"
+                      ? "thought"
+                      : "assistant",
                   text,
                 );
               }
             } else if (
               update.sessionUpdate === "user_message" ||
-              update.sessionUpdate === "agent_message"
+              update.sessionUpdate === "agent_message" ||
+              update.sessionUpdate === "agent_thought"
             ) {
               const text = (update.content ?? [])
                 .flatMap((content) => {
@@ -3480,7 +3677,11 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                 .join("\n");
               yield* appendLoadedHistory(
                 notification,
-                update.sessionUpdate === "user_message" ? "user" : "assistant",
+                update.sessionUpdate === "user_message"
+                  ? "user"
+                  : update.sessionUpdate === "agent_thought"
+                    ? "thought"
+                    : "assistant",
                 text,
                 true,
               );
@@ -3547,6 +3748,26 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           // finalize the same context object while we waited.
           if (context.finalized) return;
           switch (update.sessionUpdate) {
+            case "state_update": {
+              const toolCallId = `${context.nativeTurnId}:requires-action`;
+              const existing = context.tools.get(toolCallId);
+              if (update.state === "requires_action") {
+                yield* emitTool(context, {
+                  toolCallId,
+                  kind: "other",
+                  title: "Action required",
+                  status: "requiresAction",
+                  data: { state: "requires_action" },
+                });
+              } else if (existing?.status === "requiresAction") {
+                yield* emitTool(context, {
+                  ...existing,
+                  status: "completed",
+                  data: { ...existing.data, state: update.state },
+                });
+              }
+              break;
+            }
             case "agent_message_chunk": {
               const text = acpContentBlockDisplayText(update.content);
               if (text !== undefined) {
@@ -3581,6 +3802,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               }
               break;
             }
+            case "user_message":
             case "agent_message":
             case "agent_thought": {
               const text = (update.content ?? [])
@@ -3591,7 +3813,11 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                 .join("\n");
               yield* replaceText(
                 context,
-                update.sessionUpdate === "agent_message" ? "assistant" : "reasoning",
+                update.sessionUpdate === "user_message"
+                  ? "user"
+                  : update.sessionUpdate === "agent_message"
+                    ? "assistant"
+                    : "reasoning",
                 text,
                 update.messageId,
               );
@@ -3631,9 +3857,11 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               }
               break;
             }
-            case "user_message_chunk":
+            case "user_message_chunk": {
+              let projectUserMessage = true;
               if (update.content.type === "text" && flavor.extractBackgroundToolMutation) {
                 const mutations = flavor.extractBackgroundToolMutation(update.content.text);
+                if (mutations.length > 0) projectUserMessage = false;
                 const terminalTaskIds = mutations
                   .filter((mutation) => mutation.status !== "running")
                   .map((mutation) => mutation.taskId);
@@ -3681,6 +3909,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               }
               if (update.content.type === "text" && flavor.extractSubagentEndNotice) {
                 const notice = flavor.extractSubagentEndNotice(update.content.text);
+                if (notice !== undefined) projectUserMessage = false;
                 const subagent =
                   notice !== undefined
                     ? context.subagentsBySessionId.get(notice.childSessionId)
@@ -3705,7 +3934,14 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                   });
                 }
               }
+              if (projectUserMessage) {
+                const text = acpContentBlockDisplayText(update.content);
+                if (text !== undefined) {
+                  yield* appendText(context, "user", text, update.messageId);
+                }
+              }
               break;
+            }
             default: {
               const parsed = parseSessionUpdateEvent(notification);
               for (const event of parsed.events) {
@@ -3713,6 +3949,14 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                   yield* emitTool(context, event.toolCall);
                 } else if (event._tag === "PlanUpdated") {
                   yield* emitPlan(context, event.payload);
+                } else if (event._tag === "UnknownUpdate") {
+                  yield* emitTool(context, {
+                    toolCallId: `${context.nativeTurnId}:unsupported:${event.updateType}`,
+                    kind: "other",
+                    title: `Unsupported ACP update: ${event.updateType}`,
+                    status: "completed",
+                    data: { updateType: event.updateType },
+                  });
                 }
               }
             }
@@ -4477,6 +4721,21 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
             }),
           );
 
+        const guardClientFsRead = (path: string) =>
+          clientPolicyContext.pipe(
+            Effect.flatMap(({ policy, turnKey }) => {
+              const disposition = acpClientReadDisposition(policy, path);
+              if (
+                disposition === "allow" ||
+                (disposition === "ask" &&
+                  clientPolicyGrants.allowsRead({ path, cwd: policy.cwd, turnKey }))
+              ) {
+                return Effect.void;
+              }
+              return denyClientRequest(`fs/read_text_file for '${path}'`, disposition);
+            }),
+          );
+
         const guardClientTerminalCreate = clientPolicyContext.pipe(
           Effect.flatMap(({ policy, turnKey }) => {
             const disposition = acpClientExecuteDisposition(policy);
@@ -4503,12 +4762,39 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           yield* targetRuntime.handleTerminalRelease(clientTerminals.release);
         });
 
+        const wireAcpRuntimeMcpHandlers = Effect.fnUntraced(function* (
+          targetRuntime: AcpSessionRuntime.AcpSessionRuntime["Service"],
+          mcpBridge: AcpMcpOverAcpBridge | undefined,
+        ) {
+          if (mcpBridge === undefined) return;
+          const mapMcpBridgeError = Effect.mapError(
+            (error: Error) =>
+              new EffectAcpErrors.AcpRequestError({
+                code: -32603,
+                errorMessage: error.message,
+              }),
+          );
+          yield* targetRuntime.handleMcpConnect((request) =>
+            mcpBridge.connect(request).pipe(mapMcpBridgeError),
+          );
+          yield* targetRuntime.handleMcpMessage((request) =>
+            mcpBridge.message(request).pipe(mapMcpBridgeError),
+          );
+          yield* targetRuntime.handleMcpNotification((request) =>
+            mcpBridge.notification(request).pipe(mapMcpBridgeError),
+          );
+          yield* targetRuntime.handleMcpDisconnect((request) =>
+            mcpBridge.disconnect(request).pipe(mapMcpBridgeError),
+          );
+        });
+
         const wireAcpRuntimeHandlers = Effect.fnUntraced(function* (
           targetRuntime: AcpSessionRuntime.AcpSessionRuntime["Service"],
           handlerGeneration: number,
           handlerOptions: {
             readonly sessionUpdates?: boolean;
             readonly terminals?: boolean;
+            readonly mcp?: boolean;
           } = {},
         ) {
           const requestUserInput = (
@@ -4521,13 +4807,18 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               requestContext.requestId,
             );
           yield* targetRuntime.handleReadTextFile((request) =>
-            acpReadTextFile(options.fileSystem, request),
+            guardClientFsRead(request.path).pipe(
+              Effect.andThen(acpReadTextFile(options.fileSystem, request)),
+            ),
           );
           yield* targetRuntime.handleWriteTextFile((request) =>
             guardClientFsWrite(request.path).pipe(
               Effect.andThen(acpWriteTextFile(options.fileSystem, request)),
             ),
           );
+          if (handlerOptions.mcp !== false) {
+            yield* wireAcpRuntimeMcpHandlers(targetRuntime, runtimeMcpBridge);
+          }
           if (handlerOptions.terminals !== false) {
             yield* wireAcpRuntimeTerminalHandlers(targetRuntime);
           }
@@ -4802,6 +5093,24 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           }
         });
 
+        /** Builds the MCP-over-ACP bridge for one runtime, disposed with that runtime's scope. */
+        const makeRuntimeMcpBridge = Effect.fnUntraced(function* (
+          threadId: ThreadId | null,
+          scope: Scope.Scope,
+        ) {
+          const mcpContext = acpMcpContext(threadId);
+          if (mcpContext.endpoint === undefined || mcpContext.authorization === undefined) {
+            return undefined;
+          }
+          const mcpBridge = yield* makeAcpMcpOverAcpBridge({
+            endpoint: mcpContext.endpoint,
+            authorization: mcpContext.authorization,
+            allocateConnectionId: options.crypto.randomUUIDv4.pipe(Effect.orDie),
+          });
+          yield* Scope.addFinalizer(scope, mcpBridge.dispose);
+          return mcpBridge;
+        });
+
         const spawnAcpRuntime = Effect.fnUntraced(function* (
           threadId: ThreadId | null,
           resumeSessionId?: string,
@@ -4810,6 +5119,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
             yield* Scope.close(runtimeScope, Exit.void);
           }
           runtimeScope = yield* Scope.make();
+          runtimeMcpBridge = yield* makeRuntimeMcpBridge(threadId, runtimeScope);
           const runtimeGeneration = yield* Ref.get(runtimeCallbackGeneration);
           runtime = yield* flavor
             .makeRuntime(makeRuntimeInput(runtimeGeneration, threadId, resumeSessionId))
@@ -4876,7 +5186,9 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
             Effect.sync(() => {
               stagedSessionUpdates.push(notification);
             });
+          let replacementMcpBridge: AcpMcpOverAcpBridge | undefined;
           const startup = Effect.gen(function* () {
+            replacementMcpBridge = yield* makeRuntimeMcpBridge(threadId, replacementScope);
             const replacementRuntime = yield* flavor
               .makeRuntime(
                 makeRuntimeInput(
@@ -4896,6 +5208,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
             yield* replacementRuntime.handleSessionUpdate((notification) =>
               Effect.suspend(() => handleCandidateSessionUpdate(notification)),
             );
+            yield* wireAcpRuntimeMcpHandlers(replacementRuntime, replacementMcpBridge);
             const started = yield* replacementRuntime.start();
             return { replacementRuntime, started };
           });
@@ -4919,10 +5232,12 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               Effect.uninterruptible(
                 Effect.gen(function* () {
                   yield* awaitAdmittedNativeResponses;
+                  // Session updates and MCP were wired during candidate startup
+                  // (against its own bridge); terminals attach after commit below.
                   yield* wireAcpRuntimeHandlers(
                     replacementExit.value.replacementRuntime,
                     replacementGeneration,
-                    { sessionUpdates: false, terminals: false },
+                    { sessionUpdates: false, terminals: false, mcp: false },
                   );
                   const lifecycle = yield* Ref.modify(
                     candidateLifecycle,
@@ -4937,6 +5252,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                   yield* quarantineNativeTransportAtGeneration(previousGeneration);
                   runtime = replacementExit.value.replacementRuntime;
                   runtimeScope = replacementScope;
+                  runtimeMcpBridge = replacementMcpBridge;
                   yield* Ref.set(runtimeCallbackGeneration, replacementGeneration);
                   yield* wireAcpRuntimeTerminalHandlers(replacementExit.value.replacementRuntime);
                   yield* commitSessionState(replacementExit.value.started);
@@ -5035,7 +5351,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           if (initialFailure !== undefined) {
             return yield* initialFailure;
           }
-          const activationOptions = { mcpServers: acpMcpServers(threadId) };
+          const activationOptions = acpMcpActivation(threadId);
           prepareTerminalEnvironment(threadId);
           const activated = canLoadSession
             ? yield* runtime.loadSession(sessionId, activationOptions)
@@ -5142,46 +5458,72 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           ) {
             yield* runtime.setMode(modeSelection.value);
           }
-          if (runtimePolicy.interactionMode === "plan" && modeState !== undefined) {
-            const planMode = modeState.availableModes.find(
+          const effectiveModeState = yield* runtime.getModeState;
+          const effectiveConfigOptions = yield* runtime.getConfigOptions;
+          const planSensitiveOptions = effectiveConfigOptions.filter(
+            (
+              option,
+            ): option is Extract<
+              EffectAcpSchema.SessionConfigOption,
+              { readonly type: "select" }
+            > =>
+              option.type === "select" &&
+              (option.category === "mode" || option.category === "collaboration_mode"),
+          );
+          if (runtimePolicy.interactionMode === "plan") {
+            if (!nativeBuildConfigurationBySessionId.has(startResult.sessionId)) {
+              nativeBuildConfigurationBySessionId.set(startResult.sessionId, {
+                ...(effectiveModeState === undefined
+                  ? {}
+                  : { modeId: effectiveModeState.currentModeId }),
+                configOptions: planSensitiveOptions.map((option) => ({
+                  id: option.id,
+                  value: option.currentValue,
+                })),
+              });
+            }
+            const planMode = effectiveModeState?.availableModes.find(
               (mode) => mode.id === "plan" || mode.id === "architect",
             );
-            if (planMode !== undefined) yield* runtime.setMode(planMode.id);
-          }
-          const modeOption = configOptions.find(
-            (option) => option.type === "select" && option.category === "mode",
-          );
-          if (modeOption !== undefined && modeOption.type === "select") {
-            const modeChoices = modeOption.options.flatMap((entry) =>
-              "value" in entry ? [entry.value] : entry.options.map((option) => option.value),
-            );
-            const requestedMode =
-              runtimePolicy.interactionMode === "plan"
-                ? modeChoices.find((choice) => choice === "plan" || choice === "architect")
-                : undefined;
-            if (requestedMode !== undefined && modeOption.currentValue !== requestedMode) {
-              yield* runtime.setConfigOption(modeOption.id, requestedMode);
+            if (planMode !== undefined && effectiveModeState?.currentModeId !== planMode.id) {
+              yield* runtime.setMode(planMode.id);
             }
-          }
-          // T3's plan/build interaction mode also drives an agent-advertised
-          // collaboration-mode option (codex-acp: "default"/"plan"), so the
-          // agent follows T3's mode toggle instead of exposing its own menu.
-          const collaborationOption = configOptions.find(
-            (option) => option.type === "select" && option.category === "collaboration_mode",
-          );
-          if (collaborationOption !== undefined && collaborationOption.type === "select") {
-            const collaborationChoices = collaborationOption.options.flatMap((entry) =>
-              "value" in entry ? [entry.value] : entry.options.map((option) => option.value),
-            );
-            const planChoice = collaborationChoices.find((choice) => choice === "plan");
-            const buildChoice = collaborationChoices.find((choice) => choice !== planChoice);
-            const requestedChoice =
-              runtimePolicy.interactionMode === "plan" ? planChoice : buildChoice;
-            if (
-              requestedChoice !== undefined &&
-              collaborationOption.currentValue !== requestedChoice
-            ) {
-              yield* runtime.setConfigOption(collaborationOption.id, requestedChoice);
+            for (const option of planSensitiveOptions) {
+              const choices = option.options.flatMap((entry) =>
+                "value" in entry ? [entry.value] : entry.options.map((choice) => choice.value),
+              );
+              const requested = choices.find(
+                (choice) => choice === "plan" || choice === "architect",
+              );
+              if (requested !== undefined && option.currentValue !== requested) {
+                yield* runtime.setConfigOption(option.id, requested);
+              }
+            }
+          } else {
+            const nativeBuild = nativeBuildConfigurationBySessionId.get(startResult.sessionId);
+            if (nativeBuild !== undefined) {
+              if (
+                nativeBuild.modeId !== undefined &&
+                effectiveModeState?.currentModeId !== nativeBuild.modeId &&
+                effectiveModeState?.availableModes.some(
+                  (mode) => mode.id === nativeBuild.modeId,
+                ) === true
+              ) {
+                yield* runtime.setMode(nativeBuild.modeId);
+              }
+              for (const saved of nativeBuild.configOptions) {
+                const option = effectiveConfigOptions.find(
+                  (candidate) => candidate.type === "select" && candidate.id === saved.id,
+                );
+                if (option === undefined || option.type !== "select") continue;
+                const choices = option.options.flatMap((entry) =>
+                  "value" in entry ? [entry.value] : entry.options.map((choice) => choice.value),
+                );
+                if (option.currentValue !== saved.value && choices.includes(saved.value)) {
+                  yield* runtime.setConfigOption(option.id, saved.value);
+                }
+              }
+              nativeBuildConfigurationBySessionId.delete(startResult.sessionId);
             }
           }
           yield* (
@@ -5235,7 +5577,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
         ) {
           for (const tool of context.tools.values()) {
             const status = toolStatus(tool.status);
-            if (status === "pending" || status === "running") {
+            if (status === "pending" || status === "running" || status === "waiting") {
               yield* emitTool(context, tool, "interrupted");
             }
           }
@@ -5639,6 +5981,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               nativeTurnId,
               startedAt,
               completed,
+              user: { current: null, nextSegment: 0 },
               assistant: { current: null, nextSegment: 0 },
               reasoning: { current: null, nextSegment: 0 },
               contextUsage: rememberedContextUsage ?? turnInput.providerThread.contextUsage ?? null,
@@ -5654,7 +5997,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               awaitingBackgroundHydration: new Set(),
               pendingInjectedReport: new Set(),
               earlyInjectedReportObserved: false,
-              plan: null,
+              plans: new Map(),
               interrupted: false,
               finalized: false,
               finalizedStatus: null,
@@ -6436,9 +6779,10 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                       loadingIndex: 0,
                     });
                     prepareTerminalEnvironment(snapshotInput.providerThread.appThreadId);
-                    const activated = yield* runtime.loadSession(sessionId, {
-                      mcpServers: acpMcpServers(snapshotInput.providerThread.appThreadId),
-                    });
+                    const activated = yield* runtime.loadSession(
+                      sessionId,
+                      acpMcpActivation(snapshotInput.providerThread.appThreadId),
+                    );
                     rememberTerminalEnvironment(
                       activated.sessionId,
                       snapshotInput.providerThread.appThreadId,
@@ -6593,9 +6937,10 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                     forkInput.sourceProviderThread,
                   );
                   prepareTerminalEnvironment(forkInput.targetThreadId);
-                  const forked = yield* runtime.forkSession(sourceSessionId, {
-                    mcpServers: acpMcpServers(forkInput.targetThreadId),
-                  });
+                  const forked = yield* runtime.forkSession(
+                    sourceSessionId,
+                    acpMcpActivation(forkInput.targetThreadId),
+                  );
                   rememberTerminalEnvironment(forked.sessionId, forkInput.targetThreadId);
                   yield* Ref.set(activeSessionId, forked.sessionId);
                   yield* Ref.set(activeSessionSetup, forked);

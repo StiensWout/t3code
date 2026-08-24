@@ -829,6 +829,42 @@ export function createServerEnvironmentAtoms<R, E>(
           `${environmentId}:${input.instanceId}:${input.projectId}:${input.sessionId}`,
       },
     }),
+    deleteAcpRegistrySession: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:acp-registry:delete-session",
+      tag: WS_METHODS.serverDeleteAcpRegistrySession,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) =>
+          `${environmentId}:${input.instanceId}:${input.projectId}:${input.sessionId}`,
+      },
+    }),
+    listAcpRegistryProviders: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:acp-registry:list-providers",
+      tag: WS_METHODS.serverListAcpRegistryProviders,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) =>
+          `${environmentId}:${input.instanceId}:${input.projectId}`,
+      },
+    }),
+    setAcpRegistryProvider: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:acp-registry:set-provider",
+      tag: WS_METHODS.serverSetAcpRegistryProvider,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) =>
+          `${environmentId}:${input.instanceId}:${input.projectId}:${input.providerId}`,
+      },
+    }),
+    disableAcpRegistryProvider: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:acp-registry:disable-provider",
+      tag: WS_METHODS.serverDisableAcpRegistryProvider,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) =>
+          `${environmentId}:${input.instanceId}:${input.projectId}:${input.providerId}`,
+      },
+    }),
     logoutAcpRegistry: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:acp-registry:logout",
       tag: WS_METHODS.serverLogoutAcpRegistry,

@@ -5,6 +5,8 @@ import {
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
+import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -32,9 +34,13 @@ interface UrlAuthActionUpdate {
   readonly action: AcpRegistryUrlAuthAction | null;
 }
 
+/** Pending URL logins auto-decline after this window so stale prompts cannot be accepted later. */
+const URL_AUTH_ACTION_TTL = Duration.minutes(10);
+
 interface PendingUrlAuthAction {
   readonly action: AcpRegistryUrlAuthAction;
   readonly consent: Deferred.Deferred<boolean>;
+  readonly expiresAt: DateTime.Utc;
 }
 
 /** Gives a user-started ACP process priority over disposable discovery for the same agent. */
@@ -251,17 +257,28 @@ export const make = Effect.gen(function* () {
     Effect.fn("AcpRegistryRuntimeCoordinator.requestUrlAuthentication")(
       function* (instanceId, action) {
         const consent = yield* Deferred.make<boolean>();
+        const createdAt = yield* DateTime.now;
+        const expiresAt = DateTime.addDuration(createdAt, URL_AUTH_ACTION_TTL);
+        const publishedAction = {
+          ...action,
+          createdAt: DateTime.formatIso(createdAt),
+          expiresAt: DateTime.formatIso(expiresAt),
+        } satisfies AcpRegistryUrlAuthAction;
         const previous = yield* Ref.modify(pendingUrlAuthActions, (current) => {
           const next = new Map(current);
           const existing = next.get(instanceId);
-          next.set(instanceId, { action, consent });
+          next.set(instanceId, { action: publishedAction, consent, expiresAt });
           return [existing, next] as const;
         });
         if (previous !== undefined) {
           yield* Deferred.succeed(previous.consent, false).pipe(Effect.ignore);
         }
-        yield* publishUrlAuthAction(instanceId, action);
+        yield* publishUrlAuthAction(instanceId, publishedAction);
         return yield* Deferred.await(consent).pipe(
+          Effect.timeoutOrElse({
+            duration: URL_AUTH_ACTION_TTL,
+            orElse: () => Effect.succeed(false),
+          }),
           Effect.ensuring(
             Ref.modify(pendingUrlAuthActions, (current) => {
               if (current.get(instanceId)?.consent !== consent) {
@@ -284,6 +301,10 @@ export const make = Effect.gen(function* () {
     Effect.fn("AcpRegistryRuntimeCoordinator.acceptUrlAuthentication")(function* (input) {
       const pending = (yield* Ref.get(pendingUrlAuthActions)).get(input.instanceId);
       if (pending?.action.elicitationId !== input.elicitationId) return false;
+      if (DateTime.isGreaterThanOrEqualTo(yield* DateTime.now, pending.expiresAt)) {
+        yield* Deferred.succeed(pending.consent, false).pipe(Effect.ignore);
+        return false;
+      }
       return yield* Deferred.succeed(pending.consent, true);
     });
 

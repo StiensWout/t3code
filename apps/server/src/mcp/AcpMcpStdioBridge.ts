@@ -92,7 +92,7 @@ const discardResponseBody = (response: Response): Effect.Effect<void> =>
  * notification acknowledgements, each SSE `data:` event as it streams in, or
  * the single JSON body.
  */
-function responsePayloads(response: Response): Stream.Stream<unknown, AcpMcpBridgeError> {
+export function responsePayloads(response: Response): Stream.Stream<unknown, AcpMcpBridgeError> {
   if (response.status === 202 || response.status === 204) {
     return Stream.unwrap(discardResponseBody(response).pipe(Effect.as(Stream.empty)));
   }

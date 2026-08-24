@@ -15,14 +15,24 @@ import { reactHookHarness as hooks } from "../../test/reactHookHarness";
 const atoms = vi.hoisted(() => ({
   list: Symbol("list-acp-sessions"),
   import: Symbol("import-acp-session"),
+  delete: Symbol("delete-acp-session"),
+  listProviders: Symbol("list-acp-providers"),
+  setProvider: Symbol("set-acp-provider"),
+  disableProvider: Symbol("disable-acp-provider"),
   logout: Symbol("logout-acp"),
 }));
 
 const commands = vi.hoisted(() => ({
   list: vi.fn(),
   import: vi.fn(),
+  delete: vi.fn(),
+  listProviders: vi.fn(),
+  setProvider: vi.fn(),
+  disableProvider: vi.fn(),
   logout: vi.fn(),
 }));
+
+const dialogs = vi.hoisted(() => ({ confirm: vi.fn() }));
 
 vi.mock("react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react")>();
@@ -42,13 +52,28 @@ vi.mock("../../state/server", () => ({
   serverEnvironment: {
     listAcpRegistrySessions: atoms.list,
     importAcpRegistrySession: atoms.import,
+    deleteAcpRegistrySession: atoms.delete,
+    listAcpRegistryProviders: atoms.listProviders,
+    setAcpRegistryProvider: atoms.setProvider,
+    disableAcpRegistryProvider: atoms.disableProvider,
     logoutAcpRegistry: atoms.logout,
   },
 }));
 
 vi.mock("../../state/use-atom-command", () => ({
-  useAtomCommand: (atom: symbol) =>
-    atom === atoms.list ? commands.list : atom === atoms.import ? commands.import : commands.logout,
+  useAtomCommand: (atom: symbol) => {
+    if (atom === atoms.list) return commands.list;
+    if (atom === atoms.import) return commands.import;
+    if (atom === atoms.delete) return commands.delete;
+    if (atom === atoms.listProviders) return commands.listProviders;
+    if (atom === atoms.setProvider) return commands.setProvider;
+    if (atom === atoms.disableProvider) return commands.disableProvider;
+    return commands.logout;
+  },
+}));
+
+vi.mock("../../localApi", () => ({
+  ensureLocalApi: () => ({ dialogs }),
 }));
 
 import { AcpSessionManagementSection } from "./AcpSessionManagementSection";
@@ -72,7 +97,8 @@ const provider = {
   version: "1.0.0",
   status: "ready",
   auth: { status: "authenticated", canLogout: true },
-  nativeSessions: { canList: true, canLoad: true, canResume: true },
+  nativeSessions: { canList: true, canLoad: true, canResume: true, canDelete: true },
+  configurableProviders: true,
   checkedAt: "2026-08-23T00:00:00.000Z",
   models: [],
   slashCommands: [],
@@ -109,16 +135,48 @@ describe("AcpSessionManagementSection", () => {
     hooks.reset();
     commands.list.mockReset().mockResolvedValue({
       _tag: "Success",
-      value: { sessions: [session], nextCursor: null, canLoad: true, canResume: true },
+      value: {
+        sessions: [session],
+        nextCursor: null,
+        canLoad: true,
+        canResume: true,
+        canDelete: true,
+      },
     });
     commands.import.mockReset().mockResolvedValue({
       _tag: "Success",
       value: { threadId: ThreadId.make("thread-imported"), imported: true },
     });
+    commands.delete.mockReset().mockResolvedValue({
+      _tag: "Success",
+      value: { deleted: true },
+    });
+    commands.listProviders.mockReset().mockResolvedValue({
+      _tag: "Success",
+      value: {
+        providers: [
+          {
+            providerId: "google",
+            supported: ["openai"],
+            required: false,
+            current: { apiType: "openai", baseUrl: "https://api.example.test/v1" },
+          },
+        ],
+      },
+    });
+    commands.setProvider.mockReset().mockResolvedValue({
+      _tag: "Success",
+      value: { configured: true },
+    });
+    commands.disableProvider.mockReset().mockResolvedValue({
+      _tag: "Success",
+      value: { disabled: true },
+    });
     commands.logout.mockReset().mockResolvedValue({
       _tag: "Success",
       value: { loggedOut: true },
     });
+    dialogs.confirm.mockReset().mockResolvedValue(true);
   });
 
   it("lists and imports native sessions through the owning environment", async () => {
@@ -156,6 +214,48 @@ describe("AcpSessionManagementSection", () => {
     expect(commands.logout).toHaveBeenCalledWith({
       environmentId,
       input: { instanceId },
+    });
+  });
+
+  it("deletes unimported native sessions after destructive confirmation", async () => {
+    (findByLabel(render(), "List sessions").props.onClick as (() => void) | undefined)?.();
+    await flushPromises();
+    (findByLabel(render(), "Delete").props.onClick as (() => void) | undefined)?.();
+    await flushPromises();
+
+    expect(dialogs.confirm).toHaveBeenCalledOnce();
+    expect(commands.delete).toHaveBeenCalledWith({
+      environmentId,
+      input: { instanceId, projectId, sessionId: session.sessionId },
+    });
+  });
+
+  it("lists, saves, and disables configurable ACP providers", async () => {
+    (findByLabel(render(), "List providers").props.onClick as (() => void) | undefined)?.();
+    await flushPromises();
+
+    expect(commands.listProviders).toHaveBeenCalledWith({
+      environmentId,
+      input: { instanceId, projectId },
+    });
+    (findByLabel(render(), "Save").props.onClick as (() => void) | undefined)?.();
+    await flushPromises();
+    expect(commands.setProvider).toHaveBeenCalledWith({
+      environmentId,
+      input: {
+        instanceId,
+        projectId,
+        providerId: "google",
+        apiType: "openai",
+        baseUrl: "https://api.example.test/v1",
+      },
+    });
+
+    (findByLabel(render(), "Disable").props.onClick as (() => void) | undefined)?.();
+    await flushPromises();
+    expect(commands.disableProvider).toHaveBeenCalledWith({
+      environmentId,
+      input: { instanceId, projectId, providerId: "google" },
     });
   });
 });

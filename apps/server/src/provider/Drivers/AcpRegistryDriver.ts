@@ -49,9 +49,13 @@ import {
   type AcpRegistryConfigurationProbe,
   type AcpRegistryConfigurationProbeResult,
   type AcpRegistryLiveConfiguration,
+  deleteAcpRegistrySession,
+  disableAcpRegistryProvider,
   listAcpRegistrySessions,
+  listAcpRegistryProviders,
   logoutAcpRegistry,
   probeAcpRegistryConfiguration,
+  setAcpRegistryProvider,
 } from "../acp/AcpRegistryProbe.ts";
 import { AcpRegistryCatalog, type AcpRegistryInspection } from "../acp/AcpRegistrySupport.ts";
 import { AcpRegistryRuntimeCoordinator } from "../acp/AcpRegistryRuntimeCoordinator.ts";
@@ -218,7 +222,9 @@ function baseSnapshot(
             canList: input.probe.probe.sessionManagement.canList,
             canLoad: input.probe.probe.sessionManagement.canLoad,
             canResume: input.probe.probe.sessionManagement.canResume,
+            canDelete: input.probe.probe.sessionManagement.canDelete,
           },
+          configurableProviders: input.probe.probe.sessionManagement.canConfigureProviders,
         }),
     slashCommands: input.probe?.slashCommands ?? [],
     skills: input.probe?.skills ?? [],
@@ -683,6 +689,27 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         ),
       );
 
+      // The management probes read the coordinator via serviceOption, so it is
+      // provided only when this driver instance actually has one.
+      const provideAcpManagementServices = <A, E>(
+        effect: Effect.Effect<
+          A,
+          E,
+          AcpRegistryCatalog | ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto
+        >,
+      ): Effect.Effect<A, E> => {
+        const provided = effect.pipe(
+          Effect.provideService(AcpRegistryCatalog, catalog),
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          Effect.provideService(Crypto.Crypto, crypto),
+        );
+        return Option.isSome(runtimeCoordinator)
+          ? provided.pipe(
+              Effect.provideService(AcpRegistryRuntimeCoordinator, runtimeCoordinator.value),
+            )
+          : provided;
+      };
+
       return {
         instanceId,
         driverKind: DRIVER_KIND,
@@ -694,24 +721,58 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         orchestrationAdapter,
         textGeneration: makeUnsupportedTextGeneration(),
         acpSessionManagement: {
-          listSessions: ({ cwd, cursor }) => {
-            const list = listAcpRegistrySessions({
-              instanceId,
-              settings: effectiveConfig,
-              cwd,
-              environment: processEnvironment,
-              ...(cursor === undefined ? {} : { cursor }),
-            }).pipe(
-              Effect.provideService(AcpRegistryCatalog, catalog),
-              Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-              Effect.provideService(Crypto.Crypto, crypto),
-            );
-            return Option.isSome(runtimeCoordinator)
-              ? list.pipe(
-                  Effect.provideService(AcpRegistryRuntimeCoordinator, runtimeCoordinator.value),
-                )
-              : list;
-          },
+          listSessions: ({ cwd, cursor }) =>
+            provideAcpManagementServices(
+              listAcpRegistrySessions({
+                instanceId,
+                settings: effectiveConfig,
+                cwd,
+                environment: processEnvironment,
+                ...(cursor === undefined ? {} : { cursor }),
+              }),
+            ),
+          deleteSession: ({ cwd, sessionId }) =>
+            provideAcpManagementServices(
+              deleteAcpRegistrySession({
+                instanceId,
+                settings: effectiveConfig,
+                cwd,
+                environment: processEnvironment,
+                sessionId,
+              }),
+            ),
+          listProviders: (cwd) =>
+            provideAcpManagementServices(
+              listAcpRegistryProviders({
+                instanceId,
+                settings: effectiveConfig,
+                cwd,
+                environment: processEnvironment,
+              }),
+            ),
+          setProvider: ({ cwd, providerId, apiType, baseUrl, headers }) =>
+            provideAcpManagementServices(
+              setAcpRegistryProvider({
+                instanceId,
+                settings: effectiveConfig,
+                cwd,
+                environment: processEnvironment,
+                providerId,
+                apiType,
+                baseUrl,
+                ...(headers === undefined ? {} : { headers }),
+              }),
+            ).pipe(Effect.tap(() => liveSnapshotSemaphore.withPermit(invalidateEnrichmentCache))),
+          disableProvider: ({ cwd, providerId }) =>
+            provideAcpManagementServices(
+              disableAcpRegistryProvider({
+                instanceId,
+                settings: effectiveConfig,
+                cwd,
+                environment: processEnvironment,
+                providerId,
+              }),
+            ).pipe(Effect.tap(() => liveSnapshotSemaphore.withPermit(invalidateEnrichmentCache))),
           logout: (cwd) => {
             const logout = logoutAcpRegistry({
               instanceId,

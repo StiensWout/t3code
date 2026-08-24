@@ -5,10 +5,16 @@ import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 import {
   AcpRegistryAcceptUrlAuthInput,
   AcpRegistryAcceptUrlAuthResult,
+  AcpRegistryDeleteSessionInput,
+  AcpRegistryDeleteSessionResult,
+  AcpRegistryDisableProviderInput,
+  AcpRegistryDisableProviderResult,
   AcpRegistryImportSessionInput,
   AcpRegistryImportSessionResult,
   AcpRegistryListSessionsInput,
   AcpRegistryListSessionsResult,
+  AcpRegistryListProvidersInput,
+  AcpRegistryListProvidersResult,
   AcpRegistryLogoutInput,
   AcpRegistryLogoutResult,
   AcpRegistryManagedBinaryUninstallInput,
@@ -18,6 +24,8 @@ import {
   AcpRegistryPrepareResult,
   AcpRegistrySearchInput,
   AcpRegistrySearchResult,
+  AcpRegistrySetProviderInput,
+  AcpRegistrySetProviderResult,
 } from "./acpRegistry.ts";
 import { ExternalLauncherError, LaunchEditorInput } from "./editor.ts";
 import {
@@ -310,6 +318,10 @@ export const WS_METHODS = {
   serverAcceptAcpRegistryUrlAuth: "server.acceptAcpRegistryUrlAuth",
   serverListAcpRegistrySessions: "server.listAcpRegistrySessions",
   serverImportAcpRegistrySession: "server.importAcpRegistrySession",
+  serverDeleteAcpRegistrySession: "server.deleteAcpRegistrySession",
+  serverListAcpRegistryProviders: "server.listAcpRegistryProviders",
+  serverSetAcpRegistryProvider: "server.setAcpRegistryProvider",
+  serverDisableAcpRegistryProvider: "server.disableAcpRegistryProvider",
   serverLogoutAcpRegistry: "server.logoutAcpRegistry",
   serverGetTraceDiagnostics: "server.getTraceDiagnostics",
   serverGetProcessDiagnostics: "server.getProcessDiagnostics",
@@ -499,6 +511,39 @@ export const WsServerImportAcpRegistrySessionRpc = Rpc.make(
   {
     payload: AcpRegistryImportSessionInput,
     success: AcpRegistryImportSessionResult,
+    error: Schema.Union([AcpRegistryOperationError, EnvironmentAuthorizationError]),
+  },
+);
+
+export const WsServerDeleteAcpRegistrySessionRpc = Rpc.make(
+  WS_METHODS.serverDeleteAcpRegistrySession,
+  {
+    payload: AcpRegistryDeleteSessionInput,
+    success: AcpRegistryDeleteSessionResult,
+    error: Schema.Union([AcpRegistryOperationError, EnvironmentAuthorizationError]),
+  },
+);
+
+export const WsServerListAcpRegistryProvidersRpc = Rpc.make(
+  WS_METHODS.serverListAcpRegistryProviders,
+  {
+    payload: AcpRegistryListProvidersInput,
+    success: AcpRegistryListProvidersResult,
+    error: Schema.Union([AcpRegistryOperationError, EnvironmentAuthorizationError]),
+  },
+);
+
+export const WsServerSetAcpRegistryProviderRpc = Rpc.make(WS_METHODS.serverSetAcpRegistryProvider, {
+  payload: AcpRegistrySetProviderInput,
+  success: AcpRegistrySetProviderResult,
+  error: Schema.Union([AcpRegistryOperationError, EnvironmentAuthorizationError]),
+});
+
+export const WsServerDisableAcpRegistryProviderRpc = Rpc.make(
+  WS_METHODS.serverDisableAcpRegistryProvider,
+  {
+    payload: AcpRegistryDisableProviderInput,
+    success: AcpRegistryDisableProviderResult,
     error: Schema.Union([AcpRegistryOperationError, EnvironmentAuthorizationError]),
   },
 );
@@ -1197,6 +1242,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerAcceptAcpRegistryUrlAuthRpc,
   WsServerListAcpRegistrySessionsRpc,
   WsServerImportAcpRegistrySessionRpc,
+  WsServerDeleteAcpRegistrySessionRpc,
+  WsServerListAcpRegistryProvidersRpc,
+  WsServerSetAcpRegistryProviderRpc,
+  WsServerDisableAcpRegistryProviderRpc,
   WsServerLogoutAcpRegistryRpc,
   WsServerGetTraceDiagnosticsRpc,
   WsServerGetProcessDiagnosticsRpc,

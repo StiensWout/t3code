@@ -4,6 +4,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
+import * as TestClock from "effect/testing/TestClock";
 
 import type {
   AcpRegistryAvailableCommands,
@@ -174,6 +175,14 @@ describe("AcpRegistryRuntimeCoordinator", () => {
         .pipe(Effect.forkChild);
       yield* Deferred.await(actionSeen);
 
+      expect(yield* coordinator.getUrlAuthAction(instanceId)).toEqual(
+        Option.some({
+          ...action,
+          createdAt: "1970-01-01T00:00:00.000Z",
+          expiresAt: "1970-01-01T00:10:00.000Z",
+        }),
+      );
+
       expect(
         yield* coordinator.acceptUrlAuthentication({ instanceId, elicitationId: "stale" }),
       ).toBe(false);
@@ -181,6 +190,40 @@ describe("AcpRegistryRuntimeCoordinator", () => {
         yield* coordinator.acceptUrlAuthentication({ instanceId, elicitationId: "login-1" }),
       ).toBe(true);
       expect(yield* Fiber.join(request)).toBe(true);
+      expect(Option.isNone(yield* coordinator.getUrlAuthAction(instanceId))).toBe(true);
+      yield* Fiber.interrupt(consumer);
+    }).pipe(Effect.provide(AcpRegistryRuntimeCoordinator.layer), Effect.scoped),
+  );
+
+  it.effect("expires stale URL authentication actions without accepting them", () =>
+    Effect.gen(function* () {
+      const coordinator = yield* AcpRegistryRuntimeCoordinator;
+      const instanceId = ProviderInstanceId.make("acpRegistry_expired");
+      const actionSeen = yield* Deferred.make<void>();
+      const consumer = yield* coordinator
+        .watchUrlAuthAction(instanceId, (current) =>
+          current === null
+            ? Effect.void
+            : Deferred.succeed(actionSeen, undefined).pipe(Effect.asVoid),
+        )
+        .pipe(Effect.forkChild);
+      const request = yield* coordinator
+        .requestUrlAuthentication(instanceId, {
+          elicitationId: "expired-login",
+          url: "https://accounts.example.com/login",
+          message: "Continue in your browser",
+        })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(actionSeen);
+      yield* TestClock.adjust("10 minutes");
+
+      expect(yield* Fiber.join(request)).toBe(false);
+      expect(
+        yield* coordinator.acceptUrlAuthentication({
+          instanceId,
+          elicitationId: "expired-login",
+        }),
+      ).toBe(false);
       expect(Option.isNone(yield* coordinator.getUrlAuthAction(instanceId))).toBe(true);
       yield* Fiber.interrupt(consumer);
     }).pipe(Effect.provide(AcpRegistryRuntimeCoordinator.layer), Effect.scoped),

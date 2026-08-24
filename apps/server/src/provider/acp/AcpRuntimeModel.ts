@@ -47,7 +47,7 @@ export interface AcpToolCallState {
   readonly toolCallId: string;
   readonly kind?: string;
   readonly title?: string;
-  readonly status?: "pending" | "inProgress" | "completed" | "failed";
+  readonly status?: "pending" | "inProgress" | "requiresAction" | "completed" | "failed";
   readonly command?: string;
   readonly detail?: string;
   readonly data: Record<string, unknown>;
@@ -68,6 +68,43 @@ type AcpAgentTerminalUpdate = Extract<
 >;
 
 const MAX_ACP_TERMINAL_OUTPUT_BYTES = 16 * 1024 * 1024;
+const MAX_ACP_TERMINAL_FRAME_BYTES = MAX_ACP_TERMINAL_OUTPUT_BYTES;
+
+function isBase64DataCode(code: number): boolean {
+  return (
+    (code >= 65 && code <= 90) ||
+    (code >= 97 && code <= 122) ||
+    (code >= 48 && code <= 57) ||
+    code === 43 ||
+    code === 47
+  );
+}
+
+/**
+ * Decodes one bounded base64 terminal frame, or `undefined` when the frame is
+ * malformed or oversized. Invalid frames are dropped rather than failed so one
+ * misbehaving agent frame cannot take down session-update handling.
+ */
+function decodeBase64TerminalFrame(encoded: string): Uint8Array | undefined {
+  if (encoded.length > Math.ceil(MAX_ACP_TERMINAL_FRAME_BYTES / 3) * 4) {
+    return undefined;
+  }
+  const padding = encoded.endsWith("==") ? 2 : encoded.endsWith("=") ? 1 : 0;
+  const dataLength = encoded.length - padding;
+  if (
+    encoded.length % 4 === 1 ||
+    (padding > 0 && encoded.length % 4 !== 0) ||
+    (padding === 1 && dataLength % 4 !== 3) ||
+    (padding === 2 && dataLength % 4 !== 2)
+  ) {
+    return undefined;
+  }
+  for (let index = 0; index < dataLength; index += 1) {
+    if (!isBase64DataCode(encoded.charCodeAt(index))) return undefined;
+  }
+  const decoded = Buffer.from(encoded, "base64");
+  return decoded.byteLength <= MAX_ACP_TERMINAL_FRAME_BYTES ? decoded : undefined;
+}
 
 function trailingIncompleteUtf8Start(bytes: Uint8Array): number {
   if (bytes.length === 0) return bytes.length;
@@ -91,11 +128,10 @@ function trailingIncompleteUtf8Start(bytes: Uint8Array): number {
 function decodeTerminalOutputChunk(
   pending: Uint8Array | undefined,
   encoded: string,
-): { readonly text: string; readonly pendingOutputBytes?: Uint8Array } {
-  const bytes = Buffer.concat([
-    ...(pending === undefined ? [] : [Buffer.from(pending)]),
-    Buffer.from(encoded, "base64"),
-  ]);
+): { readonly text: string; readonly pendingOutputBytes?: Uint8Array } | undefined {
+  const frame = decodeBase64TerminalFrame(encoded);
+  if (frame === undefined) return undefined;
+  const bytes = Buffer.concat([...(pending === undefined ? [] : [Buffer.from(pending)]), frame]);
   const completeEnd = trailingIncompleteUtf8Start(bytes);
   const text = bytes.subarray(0, completeEnd).toString("utf8");
   return completeEnd === bytes.length
@@ -119,6 +155,7 @@ export function applyAcpAgentTerminalUpdate(
   const current = previous ?? { output: "" };
   if (update.sessionUpdate === "terminal_output_chunk") {
     const decoded = decodeTerminalOutputChunk(current.pendingOutputBytes, update.data);
+    if (decoded === undefined) return current;
     const { pendingOutputBytes: _pendingOutputBytes, ...withoutPendingOutputBytes } = current;
     return {
       ...withoutPendingOutputBytes,
@@ -146,14 +183,16 @@ export function applyAcpAgentTerminalUpdate(
       update.output === null
         ? { text: "" }
         : decodeTerminalOutputChunk(undefined, update.output.data);
-    const { pendingOutputBytes: _pendingOutputBytes, ...withoutPendingOutputBytes } = next;
-    next = {
-      ...withoutPendingOutputBytes,
-      output: truncateTerminalOutput(decoded.text),
-      ...(decoded.pendingOutputBytes === undefined
-        ? {}
-        : { pendingOutputBytes: decoded.pendingOutputBytes }),
-    };
+    if (decoded !== undefined) {
+      const { pendingOutputBytes: _pendingOutputBytes, ...withoutPendingOutputBytes } = next;
+      next = {
+        ...withoutPendingOutputBytes,
+        output: truncateTerminalOutput(decoded.text),
+        ...(decoded.pendingOutputBytes === undefined
+          ? {}
+          : { pendingOutputBytes: decoded.pendingOutputBytes }),
+      };
+    }
   }
   if (update.exitStatus === null) {
     const { exitStatus: _exitStatus, ...withoutExitStatus } = next;
@@ -173,13 +212,20 @@ export function applyAcpAgentTerminalUpdate(
   return next;
 }
 
-export interface AcpPlanUpdate {
-  readonly explanation?: string | null;
-  readonly plan: ReadonlyArray<{
-    readonly step: string;
-    readonly status: "pending" | "inProgress" | "completed";
-  }>;
-}
+export type AcpPlanUpdate =
+  | {
+      readonly nativePlanId: string;
+      readonly kind: "items";
+      readonly explanation?: string | null;
+      readonly plan: ReadonlyArray<{
+        readonly step: string;
+        readonly status: "pending" | "inProgress" | "completed";
+      }>;
+    }
+  | { readonly nativePlanId: string; readonly kind: "markdown"; readonly markdown: string }
+  | { readonly nativePlanId: string; readonly kind: "file"; readonly uri: string }
+  | { readonly nativePlanId: string; readonly kind: "unknown"; readonly contentType: string }
+  | { readonly nativePlanId: string; readonly kind: "removed" };
 
 export interface AcpPermissionRequest {
   readonly kind: string | "unknown";
@@ -226,6 +272,11 @@ export type AcpParsedSessionEvent =
       readonly _tag: "SessionInfoUpdated";
       readonly metadata: OrchestrationV2ProviderThreadNativeMetadata;
       readonly rawPayload: unknown;
+    }
+  | {
+      readonly _tag: "UnknownUpdate";
+      readonly updateType: string;
+      readonly rawPayload: unknown;
     };
 
 const boundedContentMetadata = (value: string | null | undefined, maximumLength: number): string =>
@@ -269,6 +320,8 @@ export function acpContentBlockDisplayText(
       const mimeType = boundedContentMetadata(content.mimeType, 256) || "unknown type";
       return `[ACP audio (${mimeType})]`;
     }
+    case "_t3_unknown":
+      return `[Unsupported ACP content: ${boundedContentMetadata(content.originalType, 128) || "unknown"}]`;
   }
 }
 
@@ -301,6 +354,12 @@ function sanitizeAcpToolCallContent(
         };
       case "terminal":
         return { type: "terminal", terminalId: entry.terminalId };
+      case "_t3_unknown":
+        return {
+          type: "_t3_unknown",
+          originalType: boundedContentMetadata(entry.originalType, 128) || "unknown",
+          raw: null,
+        };
     }
   });
 }
@@ -609,7 +668,7 @@ export function mergeToolCallState(
   previous: AcpToolCallState | undefined,
   next: AcpToolCallState,
 ): AcpToolCallState {
-  const nextKind = typeof next.data.kind === "string" ? next.data.kind : undefined;
+  const nextKind = next.kind ?? (typeof next.data.kind === "string" ? next.data.kind : undefined);
   const kind = nextKind ?? previous?.kind;
   const title = next.title ?? previous?.title;
   const status = next.status ?? previous?.status;
@@ -948,6 +1007,8 @@ export function parseSessionUpdateEvent(params: EffectAcpSchema.SessionNotificat
         events.push({
           _tag: "PlanUpdated",
           payload: {
+            nativePlanId: "legacy",
+            kind: "items",
             plan,
           },
           rawPayload: params,
@@ -956,29 +1017,65 @@ export function parseSessionUpdateEvent(params: EffectAcpSchema.SessionNotificat
       break;
     }
     case "plan_update": {
-      if (
-        upd.plan.type !== "items" ||
-        !("entries" in upd.plan) ||
-        !Array.isArray(upd.plan.entries)
-      ) {
+      const nativePlanId = upd.plan.planId.trim();
+      if (nativePlanId.length === 0) {
         break;
       }
-      const entries: ReadonlyArray<unknown> = upd.plan.entries;
-      const plan = entries.flatMap((entry, index) => {
-        if (!isRecord(entry) || typeof entry.content !== "string") return [];
-        const status = typeof entry.status === "string" ? entry.status : "pending";
-        return [
-          {
-            step: entry.content.trim().length > 0 ? entry.content.trim() : `Step ${index + 1}`,
-            status: normalizePlanStepStatus(status),
-          },
-        ];
-      });
-      events.push({ _tag: "PlanUpdated", payload: { plan }, rawPayload: params });
+      if (upd.plan.type === "items" && "entries" in upd.plan && Array.isArray(upd.plan.entries)) {
+        const entries: ReadonlyArray<unknown> = upd.plan.entries;
+        const plan = entries.flatMap((entry, index) => {
+          if (!isRecord(entry) || typeof entry.content !== "string") return [];
+          const status = typeof entry.status === "string" ? entry.status : "pending";
+          return [
+            {
+              step: entry.content.trim().length > 0 ? entry.content.trim() : `Step ${index + 1}`,
+              status: normalizePlanStepStatus(status),
+            },
+          ];
+        });
+        events.push({
+          _tag: "PlanUpdated",
+          payload: { nativePlanId, kind: "items", plan },
+          rawPayload: params,
+        });
+      } else if (
+        upd.plan.type === "markdown" &&
+        "content" in upd.plan &&
+        typeof upd.plan.content === "string"
+      ) {
+        events.push({
+          _tag: "PlanUpdated",
+          payload: { nativePlanId, kind: "markdown", markdown: upd.plan.content },
+          rawPayload: params,
+        });
+      } else if (
+        upd.plan.type === "file" &&
+        "uri" in upd.plan &&
+        typeof upd.plan.uri === "string"
+      ) {
+        events.push({
+          _tag: "PlanUpdated",
+          payload: { nativePlanId, kind: "file", uri: upd.plan.uri },
+          rawPayload: params,
+        });
+      } else {
+        events.push({
+          _tag: "PlanUpdated",
+          payload: { nativePlanId, kind: "unknown", contentType: upd.plan.type },
+          rawPayload: params,
+        });
+      }
       break;
     }
     case "plan_removed": {
-      events.push({ _tag: "PlanUpdated", payload: { plan: [] }, rawPayload: params });
+      const nativePlanId = upd.planId.trim();
+      if (nativePlanId.length > 0) {
+        events.push({
+          _tag: "PlanUpdated",
+          payload: { nativePlanId, kind: "removed" },
+          rawPayload: params,
+        });
+      }
       break;
     }
     case "tool_call": {
@@ -1090,6 +1187,14 @@ export function parseSessionUpdateEvent(params: EffectAcpSchema.SessionNotificat
           ...(upd.title === null ? { title: null } : title ? { title } : {}),
           ...(upd.updatedAt === null ? { updatedAt: null } : updatedAt ? { updatedAt } : {}),
         },
+        rawPayload: params,
+      });
+      break;
+    }
+    case "_t3_unknown": {
+      events.push({
+        _tag: "UnknownUpdate",
+        updateType: boundedContentMetadata(upd.originalSessionUpdate, 128) || "unknown",
         rawPayload: params,
       });
       break;

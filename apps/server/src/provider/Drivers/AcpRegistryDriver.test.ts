@@ -30,6 +30,8 @@ const noSessionManagement = {
   canLoad: false,
   canResume: false,
   canLogout: false,
+  canDelete: false,
+  canConfigureProviders: false,
 } as const;
 
 function catalogWithInspection(inspection: AcpRegistryInspection): AcpRegistryCatalog["Service"] {
@@ -109,6 +111,8 @@ describe("acpRegistrySnapshotReadiness", () => {
             canLoad: true,
             canResume: true,
             canLogout: true,
+            canDelete: true,
+            canConfigureProviders: true,
           },
         },
         slashCommands: [],

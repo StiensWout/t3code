@@ -935,4 +935,159 @@ it.layer(NodeServices.layer)("effect-acp client", (it) => {
         yield* Scope.close(scope, Exit.void);
       }),
   );
+
+  it.effect("calls ACP v2 session deletion and provider-management methods", () =>
+    Effect.gen(function* () {
+      const handle = yield* makeHandle({ ACP_MOCK_V2_MANAGEMENT: "1" });
+      const scope = yield* Scope.make();
+      const context = yield* Layer.buildWithScope(AcpClient.layerChildProcess(handle), scope);
+
+      yield* Effect.gen(function* () {
+        const acp = yield* AcpClient.AcpClient;
+        const initialized = yield* acp.agent.initialize({
+          protocolVersion: 2,
+          clientCapabilities: {},
+          clientInfo: { name: "effect-acp-test", version: "0.0.0" },
+        });
+        assert.ok(initialized.agentCapabilities?.sessionCapabilities?.delete);
+        assert.ok(initialized.agentCapabilities?.providers);
+
+        assert.deepEqual(yield* acp.agent.deleteSession({ sessionId: "mock-session-1" }), {});
+        assert.deepEqual(yield* acp.agent.listProviders({}), {
+          providers: [
+            {
+              providerId: "mock-provider",
+              supported: ["openai"],
+              required: false,
+              current: null,
+            },
+          ],
+        });
+        assert.deepEqual(
+          yield* acp.agent.setProvider({
+            providerId: "mock-provider",
+            apiType: "openai",
+            baseUrl: "https://api.example.test/v1",
+            headers: { Authorization: "Bearer secret" },
+          }),
+          {},
+        );
+        assert.deepEqual(yield* acp.agent.disableProvider({ providerId: "mock-provider" }), {});
+      }).pipe(Effect.provide(context), Effect.ensuring(Scope.close(scope, Exit.void)));
+    }),
+  );
+
+  it.effect("routes MCP-over-ACP connect, message, notification, and disconnect callbacks", () =>
+    Effect.gen(function* () {
+      const handle = yield* makeHandle({ ACP_MOCK_MCP_OVER_ACP: "1" });
+      const scope = yield* Scope.make();
+      const context = yield* Layer.buildWithScope(AcpClient.layerChildProcess(handle), scope);
+      const methods = yield* Ref.make<Array<string>>([]);
+
+      yield* Effect.gen(function* () {
+        const acp = yield* AcpClient.AcpClient;
+        yield* acp.handleRequestPermission(() =>
+          Effect.succeed({ outcome: { outcome: "selected", optionId: "allow" } }),
+        );
+        yield* acp.handleElicitation(() => Effect.succeed({ action: "decline" }));
+        yield* acp.handleExtRequest(
+          "x/typed_request",
+          Schema.Struct({ message: Schema.String }),
+          () => Effect.succeed({ ok: true }),
+        );
+        yield* acp.handleExtNotification(
+          "x/typed_notification",
+          Schema.Struct({ count: Schema.Number }),
+          () => Effect.void,
+        );
+        yield* acp.handleMcpConnect(() =>
+          Ref.update(methods, (current) => [...current, "connect"]).pipe(
+            Effect.as({ connectionId: "connection-1" }),
+          ),
+        );
+        yield* acp.handleMcpMessage(() =>
+          Ref.update(methods, (current) => [...current, "message"]).pipe(Effect.as({ tools: [] })),
+        );
+        yield* acp.handleMcpNotification(() =>
+          Ref.update(methods, (current) => [...current, "notification"]),
+        );
+        yield* acp.handleMcpDisconnect(() =>
+          Ref.update(methods, (current) => [...current, "disconnect"]).pipe(Effect.as({})),
+        );
+        yield* acp.agent.initialize({
+          protocolVersion: 2,
+          clientCapabilities: {},
+          clientInfo: { name: "effect-acp-test", version: "0.0.0" },
+        });
+        const session = yield* acp.agent.createSession({ cwd: process.cwd(), mcpServers: [] });
+        yield* acp.agent.prompt({
+          sessionId: session.sessionId,
+          prompt: [{ type: "text", text: "exercise MCP" }],
+        });
+      }).pipe(Effect.provide(context), Effect.ensuring(Scope.close(scope, Exit.void)));
+
+      assert.deepEqual(yield* Ref.get(methods), [
+        "connect",
+        "message",
+        "notification",
+        "disconnect",
+      ]);
+    }),
+  );
+
+  it.effect("preserves future content and session-update variants", () =>
+    Effect.gen(function* () {
+      const handle = yield* makeHandle({ ACP_MOCK_UNKNOWN_VARIANTS: "1" });
+      const scope = yield* Scope.make();
+      const context = yield* Layer.buildWithScope(AcpClient.layerChildProcess(handle), scope);
+      const updates = yield* Ref.make<Array<AcpCompat.SessionNotification>>([]);
+
+      yield* Effect.gen(function* () {
+        const acp = yield* AcpClient.AcpClient;
+        yield* acp.handleRequestPermission(() =>
+          Effect.succeed({ outcome: { outcome: "selected", optionId: "allow" } }),
+        );
+        yield* acp.handleElicitation(() => Effect.succeed({ action: "decline" }));
+        yield* acp.handleExtRequest(
+          "x/typed_request",
+          Schema.Struct({ message: Schema.String }),
+          () => Effect.succeed({ ok: true }),
+        );
+        yield* acp.handleExtNotification(
+          "x/typed_notification",
+          Schema.Struct({ count: Schema.Number }),
+          () => Effect.void,
+        );
+        yield* acp.handleSessionUpdate((update) =>
+          Ref.update(updates, (current) => [...current, update]),
+        );
+        yield* acp.agent.initialize({
+          protocolVersion: 2,
+          clientCapabilities: {},
+          clientInfo: { name: "effect-acp-test", version: "0.0.0" },
+        });
+        const session = yield* acp.agent.createSession({ cwd: process.cwd(), mcpServers: [] });
+        yield* acp.agent.prompt({
+          sessionId: session.sessionId,
+          prompt: [{ type: "text", text: "exercise future variants" }],
+        });
+      }).pipe(Effect.provide(context), Effect.ensuring(Scope.close(scope, Exit.void)));
+
+      const received = yield* Ref.get(updates);
+      assert.deepEqual(received[0]?.update, {
+        sessionUpdate: "agent_message_chunk",
+        messageId: "future-content",
+        content: {
+          type: "_t3_unknown",
+          originalType: "chart",
+          raw: { type: "chart", points: [] },
+        },
+      });
+      assert.deepEqual(received[1]?.update, {
+        sessionUpdate: "_t3_unknown",
+        originalSessionUpdate: "timeline_update",
+        raw: { sessionUpdate: "timeline_update", entries: [] },
+      });
+    }),
+  );
 });

@@ -13,7 +13,12 @@ export type ContentBlock =
   | KnownContentBlock<"image">
   | KnownContentBlock<"audio">
   | KnownContentBlock<"resource_link">
-  | KnownContentBlock<"resource">;
+  | KnownContentBlock<"resource">
+  | {
+      readonly type: "_t3_unknown";
+      readonly originalType: string;
+      readonly raw: unknown;
+    };
 
 export type AbsolutePath = V2.AbsolutePath;
 export type AvailableCommand = Omit<V2.AvailableCommand, "input"> & {
@@ -21,6 +26,21 @@ export type AvailableCommand = Omit<V2.AvailableCommand, "input"> & {
 };
 export type CloseSessionRequest = V2.CloseSessionRequest;
 export type CloseSessionResponse = V2.CloseSessionResponse;
+export type DeleteSessionRequest = V2.DeleteSessionRequest;
+export type DeleteSessionResponse = V2.DeleteSessionResponse;
+export type ListProvidersRequest = V2.ListProvidersRequest;
+export type ListProvidersResponse = V2.ListProvidersResponse;
+export type SetProviderRequest = V2.SetProviderRequest;
+export type SetProviderResponse = V2.SetProviderResponse;
+export type DisableProviderRequest = V2.DisableProviderRequest;
+export type DisableProviderResponse = V2.DisableProviderResponse;
+export type ConnectMcpRequest = V2.ConnectMcpRequest;
+export type ConnectMcpResponse = V2.ConnectMcpResponse;
+export type MessageMcpRequest = V2.MessageMcpRequest;
+export type MessageMcpNotification = V2.MessageMcpNotification;
+export type MessageMcpResponse = V2.MessageMcpResponse;
+export type DisconnectMcpRequest = V2.DisconnectMcpRequest;
+export type DisconnectMcpResponse = V2.DisconnectMcpResponse;
 export type CompleteElicitationNotification = V2.CompleteElicitationNotification;
 export type CreateElicitationRequest = V2.CreateElicitationRequest;
 export type CreateElicitationResponse = V2.CreateElicitationResponse;
@@ -74,6 +94,7 @@ export type AgentCapabilities = {
     readonly fork?: Meta;
     readonly resume?: Meta;
     readonly close?: Meta;
+    readonly delete?: Meta;
     readonly additionalDirectories?: Meta;
   };
   readonly auth?: { readonly logout?: Meta };
@@ -237,7 +258,12 @@ export type ToolCallContent =
       readonly patch?: V2.DiffPatch | null;
       readonly _meta?: Meta;
     }
-  | { readonly type: "terminal"; readonly terminalId: string; readonly _meta?: Meta };
+  | { readonly type: "terminal"; readonly terminalId: string; readonly _meta?: Meta }
+  | {
+      readonly type: "_t3_unknown";
+      readonly originalType: string;
+      readonly raw: unknown;
+    };
 
 export interface ToolCallUpdate {
   readonly toolCallId: string;
@@ -327,7 +353,12 @@ export type SessionUpdate =
       readonly _meta?: Meta;
     }
   | { readonly sessionUpdate: "plan"; readonly entries: ReadonlyArray<V2.PlanEntry> }
-  | { readonly sessionUpdate: "current_mode_update"; readonly currentModeId: string };
+  | { readonly sessionUpdate: "current_mode_update"; readonly currentModeId: string }
+  | {
+      readonly sessionUpdate: "_t3_unknown";
+      readonly originalSessionUpdate: string;
+      readonly raw: unknown;
+    };
 
 export interface SessionNotification {
   readonly sessionId: string;

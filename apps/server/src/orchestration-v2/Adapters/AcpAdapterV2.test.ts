@@ -645,9 +645,12 @@ describe("AcpAdapterV2", () => {
         (yield* runTurn(4, planPolicy, "Continue planning.")).prompt,
         "Continue planning.",
       );
+      const restoredBuild = yield* runTurn(5, defaultPolicy, "Implement the change.");
+      assert.include(restoredBuild.prompt, "T3 Code interaction mode: Default");
       assert.include(
-        (yield* runTurn(5, defaultPolicy, "Implement the change.")).prompt,
-        "T3 Code interaction mode: Default",
+        restoredBuild.methods,
+        "session/set_config_option",
+        "Build should restore the native mode that T3 temporarily replaced for Plan",
       );
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
@@ -737,6 +740,112 @@ describe("AcpAdapterV2", () => {
       assert.deepEqual(
         snapshot.messages.map((message) => message.text),
         ["before plan", "after plan"],
+      );
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
+  it.effect("projects ACP v2 fidelity updates into first-class orchestration items", () =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const idAllocator = yield* IdAllocatorV2;
+      const path = yield* Path.Path;
+      const serverConfig = yield* ServerConfig;
+      const mockAgentPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+      const instanceId = ProviderInstanceId.make("acp-test-v2-fidelity");
+      const adapter = makeAcpAdapterV2({
+        crypto: yield* Crypto.Crypto,
+        instanceId,
+        flavor: {
+          driver: ACP_TEST_DRIVER,
+          capabilities: AcpProviderCapabilitiesV2,
+          makeRuntime: makeMockRuntime({
+            childProcessSpawner,
+            mockAgentPath,
+            environment: { T3_ACP_EMIT_V2_FIDELITY: "1" },
+          }),
+        },
+        fileSystem,
+        idAllocator,
+        serverConfig,
+      });
+      const threadId = ThreadId.make("thread-acp-v2-fidelity");
+      const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+      });
+      const modelSelection = { instanceId, model: "default" } as const;
+      const runtime = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("provider-session-acp-v2-fidelity"),
+        modelSelection,
+        runtimePolicy,
+      });
+      const providerThread = yield* runtime.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy,
+      });
+      const now = yield* DateTime.now;
+      yield* runtime.startTurn(
+        makeTurnInput({
+          threadId,
+          providerThread,
+          instanceId,
+          runtimePolicy,
+          now,
+          ordinal: 1,
+        }),
+      );
+      const events = Array.from(
+        yield* runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runCollect,
+        ),
+      );
+      const plans = events.flatMap((event) => (event.type === "plan.updated" ? [event.plan] : []));
+      const planA = plans.filter((plan) => plan.kind === "proposed_plan");
+      const planB = plans.find((plan) => plan.kind === "todo_list");
+      assert.equal(planA.length, 2);
+      assert.equal(planA[0]?.id, planA[1]?.id);
+      assert.equal(planA[1]?.status, "superseded");
+      assert.isDefined(planB);
+      assert.notEqual(planA[0]?.id, planB?.id);
+
+      const items = events.flatMap((event) =>
+        event.type === "turn_item.updated" ? [event.turnItem] : [],
+      );
+      assert.isTrue(items.some((item) => item.type === "user_message" && item.text.length === 0));
+      assert.isTrue(
+        items.some((item) => item.type === "reasoning" && item.text === "final thought"),
+      );
+      assert.deepInclude(
+        items.flatMap((item) =>
+          item.type === "command_execution" ? [{ input: item.input, output: item.output }] : [],
+        ),
+        { input: "printf proof", output: "proof" },
+      );
+      assert.isTrue(
+        items.some((item) => item.title === "Action required" && item.status === "waiting"),
+      );
+      assert.isTrue(
+        items.some(
+          (item) =>
+            item.type === "file_change" &&
+            item.changes?.[0]?.operation === "move" &&
+            item.changes[0]?.oldPath === "/workspace/old.ts",
+        ),
+      );
+      assert.isTrue(
+        items.some(
+          (item) =>
+            item.type === "compaction" &&
+            item.status === "completed" &&
+            item.summary === "Retained decisions.",
+        ),
       );
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
@@ -1437,7 +1546,6 @@ describe("AcpAdapterV2", () => {
       if (writeTextFile === undefined) {
         return yield* Effect.die("ACP runtime must register the fs write handler");
       }
-
       const insidePath = path.join(workspace, "src", "inside.ts");
       yield* writeTextFile(
         { sessionId: "mock-session-1", path: insidePath, content: "inside" },
@@ -1452,6 +1560,72 @@ describe("AcpAdapterV2", () => {
       ).pipe(Effect.exit);
       assert.isTrue(Exit.isFailure(deniedWrite));
       assert.isFalse(yield* fileSystem.exists(outsidePath));
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
+  it.effect("rejects unapproved client-mediated reads in approval-required mode", () =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const idAllocator = yield* IdAllocatorV2;
+      const path = yield* Path.Path;
+      const serverConfig = yield* ServerConfig;
+      const mockAgentPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+      type RuntimeService = AcpSessionRuntime.AcpSessionRuntime["Service"];
+      let readTextFile: Parameters<RuntimeService["handleReadTextFile"]>[0] | undefined;
+      const instanceId = ProviderInstanceId.make("acp-test-client-policy-read");
+      const adapter = makeAcpAdapterV2({
+        crypto: yield* Crypto.Crypto,
+        instanceId,
+        flavor: {
+          driver: ACP_TEST_DRIVER,
+          capabilities: AcpProviderCapabilitiesV2,
+          makeRuntime: makeMockRuntime({
+            childProcessSpawner,
+            mockAgentPath,
+            wrapRuntime: (runtime) => ({
+              ...runtime,
+              handleReadTextFile: (handler) =>
+                Effect.sync(() => {
+                  readTextFile = handler;
+                }).pipe(Effect.andThen(runtime.handleReadTextFile(handler))),
+            }),
+          }),
+        },
+        fileSystem,
+        idAllocator,
+        serverConfig,
+      });
+      const workspace = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-acp-client-policy-read-",
+      });
+      const readablePath = path.join(workspace, "existing.ts");
+      yield* fileSystem.writeFileString(readablePath, "existing");
+      const threadId = ThreadId.make("thread-acp-client-policy-read");
+      const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        cwd: workspace,
+      });
+      const modelSelection = { instanceId, model: "default" } as const;
+      const runtime = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("provider-session-acp-client-policy-read"),
+        modelSelection,
+        runtimePolicy,
+      });
+      yield* runtime.ensureThread({ threadId, modelSelection, runtimePolicy });
+      if (readTextFile === undefined) {
+        return yield* Effect.die("ACP runtime must register the fs read handler");
+      }
+
+      const deniedRead = yield* readTextFile(
+        { sessionId: "mock-session-1", path: readablePath },
+        { requestId: "test-unapproved-read", method: "fs/read_text_file" },
+      ).pipe(Effect.exit);
+      assert.isTrue(Exit.isFailure(deniedRead));
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 

@@ -1,4 +1,5 @@
 import {
+  AcpRegistryListProvidersResult,
   AcpRegistryOperationError,
   AcpRegistryListSessionsResult,
   AcpRegistryProbeResult,
@@ -258,6 +259,8 @@ export function acpRegistryProbeResult(
       canLoad: started.initializeResult.agentCapabilities?.loadSession === true,
       canResume: started.initializeResult.agentCapabilities?.sessionCapabilities?.resume != null,
       canLogout: started.initializeResult.agentCapabilities?.auth?.logout != null,
+      canDelete: started.initializeResult.agentCapabilities?.sessionCapabilities?.delete != null,
+      canConfigureProviders: started.initializeResult.agentCapabilities?.providers != null,
     },
     ...liveConfiguration,
   });
@@ -362,33 +365,29 @@ export const probeAcpRegistryConfiguration = Effect.fn("AcpRegistryProbe.probeCo
         emptyAcpRegistryAvailableCommands(),
       );
       const commandsAdvertised = yield* Deferred.make<void>();
-      yield* runtime.handleElicitation((request) => {
-        if (request.mode !== "url" || !("url" in request) || !("elicitationId" in request)) {
-          return Effect.succeed({ action: "decline" } as const);
-        }
-        const url = normalizeAcpRegistryWebUrl(request.url);
-        const elicitationId = boundedOpaqueValue(request.elicitationId, MAX_ID_LENGTH);
-        if (url === undefined || elicitationId === undefined) {
-          return Effect.succeed({ action: "decline" } as const);
-        }
-        const action: AcpRegistryUrlAuthAction = {
-          elicitationId,
-          url,
-          message: boundedText(request.message, MAX_DESCRIPTION_LENGTH),
-        };
-        return Ref.set(authActionRef, action).pipe(
-          Effect.andThen(
-            Option.match(runtimeCoordinator, {
-              onNone: () => Effect.succeed(false),
-              onSome: (coordinator) =>
-                coordinator.requestUrlAuthentication(input.instanceId, action),
-            }),
-          ),
-          Effect.map((accepted) =>
-            accepted ? ({ action: "accept" } as const) : ({ action: "decline" } as const),
-          ),
-        );
-      });
+      yield* runtime.handleElicitation((request) =>
+        Effect.gen(function* () {
+          if (request.mode !== "url" || !("url" in request) || !("elicitationId" in request)) {
+            return { action: "decline" } as const;
+          }
+          const url = normalizeAcpRegistryWebUrl(request.url);
+          const elicitationId = boundedOpaqueValue(request.elicitationId, MAX_ID_LENGTH);
+          if (url === undefined || elicitationId === undefined) {
+            return { action: "decline" } as const;
+          }
+          const action: AcpRegistryUrlAuthAction = {
+            elicitationId,
+            url,
+            message: boundedText(request.message, MAX_DESCRIPTION_LENGTH),
+          };
+          yield* Ref.set(authActionRef, action);
+          const accepted = yield* Option.match(runtimeCoordinator, {
+            onNone: () => Effect.succeed(false),
+            onSome: (coordinator) => coordinator.requestUrlAuthentication(input.instanceId, action),
+          });
+          return accepted ? ({ action: "accept" } as const) : ({ action: "decline" } as const);
+        }),
+      );
       yield* runtime.handleSessionUpdate((notification) => {
         const update = notification.update;
         return update.sessionUpdate === "available_commands_update"
@@ -446,7 +445,11 @@ export const probeAcpRegistryConfiguration = Effect.fn("AcpRegistryProbe.probeCo
 const MANAGEMENT_TIMEOUT = Duration.seconds(60);
 
 function acpRegistryUnsupportedOperation(
-  reason: "session_list_unsupported" | "logout_unsupported",
+  reason:
+    | "session_list_unsupported"
+    | "session_delete_unsupported"
+    | "providers_unsupported"
+    | "logout_unsupported",
   message: string,
 ) {
   return new AcpRegistryOperationError({ reason, message });
@@ -485,48 +488,83 @@ const makeAcpRegistryManagementRuntime = Effect.fn("AcpRegistryProbe.makeManagem
     const runtime = yield* Effect.service(AcpSessionRuntime.AcpSessionRuntime).pipe(
       Effect.provide(runtimeContext),
     );
-    yield* runtime.handleElicitation((request) => {
-      if (request.mode !== "url" || !("url" in request) || !("elicitationId" in request)) {
-        return Effect.succeed({ action: "decline" } as const);
-      }
-      const url = normalizeAcpRegistryWebUrl(request.url);
-      const elicitationId = boundedOpaqueValue(request.elicitationId, MAX_ID_LENGTH);
-      if (url === undefined || elicitationId === undefined) {
-        return Effect.succeed({ action: "decline" } as const);
-      }
-      const action: AcpRegistryUrlAuthAction = {
-        elicitationId,
-        url,
-        message: boundedText(request.message, MAX_DESCRIPTION_LENGTH),
-      };
-      const accepted = Option.match(runtimeCoordinator, {
-        onNone: () => Effect.succeed(false),
-        onSome: (coordinator) => coordinator.requestUrlAuthentication(input.instanceId, action),
-      });
-      return accepted.pipe(
-        Effect.map((accepted) =>
-          accepted ? ({ action: "accept" } as const) : ({ action: "decline" } as const),
-        ),
-      );
-    });
+    yield* runtime.handleElicitation((request) =>
+      Effect.gen(function* () {
+        if (request.mode !== "url" || !("url" in request) || !("elicitationId" in request)) {
+          return { action: "decline" } as const;
+        }
+        const url = normalizeAcpRegistryWebUrl(request.url);
+        const elicitationId = boundedOpaqueValue(request.elicitationId, MAX_ID_LENGTH);
+        if (url === undefined || elicitationId === undefined) {
+          return { action: "decline" } as const;
+        }
+        const action: AcpRegistryUrlAuthAction = {
+          elicitationId,
+          url,
+          message: boundedText(request.message, MAX_DESCRIPTION_LENGTH),
+        };
+        const accepted = yield* Option.match(runtimeCoordinator, {
+          onNone: () => Effect.succeed(false),
+          onSome: (coordinator) => coordinator.requestUrlAuthentication(input.instanceId, action),
+        });
+        return accepted ? ({ action: "accept" } as const) : ({ action: "decline" } as const);
+      }),
+    );
     return runtime;
   },
 );
 
 function managementFailure(
-  operation: "list" | "logout",
+  operation:
+    | "list"
+    | "delete"
+    | "providers_list"
+    | "providers_set"
+    | "providers_disable"
+    | "logout",
   error: EffectAcpErrors.AcpError | AcpRegistryOperationError,
 ): AcpRegistryOperationError {
   if (error._tag === "AcpRegistryOperationError") return error;
   if (error._tag === "AcpRequestError" && error.code === -32601) {
+    if (operation === "list") {
+      return acpRegistryUnsupportedOperation(
+        "session_list_unsupported",
+        "The ACP agent does not advertise session listing.",
+      );
+    }
+    if (operation === "delete") {
+      return acpRegistryUnsupportedOperation(
+        "session_delete_unsupported",
+        "The ACP agent does not advertise session deletion.",
+      );
+    }
+    if (operation.startsWith("providers_")) {
+      return acpRegistryUnsupportedOperation(
+        "providers_unsupported",
+        "The ACP agent does not advertise provider configuration.",
+      );
+    }
     return acpRegistryUnsupportedOperation(
-      operation === "list" ? "session_list_unsupported" : "logout_unsupported",
-      operation === "list"
-        ? "The ACP agent does not advertise session listing."
-        : "The ACP agent does not advertise logout.",
+      "logout_unsupported",
+      "The ACP agent does not advertise logout.",
     );
   }
-  return acpRegistryProbeFailure(error);
+  const classified = acpRegistryProbeFailure(error);
+  if (classified.reason === "authentication_failed") return classified;
+  const failure =
+    operation === "delete"
+      ? { reason: "session_delete_failed" as const, message: "Could not delete the ACP session." }
+      : operation === "providers_list"
+        ? { reason: "providers_list_failed" as const, message: "Could not list ACP providers." }
+        : operation === "providers_set" || operation === "providers_disable"
+          ? {
+              reason: "provider_configuration_failed" as const,
+              message: "Could not update the ACP provider configuration.",
+            }
+          : undefined;
+  return failure === undefined
+    ? classified
+    : new AcpRegistryOperationError({ ...failure, cause: error });
 }
 
 export const listAcpRegistrySessions = Effect.fn("AcpRegistryProbe.listSessions")(
@@ -568,6 +606,7 @@ export const listAcpRegistrySessions = Effect.fn("AcpRegistryProbe.listSessions"
           : boundedText(listed.nextCursor, 2_048) || null,
       canLoad: initialized.agentCapabilities?.loadSession === true,
       canResume: initialized.agentCapabilities?.sessionCapabilities?.resume != null,
+      canDelete: initialized.agentCapabilities?.sessionCapabilities?.delete != null,
     });
   },
   (effect) =>
@@ -584,6 +623,127 @@ export const listAcpRegistrySessions = Effect.fn("AcpRegistryProbe.listSessions"
           ),
       }),
       Effect.mapError((error) => managementFailure("list", error)),
+    ),
+);
+
+export const deleteAcpRegistrySession = Effect.fn("AcpRegistryProbe.deleteSession")(
+  function* (input: AcpRegistryManagementInput & { readonly sessionId: string }) {
+    const runtime = yield* makeAcpRegistryManagementRuntime(input);
+    yield* runtime.deleteSession(input.sessionId);
+  },
+  (effect) =>
+    effect.pipe(
+      Effect.scoped,
+      Effect.timeoutOrElse({
+        duration: MANAGEMENT_TIMEOUT,
+        orElse: () =>
+          Effect.fail(
+            new AcpRegistryOperationError({
+              reason: "session_delete_failed",
+              message: "The ACP session delete request timed out.",
+            }),
+          ),
+      }),
+      Effect.mapError((error) => managementFailure("delete", error)),
+    ),
+);
+
+export const listAcpRegistryProviders = Effect.fn("AcpRegistryProbe.listProviders")(
+  function* (input: AcpRegistryManagementInput) {
+    const runtime = yield* makeAcpRegistryManagementRuntime(input);
+    const listed = yield* runtime.listProviders;
+    return AcpRegistryListProvidersResult.make({
+      providers: listed.providers.slice(0, 64).flatMap((provider) => {
+        const providerId = boundedOpaqueValue(provider.providerId, 256);
+        if (providerId === undefined) return [];
+        const supported = provider.supported
+          .flatMap((protocol) => {
+            const value = boundedOpaqueValue(protocol, 64);
+            return value === undefined ? [] : [value];
+          })
+          .slice(0, 16);
+        const current = provider.current;
+        const currentApiType =
+          current == null ? undefined : boundedOpaqueValue(current.apiType, 64);
+        const currentBaseUrl =
+          current == null ? undefined : normalizeAcpRegistryWebUrl(current.baseUrl);
+        return [
+          {
+            providerId,
+            supported,
+            required: provider.required,
+            current:
+              currentApiType === undefined || currentBaseUrl === undefined
+                ? null
+                : { apiType: currentApiType, baseUrl: currentBaseUrl },
+          },
+        ];
+      }),
+    });
+  },
+  (effect) =>
+    effect.pipe(
+      Effect.scoped,
+      Effect.timeoutOrElse({
+        duration: MANAGEMENT_TIMEOUT,
+        orElse: () =>
+          Effect.fail(
+            new AcpRegistryOperationError({
+              reason: "providers_list_failed",
+              message: "The ACP provider list request timed out.",
+            }),
+          ),
+      }),
+      Effect.mapError((error) => managementFailure("providers_list", error)),
+    ),
+);
+
+export const setAcpRegistryProvider = Effect.fn("AcpRegistryProbe.setProvider")(
+  function* (input: AcpRegistryManagementInput & EffectAcpSchema.SetProviderRequest) {
+    const runtime = yield* makeAcpRegistryManagementRuntime(input);
+    yield* runtime.setProvider({
+      providerId: input.providerId,
+      apiType: input.apiType,
+      baseUrl: input.baseUrl,
+      ...(input.headers === undefined ? {} : { headers: input.headers }),
+    });
+  },
+  (effect) =>
+    effect.pipe(
+      Effect.scoped,
+      Effect.timeoutOrElse({
+        duration: MANAGEMENT_TIMEOUT,
+        orElse: () =>
+          Effect.fail(
+            new AcpRegistryOperationError({
+              reason: "provider_configuration_failed",
+              message: "The ACP provider configuration request timed out.",
+            }),
+          ),
+      }),
+      Effect.mapError((error) => managementFailure("providers_set", error)),
+    ),
+);
+
+export const disableAcpRegistryProvider = Effect.fn("AcpRegistryProbe.disableProvider")(
+  function* (input: AcpRegistryManagementInput & { readonly providerId: string }) {
+    const runtime = yield* makeAcpRegistryManagementRuntime(input);
+    yield* runtime.disableProvider(input.providerId);
+  },
+  (effect) =>
+    effect.pipe(
+      Effect.scoped,
+      Effect.timeoutOrElse({
+        duration: MANAGEMENT_TIMEOUT,
+        orElse: () =>
+          Effect.fail(
+            new AcpRegistryOperationError({
+              reason: "provider_configuration_failed",
+              message: "The ACP provider disable request timed out.",
+            }),
+          ),
+      }),
+      Effect.mapError((error) => managementFailure("providers_disable", error)),
     ),
 );
 

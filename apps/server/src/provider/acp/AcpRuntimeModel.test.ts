@@ -353,6 +353,8 @@ describe("AcpRuntimeModel", () => {
       {
         _tag: "PlanUpdated",
         payload: {
+          nativePlanId: "legacy",
+          kind: "items",
           plan: [
             { step: "Inspect state", status: "completed" },
             { step: "Step 2", status: "inProgress" },
@@ -517,6 +519,8 @@ describe("AcpRuntimeModel", () => {
     expect(replaced.events[0]).toMatchObject({
       _tag: "PlanUpdated",
       payload: {
+        nativePlanId: "plan-1",
+        kind: "items",
         plan: [
           { step: "Inspect schema", status: "completed" },
           { step: "Ship integration", status: "inProgress" },
@@ -525,8 +529,74 @@ describe("AcpRuntimeModel", () => {
     });
     expect(removed.events[0]).toMatchObject({
       _tag: "PlanUpdated",
-      payload: { plan: [] },
+      payload: { nativePlanId: "plan-1", kind: "removed" },
     });
+  });
+
+  it("preserves markdown, file, and future ACP plan variants by plan ID", () => {
+    const updates = [
+      {
+        sessionId: "session-1",
+        update: {
+          sessionUpdate: "plan_update",
+          plan: { type: "markdown", planId: "plan-markdown", content: "# Ship it" },
+        },
+      },
+      {
+        sessionId: "session-1",
+        update: {
+          sessionUpdate: "plan_update",
+          plan: { type: "file", planId: "plan-file", uri: "file:///workspace/PLAN.md" },
+        },
+      },
+      {
+        sessionId: "session-1",
+        update: {
+          sessionUpdate: "plan_update",
+          plan: { type: "diagram", planId: "plan-future", nodes: [] },
+        },
+      },
+    ] as const;
+
+    expect(updates.flatMap((update) => parseSessionUpdateEvent(update).events)).toMatchObject([
+      {
+        _tag: "PlanUpdated",
+        payload: { nativePlanId: "plan-markdown", kind: "markdown", markdown: "# Ship it" },
+      },
+      {
+        _tag: "PlanUpdated",
+        payload: {
+          nativePlanId: "plan-file",
+          kind: "file",
+          uri: "file:///workspace/PLAN.md",
+        },
+      },
+      {
+        _tag: "PlanUpdated",
+        payload: { nativePlanId: "plan-future", kind: "unknown", contentType: "diagram" },
+      },
+    ]);
+  });
+
+  it("turns future ACP content and session updates into explicit placeholders", () => {
+    expect(
+      acpContentBlockDisplayText({
+        type: "_t3_unknown",
+        originalType: "chart",
+        raw: { type: "chart", points: [] },
+      }),
+    ).toBe("[Unsupported ACP content: chart]");
+
+    expect(
+      parseSessionUpdateEvent({
+        sessionId: "session-1",
+        update: {
+          sessionUpdate: "_t3_unknown",
+          originalSessionUpdate: "timeline_update",
+          raw: { sessionUpdate: "timeline_update", entries: [] },
+        },
+      }).events,
+    ).toMatchObject([{ _tag: "UnknownUpdate", updateType: "timeline_update" }]);
   });
 
   it("projects ACP v2 compaction lifecycle and prompt usage", () => {
@@ -624,6 +694,30 @@ describe("AcpRuntimeModel", () => {
     expect(first.pendingOutputBytes).toBeDefined();
     expect(second.output).toBe("A🙂B");
     expect(second.pendingOutputBytes).toBeUndefined();
+  });
+
+  it("drops malformed and oversized ACP terminal frames without decoding them", () => {
+    const seeded = applyAcpAgentTerminalUpdate(undefined, {
+      sessionUpdate: "terminal_output_chunk",
+      terminalId: "terminal-invalid",
+      data: Buffer.from("kept").toString("base64"),
+    });
+
+    expect(
+      applyAcpAgentTerminalUpdate(seeded, {
+        sessionUpdate: "terminal_output_chunk",
+        terminalId: "terminal-invalid",
+        data: "not base64!",
+      }),
+    ).toBe(seeded);
+
+    expect(
+      applyAcpAgentTerminalUpdate(seeded, {
+        sessionUpdate: "terminal_output_chunk",
+        terminalId: "terminal-oversized",
+        data: Buffer.alloc(16 * 1024 * 1024 + 1).toString("base64"),
+      }),
+    ).toBe(seeded);
   });
 
   it("projects binary ACP content without retaining encoded payloads", () => {

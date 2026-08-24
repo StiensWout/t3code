@@ -93,6 +93,8 @@ describe("ACP Registry probe", () => {
         canLoad: true,
         canResume: true,
         canLogout: true,
+        canDelete: false,
+        canConfigureProviders: false,
       },
     });
   });
