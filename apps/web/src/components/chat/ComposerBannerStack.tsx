@@ -53,8 +53,9 @@ interface ComposerBannerStackProps {
   readonly className?: string;
   readonly items: ReadonlyArray<ComposerBannerStackItem>;
   // Hero layout floats the stack above the composer instead of docking onto
-  // it: the front banner renders with the detached glass treatment and the
-  // slot drops its attached negative margin.
+  // it: the slot drops its attached negative margin and the front banner
+  // keeps its surface but reads the overlap as zero, so it sits flush on
+  // the composer without the seam pull-down.
   readonly detached?: boolean;
 }
 
@@ -145,7 +146,7 @@ export function ComposerBannerStack({
         >
           <ComposerBannerStackAlert
             item={frontItem}
-            attached={!detached}
+            attached
             exiting={exitingItemId === frontItem.id}
             onDismissRequest={() => requestDismiss(frontItem)}
           />
