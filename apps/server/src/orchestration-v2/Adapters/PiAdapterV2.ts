@@ -32,7 +32,9 @@ import {
   type ModelSelection,
   type OrchestrationV2ExecutionNode,
   type OrchestrationV2ProviderCapabilities,
+  type OrchestrationV2ProviderFailure,
   type OrchestrationV2ProviderRef,
+  type OrchestrationV2ProviderRetry,
   type OrchestrationV2ProviderSession,
   type OrchestrationV2ProviderThread,
   type OrchestrationV2ProviderTurn,
@@ -91,7 +93,7 @@ import {
   type ProviderAdapterDriver,
   type ProviderAdapterDriverCreateInput,
 } from "../ProviderAdapterDriver.ts";
-import { makeProviderFailure } from "../ProviderFailure.ts";
+import { makeProviderFailure, makeProviderRetryTurnItem } from "../ProviderFailure.ts";
 import { turnScopedSelectionTransition } from "../ProviderSelectionTransition.ts";
 import {
   makePiRpcConnection,
@@ -271,6 +273,33 @@ interface PiStreamItemState {
   readonly startedAt: DateTime.Utc;
 }
 
+type PiCompactionStatus = "running" | "completed" | "failed" | "cancelled";
+
+interface PiCompactionState {
+  readonly nativeItemId: string;
+  readonly startedAt: DateTime.Utc;
+}
+
+interface PiProviderRetryState {
+  readonly retry: OrchestrationV2ProviderRetry;
+  readonly failure: OrchestrationV2ProviderFailure;
+  readonly startedAt: DateTime.Utc;
+  readonly itemOrdinal: number;
+}
+
+function compactionTitle(status: PiCompactionStatus): string {
+  switch (status) {
+    case "running":
+      return "Compacting context...";
+    case "completed":
+      return "Context compacted";
+    case "failed":
+      return "Context compaction failed";
+    case "cancelled":
+      return "Context compaction stopped";
+  }
+}
+
 interface ActivePiTurn {
   readonly turnInput: ProviderAdapterV2TurnInput;
   readonly providerTurn: OrchestrationV2ProviderTurn;
@@ -298,6 +327,8 @@ interface ActivePiTurn {
   readonly promptMayBeCommandOnly: boolean;
   /** Pi reports context as unknown immediately after compaction; keep its estimate for the meter. */
   latestCompactionAfterTokens: number | null;
+  activeCompaction: PiCompactionState | null;
+  activeProviderRetry: PiProviderRetryState | null;
   failure: ReturnType<typeof makeProviderFailure> | null;
 }
 
@@ -598,6 +629,71 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
             completedAt,
           },
         });
+
+      const emitProviderRetry = Effect.fnUntraced(function* (
+        turn: ActivePiTurn,
+        providerRetry: PiProviderRetryState,
+        status: "running" | "completed" | "failed" | "interrupted" | "cancelled",
+        updatedAt: DateTime.Utc,
+      ) {
+        yield* emit({
+          type: "turn_item.updated",
+          driver: PI_PROVIDER,
+          turnItem: makeProviderRetryTurnItem({
+            idAllocator,
+            driver: PI_PROVIDER,
+            threadId: turn.turnInput.threadId,
+            runId: turn.turnInput.runId,
+            nodeId: turn.turnInput.rootNodeId,
+            providerThreadId: turn.turnInput.providerThread.id,
+            providerTurnId: turn.providerTurn.id,
+            itemOrdinal: providerRetry.itemOrdinal,
+            failure: providerRetry.failure,
+            retry: providerRetry.retry,
+            status,
+            startedAt: providerRetry.startedAt,
+            updatedAt,
+          }),
+        });
+      });
+
+      const compactionNativeItemId = (turn: ActivePiTurn): string =>
+        `compaction:${turn.providerTurn.id}:${turn.nextItemOrdinal}`;
+
+      const emitCompaction = Effect.fnUntraced(function* (
+        turn: ActivePiTurn,
+        compaction: PiCompactionState,
+        status: PiCompactionStatus,
+        details: {
+          readonly summary?: string;
+          readonly beforeTokenCount?: number;
+          readonly afterTokenCount?: number;
+        } = {},
+      ) {
+        const emittedAt = yield* DateTime.now;
+        const completedAt = status === "running" ? null : emittedAt;
+        yield* emitItemNode(
+          turn,
+          compaction.nativeItemId,
+          "system",
+          status,
+          compaction.startedAt,
+          completedAt,
+        );
+        yield* emit({
+          type: "turn_item.updated",
+          driver: PI_PROVIDER,
+          turnItem: {
+            ...baseItemFields(turn, compaction.nativeItemId, compaction.startedAt, emittedAt),
+            status,
+            title: compactionTitle(status),
+            completedAt,
+            type: "compaction",
+            driver: PI_PROVIDER,
+            ...details,
+          },
+        });
+      });
 
       // ── streaming text / reasoning ────────────────────────
 
@@ -1204,6 +1300,24 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
         state.activeTurn = null;
         const completedAt = yield* DateTime.now;
         yield* completeOpenStreamItems(turn);
+        if (turn.activeCompaction !== null) {
+          const status = turn.interrupted
+            ? "cancelled"
+            : turn.failure === null
+              ? "completed"
+              : "failed";
+          yield* emitCompaction(turn, turn.activeCompaction, status);
+          turn.activeCompaction = null;
+        }
+        if (turn.activeProviderRetry !== null) {
+          if (turn.interrupted) {
+            yield* emitProviderRetry(turn, turn.activeProviderRetry, "interrupted", completedAt);
+            turn.activeProviderRetry = null;
+          } else if (turn.failure === null) {
+            yield* emitProviderRetry(turn, turn.activeProviderRetry, "completed", completedAt);
+            turn.activeProviderRetry = null;
+          }
+        }
         yield* cancelPendingPrompts(completedAt);
         const treeRefs = yield* captureTurnTreeRefs();
         const failure = turn.interrupted ? null : turn.failure;
@@ -1232,18 +1346,27 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
         );
         if (failure !== null) {
           const failureItemId = `terminal-failure:${turn.providerTurn.id}`;
-          yield* emit({
-            type: "turn_item.updated",
-            driver: PI_PROVIDER,
-            turnItem: {
-              ...baseItemFields(turn, failureItemId, completedAt, completedAt),
-              status: "failed",
-              title: null,
+          if (turn.activeProviderRetry !== null) {
+            yield* emitProviderRetry(
+              turn,
+              { ...turn.activeProviderRetry, failure },
+              "failed",
               completedAt,
-              type: "error",
-              failure,
-            },
-          });
+            );
+          } else {
+            yield* emit({
+              type: "turn_item.updated",
+              driver: PI_PROVIDER,
+              turnItem: {
+                ...baseItemFields(turn, failureItemId, completedAt, completedAt),
+                status: "failed",
+                title: null,
+                completedAt,
+                type: "error",
+                failure,
+              },
+            });
+          }
           yield* emit({
             type: "turn.terminal",
             driver: PI_PROVIDER,
@@ -1253,6 +1376,12 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
             failureItemOrdinal: itemOrdinal(turn, failureItemId),
             status: "failed",
             failure,
+            ...(turn.activeProviderRetry === null
+              ? {}
+              : {
+                  retry: turn.activeProviderRetry.retry,
+                  retryStartedAt: turn.activeProviderRetry.startedAt,
+                }),
             threadDisposition: "reusable",
           });
         } else {
@@ -1273,6 +1402,31 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
       });
 
       // ── event pump ────────────────────────────────────────
+
+      const scheduleCommandOnlySettleProbe = (turn: ActivePiTurn) => {
+        const providerTurnId = turn.providerTurn.id;
+        return request({ type: "get_state" }).pipe(
+          Effect.matchEffect({
+            onSuccess: (data) =>
+              Queue.offer(connection.events, {
+                type: "t3.settle_probe",
+                providerTurnId,
+                data,
+              }),
+            // A failed probe still has to reach the pump. Dropping it would
+            // leave a command-only turn active forever, because Pi never emits
+            // agent events for one.
+            onFailure: () =>
+              Queue.offer(connection.events, {
+                type: "t3.settle_probe",
+                providerTurnId,
+                probeFailed: true,
+              }),
+          }),
+          Effect.ignore,
+          Effect.forkIn(scope),
+        );
+      };
 
       const handleSessionEvent = Effect.fnUntraced(function* (event: PiRpcRecord) {
         const state = threadState;
@@ -1345,80 +1499,135 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
           case "tool_execution_end":
             if (turn !== null) yield* emitToolItem(turn, event, "end");
             return;
+          case "compaction_start": {
+            if (turn === null) return;
+            if (turn.activeCompaction !== null) {
+              yield* emitCompaction(turn, turn.activeCompaction, "cancelled");
+            }
+            const startedAt = yield* DateTime.now;
+            const compaction = {
+              nativeItemId: compactionNativeItemId(turn),
+              startedAt,
+            } satisfies PiCompactionState;
+            turn.activeCompaction = compaction;
+            yield* emitCompaction(turn, compaction, "running");
+            return;
+          }
           case "compaction_end": {
             if (turn === null) return;
-            const emittedAt = yield* DateTime.now;
+            const observedAt = yield* DateTime.now;
+            const compaction = turn.activeCompaction ?? {
+              nativeItemId: compactionNativeItemId(turn),
+              startedAt: observedAt,
+            };
+            turn.activeCompaction = null;
             const result = event["result"];
             if (result === null || result === undefined) {
-              // Aborted compactions vanish silently; failed ones carry an
-              // errorMessage and deserve a visible failed compaction item.
-              const errorMessage = recordString(event, "errorMessage");
-              if (event["aborted"] === true || errorMessage === undefined) return;
-              // Threshold compaction can run after a successful answer. Its
-              // failure is visible, but must not replace that successful turn;
-              // overflow failures already arrive through message_end above.
-              const failedItemId = `compaction:${turn.nextItemOrdinal}`;
-              yield* emit({
-                type: "turn_item.updated",
-                driver: PI_PROVIDER,
-                turnItem: {
-                  ...baseItemFields(turn, failedItemId, emittedAt, emittedAt),
-                  status: "failed",
-                  title: null,
-                  completedAt: emittedAt,
-                  type: "compaction",
-                  driver: PI_PROVIDER,
-                  summary: errorMessage.slice(0, 1_000),
-                },
+              if (event["aborted"] === true) {
+                yield* emitCompaction(turn, compaction, "cancelled");
+                if (!turn.sawAgentActivity) yield* scheduleCommandOnlySettleProbe(turn);
+                return;
+              }
+              const errorMessage =
+                recordString(event, "errorMessage") ?? "Pi context compaction failed.";
+              yield* emitCompaction(turn, compaction, "failed", {
+                summary: errorMessage.slice(0, 1_000),
               });
+              if (!turn.sawAgentActivity) yield* scheduleCommandOnlySettleProbe(turn);
               return;
             }
             // An overflow can surface as a model error (`message_end` with
-            // stopReason error) before pi compacts and retries the turn. A
-            // successful compaction means the turn is recovering, so the
-            // stashed failure must not terminalize it, mirroring how
-            // auto_retry_end success already clears it.
-            turn.failure = null;
-            const nativeItemId = `compaction:${turn.nextItemOrdinal}`;
+            // stopReason error) before Pi compacts and retries the turn. Clear
+            // that failure only when Pi confirms that compaction will retry;
+            // a successful non-retrying compaction must not erase an exhausted
+            // provider retry.
+            if (event["willRetry"] === true) turn.failure = null;
             turn.latestCompactionAfterTokens =
               nonNegativeInteger(result, "estimatedTokensAfter") ?? null;
-            yield* emit({
-              type: "turn_item.updated",
-              driver: PI_PROVIDER,
-              turnItem: {
-                ...baseItemFields(turn, nativeItemId, emittedAt, emittedAt),
-                status: "completed",
-                title: null,
-                completedAt: emittedAt,
-                type: "compaction",
-                driver: PI_PROVIDER,
-                ...(recordString(result, "summary") === undefined
-                  ? {}
-                  : { summary: recordString(result, "summary") }),
-                ...(recordNumber(result, "tokensBefore") === undefined
-                  ? {}
-                  : { beforeTokenCount: recordNumber(result, "tokensBefore") }),
-                ...(recordNumber(result, "estimatedTokensAfter") === undefined
-                  ? {}
-                  : { afterTokenCount: recordNumber(result, "estimatedTokensAfter") }),
-              },
+            const summary = recordString(result, "summary");
+            const beforeTokenCount = nonNegativeInteger(result, "tokensBefore");
+            const afterTokenCount = nonNegativeInteger(result, "estimatedTokensAfter");
+            yield* emitCompaction(turn, compaction, "completed", {
+              ...(summary === undefined ? {} : { summary }),
+              ...(beforeTokenCount === undefined ? {} : { beforeTokenCount }),
+              ...(afterTokenCount === undefined ? {} : { afterTokenCount }),
             });
+            if (!turn.sawAgentActivity) yield* scheduleCommandOnlySettleProbe(turn);
+            return;
+          }
+          case "auto_retry_start": {
+            if (turn === null) return;
+            const emittedAt = yield* DateTime.now;
+            const attempt = Math.max(1, Math.trunc(recordNumber(event, "attempt") ?? 1));
+            const maxAttempts = Math.max(
+              attempt,
+              Math.trunc(recordNumber(event, "maxAttempts") ?? attempt),
+            );
+            const retryDelayMs = Math.max(0, Math.trunc(recordNumber(event, "delayMs") ?? 0));
+            const failure = makeProviderFailure({
+              message: recordString(event, "errorMessage") ?? "Pi provider request failed.",
+              class: "provider_error",
+              retryable: true,
+            });
+            const current = turn.activeProviderRetry;
+            const providerRetry = {
+              retry: { attempt, maxAttempts, retryDelayMs },
+              failure,
+              startedAt: current?.startedAt ?? emittedAt,
+              itemOrdinal:
+                current?.itemOrdinal ??
+                itemOrdinal(turn, `terminal-failure:${turn.providerTurn.id}`),
+            } satisfies PiProviderRetryState;
+            turn.activeProviderRetry = providerRetry;
+            yield* emitProviderRetry(turn, providerRetry, "running", emittedAt);
             return;
           }
           case "auto_retry_end": {
             if (turn === null) return;
+            const emittedAt = yield* DateTime.now;
             if (event["success"] === true) {
               // The retry recovered. Pi emits the erroring `message_end`
               // before retrying, so leaving that failure in place would make
               // `agent_settled` terminalize a successful turn as failed.
+              if (turn.activeProviderRetry !== null) {
+                const attempt = Math.max(
+                  1,
+                  Math.trunc(
+                    recordNumber(event, "attempt") ?? turn.activeProviderRetry.retry.attempt,
+                  ),
+                );
+                const recoveredRetry = {
+                  ...turn.activeProviderRetry,
+                  retry: { ...turn.activeProviderRetry.retry, attempt },
+                };
+                yield* emitProviderRetry(turn, recoveredRetry, "completed", emittedAt);
+                turn.activeProviderRetry = null;
+              }
               turn.failure = null;
               return;
             }
-            turn.failure = makeProviderFailure({
+            const failure = makeProviderFailure({
               message: recordString(event, "finalError") ?? "Pi auto-retry failed.",
               class: "provider_error",
               retryable: false,
             });
+            const attempt = Math.max(1, Math.trunc(recordNumber(event, "attempt") ?? 1));
+            const current = turn.activeProviderRetry;
+            const providerRetry = {
+              retry: {
+                attempt,
+                maxAttempts: current?.retry.maxAttempts ?? attempt,
+                retryDelayMs: current?.retry.retryDelayMs ?? null,
+              },
+              failure,
+              startedAt: current?.startedAt ?? emittedAt,
+              itemOrdinal:
+                current?.itemOrdinal ??
+                itemOrdinal(turn, `terminal-failure:${turn.providerTurn.id}`),
+            } satisfies PiProviderRetryState;
+            turn.activeProviderRetry = providerRetry;
+            turn.failure = failure;
+            yield* emitProviderRetry(turn, providerRetry, "failed", emittedAt);
             return;
           }
           case "extension_ui_request":
@@ -1451,28 +1660,7 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
                 responseTurn.promptMayBeCommandOnly &&
                 !responseTurn.sawAgentActivity
               ) {
-                const providerTurnId = responseTurn.providerTurn.id;
-                yield* request({ type: "get_state" }).pipe(
-                  Effect.matchEffect({
-                    onSuccess: (data) =>
-                      Queue.offer(connection.events, {
-                        type: "t3.settle_probe",
-                        providerTurnId,
-                        data,
-                      }),
-                    // A failed probe still has to reach the pump. Dropping it
-                    // would leave a command-only turn active forever, because
-                    // Pi never emits agent events for one.
-                    onFailure: () =>
-                      Queue.offer(connection.events, {
-                        type: "t3.settle_probe",
-                        providerTurnId,
-                        probeFailed: true,
-                      }),
-                  }),
-                  Effect.ignore,
-                  Effect.forkIn(scope),
-                );
+                yield* scheduleCommandOnlySettleProbe(responseTurn);
               }
               return;
             }
@@ -1524,8 +1712,10 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
               turn !== null &&
               turn.providerTurn.id === event["providerTurnId"] &&
               !turn.sawAgentActivity &&
+              turn.activeCompaction === null &&
               (probeFailed ||
                 (recordField(data, "isStreaming") !== true &&
+                  recordField(data, "isCompacting") !== true &&
                   (recordNumber(data, "pendingMessageCount") ?? 0) === 0))
             ) {
               if (state !== null) yield* finalizeTurn(state);
@@ -1907,6 +2097,8 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
               sawAgentActivity: false,
               promptMayBeCommandOnly: payload.message.trimStart().startsWith("/"),
               latestCompactionAfterTokens: null,
+              activeCompaction: null,
+              activeProviderRetry: null,
               failure: null,
             };
             // Only the install/send/start-event boundary excludes the event
