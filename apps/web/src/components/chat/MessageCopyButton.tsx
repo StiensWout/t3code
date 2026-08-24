@@ -1,10 +1,11 @@
-import { memo, useRef } from "react";
+import { memo, useCallback, useRef } from "react";
 import { CopyIcon, CheckIcon } from "lucide-react";
 import { Button } from "../ui/button";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { cn } from "~/lib/utils";
 import { anchoredToastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { type MessageClipboardImage, writeMessageToClipboard } from "../../messageClipboard";
 
 const ANCHORED_TOAST_TIMEOUT_MS = 1000;
 const onCopy = (ref: React.RefObject<HTMLButtonElement | null>) => {
@@ -43,14 +44,18 @@ export const MessageCopyButton = memo(function MessageCopyButton({
   size = "xs",
   variant = "outline",
   className,
+  image,
 }: {
   text: string;
   size?: "xs" | "icon-xs";
   variant?: "outline" | "ghost";
   className?: string;
+  image?: MessageClipboardImage;
 }) {
   const ref = useRef<HTMLButtonElement>(null);
+  const write = useCallback((value: string) => writeMessageToClipboard(value, image), [image]);
   const { copyToClipboard, isCopied } = useCopyToClipboard<void>({
+    ...(image ? { write } : {}),
     onCopy: () => onCopy(ref),
     onError: (error: Error) => onCopyError(ref, error),
     timeout: ANCHORED_TOAST_TIMEOUT_MS,

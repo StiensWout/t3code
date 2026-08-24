@@ -95,11 +95,13 @@ export async function readTextFromClipboard(target = "text"): Promise<string> {
 export function useCopyToClipboard<TContext = void>({
   timeout = 2000,
   target = "text",
+  write,
   onCopy,
   onError,
 }: {
   timeout?: number;
   target?: string;
+  write?: (value: string, ctx: TContext) => Promise<boolean>;
   onCopy?: (ctx: TContext) => void;
   onError?: (error: Error, ctx: TContext) => void;
 } = {}): { copyToClipboard: (value: string, ctx: TContext) => void; isCopied: boolean } {
@@ -107,16 +109,21 @@ export function useCopyToClipboard<TContext = void>({
   const timeoutIdRef = React.useRef<NodeJS.Timeout | null>(null);
   const onCopyRef = React.useRef(onCopy);
   const onErrorRef = React.useRef(onError);
+  const writeRef = React.useRef(write);
   const targetRef = React.useRef(target);
   const timeoutRef = React.useRef(timeout);
 
   onCopyRef.current = onCopy;
   onErrorRef.current = onError;
+  writeRef.current = write;
   targetRef.current = target;
   timeoutRef.current = timeout;
 
   const copyToClipboard = React.useCallback((value: string, ctx: TContext): void => {
-    void writeTextToClipboard(value, targetRef.current).then(
+    const writeValue = writeRef.current;
+    void (
+      writeValue ? writeValue(value, ctx) : writeTextToClipboard(value, targetRef.current)
+    ).then(
       (didCopy) => {
         if (!didCopy) return;
         if (timeoutIdRef.current) {

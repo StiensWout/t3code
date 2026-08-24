@@ -1005,6 +1005,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
   ];
   const previewImages = userImages.filter((image) => image.name.startsWith("preview-annotation-"));
   const regularImages = userImages.filter((image) => !image.name.startsWith("preview-annotation-"));
+  const clipboardImage = userImages.find((image) => image.previewUrl);
   const canRevertAgentWork = typeof row.revertTurnCount === "number";
 
   return (
@@ -1080,7 +1081,11 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           <div className="flex items-center gap-0.5">
             {canRevertAgentWork && <RevertUserMessageButton messageId={row.message.id} />}
             {displayedUserMessage.copyText && (
-              <MessageCopyButton text={displayedUserMessage.copyText} variant="ghost" />
+              <MessageCopyButton
+                text={displayedUserMessage.copyText}
+                variant="ghost"
+                {...(clipboardImage ? { image: clipboardImage } : {})}
+              />
             )}
           </div>
         </div>
