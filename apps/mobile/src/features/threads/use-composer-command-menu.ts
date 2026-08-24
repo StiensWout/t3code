@@ -329,12 +329,13 @@ export function useComposerCommandMenu({
       }));
     }
 
-    if (trigger.kind === "slash-command") {
+    if (trigger.kind === "slash-command" || trigger.kind === "slash-skill") {
+      const isSkillOnlySlash = trigger.kind === "slash-skill";
       const q = trigger.query.toLowerCase();
       const visibleSkills = getProviderSkillsForSlashMenu(skills, true);
-      const commandItems = buildComposerSlashCommandItems({
+      const commandItems = isSkillOnlySlash ? [] : buildComposerSlashCommandItems({
         query: q,
-        atMessageStart: trigger.rangeStart === 0,
+        atMessageStart: draftMessage.slice(0, trigger.rangeStart).trim() === "",
         hasThread,
         hasCompactableConversation,
         offersUsageLimits,
