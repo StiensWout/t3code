@@ -1038,6 +1038,7 @@ describe("AcpAdapterV2", () => {
       });
       const staleThread: OrchestrationV2ProviderThread = {
         ...replacementThread,
+        nativeMetadata: null,
         nativeThreadRef: {
           driver: ACP_TEST_DRIVER,
           nativeId: "stale-session",
@@ -1055,6 +1056,39 @@ describe("AcpAdapterV2", () => {
       assert.equal(resumeError._tag, "ProviderAdapterResumeThreadError");
       assert.notInclude(yield* pollProtocolMethods(protocolEvents), "session/resume");
       assert.notEqual(replacementThread.nativeThreadRef?.nativeId, "stale-session");
+      const preservedReplacement = yield* runtime.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy,
+      });
+      assert.equal(preservedReplacement.nativeMetadata?.itemIdentityVersion, 2);
+      const now = yield* DateTime.now;
+      yield* runtime.startTurn(
+        makeTurnInput({
+          threadId,
+          providerThread: preservedReplacement,
+          instanceId,
+          runtimePolicy,
+          now,
+          ordinal: 1,
+        }),
+      );
+      const terminal = Array.from(
+        yield* runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runCollect,
+        ),
+      ).find((event) => event.type === "turn.terminal");
+      assert.equal(
+        terminal?.providerTurnId,
+        idAllocator.derive.providerTurn({
+          driver: ACP_TEST_DRIVER,
+          nativeTurnId: acpScopedNativeId(
+            instanceId,
+            `${preservedReplacement.nativeThreadRef?.nativeId}:turn:1`,
+          ),
+        }),
+      );
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 

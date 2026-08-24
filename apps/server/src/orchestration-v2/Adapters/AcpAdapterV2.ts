@@ -6463,11 +6463,15 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               return yield* runtimeTransitionPermit.withPermit(
                 Effect.gen(function* () {
                   yield* awaitRuntimeTeardown();
+                  const sessionId = yield* nativeThreadId(driver, threadInput.providerThread);
+                  const previousItemIdentityVersion = itemIdentityVersion;
                   useProviderThreadIdentity(threadInput.providerThread);
+                  const restorePreviousItemIdentity = Effect.sync(() => {
+                    itemIdentityVersion = previousItemIdentityVersion;
+                  });
                   const restartAfterInterrupt = yield* restartRuntimeAfterTeardownIfRequired(
                     threadInput.providerThread.appThreadId,
-                  );
-                  const sessionId = yield* nativeThreadId(driver, threadInput.providerThread);
+                  ).pipe(Effect.tapError(() => restorePreviousItemIdentity));
                   if ((yield* Ref.get(activeSessionId)) !== sessionId || restartAfterInterrupt) {
                     yield* Ref.set(snapshot, {
                       order: [],
@@ -6479,7 +6483,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                     const activated = yield* activateSession(
                       sessionId,
                       threadInput.providerThread.appThreadId,
-                    );
+                    ).pipe(Effect.tapError(() => restorePreviousItemIdentity));
                     yield* Ref.set(activeSessionId, activated.sessionId);
                     yield* Ref.set(activeSessionSetup, activated);
                     const nextSelection = threadInput.modelSelection ?? input.modelSelection;
