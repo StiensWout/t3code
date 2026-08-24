@@ -884,6 +884,15 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     margin-bottom: calc(-1 * var(--chat-composer-attachment-overlap));
   }
 
+  /* Detached drawers (draft hero banners) float above the composer instead of
+     merging with it, so the attachment overlap must read as zero everywhere:
+     on the slot for its negative margin and on the drawer surface, which
+     re-declares the variable for its seam padding and glass. */
+  .chat-composer-drawer-detached,
+  .chat-composer-drawer-detached .chat-composer-drawer-surface {
+    --chat-composer-attachment-overlap: 0px;
+  }
+
   :is(.chat-composer-drawer-surface, .chat-composer-top-drawer)::before {
     pointer-events: none;
     position: absolute;
