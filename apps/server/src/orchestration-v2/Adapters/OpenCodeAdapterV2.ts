@@ -2995,7 +2995,7 @@ export function makeOpenCodeAdapterV2(options: OpenCodeAdapterV2Options): Provid
               );
               const nativeSession = unwrapData("session.create", response);
               const createdAt = yield* DateTime.now;
-              const providerThread = makeProviderThread({
+              const created = makeProviderThread({
                 idAllocator,
                 providerInstanceId: options.instanceId,
                 providerSessionId: input.providerSessionId,
@@ -3003,6 +3003,21 @@ export function makeOpenCodeAdapterV2(options: OpenCodeAdapterV2Options): Provid
                 nativeSession,
                 now: createdAt,
               });
+              const existing = threadInput.existingProviderThread;
+              // Bind the new native session to the caller's row when one was
+              // handed over: a second live row per app thread would make
+              // `activeProviderThreadId` flap between the two on every update.
+              const providerThread =
+                existing === undefined
+                  ? created
+                  : {
+                      ...existing,
+                      providerSessionId: input.providerSessionId,
+                      nativeThreadRef: created.nativeThreadRef,
+                      nativeConversationHeadRef: created.nativeConversationHeadRef,
+                      status: created.status,
+                      updatedAt: created.updatedAt,
+                    };
               registerThread(nativeSession, providerThread, null);
               return providerThread;
             }).pipe(
