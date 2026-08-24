@@ -6,6 +6,7 @@ import {
   NodeId,
   ProviderInstanceId,
   ProviderSessionId,
+  ProviderThreadId,
   ProviderTurnId,
   RunAttemptId,
   RunId,
@@ -369,6 +370,47 @@ describe("PiAdapterV2", () => {
       const error = yield* runtime.resumeThread({ providerThread }).pipe(Effect.flip);
       assert.equal(error._tag, "ProviderAdapterResumeThreadError");
       assert.match(String(error.cause), /while a turn is active/);
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("adopts the run's provider thread identity instead of minting a second row", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const now = yield* DateTime.now;
+      // The placeholder row the orchestrator creates for a first run: no
+      // native identity yet. The adapter must bind the pi session to this
+      // row instead of registering a second session-file-keyed row, or the
+      // projection ends up with two live rows per app thread.
+      const placeholder: OrchestrationV2ProviderThread = {
+        id: ProviderThreadId.make("thread:provider:pi:native-thread:pending:run:thread-pi-test:1"),
+        driver: PI_PROVIDER,
+        providerInstanceId: PI_INSTANCE_ID,
+        providerSessionId: SESSION_ID,
+        appThreadId: THREAD_ID,
+        ownerNodeId: null,
+        nativeThreadRef: null,
+        nativeConversationHeadRef: null,
+        status: "not_loaded",
+        firstRunOrdinal: 1,
+        lastRunOrdinal: 1,
+        handoffIds: [],
+        forkedFrom: null,
+        createdAt: now,
+        updatedAt: now,
+      };
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+        existingProviderThread: placeholder,
+      });
+      assert.equal(providerThread.id, placeholder.id);
+      assert.equal(providerThread.nativeThreadRef?.nativeId, FAKE_SESSION_FILE);
+      const updated = yield* takeEvent((event) => event.type === "provider_thread.updated");
+      assert.isTrue(
+        updated.type === "provider_thread.updated" && updated.providerThread.id === placeholder.id,
+      );
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 

@@ -2974,7 +2974,9 @@ export function makeOpenCodeAdapterV2(options: OpenCodeAdapterV2Options): Provid
           events: Stream.fromEffectRepeat(Queue.take(events)),
           ensureThread: (threadInput) =>
             Effect.gen(function* () {
-              if (threadInput.existingProviderThread !== undefined) {
+              // Only a row that already carries a native session can be
+              // resumed; a placeholder without one still needs session.create.
+              if (threadInput.existingProviderThread?.nativeThreadRef != null) {
                 return yield* runtimeSession.resumeThread({
                   providerThread: threadInput.existingProviderThread,
                 });
