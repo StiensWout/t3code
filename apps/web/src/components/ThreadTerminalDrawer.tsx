@@ -11,7 +11,6 @@ import {
   SquareSplitVertical,
   TerminalSquare,
   Trash2,
-  XIcon,
 } from "lucide-react";
 import {
   type ContextMenuItem,
@@ -34,6 +33,7 @@ import {
 } from "react";
 import { Popover, PopoverPopup, PopoverTrigger } from "~/components/ui/popover";
 import { Button } from "~/components/ui/button";
+import { PanelTabCloseButton } from "~/components/ui/panel-tab-close-button";
 import { readTextFromClipboard, writeTextToClipboard } from "~/hooks/useCopyToClipboard";
 import { cn } from "~/lib/utils";
 import { type TerminalContextSelection } from "~/lib/terminalContext";
@@ -1679,15 +1679,12 @@ export default function ThreadTerminalDrawer({
                                   : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
                               )}
                             >
-                              <button
-                                type="button"
-                                className="group/close relative flex size-4 shrink-0 cursor-pointer items-center justify-center rounded-sm hover:bg-muted"
-                                aria-label={closeTerminalLabel}
+                              <PanelTabCloseButton
+                                label={closeTerminalLabel}
                                 onClick={() => confirmCloseTerminal(terminalId)}
                               >
-                                <TerminalSquare className="size-3 shrink-0 group-hover/tab:hidden group-focus-visible/close:hidden" />
-                                <XIcon className="hidden size-3 group-hover/tab:block group-focus-visible/close:block" />
-                              </button>
+                                <TerminalSquare className="size-3 shrink-0" />
+                              </PanelTabCloseButton>
                               <button
                                 type="button"
                                 className="flex min-w-0 flex-1 cursor-pointer items-center gap-1 text-left"
