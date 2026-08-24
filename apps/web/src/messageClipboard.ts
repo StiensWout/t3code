@@ -91,9 +91,12 @@ export async function writeMessageToClipboard(
     await navigator.clipboard.write([item]);
     return true;
   } catch (cause) {
-    throw new ClipboardWriteError({
-      target: "message with image",
-      cause,
-    });
+    console.warn(
+      new ClipboardWriteError({
+        target: "message with image",
+        cause,
+      }),
+    );
+    return writeTextToClipboard(value, "message");
   }
 }

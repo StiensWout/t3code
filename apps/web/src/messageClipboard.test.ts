@@ -9,6 +9,7 @@ class TestClipboardItem {
 describe("message clipboard", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it("writes prompt text and a PNG as one clipboard item", async () => {
@@ -53,5 +54,36 @@ describe("message clipboard", () => {
 
     await expect(writeMessageToClipboard("Text only", undefined)).resolves.toBe(true);
     expect(writeText).toHaveBeenCalledWith("Text only");
+  });
+
+  it("still copies the text when the rich clipboard write fails", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.stubGlobal("window", {});
+    vi.stubGlobal("navigator", {
+      clipboard: {
+        write: vi.fn().mockRejectedValue(new Error("rich clipboard rejected")),
+        writeText,
+      },
+    });
+    vi.stubGlobal("ClipboardItem", TestClipboardItem);
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(new Blob([new Uint8Array([1])], { type: "image/png" }), { status: 200 }),
+        ),
+    );
+
+    await expect(
+      writeMessageToClipboard("Keep this text", {
+        mimeType: "image/png",
+        previewUrl: "blob:stale-image",
+      }),
+    ).resolves.toBe(true);
+
+    expect(warn).toHaveBeenCalledOnce();
+    expect(writeText).toHaveBeenCalledWith("Keep this text");
   });
 });

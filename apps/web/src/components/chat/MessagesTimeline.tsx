@@ -1005,7 +1005,9 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
   ];
   const previewImages = userImages.filter((image) => image.name.startsWith("preview-annotation-"));
   const regularImages = userImages.filter((image) => !image.name.startsWith("preview-annotation-"));
-  const clipboardImage = userImages.find((image) => image.previewUrl);
+  const clipboardImage =
+    regularImages.find((image) => image.previewUrl) ??
+    previewImages.find((image) => image.previewUrl);
   const canRevertAgentWork = typeof row.revertTurnCount === "number";
 
   return (
