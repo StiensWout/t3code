@@ -141,6 +141,11 @@ export const layer: Layer.Layer<
         ...(providerThread.nativeThreadRef?.nativeId == null
           ? {}
           : { initialNativeThreadId: providerThread.nativeThreadRef.nativeId }),
+        ...(providerThread.nativeMetadata?.itemIdentityVersion === undefined
+          ? {}
+          : {
+              initialProviderItemIdentityVersion: providerThread.nativeMetadata.itemIdentityVersion,
+            }),
       });
 
       const targetOrdinal = checkpoint.appRunOrdinal ?? 0;

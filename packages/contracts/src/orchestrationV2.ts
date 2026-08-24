@@ -591,10 +591,12 @@ export const OrchestrationV2PendingBackgroundTask = Schema.Struct({
 });
 export type OrchestrationV2PendingBackgroundTask = typeof OrchestrationV2PendingBackgroundTask.Type;
 
-/** Provider-owned metadata that should not overwrite the app thread's title. */
+/** Provider and adapter metadata that should not overwrite the app thread's title. */
 export const OrchestrationV2ProviderThreadNativeMetadata = Schema.Struct({
   title: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   updatedAt: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  /** Version 2 scopes provider-derived item ids by provider instance. */
+  itemIdentityVersion: Schema.optional(Schema.Literal(2)),
 });
 export type OrchestrationV2ProviderThreadNativeMetadata =
   typeof OrchestrationV2ProviderThreadNativeMetadata.Type;

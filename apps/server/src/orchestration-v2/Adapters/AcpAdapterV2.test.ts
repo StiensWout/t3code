@@ -66,6 +66,7 @@ import {
 import type { ProviderContinuationRequest } from "../ProviderContinuationRequests.ts";
 import {
   AcpProviderCapabilitiesV2,
+  acpProviderItemNativeId,
   acpScopedNativeId,
   acpCarryoverTerminalShouldClearContinuation,
   acpPostSettleContinuationOfferEvidence,
@@ -533,6 +534,18 @@ function makeTurnInput(input: {
 }
 
 describe("AcpAdapterV2", () => {
+  it("preserves legacy ids and scopes v2 ids by provider instance", () => {
+    const instanceId = ProviderInstanceId.make("acp-identity-test");
+    assert.equal(
+      acpProviderItemNativeId({ instanceId, itemIdentityVersion: undefined, nativeId: "item-1" }),
+      "item-1",
+    );
+    assert.equal(
+      acpProviderItemNativeId({ instanceId, itemIdentityVersion: 2, nativeId: "item-1" }),
+      acpScopedNativeId(instanceId, "item-1"),
+    );
+  });
+
   it.live("refreshes ACP prompt instructions when the interaction mode changes", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -827,6 +840,10 @@ describe("AcpAdapterV2", () => {
       const items = events.flatMap((event) =>
         event.type === "turn_item.updated" ? [event.turnItem] : [],
       );
+      assert.isFalse(
+        items.some((item) => item.type === "user_message" && item.text === "stale user text"),
+        "the active ACP prompt echo must not create a second user message",
+      );
       assert.isTrue(items.some((item) => item.type === "user_message" && item.text.length === 0));
       assert.equal(
         items.filter((item) => item.type === "assistant_message").at(-1)?.text,
@@ -936,12 +953,37 @@ describe("AcpAdapterV2", () => {
         });
 
         assert.equal(providerThread.nativeThreadRef?.nativeId, "persisted-session");
+        assert.isNull(providerThread.nativeMetadata);
         const startupMethods = yield* pollProtocolMethods(protocolEvents);
         assert.include(startupMethods, "session/resume");
         assert.notInclude(startupMethods, "session/new");
 
         yield* runtime.resumeThread({ providerThread, modelSelection, runtimePolicy });
         assert.notInclude(yield* pollProtocolMethods(protocolEvents), "session/resume");
+        const now = yield* DateTime.now;
+        yield* runtime.startTurn(
+          makeTurnInput({
+            threadId,
+            providerThread,
+            instanceId,
+            runtimePolicy,
+            now,
+            ordinal: 1,
+          }),
+        );
+        const terminal = Array.from(
+          yield* runtime.events.pipe(
+            Stream.takeUntil((event) => event.type === "turn.terminal"),
+            Stream.runCollect,
+          ),
+        ).find((event) => event.type === "turn.terminal");
+        assert.equal(
+          terminal?.providerTurnId,
+          idAllocator.derive.providerTurn({
+            driver: ACP_TEST_DRIVER,
+            nativeTurnId: "persisted-session:turn:1",
+          }),
+        );
       }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 

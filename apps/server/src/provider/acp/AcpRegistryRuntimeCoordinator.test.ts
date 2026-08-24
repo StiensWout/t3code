@@ -64,6 +64,33 @@ describe("AcpRegistryRuntimeCoordinator", () => {
     }).pipe(Effect.provide(AcpRegistryRuntimeCoordinator.layer), Effect.scoped),
   );
 
+  it.effect("serializes native session mutations across callers", () =>
+    Effect.gen(function* () {
+      const coordinator = yield* AcpRegistryRuntimeCoordinator;
+      const firstEntered = yield* Deferred.make<void>();
+      const releaseFirst = yield* Deferred.make<void>();
+      const secondEntered = yield* Deferred.make<void>();
+      const first = yield* coordinator
+        .withSessionMutation(
+          Deferred.succeed(firstEntered, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseFirst)),
+          ),
+        )
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(firstEntered);
+
+      const second = yield* coordinator
+        .withSessionMutation(Deferred.succeed(secondEntered, undefined))
+        .pipe(Effect.forkChild);
+      expect(yield* Deferred.poll(secondEntered)).toEqual(Option.none());
+
+      yield* Deferred.succeed(releaseFirst, undefined);
+      yield* Fiber.join(first);
+      yield* Fiber.join(second);
+      expect(Option.isSome(yield* Deferred.poll(secondEntered))).toBe(true);
+    }).pipe(Effect.provide(AcpRegistryRuntimeCoordinator.layer), Effect.scoped),
+  );
+
   it.effect("replays and replaces late command advertisements per provider instance", () =>
     Effect.gen(function* () {
       const coordinator = yield* AcpRegistryRuntimeCoordinator;

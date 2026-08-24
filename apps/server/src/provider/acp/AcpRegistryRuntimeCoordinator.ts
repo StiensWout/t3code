@@ -56,6 +56,10 @@ export class AcpRegistryRuntimeCoordinator extends Context.Service<
       agentId: string,
       effect: Effect.Effect<A, E, R>,
     ) => Effect.Effect<Option.Option<A>, E, R>;
+    /** Serializes native-session imports and deletes across all client connections. */
+    readonly withSessionMutation: <A, E, R>(
+      effect: Effect.Effect<A, E, R>,
+    ) => Effect.Effect<A, E, R>;
     readonly clearAvailableCommands: (instanceId: ProviderInstanceId) => Effect.Effect<void>;
     readonly publishAvailableCommands: (
       instanceId: ProviderInstanceId,
@@ -117,6 +121,7 @@ export const make = Effect.gen(function* () {
     new Map<ProviderInstanceId, PendingUrlAuthAction>(),
   );
   const urlAuthActionPermit = yield* Semaphore.make(1);
+  const sessionMutationPermit = yield* Semaphore.make(1);
 
   const withForegroundStartup: AcpRegistryRuntimeCoordinator["Service"]["withForegroundStartup"] = (
     agentId,
@@ -159,6 +164,10 @@ export const make = Effect.gen(function* () {
         return yield* Effect.raceFirst(effect.pipe(Effect.map(Option.some)), foregroundStarted);
       }),
     );
+
+  const withSessionMutation: AcpRegistryRuntimeCoordinator["Service"]["withSessionMutation"] = (
+    effect,
+  ) => sessionMutationPermit.withPermit(effect);
 
   const clearAvailableCommands: AcpRegistryRuntimeCoordinator["Service"]["clearAvailableCommands"] =
     (instanceId) =>
@@ -341,6 +350,7 @@ export const make = Effect.gen(function* () {
   return AcpRegistryRuntimeCoordinator.of({
     withForegroundStartup,
     runBackgroundProbe,
+    withSessionMutation,
     clearAvailableCommands,
     publishAvailableCommands,
     getAvailableCommands,

@@ -146,6 +146,7 @@ describe("AcpRegistryAdapterV2", () => {
                 }),
             ),
           runBackgroundProbe: (_agentId, effect) => effect.pipe(Effect.map(Option.some)),
+          withSessionMutation: (effect) => effect,
           clearAvailableCommands: () => Effect.void,
           publishAvailableCommands: (publishedInstanceId, commands) =>
             Deferred.succeed(commandsPublished, {
@@ -202,6 +203,7 @@ describe("AcpRegistryAdapterV2", () => {
       assert.equal(startupCount, 1);
       assert.isFalse(startupActive);
       assert.equal(providerThread.nativeThreadRef?.nativeId, "mock-session-1");
+      assert.equal(providerThread.nativeMetadata?.itemIdentityVersion, 2);
       assert.isTrue(runtime.providerSession.capabilities.threads.canReadThreadSnapshot);
       assert.isTrue(runtime.providerSession.capabilities.threads.canForkThread);
       assert.deepEqual(yield* Deferred.await(commandsPublished), {

@@ -322,6 +322,17 @@ export function acpScopedNativeId(instanceId: ProviderInstanceId, nativeId: stri
   return `provider-instance:${encodeURIComponent(instanceId)}:${nativeId}`;
 }
 
+/** Keeps pre-v2 persisted ids stable while scoping ids for newly created threads. */
+export function acpProviderItemNativeId(input: {
+  readonly instanceId: ProviderInstanceId;
+  readonly itemIdentityVersion: 2 | undefined;
+  readonly nativeId: string;
+}): string {
+  return input.itemIdentityVersion === 2
+    ? acpScopedNativeId(input.instanceId, input.nativeId)
+    : input.nativeId;
+}
+
 export interface AcpAdapterV2SubagentUpdate {
   readonly nativeTaskId: string;
   readonly prompt: string;
@@ -602,6 +613,7 @@ function makeProviderThread(input: {
   readonly nativeThreadId: string;
   readonly ownerNodeId?: OrchestrationV2ProviderThread["ownerNodeId"];
   readonly forkedFrom?: OrchestrationV2ProviderThread["forkedFrom"];
+  readonly itemIdentityVersion?: 2;
   readonly now: DateTime.Utc;
 }): OrchestrationV2ProviderThread {
   return {
@@ -627,7 +639,10 @@ function makeProviderThread(input: {
     handoffIds: [],
     forkedFrom: input.forkedFrom ?? null,
     contextUsage: null,
-    nativeMetadata: null,
+    nativeMetadata:
+      input.itemIdentityVersion === undefined
+        ? null
+        : { itemIdentityVersion: input.itemIdentityVersion },
     createdAt: input.now,
     updatedAt: input.now,
   };
@@ -1207,24 +1222,6 @@ interface SnapshotMessageState {
 export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV2Shape {
   const { flavor, fileSystem, idAllocator, serverConfig } = options;
   const driver = flavor.driver;
-  // ACP native ids are only unique within one agent instance. Scope every
-  // derived orchestration id so two configured instances cannot collide when
-  // they report the same session, turn, message, task, or tool ids.
-  const scopedNativeId = (nativeId: string) => acpScopedNativeId(options.instanceId, nativeId);
-  const providerNodeId = (nativeItemId: string) =>
-    idAllocator.derive.nodeFromProviderItem({ driver, nativeItemId: scopedNativeId(nativeItemId) });
-  const providerMessageId = (nativeItemId: string) =>
-    idAllocator.derive.messageFromProviderItem({
-      driver,
-      nativeItemId: scopedNativeId(nativeItemId),
-    });
-  const providerTurnItemId = (nativeItemId: string) =>
-    idAllocator.derive.turnItemFromProviderItem({
-      driver,
-      nativeItemId: scopedNativeId(nativeItemId),
-    });
-  const deriveProviderTurnId = (nativeTurnId: string) =>
-    idAllocator.derive.providerTurn({ driver, nativeTurnId: scopedNativeId(nativeTurnId) });
   const continuationRequests = options.continuationRequests;
   const postSettleContinuationEnabled =
     flavor.enablePostSettleContinuation === true && continuationRequests !== undefined;
@@ -1237,6 +1234,41 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
     openSession: Effect.fn("AcpAdapterV2.openSession")(
       function* (input: ProviderAdapterV2OpenSessionInput) {
         const sessionScope = yield* Effect.scope;
+        // Persisted ACP threads from before item identity v2 retain their old
+        // deterministic ids. Fresh threads scope native ids by instance so
+        // separately configured agents cannot collide.
+        let itemIdentityVersion: 2 | undefined =
+          input.initialProviderItemIdentityVersion ??
+          (input.initialNativeThreadId === undefined ? 2 : undefined);
+        const providerNativeId = (nativeId: string) =>
+          acpProviderItemNativeId({
+            instanceId: options.instanceId,
+            itemIdentityVersion,
+            nativeId,
+          });
+        const providerNodeId = (nativeItemId: string) =>
+          idAllocator.derive.nodeFromProviderItem({
+            driver,
+            nativeItemId: providerNativeId(nativeItemId),
+          });
+        const providerMessageId = (nativeItemId: string) =>
+          idAllocator.derive.messageFromProviderItem({
+            driver,
+            nativeItemId: providerNativeId(nativeItemId),
+          });
+        const providerTurnItemId = (nativeItemId: string) =>
+          idAllocator.derive.turnItemFromProviderItem({
+            driver,
+            nativeItemId: providerNativeId(nativeItemId),
+          });
+        const deriveProviderTurnId = (nativeTurnId: string) =>
+          idAllocator.derive.providerTurn({
+            driver,
+            nativeTurnId: providerNativeId(nativeTurnId),
+          });
+        const useProviderThreadIdentity = (thread: OrchestrationV2ProviderThread): void => {
+          itemIdentityVersion = thread.nativeMetadata?.itemIdentityVersion;
+        };
         const terminalEnvironmentBySessionId = new Map<string, NodeJS.ProcessEnv>();
         interface PendingTerminalEnvironment {
           readonly environment: NodeJS.ProcessEnv | undefined;
@@ -2329,6 +2361,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               appThreadId: childThreadId,
               providerSessionId: input.providerSessionId,
               nativeThreadId: childSessionId,
+              ...(itemIdentityVersion === undefined ? {} : { itemIdentityVersion }),
               forkedFrom: {
                 providerThreadId: context.input.providerThread.id,
                 providerTurnId: context.providerTurnId,
@@ -3919,10 +3952,8 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               break;
             }
             case "user_message_chunk": {
-              let projectUserMessage = true;
               if (update.content.type === "text" && flavor.extractBackgroundToolMutation) {
                 const mutations = flavor.extractBackgroundToolMutation(update.content.text);
-                if (mutations.length > 0) projectUserMessage = false;
                 const terminalTaskIds = mutations
                   .filter((mutation) => mutation.status !== "running")
                   .map((mutation) => mutation.taskId);
@@ -3970,7 +4001,6 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               }
               if (update.content.type === "text" && flavor.extractSubagentEndNotice) {
                 const notice = flavor.extractSubagentEndNotice(update.content.text);
-                if (notice !== undefined) projectUserMessage = false;
                 const subagent =
                   notice !== undefined
                     ? context.subagentsBySessionId.get(notice.childSessionId)
@@ -3995,12 +4025,9 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                   });
                 }
               }
-              if (projectUserMessage) {
-                const text = acpContentBlockDisplayText(update.content);
-                if (text !== undefined) {
-                  yield* appendText(context, "user", text, update.messageId);
-                }
-              }
+              // startTurn already projects the submitted prompt. Active ACP
+              // user chunks are transport echoes or injected background
+              // notices, so only their semantic mutations belong in the turn.
               break;
             }
             default: {
@@ -5392,6 +5419,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                 sessionId: input.initialNativeThreadId,
                 error: initialStart.failure,
               });
+              itemIdentityVersion = 2;
               yield* Ref.set(runtimeRestartRequired, false);
               prepareClaimableTerminalEnvironment(input.threadId);
               return yield* startAcpRuntime(input.threadId);
@@ -5941,6 +5969,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                 detail: `ACP provider turn ${existing.providerTurnId} is still active`,
               });
             }
+            useProviderThreadIdentity(turnInput.providerThread);
             // Session activation can itself invoke client fs/terminal methods.
             // Install the incoming thread policy before load/resume so those
             // requests can never inherit the previously active thread's policy.
@@ -6042,6 +6071,18 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
             const rememberedNativeMetadata = (yield* Ref.get(nativeMetadataBySessionId)).get(
               requestedSessionId,
             );
+            const initialNativeMetadata =
+              rememberedNativeMetadata === undefined
+                ? (turnInput.providerThread.nativeMetadata ?? null)
+                : {
+                    ...turnInput.providerThread.nativeMetadata,
+                    ...rememberedNativeMetadata,
+                  };
+            if (initialNativeMetadata !== null) {
+              yield* Ref.update(nativeMetadataBySessionId, (current) =>
+                new Map(current).set(requestedSessionId, initialNativeMetadata),
+              );
+            }
             const context: ActiveAcpTurn = {
               input: turnInput,
               providerTurnId,
@@ -6053,8 +6094,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               assistant: { current: null, nextSegment: 0 },
               reasoning: { current: null, nextSegment: 0 },
               contextUsage: rememberedContextUsage ?? turnInput.providerThread.contextUsage ?? null,
-              nativeMetadata:
-                rememberedNativeMetadata ?? turnInput.providerThread.nativeMetadata ?? null,
+              nativeMetadata: initialNativeMetadata,
               tools: new Map(),
               toolStartedAt: new Map(),
               subagents: new Map(),
@@ -6394,6 +6434,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                 appThreadId: threadInput.threadId,
                 providerSessionId: input.providerSessionId,
                 nativeThreadId: sessionId,
+                ...(itemIdentityVersion === undefined ? {} : { itemIdentityVersion }),
                 now,
               });
               yield* Ref.update(providerThreadByNativeSessionId, (current) =>
@@ -6422,6 +6463,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               return yield* runtimeTransitionPermit.withPermit(
                 Effect.gen(function* () {
                   yield* awaitRuntimeTeardown();
+                  useProviderThreadIdentity(threadInput.providerThread);
                   const restartAfterInterrupt = yield* restartRuntimeAfterTeardownIfRequired(
                     threadInput.providerThread.appThreadId,
                   );
@@ -6828,6 +6870,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               return yield* runtimeTransitionPermit.withPermit(
                 Effect.gen(function* () {
                   yield* awaitRuntimeTeardown();
+                  useProviderThreadIdentity(snapshotInput.providerThread);
                   yield* restartRuntimeAfterTeardownIfRequired(
                     snapshotInput.providerThread.appThreadId,
                   );
@@ -6908,6 +6951,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                   // Returning its binding keeps the next turn runnable without
                   // loading any of the rolled-back conversation.
                   yield* awaitRuntimeTeardown();
+                  itemIdentityVersion = 2;
                   prepareTerminalEnvironment(rollbackInput.providerThread.appThreadId);
                   const replacement = yield* startReplacementAcpRuntime(
                     rollbackInput.providerThread.appThreadId,
@@ -6960,6 +7004,10 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                         strength: "strong" as const,
                       },
                       nativeConversationHeadRef: null,
+                      nativeMetadata: {
+                        ...rollbackInput.providerThread.nativeMetadata,
+                        itemIdentityVersion: 2 as const,
+                      },
                       status: "idle" as const,
                       updatedAt: now,
                     },
@@ -6985,6 +7033,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               return yield* runtimeTransitionPermit.withPermit(
                 Effect.gen(function* () {
                   yield* awaitRuntimeTeardown();
+                  useProviderThreadIdentity(forkInput.sourceProviderThread);
                   yield* restartRuntimeAfterTeardownIfRequired(
                     forkInput.sourceProviderThread.appThreadId,
                   );
@@ -7014,6 +7063,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                   yield* Ref.set(activeSessionSetup, forked);
                   yield* Ref.set(activeSelection, null);
                   yield* Ref.set(activeInteractionMode, null);
+                  itemIdentityVersion = 2;
                   const now = yield* DateTime.now;
                   const providerThread = makeProviderThread({
                     driver,
@@ -7022,6 +7072,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                     appThreadId: forkInput.targetThreadId,
                     providerSessionId: input.providerSessionId,
                     nativeThreadId: forked.sessionId,
+                    itemIdentityVersion: 2,
                     ...(forkInput.ownerNodeId === undefined
                       ? {}
                       : { ownerNodeId: forkInput.ownerNodeId }),

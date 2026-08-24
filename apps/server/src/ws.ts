@@ -632,126 +632,138 @@ const makeWsRpcLayer = (
       const importAcpRegistrySession = Effect.fn("ws.acpRegistry.importSession")(function* (
         input: AcpRegistryImportSessionInput,
       ) {
-        yield* acpRegistryProject(input.projectId);
-        const { instance } = yield* acpSessionManager(input.instanceId);
-        const providerSnapshot = yield* instance.snapshot.getSnapshot;
-        if (
-          providerSnapshot.nativeSessions?.canLoad !== true &&
-          providerSnapshot.nativeSessions?.canResume !== true
-        ) {
-          return yield* new AcpRegistryOperationError({
-            reason: "session_resume_unsupported",
-            message: "The ACP agent cannot load or resume native sessions.",
-          });
-        }
-        const threadId = importedAcpThreadId({
-          driver: instance.driverKind,
-          instanceId: input.instanceId,
-          sessionId: input.sessionId,
-        });
-        const existing = yield* threadManagement.getThreadShell(threadId).pipe(
-          Effect.mapError(
-            (cause) =>
-              new AcpRegistryOperationError({
-                reason: "session_import_failed",
-                message: "Could not inspect the imported ACP session mapping.",
-                cause,
-              }),
-          ),
-        );
-        if (existing !== null) return { threadId, imported: false } as const;
+        return yield* acpRegistryRuntimeCoordinator.withSessionMutation(
+          Effect.gen(function* () {
+            yield* acpRegistryProject(input.projectId);
+            const { instance } = yield* acpSessionManager(input.instanceId);
+            const providerSnapshot = yield* instance.snapshot.getSnapshot;
+            if (
+              providerSnapshot.nativeSessions?.canLoad !== true &&
+              providerSnapshot.nativeSessions?.canResume !== true
+            ) {
+              return yield* new AcpRegistryOperationError({
+                reason: "session_resume_unsupported",
+                message: "The ACP agent cannot load or resume native sessions.",
+              });
+            }
+            const threadId = importedAcpThreadId({
+              driver: instance.driverKind,
+              instanceId: input.instanceId,
+              sessionId: input.sessionId,
+            });
+            const existing = yield* threadManagement.getThreadShell(threadId).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new AcpRegistryOperationError({
+                    reason: "session_import_failed",
+                    message: "Could not inspect the imported ACP session mapping.",
+                    cause,
+                  }),
+              ),
+            );
+            if (existing !== null) return { threadId, imported: false } as const;
 
-        const provider = (yield* providerRegistry.getProviders).find(
-          (candidate) => candidate.instanceId === input.instanceId,
-        );
-        const model =
-          provider?.models.find((candidate) => candidate.isDefault)?.slug ??
-          provider?.models[0]?.slug ??
-          "default";
-        const commandId = CommandId.make(NodeCrypto.randomUUID());
-        const launched = yield* Effect.result(
-          startup.enqueueCommand(
-            threadLaunch.launch({
-              commandId,
-              threadId,
-              projectId: input.projectId,
-              title: input.title ?? "Imported ACP session",
-              modelSelection: { instanceId: input.instanceId, model },
-              runtimeMode: "approval-required",
-              interactionMode: "default",
-              workspaceStrategy: { type: "root" },
-              importedNativeThread: {
-                ref: {
-                  driver: instance.driverKind,
-                  nativeId: input.sessionId,
-                  strength: "strong",
-                },
-                metadata: {
-                  ...(input.title === undefined ? {} : { title: input.title }),
-                  ...(input.updatedAt === undefined ? {} : { updatedAt: input.updatedAt }),
-                },
-              },
-              createdBy: "user",
-              creationSource: "web",
-            }),
-          ),
-        );
-        if (Result.isFailure(launched)) {
-          const racedImport = yield* threadManagement.getThreadShell(threadId).pipe(
-            Effect.mapError(
-              (cause) =>
-                new AcpRegistryOperationError({
-                  reason: "session_import_failed",
-                  message: "Could not inspect the imported ACP session after launch failed.",
-                  cause,
+            const provider = (yield* providerRegistry.getProviders).find(
+              (candidate) => candidate.instanceId === input.instanceId,
+            );
+            const model =
+              provider?.models.find((candidate) => candidate.isDefault)?.slug ??
+              provider?.models[0]?.slug ??
+              "default";
+            const commandId = CommandId.make(NodeCrypto.randomUUID());
+            const launched = yield* Effect.result(
+              startup.enqueueCommand(
+                threadLaunch.launch({
+                  commandId,
+                  threadId,
+                  projectId: input.projectId,
+                  title: input.title ?? "Imported ACP session",
+                  modelSelection: { instanceId: input.instanceId, model },
+                  runtimeMode: "approval-required",
+                  interactionMode: "default",
+                  workspaceStrategy: { type: "root" },
+                  importedNativeThread: {
+                    ref: {
+                      driver: instance.driverKind,
+                      nativeId: input.sessionId,
+                      strength: "strong",
+                    },
+                    metadata: {
+                      itemIdentityVersion: 2,
+                      ...(input.title === undefined ? {} : { title: input.title }),
+                      ...(input.updatedAt === undefined ? {} : { updatedAt: input.updatedAt }),
+                    },
+                  },
+                  createdBy: "user",
+                  creationSource: "web",
                 }),
-            ),
-          );
-          if (racedImport !== null) return { threadId, imported: false } as const;
-          return yield* new AcpRegistryOperationError({
-            reason: "session_import_failed",
-            message: "Could not create a T3 thread for the ACP session.",
-            cause: launched.failure,
-          });
-        }
-        return { threadId, imported: true } as const;
+              ),
+            );
+            if (Result.isFailure(launched)) {
+              const racedImport = yield* threadManagement.getThreadShell(threadId).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new AcpRegistryOperationError({
+                      reason: "session_import_failed",
+                      message: "Could not inspect the imported ACP session after launch failed.",
+                      cause,
+                    }),
+                ),
+              );
+              if (racedImport !== null) return { threadId, imported: false } as const;
+              return yield* new AcpRegistryOperationError({
+                reason: "session_import_failed",
+                message: "Could not create a T3 thread for the ACP session.",
+                cause: launched.failure,
+              });
+            }
+            return { threadId, imported: true } as const;
+          }),
+        );
       });
 
       const deleteAcpRegistrySession = Effect.fn("ws.acpRegistry.deleteSession")(function* (
         input: AcpRegistryDeleteSessionInput,
       ) {
-        const project = yield* acpRegistryProject(input.projectId);
-        const { instance, manager } = yield* acpSessionManager(input.instanceId);
-        const snapshot = yield* instance.snapshot.getSnapshot;
-        if (snapshot.nativeSessions?.canDelete !== true) {
-          return yield* new AcpRegistryOperationError({
-            reason: "session_delete_unsupported",
-            message: "The ACP agent does not advertise session deletion.",
-          });
-        }
-        const threadId = importedAcpThreadId({
-          driver: instance.driverKind,
-          instanceId: input.instanceId,
-          sessionId: input.sessionId,
-        });
-        const importedThread = yield* threadManagement.getThreadShell(threadId).pipe(
-          Effect.mapError(
-            (cause) =>
-              new AcpRegistryOperationError({
+        return yield* acpRegistryRuntimeCoordinator.withSessionMutation(
+          Effect.gen(function* () {
+            const project = yield* acpRegistryProject(input.projectId);
+            const { instance, manager } = yield* acpSessionManager(input.instanceId);
+            const snapshot = yield* instance.snapshot.getSnapshot;
+            if (snapshot.nativeSessions?.canDelete !== true) {
+              return yield* new AcpRegistryOperationError({
+                reason: "session_delete_unsupported",
+                message: "The ACP agent does not advertise session deletion.",
+              });
+            }
+            const threadId = importedAcpThreadId({
+              driver: instance.driverKind,
+              instanceId: input.instanceId,
+              sessionId: input.sessionId,
+            });
+            const importedThread = yield* threadManagement.getThreadShell(threadId).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new AcpRegistryOperationError({
+                    reason: "session_delete_failed",
+                    message: "Could not inspect the imported ACP session mapping.",
+                    cause,
+                  }),
+              ),
+            );
+            if (importedThread !== null) {
+              return yield* new AcpRegistryOperationError({
                 reason: "session_delete_failed",
-                message: "Could not inspect the imported ACP session mapping.",
-                cause,
-              }),
-          ),
+                message: "Delete the imported T3 thread before deleting its native ACP session.",
+              });
+            }
+            yield* manager.deleteSession({
+              cwd: project.workspaceRoot,
+              sessionId: input.sessionId,
+            });
+            return { deleted: true } as const;
+          }),
         );
-        if (importedThread !== null) {
-          return yield* new AcpRegistryOperationError({
-            reason: "session_delete_failed",
-            message: "Delete the imported T3 thread before deleting its native ACP session.",
-          });
-        }
-        yield* manager.deleteSession({ cwd: project.workspaceRoot, sessionId: input.sessionId });
-        return { deleted: true } as const;
       });
 
       const listAcpRegistryProviders = Effect.fn("ws.acpRegistry.listProviders")(function* (
