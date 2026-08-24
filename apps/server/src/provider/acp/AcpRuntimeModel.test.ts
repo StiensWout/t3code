@@ -781,6 +781,19 @@ describe("AcpRuntimeModel", () => {
       },
     });
   });
+
+  it("bounds text-bearing ACP content without changing streamed whitespace", () => {
+    const text = `  ${"x".repeat(70_000)}  `;
+    const projectedText = acpContentBlockDisplayText({ type: "text", text });
+    const projectedResource = acpContentBlockDisplayText({
+      type: "resource",
+      resource: { uri: "file:///workspace/large.txt", text },
+    });
+
+    expect(projectedText).toHaveLength(65_536);
+    expect(projectedText?.startsWith("  ")).toBe(true);
+    expect(projectedResource).toEqual(projectedText);
+  });
 });
 
 describe("extractMcpToolCallIdentity", () => {

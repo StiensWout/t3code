@@ -228,4 +228,56 @@ describe("AcpRegistryRuntimeCoordinator", () => {
       yield* Fiber.interrupt(consumer);
     }).pipe(Effect.provide(AcpRegistryRuntimeCoordinator.layer), Effect.scoped),
   );
+
+  it.effect("publishes a replacement URL action before retiring the previous request", () =>
+    Effect.gen(function* () {
+      const coordinator = yield* AcpRegistryRuntimeCoordinator;
+      const instanceId = ProviderInstanceId.make("acpRegistry_replacement");
+      const received: Array<string | null> = [];
+      const firstSeen = yield* Deferred.make<void>();
+      const replacementSeen = yield* Deferred.make<void>();
+      const consumer = yield* coordinator
+        .watchUrlAuthAction(instanceId, (current) =>
+          Effect.sync(() => {
+            received.push(current?.elicitationId ?? null);
+          }).pipe(
+            Effect.andThen(
+              current?.elicitationId === "login-1"
+                ? Deferred.succeed(firstSeen, undefined).pipe(Effect.asVoid)
+                : current?.elicitationId === "login-2"
+                  ? Deferred.succeed(replacementSeen, undefined).pipe(Effect.asVoid)
+                  : Effect.void,
+            ),
+          ),
+        )
+        .pipe(Effect.forkChild);
+      const first = yield* coordinator
+        .requestUrlAuthentication(instanceId, {
+          elicitationId: "login-1",
+          url: "https://accounts.example.com/first",
+          message: "Continue with the first login",
+        })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(firstSeen);
+      const replacement = yield* coordinator
+        .requestUrlAuthentication(instanceId, {
+          elicitationId: "login-2",
+          url: "https://accounts.example.com/replacement",
+          message: "Continue with the replacement login",
+        })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(replacementSeen);
+
+      expect(yield* Fiber.join(first)).toBe(false);
+      expect(
+        (yield* coordinator.getUrlAuthAction(instanceId)).pipe(Option.getOrThrow),
+      ).toMatchObject({ elicitationId: "login-2" });
+      expect(received.slice(0, 2)).toEqual(["login-1", "login-2"]);
+      expect(
+        yield* coordinator.acceptUrlAuthentication({ instanceId, elicitationId: "login-2" }),
+      ).toBe(true);
+      expect(yield* Fiber.join(replacement)).toBe(true);
+      yield* Fiber.interrupt(consumer);
+    }).pipe(Effect.provide(AcpRegistryRuntimeCoordinator.layer), Effect.scoped),
+  );
 });

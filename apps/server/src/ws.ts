@@ -1,3 +1,5 @@
+import * as NodeCrypto from "node:crypto";
+
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Encoding from "effect/Encoding";
@@ -666,10 +668,11 @@ const makeWsRpcLayer = (
           provider?.models.find((candidate) => candidate.isDefault)?.slug ??
           provider?.models[0]?.slug ??
           "default";
+        const commandId = CommandId.make(NodeCrypto.randomUUID());
         yield* startup
           .enqueueCommand(
             threadLaunch.launch({
-              commandId: CommandId.make(`command:acp-session-import:${threadId}`),
+              commandId,
               threadId,
               projectId: input.projectId,
               title: input.title ?? "Imported ACP session",

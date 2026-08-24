@@ -282,6 +282,11 @@ export type AcpParsedSessionEvent =
 const boundedContentMetadata = (value: string | null | undefined, maximumLength: number): string =>
   value?.trim().slice(0, maximumLength) ?? "";
 
+const MAX_ACP_CONTENT_TEXT_LENGTH = 65_536;
+
+// Preserve whitespace in streamed model output while keeping one provider frame bounded.
+const boundedContentText = (value: string): string => value.slice(0, MAX_ACP_CONTENT_TEXT_LENGTH);
+
 const boundedContentUri = (value: string | null | undefined): string => {
   const uri = boundedContentMetadata(value, 4_096);
   return uri.toLowerCase().startsWith("data:") ? "" : uri;
@@ -293,7 +298,7 @@ export function acpContentBlockDisplayText(
 ): string | undefined {
   switch (content.type) {
     case "text":
-      return content.text;
+      return boundedContentText(content.text);
     case "resource_link": {
       const label =
         boundedContentMetadata(content.title, 512) ||
@@ -305,7 +310,7 @@ export function acpContentBlockDisplayText(
     }
     case "resource": {
       if ("text" in content.resource) {
-        return content.resource.text;
+        return boundedContentText(content.resource.text);
       }
       const mimeType = boundedContentMetadata(content.resource.mimeType, 256);
       const uri = boundedContentUri(content.resource.uri);

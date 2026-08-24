@@ -12,6 +12,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
 import type {
@@ -115,6 +116,7 @@ export const make = Effect.gen(function* () {
   const pendingUrlAuthActions = yield* Ref.make(
     new Map<ProviderInstanceId, PendingUrlAuthAction>(),
   );
+  const urlAuthActionPermit = yield* Semaphore.make(1);
 
   const withForegroundStartup: AcpRegistryRuntimeCoordinator["Service"]["withForegroundStartup"] = (
     agentId,
@@ -264,16 +266,20 @@ export const make = Effect.gen(function* () {
           createdAt: DateTime.formatIso(createdAt),
           expiresAt: DateTime.formatIso(expiresAt),
         } satisfies AcpRegistryUrlAuthAction;
-        const previous = yield* Ref.modify(pendingUrlAuthActions, (current) => {
-          const next = new Map(current);
-          const existing = next.get(instanceId);
-          next.set(instanceId, { action: publishedAction, consent, expiresAt });
-          return [existing, next] as const;
-        });
-        if (previous !== undefined) {
-          yield* Deferred.succeed(previous.consent, false).pipe(Effect.ignore);
-        }
-        yield* publishUrlAuthAction(instanceId, publishedAction);
+        yield* urlAuthActionPermit.withPermits(1)(
+          Effect.gen(function* () {
+            const previous = yield* Ref.modify(pendingUrlAuthActions, (current) => {
+              const next = new Map(current);
+              const existing = next.get(instanceId);
+              next.set(instanceId, { action: publishedAction, consent, expiresAt });
+              return [existing, next] as const;
+            });
+            if (previous !== undefined) {
+              yield* Deferred.succeed(previous.consent, false).pipe(Effect.ignore);
+            }
+            yield* publishUrlAuthAction(instanceId, publishedAction);
+          }),
+        );
         return yield* Deferred.await(consent).pipe(
           Effect.timeoutOrElse({
             duration: URL_AUTH_ACTION_TTL,
