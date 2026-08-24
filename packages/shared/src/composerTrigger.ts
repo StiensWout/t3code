@@ -1,4 +1,9 @@
-export type ComposerTriggerKind = "path" | "slash-command" | "slash-model" | "skill";
+export type ComposerTriggerKind =
+  | "path"
+  | "slash-command"
+  | "slash-model"
+  | "slash-skill"
+  | "skill";
 export type ComposerSlashCommand = "model" | "plan" | "default";
 
 export interface ComposerTrigger {
@@ -50,7 +55,7 @@ function isWhitespace(char: string): boolean {
 }
 
 /**
- * Detect an active trigger (@path, $skill, /command) at the cursor position.
+ * Detect an active trigger (@path, $skill, leading /command, inline /skill) at the cursor.
  *
  * Accepts an optional `isWhitespaceChar` override so callers with inline
  * placeholder characters (e.g. terminal context chips on web) can treat
@@ -64,8 +69,9 @@ export function detectComposerTrigger(
   const cursor = clampCursor(text, cursorInput);
   const lineStart = text.lastIndexOf("\n", Math.max(0, cursor - 1)) + 1;
   const linePrefix = text.slice(lineStart, cursor);
+  const hasContentBeforeLine = text.slice(0, lineStart).trim().length > 0;
 
-  if (linePrefix.startsWith("/")) {
+  if (!hasContentBeforeLine && linePrefix.startsWith("/")) {
     const commandMatch = /^\/(\S*)$/.exec(linePrefix);
     if (commandMatch) {
       const commandQuery = commandMatch[1] ?? "";
@@ -104,6 +110,14 @@ export function detectComposerTrigger(
   const tokenStart = tokenIdx + 1;
 
   const token = text.slice(tokenStart, cursor);
+  if (token.startsWith("/") && text.slice(0, tokenStart).trim().length > 0) {
+    return {
+      kind: "slash-skill",
+      query: token.slice(1),
+      rangeStart: tokenStart,
+      rangeEnd: cursor,
+    };
+  }
   if (token.startsWith("$")) {
     return {
       kind: "skill",

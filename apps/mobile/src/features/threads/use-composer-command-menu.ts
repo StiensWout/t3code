@@ -260,16 +260,19 @@ export function useComposerCommandMenu({
   const items = useMemo<ComposerCommandItem[]>(() => {
     if (!trigger) return [];
 
-    if (trigger.kind === "slash-command") {
+    if (trigger.kind === "slash-command" || trigger.kind === "slash-skill") {
+      const isSkillOnlySlash = trigger.kind === "slash-skill";
       const q = trigger.query.toLowerCase();
-      const commandItems = buildComposerSlashCommandItems({
-        query: q,
-        atMessageStart: trigger.rangeStart === 0,
-        hasThread,
-        hasCompactableConversation,
-        allowInteractionMode: onUpdateInteractionMode !== undefined,
-        selectedProviderStatus,
-      });
+      const commandItems = isSkillOnlySlash
+        ? []
+        : buildComposerSlashCommandItems({
+            query: q,
+            atMessageStart: draftMessage.slice(0, trigger.rangeStart).trim() === "",
+            hasThread,
+            hasCompactableConversation,
+            allowInteractionMode: onUpdateInteractionMode !== undefined,
+            selectedProviderStatus,
+          });
 
       const skillItems = getProviderSkillsForSlashMenu(skills, true)
         .filter((skill) => matchesSlashSkillQuery(skill, q))
