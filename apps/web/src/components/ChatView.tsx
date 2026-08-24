@@ -6779,7 +6779,10 @@ function ChatViewContent(props: ChatViewProps) {
                           activeProjectTitle={activeProject?.title ?? null}
                         />
                       </div>
-                      <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
+                      <ComposerBannerStack
+                        className="relative z-0 [--chat-composer-attachment-overlap:0px]"
+                        items={composerBannerItems}
+                      />
                     </div>
                   ) : (
                     <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
