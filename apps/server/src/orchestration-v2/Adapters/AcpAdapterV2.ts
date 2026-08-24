@@ -4988,6 +4988,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                 requestId,
                 transportRequestId: pendingTransportRequestId,
               } = admitted.value.pending;
+              const parsedPermission = parsePermissionRequest(params);
               const decision = yield* Deferred.await(pendingDecision).pipe(
                 Effect.ensuring(
                   runRuntimeCallbackAtGeneration(
@@ -5002,9 +5003,12 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                   ).pipe(Effect.asVoid),
                 ),
               );
-              if (decision === "accept" || decision === "acceptForSession") {
+              if (
+                parsedPermission.kind !== "unknown" &&
+                (decision === "accept" || decision === "acceptForSession")
+              ) {
                 clientPolicyGrants.recordApproval({
-                  kind: providerRequestKind(parsePermissionRequest(params).kind),
+                  kind: providerRequestKind(parsedPermission.kind),
                   locations: (params.toolCall.locations ?? []).map((location) => location.path),
                   cwd: context.input.runtimePolicy.cwd,
                   scope: decision === "acceptForSession" ? "session" : "turn",
