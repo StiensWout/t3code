@@ -33,9 +33,10 @@ environment.
 
 Search is read-only. Preparation is an explicit user-authorized operation: compatible binaries are
 downloaded into a versioned cache and checked against the registry's SHA-256 when one is declared;
-version-pinned `npx` and `uvx` recipes validate their local runner without starting the agent. The
-normal V2 ACP adapter starts the selected agent only when provider work begins and negotiates its
-capabilities during `initialize`.
+version-pinned `npx` recipes install globally through `npm`, while `uvx` recipes install globally
+through `uv tool`. The catalog records the exposed command and the normal V2 ACP adapter launches
+that executable directly only when provider work begins, then negotiates its capabilities during
+`initialize`.
 
 Catalog inspection never launches a third-party ACP process. It reports registry, platform, runner,
 and managed-cache readiness. The driver's managed provider snapshot then uses a disposable
@@ -58,9 +59,10 @@ RPCs are routed to the owning environment. Imported session IDs deterministicall
 app thread and provider-thread IDs using the provider instance ID, making repeated and concurrent
 imports idempotent without a mapping table. Logout first closes every live runtime for the instance.
 
-Deleting the final configured instance for an agent removes only T3-owned binary files. Package
-runner caches remain owned by `npx` and `uvx`. Registry icons are restricted to the official HTTPS
-CDN and cached by the client after their first bounded fetch.
+Deleting the final configured instance for an agent removes only T3-owned binary files. Globally
+installed package commands remain available to the server account for direct CLI use. Registry
+icons are restricted to the official HTTPS CDN and cached by the client after their first bounded
+fetch.
 
 ### ACP runtime boundary
 

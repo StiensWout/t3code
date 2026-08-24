@@ -68,6 +68,119 @@ function resolverLayer(
   );
 }
 
+const makeFakeNpmToolchain = Effect.fn("AcpRegistrySupport.test.makeFakeNpmToolchain")(function* (
+  rootDirectory: string,
+) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const toolchainBin = path.join(rootDirectory, "fake-node", "bin");
+  const globalPrefix = path.join(rootDirectory, "global");
+  const globalBin = path.join(globalPrefix, "bin");
+  const executablePath = path.join(globalBin, "example-agent");
+  const npmPath = path.join(toolchainBin, "npm");
+  const logPath = path.join(rootDirectory, "npm.log");
+  yield* fileSystem.makeDirectory(toolchainBin, { recursive: true });
+  yield* fileSystem.makeDirectory(globalPrefix, { recursive: true });
+  yield* fileSystem.writeFileString(logPath, "");
+  yield* fileSystem.writeFileString(
+    npmPath,
+    [
+      "#!/bin/sh",
+      'printf \'%s\\n\' "$*" >> "$FAKE_NPM_LOG"',
+      'prefix="${npm_config_prefix:-$FAKE_NPM_PREFIX}"',
+      'if [ "$1" = "root" ] && [ "$2" = "--global" ]; then',
+      "  printf '%s\\n' \"$prefix/lib/node_modules\"",
+      "  exit 0",
+      "fi",
+      'if [ "$1" = "prefix" ] && [ "$2" = "--global" ]; then',
+      "  printf '%s\\n' \"$prefix\"",
+      "  exit 0",
+      "fi",
+      'if [ "$1" = "install" ] && [ "$2" = "--global" ]; then',
+      '  package_root="$prefix/lib/node_modules/@example/acp"',
+      '  executable="$prefix/bin/example-agent"',
+      '  mkdir -p "$package_root" "$prefix/bin"',
+      '  printf \'%s\' "$FAKE_NPM_MANIFEST" > "$package_root/package.json"',
+      "  printf '#!/bin/sh\\n' > \"$executable\"",
+      '  chmod 755 "$executable"',
+      "  exit 0",
+      "fi",
+      "exit 64",
+      "",
+    ].join("\n"),
+  );
+  yield* fileSystem.chmod(npmPath, 0o755);
+  return {
+    environment: {
+      ...process.env,
+      PATH: `${toolchainBin}:${process.env.PATH ?? ""}`,
+      FAKE_NPM_LOG: logPath,
+      FAKE_NPM_PREFIX: globalPrefix,
+      FAKE_NPM_MANIFEST: encodeUnknownJson({
+        name: "@example/acp",
+        version: "1.2.3",
+        bin: { "example-agent": "dist/cli.js" },
+      }),
+    } satisfies NodeJS.ProcessEnv,
+    executablePath,
+    globalBin,
+    logPath,
+    npmPath,
+  };
+});
+
+const makeFakeUvToolchain = Effect.fn("AcpRegistrySupport.test.makeFakeUvToolchain")(function* (
+  rootDirectory: string,
+) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const toolchainBin = path.join(rootDirectory, "fake-uv", "bin");
+  const globalBin = path.join(rootDirectory, "uv-tools", "bin");
+  const executablePath = path.join(globalBin, "fast-agent");
+  const uvPath = path.join(toolchainBin, "uv");
+  const logPath = path.join(rootDirectory, "uv.log");
+  yield* fileSystem.makeDirectory(toolchainBin, { recursive: true });
+  yield* fileSystem.writeFileString(logPath, "");
+  yield* fileSystem.writeFileString(
+    uvPath,
+    [
+      "#!/bin/sh",
+      'printf \'%s\\n\' "$*" >> "$FAKE_UV_LOG"',
+      'if [ "$1" = "tool" ] && [ "$2" = "dir" ] && [ "$3" = "--bin" ]; then',
+      "  printf '%s\\n' \"$FAKE_UV_BIN\"",
+      "  exit 0",
+      "fi",
+      'if [ "$1" = "tool" ] && [ "$2" = "list" ]; then',
+      '  if [ -x "$FAKE_UV_EXECUTABLE" ]; then',
+      "    printf 'fast-agent-acp v0.10.1\\n- fast-agent\\n'",
+      "  fi",
+      "  exit 0",
+      "fi",
+      'if [ "$1" = "tool" ] && [ "$2" = "install" ] && [ "$3" = "--force" ]; then',
+      '  mkdir -p "$FAKE_UV_BIN"',
+      "  printf '#!/bin/sh\\n' > \"$FAKE_UV_EXECUTABLE\"",
+      '  chmod 755 "$FAKE_UV_EXECUTABLE"',
+      "  exit 0",
+      "fi",
+      "exit 64",
+      "",
+    ].join("\n"),
+  );
+  yield* fileSystem.chmod(uvPath, 0o755);
+  return {
+    environment: {
+      ...process.env,
+      PATH: `${toolchainBin}:${process.env.PATH ?? ""}`,
+      FAKE_UV_LOG: logPath,
+      FAKE_UV_BIN: globalBin,
+      FAKE_UV_EXECUTABLE: executablePath,
+    } satisfies NodeJS.ProcessEnv,
+    executablePath,
+    globalBin,
+    logPath,
+  };
+});
+
 describe("AcpRegistrySupport", () => {
   it("preserves the registry failure when translating it for clients", () => {
     const cause = new Error("registry unavailable");
@@ -186,33 +299,96 @@ describe("AcpRegistrySupport", () => {
     );
   });
 
-  it.effect("adds a symlinked package runner's real bin directory to the child PATH", () => {
-    const agent = makeAgent({ npx: { package: "@example/acp@1.2.3" } });
+  it.effect("globally installs a package and launches its exposed command", () => {
+    const agent = makeAgent({
+      npx: { package: "@example/acp@1.2.3", args: ["--stdio"] },
+    });
     return Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-acp-registry-runner-real-path-",
+        prefix: "t3-acp-registry-global-package-",
       });
-      const runnerBin = `${cacheDir}/node/bin`;
-      const visibleBin = `${cacheDir}/visible-bin`;
-      const runner = `${runnerBin}/npx`;
-      const runnerLink = `${visibleBin}/npx`;
-      yield* fileSystem.makeDirectory(runnerBin, { recursive: true });
-      yield* fileSystem.makeDirectory(visibleBin, { recursive: true });
-      yield* fileSystem.writeFileString(runner, "#!/bin/sh\n");
-      yield* fileSystem.chmod(runner, 0o755);
-      yield* fileSystem.symlink(runner, runnerLink);
+      const toolchain = yield* makeFakeNpmToolchain(cacheDir);
+      const resolver = yield* makeAcpRegistryCatalog({ cacheDir, registryUrl }).pipe(
+        Effect.provideService(HostProcessEnvironment, toolchain.environment),
+      );
+
+      const first = yield* resolver.resolve(settings(), "/workspace", toolchain.environment);
+      const second = yield* resolver.resolve(settings(), "/workspace", toolchain.environment);
+
+      expect(first.spawn).toMatchObject({
+        command: toolchain.executablePath,
+        args: ["--stdio"],
+        env: { PATH: expect.stringMatching(new RegExp(`^${toolchain.globalBin}:`, "u")) },
+      });
+      expect(second.spawn.command).toBe(toolchain.executablePath);
+      const npmCommands = yield* fileSystem.readFileString(toolchain.logPath);
+      expect(npmCommands.match(/^install --global /gmu)).toHaveLength(1);
+      expect(npmCommands).toContain("install --global @example/acp@1.2.3");
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        resolverLayer((request) =>
+          Effect.succeed(HttpClientResponse.fromWeb(request, new Response(makeRegistry(agent)))),
+        ),
+      ),
+    );
+  });
+
+  it.effect("falls back to a writable user prefix for a system-owned npm", () => {
+    const agent = makeAgent({ npx: { package: "@example/acp@1.2.3" } });
+    return Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-acp-registry-user-global-package-",
+      });
+      const toolchain = yield* makeFakeNpmToolchain(cacheDir);
+      yield* fileSystem.chmod(path.dirname(toolchain.globalBin), 0o555);
+      const userHome = path.join(cacheDir, "home");
+      const environment = { ...toolchain.environment, HOME: userHome };
+      const resolver = yield* makeAcpRegistryCatalog({ cacheDir, registryUrl }).pipe(
+        Effect.provideService(HostProcessEnvironment, environment),
+      );
+
+      const resolved = yield* resolver.resolve(settings(), "/workspace", environment);
+      const userGlobalBin = path.join(userHome, ".local", "bin");
+      expect(resolved.spawn).toMatchObject({
+        command: path.join(userGlobalBin, "example-agent"),
+        env: { PATH: expect.stringMatching(new RegExp(`^${userGlobalBin}:`, "u")) },
+      });
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        resolverLayer((request) =>
+          Effect.succeed(HttpClientResponse.fromWeb(request, new Response(makeRegistry(agent)))),
+        ),
+      ),
+    );
+  });
+
+  it.effect("globally installs a uv tool and launches its exposed command", () => {
+    const agent = makeAgent({
+      uvx: { package: "fast-agent-acp==0.10.1", args: ["--acp"] },
+    });
+    return Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-acp-registry-global-uv-tool-",
+      });
+      const toolchain = yield* makeFakeUvToolchain(cacheDir);
       const resolver = yield* makeAcpRegistryCatalog({ cacheDir, registryUrl });
 
-      const resolved = yield* resolver.resolve(settings(), "/workspace", {
-        PATH: visibleBin,
-      });
+      const resolved = yield* resolver.resolve(settings(), "/workspace", toolchain.environment);
 
       expect(resolved.spawn).toMatchObject({
-        command: runnerLink,
-        args: ["--yes", "@example/acp@1.2.3"],
-        env: { PATH: `${runnerBin}:${visibleBin}` },
+        command: toolchain.executablePath,
+        args: ["--acp"],
+        env: { PATH: expect.stringMatching(new RegExp(`^${toolchain.globalBin}:`, "u")) },
       });
+      expect(yield* fileSystem.readFileString(toolchain.logPath)).toContain(
+        "tool install --force fast-agent-acp==0.10.1",
+      );
     }).pipe(
       Effect.scoped,
       Effect.provide(
@@ -590,7 +766,7 @@ describe("AcpRegistrySupport", () => {
     );
   });
 
-  it.effect("prepares runner recipes without starting the ACP package", () => {
+  it.effect("globally installs package recipes during preparation", () => {
     const agent = makeAgent({ npx: { package: "@example/acp@1.2.3", args: ["--stdio"] } });
     const requests: string[] = [];
 
@@ -599,7 +775,10 @@ describe("AcpRegistrySupport", () => {
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
         prefix: "t3-acp-registry-runner-",
       });
-      const resolver = yield* makeAcpRegistryCatalog({ cacheDir, registryUrl });
+      const toolchain = yield* makeFakeNpmToolchain(cacheDir);
+      const resolver = yield* makeAcpRegistryCatalog({ cacheDir, registryUrl }).pipe(
+        Effect.provideService(HostProcessEnvironment, toolchain.environment),
+      );
       const prepared = yield* resolver.prepare({ agentId: agent.id });
       expect(prepared).toEqual({
         agentId: "example-agent",
@@ -607,6 +786,10 @@ describe("AcpRegistrySupport", () => {
         distribution: "npx",
         prepared: true,
       });
+      expect(yield* fileSystem.exists(toolchain.executablePath)).toBe(true);
+      expect(yield* fileSystem.readFileString(toolchain.logPath)).toContain(
+        "install --global @example/acp@1.2.3",
+      );
       expect(requests).toEqual([registryUrl]);
     }).pipe(
       Effect.scoped,
@@ -636,12 +819,13 @@ describe("AcpRegistrySupport", () => {
       const registryDirectory = `${cacheDir}/acp-registry`;
       yield* fileSystem.makeDirectory(registryDirectory, { recursive: true });
       yield* fileSystem.writeFileString(`${registryDirectory}/registry.json`, makeRegistry(agent));
+      const toolchain = yield* makeFakeNpmToolchain(cacheDir);
       const resolver = yield* makeAcpRegistryCatalog({ cacheDir, registryUrl });
-      const resolved = yield* resolver.resolve(settings(), "/workspace");
+      const resolved = yield* resolver.resolve(settings(), "/workspace", toolchain.environment);
 
       expect(resolved.spawn).toMatchObject({
-        command: expect.stringMatching(/\/npx$/u),
-        args: ["--yes", "@example/acp@1.2.3", "--stdio"],
+        command: toolchain.executablePath,
+        args: ["--stdio"],
       });
     }).pipe(
       Effect.scoped,
@@ -749,25 +933,21 @@ describe("AcpRegistrySupport", () => {
         prefix: "t3-acp-registry-effective-env-",
       });
       const registryDirectory = `${cacheDir}/acp-registry`;
-      const binDirectory = `${cacheDir}/provider-bin`;
-      const npxPath = `${binDirectory}/npx`;
       yield* fileSystem.makeDirectory(registryDirectory, { recursive: true });
-      yield* fileSystem.makeDirectory(binDirectory, { recursive: true });
       yield* fileSystem.writeFileString(`${registryDirectory}/registry.json`, makeRegistry(agent));
-      yield* fileSystem.writeFileString(npxPath, "#!/bin/sh\n");
-      yield* fileSystem.chmod(npxPath, 0o755);
+      const toolchain = yield* makeFakeNpmToolchain(cacheDir);
 
       const resolver = yield* makeAcpRegistryCatalog({ cacheDir, registryUrl });
       const hostInspection = yield* resolver.inspect(settings());
-      const providerEnvironment = { PATH: binDirectory };
+      const providerEnvironment = toolchain.environment;
       const instanceInspection = yield* resolver.inspect(settings(), providerEnvironment);
       const resolved = yield* resolver.resolve(settings(), "/workspace", providerEnvironment);
 
-      expect(hostInspection).toMatchObject({ status: "missing_runner", runner: "npx" });
+      expect(hostInspection).toMatchObject({ status: "missing_runner", runner: "npm" });
       expect(instanceInspection).toMatchObject({ status: "ready", distribution: "npx" });
       expect(resolved.spawn).toMatchObject({
-        command: npxPath,
-        env: providerEnvironment,
+        command: toolchain.executablePath,
+        env: { PATH: expect.stringMatching(new RegExp(`^${toolchain.globalBin}:`, "u")) },
       });
     }).pipe(
       Effect.scoped,
@@ -1021,73 +1201,100 @@ describe("AcpRegistrySupport", () => {
 });
 
 describe("acpRegistryManagedBinaryDirectories", () => {
-  it.effect(
-    "lists executable directories from cached registry commands, newest version first",
-    () =>
-      Effect.gen(function* () {
-        const fileSystem = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
-          prefix: "t3-acp-registry-bins-",
-        });
-        const install = (agent: string, version: string, target: string, commandDirectory = "") =>
-          fileSystem.makeDirectory(
-            path.join(cacheDir, "acp-registry", "agents", agent, version, target, commandDirectory),
-            { recursive: true },
-          );
-        yield* install("kimi", "1.49.0", "linux-x86_64", "bin");
-        yield* install("kimi", "1.50.0", "linux-x86_64", "cmd");
-        yield* install("kimi", "1.50.0", "darwin-aarch64");
-        yield* install("other-agent", "0.2.0", "darwin-aarch64");
-        yield* fileSystem.writeFileString(
-          path.join(cacheDir, "acp-registry", "registry.json"),
-          encodeUnknownJson({
-            version: "1.0.0",
-            agents: [
-              {
-                ...makeAgent({
-                  binary: {
-                    "linux-x86_64": { archive: archiveUrl, cmd: "bin/kimi" },
-                  },
-                }),
-                id: "kimi",
-                name: "Kimi",
-                version: "1.49.0",
-              },
-              {
-                ...makeAgent({
-                  binary: {
-                    "linux-x86_64": { archive: archiveUrl, cmd: "cmd/kimi" },
-                  },
-                }),
-                id: "kimi",
-                name: "Kimi",
-                version: "1.50.0",
-              },
-            ],
-          }),
+  it.effect("lists global package and cached binary command directories", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-acp-registry-bins-",
+      });
+      const install = (agent: string, version: string, target: string, commandDirectory = "") =>
+        fileSystem.makeDirectory(
+          path.join(cacheDir, "acp-registry", "agents", agent, version, target, commandDirectory),
+          { recursive: true },
         );
+      yield* install("kimi", "1.49.0", "linux-x86_64", "bin");
+      yield* install("kimi", "1.50.0", "linux-x86_64", "cmd");
+      yield* install("kimi", "1.50.0", "darwin-aarch64");
+      yield* install("other-agent", "0.2.0", "darwin-aarch64");
+      const globalBin = path.join(cacheDir, "global", "bin");
+      const geminiCommand = path.join(globalBin, "gemini");
+      const receiptsDirectory = path.join(cacheDir, "acp-registry", "package-installs");
+      yield* fileSystem.makeDirectory(globalBin, { recursive: true });
+      yield* fileSystem.makeDirectory(receiptsDirectory, { recursive: true });
+      yield* fileSystem.writeFileString(geminiCommand, "#!/bin/sh\n");
+      yield* fileSystem.chmod(geminiCommand, 0o755);
+      yield* fileSystem.writeFileString(
+        path.join(receiptsDirectory, "gemini.json"),
+        encodeUnknownJson({
+          agentId: "gemini",
+          agentVersion: "0.56.0",
+          distribution: "npx",
+          packageSpec: "@google/gemini-cli@0.56.0",
+          managerPath: "/usr/bin/npm",
+          binDirectory: globalBin,
+          executablePath: geminiCommand,
+          packageRoot: path.join(
+            cacheDir,
+            "global",
+            "lib",
+            "node_modules",
+            "@google",
+            "gemini-cli",
+          ),
+          packageVersion: "0.56.0",
+        }),
+      );
+      yield* fileSystem.writeFileString(
+        path.join(cacheDir, "acp-registry", "registry.json"),
+        encodeUnknownJson({
+          version: "1.0.0",
+          agents: [
+            {
+              ...makeAgent({
+                binary: {
+                  "linux-x86_64": { archive: archiveUrl, cmd: "bin/kimi" },
+                },
+              }),
+              id: "kimi",
+              name: "Kimi",
+              version: "1.49.0",
+            },
+            {
+              ...makeAgent({
+                binary: {
+                  "linux-x86_64": { archive: archiveUrl, cmd: "cmd/kimi" },
+                },
+              }),
+              id: "kimi",
+              name: "Kimi",
+              version: "1.50.0",
+            },
+          ],
+        }),
+      );
 
-        const directories = yield* acpRegistryManagedBinaryDirectories({
-          fileSystem,
-          path,
-          cacheDir,
-          platform: "linux",
-          architecture: "x64",
-        });
-        expect(directories).toEqual([
-          path.join(cacheDir, "acp-registry", "agents", "kimi", "1.50.0", "linux-x86_64", "cmd"),
-          path.join(cacheDir, "acp-registry", "agents", "kimi", "1.49.0", "linux-x86_64", "bin"),
-        ]);
+      const directories = yield* acpRegistryManagedBinaryDirectories({
+        fileSystem,
+        path,
+        cacheDir,
+        platform: "linux",
+        architecture: "x64",
+      });
+      expect(directories).toEqual([
+        globalBin,
+        path.join(cacheDir, "acp-registry", "agents", "kimi", "1.50.0", "linux-x86_64", "cmd"),
+        path.join(cacheDir, "acp-registry", "agents", "kimi", "1.49.0", "linux-x86_64", "bin"),
+      ]);
 
-        const missing = yield* acpRegistryManagedBinaryDirectories({
-          fileSystem,
-          path,
-          cacheDir: path.join(cacheDir, "does-not-exist"),
-          platform: "linux",
-          architecture: "x64",
-        });
-        expect(missing).toEqual([]);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      const missing = yield* acpRegistryManagedBinaryDirectories({
+        fileSystem,
+        path,
+        cacheDir: path.join(cacheDir, "does-not-exist"),
+        platform: "linux",
+        architecture: "x64",
+      });
+      expect(missing).toEqual([]);
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 });

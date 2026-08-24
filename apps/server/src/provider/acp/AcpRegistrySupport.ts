@@ -17,9 +17,14 @@ import {
   HostProcessEnvironment,
   HostProcessPlatform,
 } from "@t3tools/shared/hostProcess";
-import { mergePathEntries, SpawnExecutableResolution } from "@t3tools/shared/shell";
+import {
+  mergePathEntries,
+  resolveSpawnCommand,
+  SpawnExecutableResolution,
+} from "@t3tools/shared/shell";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -42,9 +47,12 @@ export const ACP_REGISTRY_URL =
 
 const MAX_REGISTRY_BYTES = 1024 * 1024;
 const MAX_ARCHIVE_BYTES = 1024 * 1024 * 1024;
+const MAX_PACKAGE_MANIFEST_BYTES = 1024 * 1024;
 const MAX_SEARCH_RESULTS = 20;
 const REGISTRY_REQUEST_TIMEOUT = "30 seconds";
 const ARCHIVE_REQUEST_TIMEOUT = "20 minutes";
+const PACKAGE_INSTALL_TIMEOUT = "20 minutes";
+const PACKAGE_QUERY_TIMEOUT = "30 seconds";
 
 const BoundedAgentId = Schema.String.check(
   Schema.isMaxLength(128),
@@ -55,6 +63,11 @@ const BoundedVersion = TrimmedNonEmptyString.check(Schema.isMaxLength(128));
 const BoundedDescription = Schema.String.check(Schema.isMaxLength(1_024));
 const BoundedMetadata = Schema.String.check(Schema.isMaxLength(256));
 const BoundedArgument = Schema.String.check(Schema.isMaxLength(1_024));
+const PackageCommandName = Schema.String.check(
+  Schema.isMaxLength(128),
+  Schema.isPattern(/^[a-z0-9][a-z0-9._-]*$/iu),
+);
+const isPackageCommandName = Schema.is(PackageCommandName);
 const EXACT_RUNNER_VERSION = "v?[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?";
 const EXACT_NPX_PACKAGE = new RegExp(
   `^(?:@[^/@\\s]+/[^@\\s]+|[a-z0-9][a-z0-9._-]*)@${EXACT_RUNNER_VERSION}$`,
@@ -129,6 +142,25 @@ const AcpRegistryAgent = Schema.Struct({
 });
 export type AcpRegistryAgent = typeof AcpRegistryAgent.Type;
 
+const NpmPackageManifest = Schema.Struct({
+  name: Schema.String,
+  version: Schema.String,
+  bin: Schema.Union([BoundedArgument, Schema.Record(PackageCommandName, BoundedArgument)]),
+});
+
+const AcpRegistryPackageInstallReceipt = Schema.Struct({
+  agentId: BoundedAgentId,
+  agentVersion: BoundedVersion,
+  distribution: Schema.Literals(["npx", "uvx"]),
+  packageSpec: Schema.String,
+  managerPath: Schema.String,
+  binDirectory: Schema.String,
+  executablePath: Schema.String,
+  packageRoot: Schema.optional(Schema.String),
+  packageVersion: Schema.optional(Schema.String),
+});
+type AcpRegistryPackageInstallReceipt = typeof AcpRegistryPackageInstallReceipt.Type;
+
 const AcpRegistryIndexEnvelope = Schema.Struct({
   version: BoundedVersion,
   agents: Schema.Array(Schema.Unknown).check(Schema.isMaxLength(512)),
@@ -141,6 +173,15 @@ export interface AcpRegistryIndex {
 const decodeRegistryIndexEnvelope = Schema.decodeUnknownEffect(AcpRegistryIndexEnvelope);
 const decodeRegistryAgent = Schema.decodeUnknownOption(AcpRegistryAgent);
 const decodeJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
+const decodeNpmPackageManifest = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(NpmPackageManifest),
+);
+const decodePackageInstallReceipt = Schema.decodeUnknownOption(
+  Schema.fromJsonString(AcpRegistryPackageInstallReceipt),
+);
+const encodePackageInstallReceipt = Schema.encodeSync(
+  Schema.fromJsonString(AcpRegistryPackageInstallReceipt),
+);
 const decodeHttpsUrl = Schema.decodeUnknownEffect(HttpsUrl);
 const decodeBoundedAgentId = Schema.decodeUnknownEffect(BoundedAgentId);
 
@@ -194,11 +235,85 @@ export function resolveAcpRegistryPlatformTarget(
   return os && arch ? (`${os}-${arch}` as AcpRegistryPlatformTarget) : undefined;
 }
 
+interface ExactPackageSpec {
+  readonly name: string;
+  readonly version: string;
+}
+
+function parseNpxPackageSpec(packageSpec: string): ExactPackageSpec {
+  const separator = packageSpec.lastIndexOf("@");
+  return {
+    name: packageSpec.slice(0, separator),
+    version: packageSpec.slice(separator + 1).replace(/^v/u, ""),
+  };
+}
+
+function parseUvxPackageSpec(packageSpec: string): ExactPackageSpec {
+  const equalsSeparator = packageSpec.lastIndexOf("==");
+  const separator = equalsSeparator >= 0 ? equalsSeparator : packageSpec.lastIndexOf("@");
+  const separatorLength = equalsSeparator >= 0 ? 2 : 1;
+  return {
+    name: packageSpec.slice(0, separator),
+    version: packageSpec.slice(separator + separatorLength).replace(/^v/u, ""),
+  };
+}
+
+function packageManagerFor(distribution: AcpRegistryDistributionKind): "npm" | "uv" | undefined {
+  return distribution === "npx" ? "npm" : distribution === "uvx" ? "uv" : undefined;
+}
+
+function packageCommandCandidates(
+  agent: AcpRegistryAgent,
+  packageName: string,
+): ReadonlyArray<string> {
+  const unscopedPackageName = packageName.split("/").pop() ?? packageName;
+  return Array.from(
+    new Set(
+      [agent.id, unscopedPackageName, unscopedPackageName.replace(/-acp$/u, "")].filter(
+        isPackageCommandName,
+      ),
+    ),
+  );
+}
+
+function readEnvironmentPath(
+  environment: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+): string | undefined {
+  if (platform !== "win32") return environment.PATH;
+  return Object.entries(environment).find(([key]) => key.toLowerCase() === "path")?.[1];
+}
+
+function withPreferredPath(
+  environment: NodeJS.ProcessEnv,
+  directory: string,
+  platform: NodeJS.Platform,
+): NodeJS.ProcessEnv {
+  return {
+    ...environment,
+    PATH: mergePathEntries(directory, readEnvironmentPath(environment, platform), platform),
+  };
+}
+
+function userNpmPrefix(
+  environment: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+  path: Path.Path,
+): string | undefined {
+  const baseDirectory =
+    platform === "win32"
+      ? (environment.LOCALAPPDATA ?? environment.APPDATA ?? environment.USERPROFILE)?.trim()
+      : environment.HOME?.trim();
+  if (!baseDirectory || !path.isAbsolute(baseDirectory)) return undefined;
+  return platform === "win32"
+    ? path.join(baseDirectory, "t3code", "npm-global")
+    : path.join(baseDirectory, ".local");
+}
+
 /**
- * Directories containing installed ACP Registry managed binaries for one
- * platform, newest version first per agent. The integrated terminal appends
- * them to PATH so users can run managed agents by name (for example
- * `kimi login`) instead of the full cache path. Best effort: unreadable
+ * Directories exposing installed ACP Registry commands. The integrated
+ * terminal appends them to PATH so globally installed package commands and
+ * managed binary agents are both available by name. Best effort: unreadable
  * directories resolve to no entries.
  */
 export const acpRegistryManagedBinaryDirectories = (input: {
@@ -210,10 +325,35 @@ export const acpRegistryManagedBinaryDirectories = (input: {
 }): Effect.Effect<ReadonlyArray<string>> =>
   Effect.gen(function* () {
     const target = resolveAcpRegistryPlatformTarget(input.platform, input.architecture);
-    if (target === undefined) return [];
-    const installsDirectory = input.path.join(input.cacheDir, "acp-registry", "agents");
+    const registryDirectory = input.path.join(input.cacheDir, "acp-registry");
+    const installsDirectory = input.path.join(registryDirectory, "agents");
+    const packageReceiptsDirectory = input.path.join(registryDirectory, "package-installs");
+    const listDirectories = (directory: string) =>
+      input.fileSystem.readDirectory(directory).pipe(Effect.orElseSucceed((): Array<string> => []));
+    const directories: Array<string> = [];
+
+    for (const receiptFile of (yield* listDirectories(packageReceiptsDirectory)).toSorted()) {
+      const receipt = yield* input.fileSystem
+        .readFileString(input.path.join(packageReceiptsDirectory, receiptFile))
+        .pipe(
+          Effect.map(decodePackageInstallReceipt),
+          Effect.orElseSucceed(() => Option.none()),
+        );
+      if (
+        Option.isSome(receipt) &&
+        input.path.isAbsolute(receipt.value.binDirectory) &&
+        input.path.dirname(receipt.value.executablePath) === receipt.value.binDirectory &&
+        (yield* input.fileSystem
+          .exists(receipt.value.executablePath)
+          .pipe(Effect.orElseSucceed(() => false)))
+      ) {
+        directories.push(receipt.value.binDirectory);
+      }
+    }
+
+    if (target === undefined) return Array.from(new Set(directories));
     const cachedAgents = yield* input.fileSystem
-      .readFileString(input.path.join(input.cacheDir, "acp-registry", "registry.json"))
+      .readFileString(input.path.join(registryDirectory, "registry.json"))
       .pipe(
         Effect.flatMap(decodeJson),
         Effect.flatMap(decodeRegistryIndexEnvelope),
@@ -228,9 +368,6 @@ export const acpRegistryManagedBinaryDirectories = (input: {
     const cachedAgentByInstall = new Map(
       cachedAgents.map((agent) => [`${agent.id}\0${agent.version}`, agent] as const),
     );
-    const listDirectories = (directory: string) =>
-      input.fileSystem.readDirectory(directory).pipe(Effect.orElseSucceed((): Array<string> => []));
-    const directories: Array<string> = [];
     for (const agent of (yield* listDirectories(installsDirectory)).toSorted()) {
       const versions = (yield* listDirectories(input.path.join(installsDirectory, agent))).toSorted(
         (left, right) => right.localeCompare(left, undefined, { numeric: true }),
@@ -252,7 +389,7 @@ export const acpRegistryManagedBinaryDirectories = (input: {
         }
       }
     }
-    return directories;
+    return Array.from(new Set(directories));
   });
 
 export interface ResolvedAcpRegistryDistribution {
@@ -448,10 +585,6 @@ function searchRank(agent: AcpRegistryAgent, query: string): number | undefined 
   return undefined;
 }
 
-function runnerFor(distribution: AcpRegistryDistributionKind): "npx" | "uvx" | undefined {
-  return distribution === "npx" ? "npx" : distribution === "uvx" ? "uvx" : undefined;
-}
-
 export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(function* (
   input: AcpRegistryCatalogOptions,
 ): Effect.fn.Return<
@@ -475,27 +608,28 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
   const registryDirectory = path.join(input.cacheDir, "acp-registry");
   const registryCachePath = path.join(registryDirectory, "registry.json");
   const installsDirectory = path.join(registryDirectory, "agents");
+  const packageReceiptsDirectory = path.join(registryDirectory, "package-installs");
   const registryRef = yield* Ref.make<AcpRegistryIndex | undefined>(undefined);
   const registryRevision = yield* Ref.make(0);
   const registrySemaphore = yield* Semaphore.make(1);
   const installSemaphore = yield* Semaphore.make(1);
   const preparedBinaryReservations = yield* Ref.make<ReadonlyMap<string, number>>(new Map());
 
-  const packageRunnerBinDirectory = Effect.fn("AcpRegistryCatalog.packageRunnerBinDirectory")(
-    function* (runner: string) {
-      const linkedTarget = yield* fileSystem.readLink(runner).pipe(Effect.option);
-      if (Option.isNone(linkedTarget)) return path.dirname(runner);
-      const target = path.isAbsolute(linkedTarget.value)
-        ? linkedTarget.value
-        : path.resolve(path.dirname(runner), linkedTarget.value);
-      // Some service installs expose npx/uvx through a wrapper symlink into the
-      // actual toolchain bin directory. Include that directory so sibling global
-      // CLIs remain visible, but do not add npm's internal `npx-cli.js` directory.
-      return path.basename(target) === path.basename(runner)
-        ? path.dirname(target)
-        : path.dirname(runner);
-    },
-  );
+  const managerBinDirectory = Effect.fn("AcpRegistryCatalog.managerBinDirectory")(function* (
+    runner: string,
+  ) {
+    const linkedTarget = yield* fileSystem.readLink(runner).pipe(Effect.option);
+    if (Option.isNone(linkedTarget)) return path.dirname(runner);
+    const target = path.isAbsolute(linkedTarget.value)
+      ? linkedTarget.value
+      : path.resolve(path.dirname(runner), linkedTarget.value);
+    // Some service installs expose npm/uv through a wrapper symlink into the
+    // actual toolchain bin directory. Do not mistake npm's internal
+    // `npm-cli.js` directory for the global command directory.
+    return path.basename(target) === path.basename(runner)
+      ? path.dirname(target)
+      : path.dirname(runner);
+  });
 
   const reservePreparedBinary = Effect.fn("AcpRegistryCatalog.reservePreparedBinary")(function* (
     agentId: string,
@@ -705,37 +839,421 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
   const runCommand = Effect.fn("AcpRegistryCatalog.runCommand")(function* (
     command: string,
     args: ReadonlyArray<string>,
-    cwd?: string,
+    options: {
+      readonly cwd?: string;
+      readonly env?: NodeJS.ProcessEnv;
+      readonly timeout?: Duration.Input;
+      readonly truncatedOutputReason?: AcpRegistryErrorReason;
+    } = {},
   ) {
-    const child = yield* spawner.spawn(
-      ChildProcess.make(command, args, {
-        ...(cwd ? { cwd } : {}),
-        shell: false,
-      }),
+    const collect = Effect.gen(function* () {
+      const resolved = yield* resolveSpawnCommand(
+        command,
+        args,
+        options.env === undefined ? {} : { env: options.env },
+      );
+      const child = yield* spawner.spawn(
+        ChildProcess.make(resolved.command, resolved.args, {
+          ...(options.cwd ? { cwd: options.cwd } : {}),
+          ...(options.env === undefined ? {} : { env: options.env }),
+          shell: resolved.shell,
+        }),
+      );
+      yield* Effect.addFinalizer(() => child.kill().pipe(Effect.ignore));
+      const [stdout, stderr, exitCode] = yield* Effect.all(
+        [
+          collectUint8StreamText({ stream: child.stdout, maxBytes: 1024 * 1024 }),
+          collectUint8StreamText({ stream: child.stderr, maxBytes: 1024 * 1024 }),
+          child.exitCode,
+        ],
+        { concurrency: "unbounded" },
+      );
+      if (Number(exitCode) !== 0) {
+        return yield* new AcpRegistryError({
+          reason: "install_failed",
+          detail: `ACP Registry install command '${command}' exited with code ${Number(exitCode)}: ${stderr.text.trim()}`,
+        });
+      }
+      // Archive listings feed validateArchiveEntries; a truncated listing would let
+      // unvalidated entries past the traversal check, so oversized output is fatal.
+      if (stdout.truncated) {
+        return yield* new AcpRegistryError({
+          reason: options.truncatedOutputReason ?? "archive_invalid",
+          detail: `ACP Registry install command '${command}' produced more output than expected.`,
+        });
+      }
+      return stdout.text;
+    });
+    const scoped = collect.pipe(
+      Effect.scoped,
+      Effect.mapError((cause) =>
+        isAcpRegistryError(cause)
+          ? cause
+          : new AcpRegistryError({
+              reason: "install_failed",
+              detail: `Could not run ACP Registry install command '${command}'.`,
+              cause,
+            }),
+      ),
     );
-    const [stdout, stderr, exitCode] = yield* Effect.all(
-      [
-        collectUint8StreamText({ stream: child.stdout, maxBytes: 1024 * 1024 }),
-        collectUint8StreamText({ stream: child.stderr, maxBytes: 1024 * 1024 }),
-        child.exitCode,
-      ],
-      { concurrency: "unbounded" },
-    );
-    if (Number(exitCode) !== 0) {
+    return yield* options.timeout === undefined
+      ? scoped
+      : scoped.pipe(
+          Effect.timeoutOrElse({
+            duration: options.timeout,
+            orElse: () =>
+              Effect.fail(
+                new AcpRegistryError({
+                  reason: "install_failed",
+                  detail: `Timed out running ACP Registry install command '${command}'.`,
+                }),
+              ),
+          }),
+        );
+  });
+
+  const packageReceiptPath = (
+    agentId: string,
+    distribution: "npx" | "uvx",
+    managerPath: string,
+  ) => {
+    const managerId = NodeCrypto.createHash("sha256")
+      .update(`${distribution}\0${managerPath}`)
+      .digest("hex")
+      .slice(0, 16);
+    return path.join(packageReceiptsDirectory, `${agentId}-${managerId}.json`);
+  };
+
+  const readPackageReceipt = Effect.fn("AcpRegistryCatalog.readPackageReceipt")(function* (
+    agent: AcpRegistryAgent,
+    distribution: "npx" | "uvx",
+    packageSpec: string,
+    managerPath: string,
+  ) {
+    const receipt = yield* fileSystem
+      .readFileString(packageReceiptPath(agent.id, distribution, managerPath))
+      .pipe(
+        Effect.map(decodePackageInstallReceipt),
+        Effect.orElseSucceed(() => Option.none()),
+      );
+    if (
+      Option.isNone(receipt) ||
+      receipt.value.agentId !== agent.id ||
+      receipt.value.agentVersion !== agent.version ||
+      receipt.value.distribution !== distribution ||
+      receipt.value.packageSpec !== packageSpec ||
+      receipt.value.managerPath !== managerPath ||
+      !path.isAbsolute(receipt.value.binDirectory) ||
+      path.dirname(receipt.value.executablePath) !== receipt.value.binDirectory
+    ) {
+      return Option.none<AcpRegistryPackageInstallReceipt>();
+    }
+    const executableExists = yield* fileSystem
+      .exists(receipt.value.executablePath)
+      .pipe(Effect.orElseSucceed(() => false));
+    if (!executableExists) return Option.none<AcpRegistryPackageInstallReceipt>();
+
+    if (distribution === "npx") {
+      const packageIdentity = parseNpxPackageSpec(packageSpec);
+      if (receipt.value.packageRoot === undefined || receipt.value.packageVersion === undefined) {
+        return Option.none<AcpRegistryPackageInstallReceipt>();
+      }
+      const manifest = yield* fileSystem
+        .readFileString(path.join(receipt.value.packageRoot, "package.json"))
+        .pipe(Effect.flatMap(decodeNpmPackageManifest), Effect.option);
+      if (
+        Option.isNone(manifest) ||
+        manifest.value.name !== packageIdentity.name ||
+        manifest.value.version !== packageIdentity.version ||
+        receipt.value.packageVersion !== packageIdentity.version
+      ) {
+        return Option.none<AcpRegistryPackageInstallReceipt>();
+      }
+    }
+    return receipt;
+  });
+
+  const writePackageReceipt = Effect.fn("AcpRegistryCatalog.writePackageReceipt")(
+    function* (receipt: AcpRegistryPackageInstallReceipt) {
+      const receiptPath = packageReceiptPath(
+        receipt.agentId,
+        receipt.distribution,
+        receipt.managerPath,
+      );
+      const temporaryPath = `${receiptPath}.${process.pid}.tmp`;
+      yield* fileSystem.makeDirectory(packageReceiptsDirectory, { recursive: true });
+      yield* fileSystem.remove(temporaryPath, { force: true });
+      yield* fileSystem.writeFileString(temporaryPath, `${encodePackageInstallReceipt(receipt)}\n`);
+      yield* fileSystem.remove(receiptPath, { force: true });
+      yield* fileSystem.rename(temporaryPath, receiptPath);
+    },
+    Effect.mapError((cause) =>
+      isAcpRegistryError(cause)
+        ? cause
+        : new AcpRegistryError({
+            reason: "install_failed",
+            detail: "Could not record the globally installed ACP Registry command.",
+            cause,
+          }),
+    ),
+  );
+
+  const parsePackageManagerPath = Effect.fn("AcpRegistryCatalog.parsePackageManagerPath")(
+    function* (managerPath: string, output: string) {
+      const lines = output
+        .split(/\r?\n/u)
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0);
+      if (lines.length !== 1 || !path.isAbsolute(lines[0]!)) {
+        return yield* new AcpRegistryError({
+          reason: "install_failed",
+          detail: `ACP Registry package manager '${managerPath}' returned an invalid global path.`,
+        });
+      }
+      return lines[0]!;
+    },
+  );
+
+  const npmGlobalEnvironment = Effect.fn("AcpRegistryCatalog.npmGlobalEnvironment")(function* (
+    managerPath: string,
+    environment: NodeJS.ProcessEnv,
+  ) {
+    const managerDirectory = yield* managerBinDirectory(managerPath);
+    const managerEnvironment = withPreferredPath(environment, managerDirectory, platform);
+    const configuredPrefix = yield* runCommand(managerPath, ["prefix", "--global"], {
+      env: managerEnvironment,
+      timeout: PACKAGE_QUERY_TIMEOUT,
+      truncatedOutputReason: "install_failed",
+    }).pipe(Effect.flatMap((output) => parsePackageManagerPath(managerPath, output)));
+    const ensureWritable = (directory: string) =>
+      fileSystem.makeDirectory(directory, { recursive: true }).pipe(
+        Effect.flatMap(() => fileSystem.access(directory, { writable: true })),
+        Effect.as(true),
+        Effect.orElseSucceed(() => false),
+      );
+    if (yield* ensureWritable(configuredPrefix)) return managerEnvironment;
+
+    const fallbackPrefix = userNpmPrefix(environment, platform, path);
+    if (fallbackPrefix === undefined || !(yield* ensureWritable(fallbackPrefix))) {
       return yield* new AcpRegistryError({
         reason: "install_failed",
-        detail: `ACP Registry install command '${command}' exited with code ${Number(exitCode)}: ${stderr.text.trim()}`,
+        detail: `ACP Registry cannot write to npm's global prefix '${configuredPrefix}' and could not create a writable user prefix.`,
       });
     }
-    // Archive listings feed validateArchiveEntries; a truncated listing would let
-    // unvalidated entries past the traversal check, so oversized output is fatal.
-    if (stdout.truncated) {
+    return { ...managerEnvironment, npm_config_prefix: fallbackPrefix };
+  });
+
+  const npmCommandName = (
+    agent: AcpRegistryAgent,
+    packageName: string,
+    manifest: typeof NpmPackageManifest.Type,
+  ): string | undefined => {
+    const packageBaseName = packageName.split("/").pop() ?? packageName;
+    if (typeof manifest.bin === "string") return packageBaseName;
+    const entries = Object.entries(manifest.bin).toSorted(([left], [right]) =>
+      compareText(left, right),
+    );
+    if (entries.length === 1) return entries[0]![0];
+    if (manifest.bin[packageBaseName] !== undefined) return packageBaseName;
+    if (manifest.bin[agent.id] !== undefined) return agent.id;
+    return new Set(entries.map(([, commandPath]) => commandPath)).size === 1
+      ? entries[0]?.[0]
+      : undefined;
+  };
+
+  const discoverNpmGlobalPackage = Effect.fn("AcpRegistryCatalog.discoverNpmGlobalPackage")(
+    function* (
+      agent: AcpRegistryAgent,
+      packageSpec: string,
+      managerPath: string,
+      environment: NodeJS.ProcessEnv,
+    ) {
+      const packageIdentity = parseNpxPackageSpec(packageSpec);
+      const commandOptions = {
+        env: environment,
+        timeout: PACKAGE_QUERY_TIMEOUT,
+        truncatedOutputReason: "install_failed" as const,
+      } as const;
+      const globalRoot = yield* runCommand(managerPath, ["root", "--global"], commandOptions).pipe(
+        Effect.flatMap((output) => parsePackageManagerPath(managerPath, output)),
+      );
+      const globalPrefix = yield* runCommand(
+        managerPath,
+        ["prefix", "--global"],
+        commandOptions,
+      ).pipe(Effect.flatMap((output) => parsePackageManagerPath(managerPath, output)));
+      const packageRoot = path.join(globalRoot, ...packageIdentity.name.split("/"));
+      const manifestPath = path.join(packageRoot, "package.json");
+      const manifestInfo = yield* fileSystem.stat(manifestPath).pipe(Effect.option);
+      if (Option.isNone(manifestInfo) || manifestInfo.value.size > MAX_PACKAGE_MANIFEST_BYTES) {
+        return Option.none<AcpRegistryPackageInstallReceipt>();
+      }
+      const manifest = yield* fileSystem
+        .readFileString(manifestPath)
+        .pipe(Effect.flatMap(decodeNpmPackageManifest), Effect.option);
+      if (
+        Option.isNone(manifest) ||
+        manifest.value.name !== packageIdentity.name ||
+        manifest.value.version !== packageIdentity.version
+      ) {
+        return Option.none<AcpRegistryPackageInstallReceipt>();
+      }
+      const commandName = npmCommandName(agent, packageIdentity.name, manifest.value);
+      if (commandName === undefined) return Option.none<AcpRegistryPackageInstallReceipt>();
+      const binDirectory = platform === "win32" ? globalPrefix : path.join(globalPrefix, "bin");
+      const executablePath = resolveExecutable(
+        commandName,
+        platform,
+        withPreferredPath(environment, binDirectory, platform),
+      );
+      return executablePath === undefined
+        ? Option.none<AcpRegistryPackageInstallReceipt>()
+        : Option.some<AcpRegistryPackageInstallReceipt>({
+            agentId: agent.id,
+            agentVersion: agent.version,
+            distribution: "npx" as const,
+            packageSpec,
+            managerPath,
+            binDirectory,
+            executablePath,
+            packageRoot,
+            packageVersion: manifest.value.version,
+          });
+    },
+  );
+
+  const discoverUvGlobalPackage = Effect.fn("AcpRegistryCatalog.discoverUvGlobalPackage")(
+    function* (
+      agent: AcpRegistryAgent,
+      packageSpec: string,
+      managerPath: string,
+      environment: NodeJS.ProcessEnv,
+    ) {
+      const packageIdentity = parseUvxPackageSpec(packageSpec);
+      const installedTools = yield* runCommand(managerPath, ["tool", "list"], {
+        env: environment,
+        timeout: PACKAGE_QUERY_TIMEOUT,
+        truncatedOutputReason: "install_failed",
+      });
+      const normalizedPackageName = packageIdentity.name.toLowerCase().replace(/[._-]+/gu, "-");
+      const exactVersionInstalled = installedTools.split(/\r?\n/u).some((line) => {
+        const match = /^(\S+) v(\S+)(?:\s|$)/u.exec(line);
+        return (
+          match?.[1]?.toLowerCase().replace(/[._-]+/gu, "-") === normalizedPackageName &&
+          match[2] === packageIdentity.version
+        );
+      });
+      if (!exactVersionInstalled) return Option.none<AcpRegistryPackageInstallReceipt>();
+      const binDirectory = yield* runCommand(managerPath, ["tool", "dir", "--bin"], {
+        env: environment,
+        timeout: PACKAGE_QUERY_TIMEOUT,
+        truncatedOutputReason: "install_failed",
+      }).pipe(Effect.flatMap((output) => parsePackageManagerPath(managerPath, output)));
+      const commandEnvironment = withPreferredPath(environment, binDirectory, platform);
+      const executablePath = packageCommandCandidates(agent, packageIdentity.name)
+        .map((candidate) => resolveExecutable(candidate, platform, commandEnvironment))
+        .find((candidate): candidate is string => candidate !== undefined);
+      return executablePath === undefined
+        ? Option.none<AcpRegistryPackageInstallReceipt>()
+        : Option.some<AcpRegistryPackageInstallReceipt>({
+            agentId: agent.id,
+            agentVersion: agent.version,
+            distribution: "uvx" as const,
+            packageSpec,
+            managerPath,
+            binDirectory,
+            executablePath,
+            packageVersion: packageIdentity.version,
+          });
+    },
+  );
+
+  const ensureGlobalPackage = Effect.fn("AcpRegistryCatalog.ensureGlobalPackage")(function* (
+    agent: AcpRegistryAgent,
+    distribution: "npx" | "uvx",
+    packageSpec: string,
+    environment: NodeJS.ProcessEnv,
+  ) {
+    const managerName = packageManagerFor(distribution)!;
+    const managerPath = resolveExecutable(managerName, platform, environment);
+    if (managerPath === undefined) {
       return yield* new AcpRegistryError({
-        reason: "archive_invalid",
-        detail: `ACP Registry install command '${command}' produced more output than expected.`,
+        reason: "runner_unavailable",
+        detail: `ACP Registry agent ${agent.id} requires '${managerName}', but it is not available on this environment's PATH.`,
       });
     }
-    return stdout.text;
+    const receipt = yield* readPackageReceipt(agent, distribution, packageSpec, managerPath);
+    if (Option.isSome(receipt) && distribution === "npx") return receipt.value;
+
+    const packageEnvironment =
+      distribution === "npx" ? yield* npmGlobalEnvironment(managerPath, environment) : environment;
+    if (Option.isSome(receipt)) {
+      const installed = yield* discoverUvGlobalPackage(
+        agent,
+        packageSpec,
+        managerPath,
+        packageEnvironment,
+      );
+      if (Option.isSome(installed)) return installed.value;
+    }
+
+    const discover =
+      distribution === "npx"
+        ? () => discoverNpmGlobalPackage(agent, packageSpec, managerPath, packageEnvironment)
+        : () => discoverUvGlobalPackage(agent, packageSpec, managerPath, packageEnvironment);
+    const existing = yield* discover();
+    if (Option.isSome(existing)) {
+      yield* writePackageReceipt(existing.value);
+      return existing.value;
+    }
+
+    const managerDirectory = yield* managerBinDirectory(managerPath);
+    const installEnvironment = withPreferredPath(packageEnvironment, managerDirectory, platform);
+    if (distribution === "npx") {
+      yield* runCommand(managerPath, ["install", "--global", packageSpec], {
+        env: installEnvironment,
+        timeout: PACKAGE_INSTALL_TIMEOUT,
+        truncatedOutputReason: "install_failed",
+      });
+    } else {
+      yield* runCommand(managerPath, ["tool", "install", "--force", packageSpec], {
+        env: installEnvironment,
+        timeout: PACKAGE_INSTALL_TIMEOUT,
+        truncatedOutputReason: "install_failed",
+      });
+    }
+
+    if (distribution === "npx") {
+      const installed = yield* discoverNpmGlobalPackage(
+        agent,
+        packageSpec,
+        managerPath,
+        packageEnvironment,
+      );
+      if (Option.isNone(installed)) {
+        return yield* new AcpRegistryError({
+          reason: "install_failed",
+          detail: `ACP Registry installed ${packageSpec}, but could not resolve its global command.`,
+        });
+      }
+      yield* writePackageReceipt(installed.value);
+      return installed.value;
+    }
+
+    const installed = yield* discoverUvGlobalPackage(
+      agent,
+      packageSpec,
+      managerPath,
+      packageEnvironment,
+    );
+    if (Option.isNone(installed)) {
+      return yield* new AcpRegistryError({
+        reason: "install_failed",
+        detail: `ACP Registry installed ${packageSpec}, but could not resolve its global command.`,
+      });
+    }
+    yield* writePackageReceipt(installed.value);
+    return installed.value;
   });
 
   const acquireInstallLock = Effect.fn("AcpRegistryCatalog.acquireInstallLock")(function* (
@@ -1050,11 +1568,12 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
           platformTarget,
         });
         const rank = searchRank(agent, input.query);
-        const runner = distribution === undefined ? undefined : runnerFor(distribution.kind);
-        const runnerAvailable =
-          runner === undefined ||
-          resolveExecutable(runner, platform, hostEnvironment) !== undefined;
-        return distribution === undefined || rank === undefined || !runnerAvailable
+        const packageManager =
+          distribution === undefined ? undefined : packageManagerFor(distribution.kind);
+        const packageManagerAvailable =
+          packageManager === undefined ||
+          resolveExecutable(packageManager, platform, hostEnvironment) !== undefined;
+        return distribution === undefined || rank === undefined || !packageManagerAvailable
           ? []
           : [{ agent, distribution, rank }];
       });
@@ -1100,14 +1619,9 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
           );
         }
       } else {
-        const runner = runnerFor(distribution.kind)!;
-        const available = resolveExecutable(runner, platform, hostEnvironment) !== undefined;
-        if (!available) {
-          return yield* new AcpRegistryError({
-            reason: "runner_unavailable",
-            detail: `ACP Registry agent ${agent.id} requires '${runner}', but it is not available on this environment's PATH.`,
-          });
-        }
+        yield* installSemaphore.withPermits(1)(
+          ensureGlobalPackage(agent, distribution.kind, distribution.packageName!, hostEnvironment),
+        );
       }
       return {
         agentId: agent.id,
@@ -1207,7 +1721,7 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
         );
       }
 
-      const runner = runnerFor(distribution.kind)!;
+      const runner = packageManagerFor(distribution.kind)!;
       const available =
         resolveExecutable(runner, platform, environment ?? hostEnvironment) !== undefined;
       return available
@@ -1241,7 +1755,7 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
 
       let command: string;
       let args: ReadonlyArray<string>;
-      let runnerBinDirectory: string | undefined;
+      let commandBinDirectory: string | undefined;
       const effectiveEnvironment = environment ?? hostEnvironment;
       const commandOverride = settings.commandPath.trim();
       if (commandOverride.length > 0) {
@@ -1254,28 +1768,18 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
         }
         command = resolvedOverride;
         args = distribution.args;
-      } else if (distribution.kind === "npx") {
-        const runner = resolveExecutable("npx", platform, effectiveEnvironment);
-        if (runner === undefined) {
-          return yield* new AcpRegistryError({
-            reason: "runner_unavailable",
-            detail: `ACP Registry agent ${agent.id} requires 'npx', but it is not available on this provider instance's PATH.`,
-          });
-        }
-        command = runner;
-        args = ["--yes", distribution.packageName!, ...distribution.args];
-        runnerBinDirectory = yield* packageRunnerBinDirectory(runner);
-      } else if (distribution.kind === "uvx") {
-        const runner = resolveExecutable("uvx", platform, effectiveEnvironment);
-        if (runner === undefined) {
-          return yield* new AcpRegistryError({
-            reason: "runner_unavailable",
-            detail: `ACP Registry agent ${agent.id} requires 'uvx', but it is not available on this provider instance's PATH.`,
-          });
-        }
-        command = runner;
-        args = [distribution.packageName!, ...distribution.args];
-        runnerBinDirectory = yield* packageRunnerBinDirectory(runner);
+      } else if (distribution.kind === "npx" || distribution.kind === "uvx") {
+        const installed = yield* installSemaphore.withPermits(1)(
+          ensureGlobalPackage(
+            agent,
+            distribution.kind,
+            distribution.packageName!,
+            effectiveEnvironment,
+          ),
+        );
+        command = installed.executablePath;
+        args = distribution.args;
+        commandBinDirectory = installed.binDirectory;
       } else {
         const target = distribution.binaryTarget!;
         const paths = binaryPaths(agent, target);
@@ -1297,17 +1801,14 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
         args = distribution.args;
       }
 
-      const spawnEnvironment = {
+      const baseSpawnEnvironment = {
         ...effectiveEnvironment,
         ...distribution.env,
       };
-      if (runnerBinDirectory !== undefined) {
-        spawnEnvironment.PATH = mergePathEntries(
-          runnerBinDirectory,
-          spawnEnvironment.PATH,
-          platform,
-        );
-      }
+      const spawnEnvironment =
+        commandBinDirectory === undefined
+          ? baseSpawnEnvironment
+          : withPreferredPath(baseSpawnEnvironment, commandBinDirectory, platform);
 
       return {
         agent,

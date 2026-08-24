@@ -25,8 +25,10 @@ connect through `app.t3.codes`, T3 Connect, or a relay.
 
 Binary agents download into a managed cache. T3 Code verifies SHA-256 when the Registry entry
 provides one; entries without a checksum retain the Registry's HTTPS distribution guarantee.
-`npx` and `uvx` agents install through their package runner when their first session starts.
-Removing an agent's last provider instance also removes its managed files.
+Registry `npx` packages install globally through `npm`, and `uvx` packages install globally through
+`uv tool`, at the exact version published by the Registry. Their normal CLI command is therefore
+available in a new server terminal for sign-in and direct use. Removing an agent's last provider
+instance removes T3-managed binary files but leaves globally installed package commands intact.
 
 ## Signing in
 
@@ -43,8 +45,7 @@ also offers **Log out** and stops that instance's active sessions before clearin
 For Codex, credentials belong to the Codex CLI on the server. Run `codex login status` to check
 them, or `codex login --device-auth` to sign in with a ChatGPT subscription.
 
-For Grok Build on a remote or headless server, run `grok login --device-auth`, or
-`npx -y @xai-official/grok login --device-auth` if Grok is not installed globally. See the
+For Grok Build on a remote or headless server, run `grok login --device-auth`. See the
 [Grok Build authentication guide](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/02-authentication.md).
 
 ## Models and options
