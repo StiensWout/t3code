@@ -29,7 +29,7 @@ const mcpSession = {
 };
 
 describe("pi T3 MCP injection", () => {
-  it("adds only the namespaced T3 MCP bridge to the native Pi launch", () => {
+  it("always adds the permission bridge and configures MCP when available", () => {
     const launch = buildPiRpcLaunch({
       launchArgs: [
         "--extension",
@@ -56,6 +56,23 @@ describe("pi T3 MCP injection", () => {
     assert.equal(launch.env[T3_MCP_URL_ENV], "http://127.0.0.1:43123/mcp");
     assert.equal(launch.env[T3_MCP_BEARER_ENV], "secret-pi-token");
     assert.equal(launch.env[T3_PI_RUNTIME_MODE_ENV], "approval-required");
+
+    const permissionOnly = buildPiRpcLaunch({
+      launchArgs: [],
+      environment: {},
+      mcpSession: undefined,
+      extensionPath: "/tmp/cache/pi-t3-mcp-extension.ts",
+      runtimeMode: "auto-accept-edits",
+    });
+    assert.deepEqual(permissionOnly.args, [
+      "--mode",
+      "rpc",
+      "--extension",
+      "/tmp/cache/pi-t3-mcp-extension.ts",
+    ]);
+    assert.isFalse(permissionOnly.hasT3Mcp);
+    assert.isUndefined(permissionOnly.env[T3_MCP_URL_ENV]);
+    assert.equal(permissionOnly.env[T3_PI_RUNTIME_MODE_ENV], "auto-accept-edits");
   });
 
   it("forces tools and user extensions off for unattended text generation", () => {

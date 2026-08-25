@@ -235,10 +235,8 @@ export function buildPiRpcLaunch(input: {
   readonly env: NodeJS.ProcessEnv;
   readonly hasT3Mcp: boolean;
 } {
-  const hasT3Mcp =
-    input.disableExtensions !== true &&
-    input.mcpSession !== undefined &&
-    input.extensionPath !== undefined;
+  const hasT3Extension = input.disableExtensions !== true && input.extensionPath !== undefined;
+  const hasT3Mcp = hasT3Extension && input.mcpSession !== undefined;
   const extensionSafeArgs =
     input.disableExtensions === true
       ? withoutExplicitExtensions(input.launchArgs)
@@ -256,7 +254,7 @@ export function buildPiRpcLaunch(input: {
     ...(input.disableTools === true ? ["--no-tools"] : []),
   ];
   if (
-    hasT3Mcp &&
+    hasT3Extension &&
     input.extensionPath !== undefined &&
     !hasExplicitExtension(args, input.extensionPath)
   ) {
@@ -267,15 +265,15 @@ export function buildPiRpcLaunch(input: {
     args,
     env: {
       ...input.environment,
+      ...(hasT3Extension && input.runtimeMode !== undefined
+        ? { [T3_PI_RUNTIME_MODE_ENV]: input.runtimeMode }
+        : {}),
       ...(hasT3Mcp && input.mcpSession !== undefined
         ? {
             [T3_MCP_URL_ENV]: input.mcpSession.endpoint,
             [T3_MCP_BEARER_ENV]: bearerTokenFromAuthorizationHeader(
               input.mcpSession.authorizationHeader,
             ),
-            ...(input.runtimeMode === undefined
-              ? {}
-              : { [T3_PI_RUNTIME_MODE_ENV]: input.runtimeMode }),
           }
         : {}),
     },
