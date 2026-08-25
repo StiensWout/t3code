@@ -313,19 +313,20 @@ const startTurn = Effect.fnUntraced(function* (
   model = "default",
   attachments: ReadonlyArray<ChatAttachment> = [],
   text = "Hello pi",
+  ordinal = 1,
 ) {
   const appThread = yield* makeAppThread(model);
   yield* runtime.startTurn({
     appThread,
     threadId: THREAD_ID,
-    runId: RunId.make("run:thread-pi-test:1"),
-    runOrdinal: 1,
-    providerTurnOrdinal: 1,
-    attemptId: RunAttemptId.make("run-attempt:run:thread-pi-test:1:1"),
-    rootNodeId: NodeId.make("node:run:thread-pi-test:1:root"),
+    runId: RunId.make(`run:thread-pi-test:${ordinal}`),
+    runOrdinal: ordinal,
+    providerTurnOrdinal: ordinal,
+    attemptId: RunAttemptId.make(`run-attempt:run:thread-pi-test:${ordinal}:1`),
+    rootNodeId: NodeId.make(`node:run:thread-pi-test:${ordinal}:root`),
     providerThread,
     message: {
-      messageId: "message:thread-pi-test:1" as never,
+      messageId: `message:thread-pi-test:${ordinal}` as never,
       text,
       attachments,
       createdBy: "user",
@@ -885,6 +886,8 @@ describe("PiAdapterV2", () => {
       );
       const providerTurnId =
         running.type === "provider_turn.updated" ? running.providerTurn.id : undefined;
+      yield* fake.emit({ type: "response", command: "prompt", success: true });
+      yield* fake.emit({ type: "agent_start" });
 
       yield* runtime.steerTurn({
         threadId: THREAD_ID,
@@ -917,6 +920,27 @@ describe("PiAdapterV2", () => {
       });
       const command = yield* fake.takeRequest("prompt");
       assert.equal(command["message"], "/my-command");
+
+      yield* fake.emit({ type: "agent_settled" });
+      const firstTerminal = yield* takeEvent((event) => event.type === "turn.terminal");
+      assert.isTrue(firstTerminal.type === "turn.terminal" && firstTerminal.status === "completed");
+
+      yield* startTurn(runtime, providerThread, "default", [], "Second turn", 2);
+      yield* fake.takeRequest("prompt");
+      // The slash command's response belongs to the settled first turn. It
+      // must not consume or fail the second turn's prompt acknowledgement.
+      yield* fake.emit({
+        type: "response",
+        command: "prompt",
+        success: false,
+        error: "late command rejection",
+      });
+      yield* fake.emit({ type: "agent_start" });
+      yield* fake.emit({ type: "agent_settled" });
+      const secondTerminal = yield* takeEvent((event) => event.type === "turn.terminal");
+      assert.isTrue(
+        secondTerminal.type === "turn.terminal" && secondTerminal.status === "completed",
+      );
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 });
