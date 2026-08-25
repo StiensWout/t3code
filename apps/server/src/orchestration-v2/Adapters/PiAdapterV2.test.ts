@@ -591,6 +591,7 @@ describe("PiAdapterV2", () => {
           event.type === "provider_turn.updated" && event.providerTurn.status === "completed",
       );
       yield* takeEvent((event) => event.type === "turn.terminal");
+      yield* fake.takeRequest("get_session_stats");
       assert.isTrue(
         finalTurn.type === "provider_turn.updated" &&
           finalTurn.providerTurn.nativeTurnRef?.nativeId === "u1" &&
@@ -608,7 +609,11 @@ describe("PiAdapterV2", () => {
         startedAt: null,
         completedAt: null,
       });
-      yield* runtime.rollbackThread({
+      fake.queueStats({
+        tokens: { input: 2_000, output: 100, total: 2_100 },
+        contextUsage: { tokens: 2_100, contextWindow: 200_000 },
+      });
+      const rollbackSnapshot = yield* runtime.rollbackThread({
         providerThread,
         target: {
           type: "provider_turn",
@@ -620,6 +625,7 @@ describe("PiAdapterV2", () => {
       });
       const fork = yield* fake.takeRequest("fork");
       assert.equal(fork["entryId"], "u2");
+      assert.equal(rollbackSnapshot.providerThread.contextUsage?.usedTokens, 2_100);
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 

@@ -30,13 +30,13 @@ const mcpSession = {
 
 describe("pi T3 MCP injection", () => {
   it("always adds the permission bridge and configures MCP when available", () => {
+    const resolvedArgs = resolvePiLaunchArgs(
+      "--extension=/home/user/.pi/agent/extensions/demo.ts --session-dir=/tmp/pi-sessions --provider=anthropic --model=claude-sonnet --extension-flag=kept",
+    );
+    assert.isTrue(resolvedArgs.ok);
+    if (!resolvedArgs.ok) return;
     const launch = buildPiRpcLaunch({
-      launchArgs: [
-        "--extension",
-        "/home/user/.pi/agent/extensions/demo.ts",
-        "--session-dir",
-        "/tmp/pi-sessions",
-      ],
+      launchArgs: resolvedArgs.args,
       environment: { PATH: "/usr/bin" },
       mcpSession,
       extensionPath: "/tmp/cache/pi-t3-mcp-extension.ts",
@@ -49,6 +49,11 @@ describe("pi T3 MCP injection", () => {
       "/home/user/.pi/agent/extensions/demo.ts",
       "--session-dir",
       "/tmp/pi-sessions",
+      "--provider",
+      "anthropic",
+      "--model",
+      "claude-sonnet",
+      "--extension-flag=kept",
       "--extension",
       "/tmp/cache/pi-t3-mcp-extension.ts",
     ]);

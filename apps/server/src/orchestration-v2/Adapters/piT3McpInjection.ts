@@ -92,13 +92,25 @@ function reservedPiArgument(arg: string): string | undefined {
   return undefined;
 }
 
+function normalizePiBuiltInEqualsArguments(args: ReadonlyArray<string>): ReadonlyArray<string> {
+  return args.flatMap((arg) => {
+    const equalsIndex = arg.indexOf("=");
+    if (equalsIndex <= 0) return [arg];
+    const option = arg.slice(0, equalsIndex);
+    return PI_ARGUMENTS_WITH_VALUES.has(option) ? [option, arg.slice(equalsIndex + 1)] : [arg];
+  });
+}
+
 /**
  * Pi launch arguments may configure resources, models, tools, trust, and
  * storage. T3 owns RPC mode and session identity, so arguments that select a
  * different execution mode or native session are rejected before spawn.
  */
 export function resolvePiLaunchArgs(launchArgs: string): PiLaunchArgsResolution {
-  const args = tokenizeCliArgs(launchArgs);
+  // Pi parses equals-form tokens only as extension flags, even when their name
+  // matches a built-in option. Split known built-ins while leaving arbitrary
+  // extension flags in their native form.
+  const args = normalizePiBuiltInEqualsArguments(tokenizeCliArgs(launchArgs));
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === undefined) continue;
@@ -117,7 +129,7 @@ export function resolvePiLaunchArgs(launchArgs: string): PiLaunchArgsResolution 
     }
     if (PI_ARGUMENTS_WITH_VALUES.has(arg)) {
       const value = args[index + 1];
-      if (value === undefined || value.startsWith("-")) {
+      if (value === undefined || value.length === 0 || value.startsWith("-")) {
         return { ok: false, message: `Pi launch argument '${arg}' requires a value.` };
       }
       index += 1;
