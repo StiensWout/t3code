@@ -200,14 +200,15 @@ export default async function t3McpExtension(pi: ExtensionAPI) {
       const tools = await client.listTools(signal);
       for (const tool of tools) {
         const name = tool.name;
+        const registeredName = \`mcp__t3-code__\${name}\`;
         const description = tool.description ?? name;
         pi.registerTool({
-          name,
+          name: registeredName,
           label: name,
           description,
           promptSnippet: description.split("\\n")[0] ?? name,
           promptGuidelines: [
-            \`Use \${name} from the t3-code MCP server when the user asks for T3 orchestration that this tool covers.\`,
+            \`Use \${registeredName} from the t3-code MCP server when the user asks for T3 orchestration that this tool covers.\`,
           ],
           parameters: jsonSchemaToTypebox(tool.inputSchema),
           async execute(_toolCallId, params, signal) {

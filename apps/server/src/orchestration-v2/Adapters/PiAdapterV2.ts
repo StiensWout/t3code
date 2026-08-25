@@ -18,10 +18,9 @@
  * Extension UI: Pi extensions raise dialogs through `extension_ui_request`.
  * Dialog methods become v2 runtime requests (`confirm` → approval_request,
  * `select`/`input`/`editor` → user_input_request); answers travel back as
- * `extension_ui_response`. `notify` becomes a completed activity item;
- * keyed `setStatus`/`setWidget` updates become live work-log rows. Remaining
- * fire-and-forget surfaces such as `setTitle` are ignored until T3 has a
- * matching surface.
+ * `extension_ui_response`. `notify` becomes a completed activity item.
+ * Terminal-only decoration such as status, widget, title, and editor-text
+ * updates has no matching T3 surface and is ignored.
  */
 import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
@@ -37,7 +36,6 @@ import {
   type OrchestrationV2ProviderSession,
   type OrchestrationV2ProviderThread,
   type OrchestrationV2ProviderTurn,
-  type ThreadId,
   type OrchestrationV2RuntimeRequest,
   type OrchestrationV2TurnItem,
   type OrchestrationV2UserInputQuestion,
@@ -96,11 +94,6 @@ import {
 import { makeProviderFailure } from "../ProviderFailure.ts";
 import { turnScopedSelectionTransition } from "../ProviderSelectionTransition.ts";
 import {
-  makeSubagentChildThread,
-  makeSubagentConversationArtifacts,
-  subagentThreadTitle,
-} from "../SubagentProjection.ts";
-import {
   makePiRpcConnection,
   parsePiModelSlug,
   piRecordField as recordField,
@@ -111,9 +104,8 @@ import {
 } from "./PiRpc.ts";
 import {
   buildPiRpcLaunch,
-  discoverPiUserExtensions,
   materializePiT3McpExtension,
-  materializePiT3SubagentExtension,
+  resolvePiLaunchArgs,
 } from "./piT3McpInjection.ts";
 
 export const PI_PROVIDER = ProviderDriverKind.make("pi");
@@ -145,9 +137,9 @@ export const PiProviderCapabilitiesV2 = {
     canCreateEmptyThread: true,
     canReadThreadSnapshot: true,
     canRollbackThread: true,
-    // Forks clone pi's active branch into a new session file. Fork-from-a-
-    // specific-turn stays off until clone-then-rewind lands.
-    canForkThread: true,
+    // T3's portable full-thread handoff matches Cursor and Grok without
+    // making this process clone a Pi session and switch back behind T3.
+    canForkThread: false,
     canForkFromTurn: false,
     canForkFromSubagentThread: false,
     exposesNativeThreadId: true,
@@ -196,11 +188,11 @@ export const PiProviderCapabilitiesV2 = {
     planDeltasHaveItemIds: false,
   },
   subagents: {
-    // Pi has no core subagents; the T3-owned `subagent` override persists a
-    // session file per task so each child is a resumeable T3 thread. The
-    // official tool is omitted because a second `subagent` registration aborts Pi.
+    // T3 delegation uses the shared MCP `delegate_task` path. Installed Pi
+    // subagent extensions are observed best-effort, but their official tool
+    // runs children with --no-session and exposes no resumable child id.
     supportsSubagents: true,
-    exposesSubagentThreadIds: true,
+    exposesSubagentThreadIds: false,
     emitsSubagentLifecycle: true,
     canWaitForSubagents: false,
     canCloseSubagents: false,
@@ -291,7 +283,6 @@ interface ActivePiTurn {
    * tool keeps one start timestamp and reports a real duration.
    */
   readonly toolStartedAt: Map<string, DateTime.Utc>;
-  readonly childSubagents: Map<string, PiChildSubagent>;
   interrupted: boolean;
   /**
    * Whether any agent run activity was observed. Command-only prompts (pure
@@ -300,25 +291,9 @@ interface ActivePiTurn {
    * the turn instead.
    */
   sawAgentActivity: boolean;
-  /**
-   * Open keyed status/widget items from extension `setStatus`/`setWidget`
-   * calls, by native item id. Updated in place as the extension re-keys
-   * them; whatever is still open is completed when the turn settles.
-   */
-  readonly liveStatus: Map<string, { title: string; input: unknown }>;
   /** Pi reports context as unknown immediately after compaction; keep its estimate for the meter. */
   latestCompactionAfterTokens: number | null;
   failure: ReturnType<typeof makeProviderFailure> | null;
-}
-
-interface PiChildSubagent {
-  readonly nativeTaskId: string;
-  readonly sessionFile: string;
-  readonly childThreadId: ThreadId;
-  readonly childProviderThreadId: OrchestrationV2ProviderThread["id"];
-  readonly childRootNodeId: OrchestrationV2ExecutionNode["id"];
-  emittedUserPrompt: boolean;
-  emittedMessageCount: number;
 }
 
 interface PendingPiPrompt {
@@ -339,13 +314,6 @@ interface PiThreadState {
 
 export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2Shape {
   const { idAllocator } = options;
-  /**
-   * Session files of subagent children whose task is still running, shared
-   * across this instance's sessions. A send into such a child would open a
-   * second pi process on a session file the child process is actively
-   * writing; refuse it with a readable error until the task finishes.
-   */
-  const liveChildSessions = new Set<string>();
 
   const protocolError = (detail: string, payload?: unknown) =>
     new ProviderAdapterProtocolError({
@@ -383,19 +351,19 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
           : yield* provideCacheFs(
               materializePiT3McpExtension(options.serverConfig.providerStatusCacheDir),
             );
-      const subagentExtensionPath = yield* provideCacheFs(
-        materializePiT3SubagentExtension(options.serverConfig.providerStatusCacheDir),
-      );
-      const discoveredExtensionPaths = yield* provideCacheFs(
-        discoverPiUserExtensions({ environment: options.environment, cwd }),
-      );
+      const resolvedLaunchArgs = resolvePiLaunchArgs(options.settings.launchArgs);
+      if (!resolvedLaunchArgs.ok) {
+        return yield* new ProviderAdapterOpenSessionError({
+          driver: PI_PROVIDER,
+          providerSessionId: input.providerSessionId,
+          cause: new Error(resolvedLaunchArgs.message),
+        });
+      }
       const launch = buildPiRpcLaunch({
-        launchArgs: options.settings.launchArgs,
+        launchArgs: resolvedLaunchArgs.args,
         environment: options.environment,
         mcpSession,
         extensionPath,
-        subagentExtensionPath,
-        discoveredExtensionPaths,
       });
       const connection: PiRpcConnection = yield* makePiRpcConnection({
         command: options.settings.binaryPath || "pi",
@@ -464,6 +432,8 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
        * dialog bookkeeping stays single-threaded. Cancelled on session close.
        */
       const outOfTurnDialogs: Array<PiRpcRecord> = [];
+      /** Extension failures raised during startup are attached to the next turn. */
+      const outOfTurnExtensionErrors: Array<PiRpcRecord> = [];
       /**
        * Leaf entry id of the pi session tree as of the last turn boundary.
        * Turn-start user entries are located relative to it, giving each
@@ -845,11 +815,10 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
       });
 
       /**
-       * Project the T3-owned pi subagent override's per-task progress into
-       * v2's native subagent surface. Each result may include `sessionFile`;
-       * when present the adapter binds a resumeable child thread. Tolerant by
-       * design: any other tool named `subagent` without the results shape is
-       * ignored.
+       * Observe the result shape from Pi's official example subagent extension.
+       * The extension runs children with --no-session, so these entries are
+       * visible in T3's shared subagent UI without inventing a child thread.
+       * Unknown or changed result shapes stay ordinary dynamic tool output.
        */
       const emitSubagentTasks = Effect.fnUntraced(function* (
         turn: ActivePiTurn,
@@ -890,212 +859,9 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
                 ? "completed"
                 : "running";
           const outputText = piSubagentOutput(result);
-          const title = agent;
-          const sessionFile = recordString(result, "sessionFile");
-          if (sessionFile !== undefined) {
-            if (finished) liveChildSessions.delete(sessionFile);
-            else liveChildSessions.add(sessionFile);
-          }
-          let child = turn.childSubagents.get(nativeTaskId);
-          if (sessionFile !== undefined && child === undefined) {
-            const childThreadId = idAllocator.derive.threadFromProviderThread({
-              driver: PI_PROVIDER,
-              nativeThreadId: sessionFile,
-            });
-            const childProviderThreadId = idAllocator.derive.providerThread({
-              driver: PI_PROVIDER,
-              nativeThreadId: sessionFile,
-            });
-            const childRootNodeId = idAllocator.derive.nodeFromProviderItem({
-              driver: PI_PROVIDER,
-              nativeItemId: `${nativeTaskId}:child-root`,
-            });
-            child = {
-              nativeTaskId,
-              sessionFile,
-              childThreadId,
-              childProviderThreadId,
-              childRootNodeId,
-              emittedUserPrompt: false,
-              emittedMessageCount: 0,
-            };
-            turn.childSubagents.set(nativeTaskId, child);
-            const childModelSelection = {
-              ...turn.turnInput.modelSelection,
-              model: recordString(result, "model") ?? turn.turnInput.modelSelection.model,
-            };
-            const childThread = makeSubagentChildThread({
-              parentThread: turn.turnInput.appThread,
-              childThreadId,
-              parentNodeId,
-              activeProviderThreadId: childProviderThreadId,
-              providerInstanceId: options.instanceId,
-              modelSelection: childModelSelection,
-              title: subagentThreadTitle({
-                parentTitle: turn.turnInput.appThread.title,
-                title,
-                prompt: task,
-                ordinal: index + 1,
-              }),
-              now: emittedAt,
-              createdBy: "agent",
-              creationSource: "provider",
-            });
-            // Null session id so a later send allocates a fresh RPC. Pi cannot
-            // host two threads on the parent process; resume uses switch_session
-            // against nativeThreadRef on that new session.
-            const childProviderThread: OrchestrationV2ProviderThread = {
-              id: childProviderThreadId,
-              driver: PI_PROVIDER,
-              providerInstanceId: options.instanceId,
-              providerSessionId: null,
-              appThreadId: childThreadId,
-              ownerNodeId: parentNodeId,
-              nativeThreadRef: providerRef(sessionFile),
-              nativeConversationHeadRef: null,
-              status: "idle",
-              firstRunOrdinal: null,
-              lastRunOrdinal: null,
-              handoffIds: [],
-              forkedFrom: {
-                providerThreadId: turn.turnInput.providerThread.id,
-                providerTurnId: turn.providerTurn.id,
-              },
-              pendingBackgroundTasks: [],
-              createdAt: emittedAt,
-              updatedAt: emittedAt,
-            };
-            yield* emit({
-              type: "app_thread.created",
-              driver: PI_PROVIDER,
-              appThread: childThread,
-            });
-            yield* emit({
-              type: "provider_thread.updated",
-              driver: PI_PROVIDER,
-              providerThread: childProviderThread,
-            });
-            yield* emit({
-              type: "node.updated",
-              driver: PI_PROVIDER,
-              node: {
-                id: childRootNodeId,
-                threadId: childThreadId,
-                runId: null,
-                parentNodeId: null,
-                rootNodeId: childRootNodeId,
-                kind: "root_turn",
-                status: "running",
-                countsForRun: false,
-                providerThreadId: childProviderThreadId,
-                providerTurnId: null,
-                nativeItemRef: providerRef(sessionFile),
-                runtimeRequestId: null,
-                checkpointScopeId: null,
-                startedAt,
-                completedAt: null,
-              },
-            });
-          }
-          if (child !== undefined && !child.emittedUserPrompt) {
-            child.emittedUserPrompt = true;
-            const promptArtifacts = makeSubagentConversationArtifacts({
-              messageId: idAllocator.derive.messageFromProviderItem({
-                driver: PI_PROVIDER,
-                nativeItemId: `${nativeTaskId}:prompt`,
-              }),
-              turnItemId: idAllocator.derive.turnItemFromProviderItem({
-                driver: PI_PROVIDER,
-                nativeItemId: `${nativeTaskId}:prompt`,
-              }),
-              threadId: child.childThreadId,
-              rootNodeId: child.childRootNodeId,
-              providerThreadId: child.childProviderThreadId,
-              providerTurnId: null,
-              nativeItemRef: providerRef(`${nativeTaskId}:prompt`),
-              role: "user",
-              text: task,
-              ordinal: 100,
-              now: emittedAt,
-            });
-            yield* emit({
-              type: "message.updated",
-              driver: PI_PROVIDER,
-              message: promptArtifacts.message,
-            });
-            yield* emit({
-              type: "turn_item.updated",
-              driver: PI_PROVIDER,
-              turnItem: promptArtifacts.turnItem,
-            });
-          }
-          if (child !== undefined) {
-            const messages = recordField(result, "messages");
-            if (Array.isArray(messages)) {
-              for (let messageIndex = child.emittedMessageCount; messageIndex < messages.length; ) {
-                const message = messages[messageIndex];
-                messageIndex += 1;
-                child.emittedMessageCount = messageIndex;
-                if (recordString(message, "role") !== "assistant") continue;
-                const text = contentText(recordField(message, "content"));
-                if (text.length === 0) continue;
-                const nativeMessageId = `${nativeTaskId}:assistant:${messageIndex}`;
-                const artifacts = makeSubagentConversationArtifacts({
-                  messageId: idAllocator.derive.messageFromProviderItem({
-                    driver: PI_PROVIDER,
-                    nativeItemId: nativeMessageId,
-                  }),
-                  turnItemId: idAllocator.derive.turnItemFromProviderItem({
-                    driver: PI_PROVIDER,
-                    nativeItemId: nativeMessageId,
-                  }),
-                  threadId: child.childThreadId,
-                  rootNodeId: child.childRootNodeId,
-                  providerThreadId: child.childProviderThreadId,
-                  providerTurnId: null,
-                  nativeItemRef: providerRef(nativeMessageId),
-                  role: "assistant",
-                  text,
-                  ordinal: 100 + messageIndex,
-                  now: emittedAt,
-                });
-                yield* emit({
-                  type: "message.updated",
-                  driver: PI_PROVIDER,
-                  message: artifacts.message,
-                });
-                yield* emit({
-                  type: "turn_item.updated",
-                  driver: PI_PROVIDER,
-                  turnItem: artifacts.turnItem,
-                });
-              }
-            }
-            if (finished) {
-              yield* emit({
-                type: "node.updated",
-                driver: PI_PROVIDER,
-                node: {
-                  id: child.childRootNodeId,
-                  threadId: child.childThreadId,
-                  runId: null,
-                  parentNodeId: null,
-                  rootNodeId: child.childRootNodeId,
-                  kind: "root_turn",
-                  status,
-                  countsForRun: false,
-                  providerThreadId: child.childProviderThreadId,
-                  providerTurnId: null,
-                  nativeItemRef: providerRef(child.sessionFile),
-                  runtimeRequestId: null,
-                  checkpointScopeId: null,
-                  startedAt,
-                  completedAt: emittedAt,
-                },
-              });
-            }
-          }
-          const childThreadId = child?.childThreadId ?? null;
+          const progress =
+            !finished && outputText.length > 0 ? { progress: outputText.slice(0, 200) } : {};
+          const resultText = finished && outputText.length > 0 ? outputText.slice(0, 10_000) : null;
           yield* emit({
             type: "subagent.updated",
             driver: PI_PROVIDER,
@@ -1109,16 +875,14 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
               driver: PI_PROVIDER,
               providerInstanceId: options.instanceId,
               providerThreadId: turn.turnInput.providerThread.id,
-              childThreadId,
+              childThreadId: null,
               nativeTaskRef: providerRef(nativeTaskId),
               prompt: task,
-              title,
+              title: agent,
               model: recordString(result, "model") ?? null,
               status,
-              ...(finished || outputText.length === 0
-                ? {}
-                : { progress: outputText.slice(0, 200) }),
-              result: finished && outputText.length > 0 ? outputText.slice(0, 10_000) : null,
+              ...progress,
+              result: resultText,
               startedAt,
               completedAt: finished ? emittedAt : null,
               updatedAt: emittedAt,
@@ -1130,56 +894,20 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
             turnItem: {
               ...baseItemFields(turn, nativeTaskId, startedAt, emittedAt),
               status,
-              title,
+              title: agent,
               completedAt: finished ? emittedAt : null,
               type: "subagent",
               subagentId,
               origin: "provider_native",
               driver: PI_PROVIDER,
               providerInstanceId: options.instanceId,
-              childThreadId,
+              childThreadId: null,
               prompt: task,
-              ...(finished || outputText.length === 0
-                ? {}
-                : { progress: outputText.slice(0, 200) }),
-              result: finished && outputText.length > 0 ? outputText.slice(0, 10_000) : null,
+              ...progress,
+              result: resultText,
             },
           });
         }
-      });
-
-      /** One keyed status/widget row, updated in place while running. */
-      const emitLiveStatusItem = Effect.fnUntraced(function* (
-        turn: ActivePiTurn,
-        nativeItemId: string,
-        title: string,
-        input: unknown,
-        done: boolean,
-      ) {
-        const emittedAt = yield* DateTime.now;
-        const startedAt = turn.toolStartedAt.get(nativeItemId) ?? emittedAt;
-        turn.toolStartedAt.set(nativeItemId, startedAt);
-        yield* emitItemNode(
-          turn,
-          nativeItemId,
-          "system",
-          done ? "completed" : "running",
-          startedAt,
-          done ? emittedAt : null,
-        );
-        yield* emit({
-          type: "turn_item.updated",
-          driver: PI_PROVIDER,
-          turnItem: {
-            ...baseItemFields(turn, nativeItemId, startedAt, emittedAt),
-            status: done ? "completed" : "running",
-            title,
-            completedAt: done ? emittedAt : null,
-            type: "dynamic_tool",
-            toolName: nativeItemId.startsWith("status:") ? "status" : "widget",
-            input,
-          },
-        });
       });
 
       // ── extension UI prompts ──────────────────────────────
@@ -1260,47 +988,13 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
           });
           return;
         }
-        if (method === "setStatus" || method === "setWidget") {
-          // Keyed live progress from extensions (e.g. a tps tracker). Each
-          // key becomes one work-log item updated in place: running while
-          // the extension keeps it set, completed when cleared or on settle.
-          const state = threadState;
-          const turn = state?.activeTurn ?? null;
-          if (turn === null) return;
-          const key =
-            method === "setStatus"
-              ? recordString(event, "statusKey")
-              : recordString(event, "widgetKey");
-          if (key === undefined) return;
-          const nativeItemId = `${method === "setStatus" ? "status" : "widget"}:${turn.providerTurn.id}:${key}`;
-          const statusText = recordString(event, "statusText");
-          const widgetLines = Array.isArray(event["widgetLines"])
-            ? event["widgetLines"].filter((line): line is string => typeof line === "string")
-            : undefined;
-          const cleared =
-            method === "setStatus" ? statusText === undefined : widgetLines === undefined;
-          const payload =
-            method === "setStatus"
-              ? { title: key, input: { status: statusText ?? "" } }
-              : { title: key, input: { lines: widgetLines ?? [] } };
-          if (cleared) {
-            const open = turn.liveStatus.get(nativeItemId);
-            if (open === undefined) return;
-            turn.liveStatus.delete(nativeItemId);
-            yield* emitLiveStatusItem(turn, nativeItemId, open.title, open.input, true);
-            return;
-          }
-          turn.liveStatus.set(nativeItemId, payload);
-          yield* emitLiveStatusItem(turn, nativeItemId, payload.title, payload.input, false);
-          return;
-        }
         if (
           method !== "select" &&
           method !== "confirm" &&
           method !== "input" &&
           method !== "editor"
         ) {
-          // setTitle / set_editor_text have no matching T3 surface yet.
+          // Terminal decoration has no matching T3 surface.
           yield* Effect.logDebug("Ignoring pi extension UI update.", { method });
           return;
         }
@@ -1397,6 +1091,44 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
         yield* emit({ type: "turn_item.updated", driver: PI_PROVIDER, turnItem });
       });
 
+      const emitExtensionError = Effect.fnUntraced(function* (event: PiRpcRecord) {
+        const state = threadState;
+        const turn = state?.activeTurn ?? null;
+        if (turn === null) {
+          outOfTurnExtensionErrors.push(event);
+          return;
+        }
+        const emittedAt = yield* DateTime.now;
+        const nativeItemId = `extension-error:${turn.nextItemOrdinal}`;
+        const extensionName = piExtensionDisplayName(recordString(event, "extensionPath"));
+        const extensionEvent = recordString(event, "event");
+        const detail = recordString(event, "error")?.trim();
+        const message = [
+          `${extensionName} failed${extensionEvent === undefined ? "" : ` during ${extensionEvent}`}.`,
+          detail === undefined || detail.length === 0 ? undefined : detail.slice(0, 2_000),
+        ]
+          .filter((part): part is string => part !== undefined)
+          .join("\n\n");
+        const failure = makeProviderFailure({
+          message,
+          class: "provider_error",
+          retryable: false,
+        });
+        yield* emitItemNode(turn, nativeItemId, "system", "failed", emittedAt, emittedAt);
+        yield* emit({
+          type: "turn_item.updated",
+          driver: PI_PROVIDER,
+          turnItem: {
+            ...baseItemFields(turn, nativeItemId, emittedAt, emittedAt),
+            status: "failed",
+            title: extensionName,
+            completedAt: emittedAt,
+            type: "error",
+            failure,
+          },
+        });
+      });
+
       // ── turn lifecycle ────────────────────────────────────
 
       /**
@@ -1444,11 +1176,15 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
         };
       });
 
-      const releaseLiveChildSessions = (turn: ActivePiTurn): void => {
-        for (const child of turn.childSubagents.values()) {
-          liveChildSessions.delete(child.sessionFile);
-        }
-      };
+      const refreshContextUsageAfterTurn = (state: PiThreadState, turn: ActivePiTurn) =>
+        readContextUsage(turn).pipe(
+          Effect.flatMap((contextUsage) =>
+            contextUsage === undefined || threadState !== state
+              ? Effect.void
+              : updateProviderThread(state, { contextUsage }),
+          ),
+          Effect.forkIn(scope),
+        );
 
       const finalizeTurn = Effect.fnUntraced(function* (
         state: PiThreadState,
@@ -1457,20 +1193,10 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
         const turn = state.activeTurn;
         if (turn === null) return;
         state.activeTurn = null;
-        releaseLiveChildSessions(turn);
         const completedAt = yield* DateTime.now;
         yield* completeOpenStreamItems(turn);
         yield* cancelPendingPrompts(completedAt);
-        // Close any status/widget rows the extension left open.
-        yield* Effect.forEach(
-          Array.from(turn.liveStatus.entries()),
-          ([nativeItemId, open]) =>
-            emitLiveStatusItem(turn, nativeItemId, open.title, open.input, true),
-          { discard: true },
-        );
-        turn.liveStatus.clear();
         const treeRefs = yield* captureTurnTreeRefs();
-        const contextUsage = refreshContextUsage ? yield* readContextUsage(turn) : undefined;
         const failure = turn.interrupted ? null : turn.failure;
         yield* emit({
           type: "provider_turn.updated",
@@ -1490,7 +1216,6 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
           ...(treeRefs?.leafId == null
             ? {}
             : { nativeConversationHeadRef: providerRef(treeRefs.leafId) }),
-          ...(contextUsage === undefined ? {} : { contextUsage }),
         });
         yield* updateProviderSession(failure !== null ? "error" : "ready");
         if (failure !== null) {
@@ -1518,18 +1243,21 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
             failure,
             threadDisposition: "reusable",
           });
-          return;
+        } else {
+          yield* emit({
+            type: "turn.terminal",
+            driver: PI_PROVIDER,
+            providerThreadId: state.providerThread.id,
+            providerTurnId: turn.providerTurn.id,
+            runOrdinal: turn.turnInput.runOrdinal,
+            status: turn.interrupted ? "interrupted" : "completed",
+            failure: null,
+            threadDisposition: "reusable",
+          });
         }
-        yield* emit({
-          type: "turn.terminal",
-          driver: PI_PROVIDER,
-          providerThreadId: state.providerThread.id,
-          providerTurnId: turn.providerTurn.id,
-          runOrdinal: turn.turnInput.runOrdinal,
-          status: turn.interrupted ? "interrupted" : "completed",
-          failure: null,
-          threadDisposition: "reusable",
-        });
+        // Session statistics are optional telemetry. Terminalize first, then
+        // refresh the shared context meter without delaying the visible turn.
+        if (refreshContextUsage) yield* refreshContextUsageAfterTurn(state, turn);
       });
 
       // ── event pump ────────────────────────────────────────
@@ -1682,13 +1410,7 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
             yield* handleExtensionUiRequest(event);
             return;
           case "extension_error": {
-            // Length only: extension errors are unbounded remote output and
-            // can carry prompt text or credentials.
-            yield* Effect.logWarning("Pi extension error.", {
-              extensionPath: recordString(event, "extensionPath"),
-              event: recordString(event, "event"),
-              errorLength: recordString(event, "error")?.length,
-            });
+            yield* emitExtensionError(event);
             return;
           }
           case "agent_settled": {
@@ -1758,6 +1480,9 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
             // handler re-buffers any dialog whose turn vanished mid-drain.
             for (const dialog of outOfTurnDialogs.splice(0)) {
               yield* handleExtensionUiRequest(dialog);
+            }
+            for (const extensionError of outOfTurnExtensionErrors.splice(0)) {
+              yield* emitExtensionError(extensionError);
             }
             return;
           }
@@ -1845,11 +1570,6 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
         }
         const existing = threadInput.existingProviderThread;
         if (existing?.nativeThreadRef?.nativeId != null) {
-          if (liveChildSessions.has(existing.nativeThreadRef.nativeId)) {
-            return yield* protocolError(
-              "This subagent is still running. Wait for it to finish before sending messages to its thread.",
-            );
-          }
           const switchData = yield* request({
             type: "switch_session",
             sessionPath: existing.nativeThreadRef.nativeId,
@@ -2044,12 +1764,6 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
       // Buffered dialogs must not strand their extensions when the session
       // closes before another turn ever starts.
       yield* Effect.addFinalizer(() =>
-        Effect.sync(() => {
-          const turn = threadState?.activeTurn;
-          if (turn !== null && turn !== undefined) releaseLiveChildSessions(turn);
-        }),
-      );
-      yield* Effect.addFinalizer(() =>
         Effect.forEach(
           outOfTurnDialogs,
           (dialog) => {
@@ -2164,10 +1878,8 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
               streamItems: new Map(),
               toolArgs: new Map(),
               toolStartedAt: new Map(),
-              childSubagents: new Map(),
               interrupted: false,
               sawAgentActivity: false,
-              liveStatus: new Map(),
               latestCompactionAfterTokens: null,
               failure: null,
             };
@@ -2203,7 +1915,7 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
             // Attach any dialogs that arrived before this turn existed
             // (project trust, session-start login prompts). The flush runs
             // inside the event pump, behind everything pi already emitted.
-            if (outOfTurnDialogs.length > 0) {
+            if (outOfTurnDialogs.length > 0 || outOfTurnExtensionErrors.length > 0) {
               yield* Queue.offer(connection.events, { type: "t3.flush_dialogs" });
             }
             // Pi acks `prompt` only after slash-command expansion completes,
@@ -2463,82 +2175,12 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
             ),
           ),
         forkThread: (forkInput) =>
-          Effect.gen(function* () {
-            const state = threadState;
-            if (state === null || state.activeTurn !== null) {
-              return yield* protocolError(
-                "Pi can only fork an idle thread; wait for the current run to finish.",
-              );
-            }
-            if (forkInput.providerTurnId !== undefined) {
-              return yield* protocolError("Pi cannot fork from a specific earlier turn yet");
-            }
-            const sourceNativeId = forkInput.sourceProviderThread.nativeThreadRef?.nativeId;
-            if (sourceNativeId == null) {
-              return yield* protocolError("Pi fork source has no native session file");
-            }
-            if (state.providerThread.nativeThreadRef?.nativeId !== sourceNativeId) {
-              return yield* protocolError(
-                "Pi fork requested for a thread this session does not host",
-              );
-            }
-            // `clone` duplicates the active branch into a new session file
-            // and moves this process onto it; capture the clone's identity,
-            // then switch back so this runtime keeps serving the source.
-            const cloneData = yield* request({ type: "clone" });
-            if (recordField(cloneData, "cancelled") === true) {
-              return yield* protocolError("A Pi extension cancelled the session clone");
-            }
-            const cloneState = yield* request({ type: "get_state" }).pipe(
-              Effect.tapError(() => connection.terminate),
-            );
-            const cloneNativeId =
-              recordString(cloneState, "sessionFile") ?? recordString(cloneState, "sessionId");
-            if (cloneNativeId === undefined || cloneNativeId === sourceNativeId) {
-              yield* connection.terminate;
-              return yield* protocolError("Pi clone did not produce a new session", cloneState);
-            }
-            const switchData = yield* request({
-              type: "switch_session",
-              sessionPath: sourceNativeId,
-            }).pipe(Effect.tapError(() => connection.terminate));
-            if (recordField(switchData, "cancelled") === true) {
-              yield* connection.terminate;
-              return yield* protocolError("A Pi extension cancelled the session switch");
-            }
-            const createdAt = yield* DateTime.now;
-            return {
-              id: idAllocator.derive.providerThread({
-                driver: PI_PROVIDER,
-                nativeThreadId: cloneNativeId,
-              }),
+          Effect.fail(
+            new ProviderAdapterForkThreadError({
               driver: PI_PROVIDER,
-              providerInstanceId: options.instanceId,
-              // Null so the fork's first send opens its own pi process.
-              providerSessionId: null,
-              appThreadId: forkInput.targetThreadId,
-              ownerNodeId: forkInput.ownerNodeId ?? null,
-              nativeThreadRef: providerRef(cloneNativeId),
-              nativeConversationHeadRef: null,
-              status: "idle",
-              firstRunOrdinal: null,
-              lastRunOrdinal: null,
-              handoffIds: [],
-              forkedFrom: { providerThreadId: forkInput.sourceProviderThread.id },
-              pendingBackgroundTasks: [],
-              createdAt,
-              updatedAt: createdAt,
-            } satisfies OrchestrationV2ProviderThread;
-          }).pipe(
-            sessionEventPermit.withPermits(1),
-            Effect.mapError(
-              (cause) =>
-                new ProviderAdapterForkThreadError({
-                  driver: PI_PROVIDER,
-                  providerThreadId: forkInput.sourceProviderThread.id,
-                  cause,
-                }),
-            ),
+              providerThreadId: forkInput.sourceProviderThread.id,
+              cause: "Pi threads use T3 Code's portable full-thread fork.",
+            }),
           ),
       };
       return runtime;
@@ -2595,6 +2237,13 @@ function piSubagentOutput(result: unknown): string {
     if (text.length > 0) return text;
   }
   return "";
+}
+
+function piExtensionDisplayName(extensionPath: string | undefined): string {
+  if (extensionPath === undefined) return "Pi extension";
+  const normalized = extensionPath.replace(/\\/g, "/").replace(/\/+$/, "");
+  const name = normalized.slice(normalized.lastIndexOf("/") + 1).replace(/\.[^.]+$/, "");
+  return name.length === 0 ? "Pi extension" : name;
 }
 
 function piThreadSnapshot(

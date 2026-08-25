@@ -11,7 +11,7 @@
 import { type PiSettings, type ServerProvider, type ServerProviderModel } from "@t3tools/contracts";
 import { causeErrorTag } from "@t3tools/shared/observability";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
-import { tokenizeCliArgs } from "@t3tools/shared/cliArgs";
+import { compareSemverVersions } from "@t3tools/shared/semver";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -20,6 +20,10 @@ import * as Result from "effect/Result";
 import { HttpClient } from "effect/unstable/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
+import {
+  buildPiRpcLaunch,
+  resolvePiLaunchArgs,
+} from "../../orchestration-v2/Adapters/piT3McpInjection.ts";
 import {
   makePiRpcConnection,
   piRecordField as recordField,
@@ -52,6 +56,12 @@ const PI_PRESENTATION = {
 
 const VERSION_PROBE_TIMEOUT_MS = 4_000;
 const PI_RPC_DISCOVERY_TIMEOUT_MS = 15_000;
+/**
+ * get_entries arrived in 0.80.3 and agent_settled landed in source at 0.80.4.
+ * Version 0.80.5 was the first published package containing both hooks. T3
+ * needs them for rollback boundaries and reliable turn terminalization.
+ */
+export const MINIMUM_PI_VERSION = "0.80.5";
 
 /** Deferring to the user's own settings.json default model. */
 const PI_DEFAULT_MODEL: ServerProviderModel = {
@@ -102,13 +112,25 @@ function parseDiscoveredModels(
   return parsed;
 }
 
-const discoverPiViaRpc = (piSettings: PiSettings, environment: NodeJS.ProcessEnv, cwd?: string) =>
+const discoverPiViaRpc = (
+  piSettings: PiSettings,
+  environment: NodeJS.ProcessEnv,
+  launchArgs: ReadonlyArray<string>,
+  cwd?: string,
+) =>
   Effect.gen(function* () {
+    const launch = buildPiRpcLaunch({
+      launchArgs,
+      environment,
+      mcpSession: undefined,
+      extensionPath: undefined,
+      ephemeral: true,
+    });
     const connection = yield* makePiRpcConnection({
       command: piSettings.binaryPath || "pi",
-      args: ["--mode", "rpc", "--no-session", ...tokenizeCliArgs(piSettings.launchArgs)],
+      args: launch.args,
       cwd,
-      env: environment,
+      env: launch.env,
     });
     const stateData = yield* connection.request({ type: "get_state" });
     const modelsData = yield* connection.request({ type: "get_available_models" });
@@ -263,10 +285,61 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
     });
   }
 
-  const discoveryExit = yield* discoverPiViaRpc(piSettings, environment, cwd).pipe(
-    Effect.timeoutOption(PI_RPC_DISCOVERY_TIMEOUT_MS),
-    Effect.exit,
-  );
+  if (version === null) {
+    return buildServerProvider({
+      presentation: PI_PRESENTATION,
+      enabled: piSettings.enabled,
+      checkedAt,
+      models: fallbackModels,
+      probe: {
+        installed: true,
+        version: null,
+        status: "error",
+        auth: { status: "unknown" },
+        message: `T3 Code could not determine the Pi version. Pi ${MINIMUM_PI_VERSION} or newer is required.`,
+      },
+    });
+  }
+
+  if (compareSemverVersions(version, MINIMUM_PI_VERSION) < 0) {
+    return buildServerProvider({
+      presentation: PI_PRESENTATION,
+      enabled: piSettings.enabled,
+      checkedAt,
+      models: fallbackModels,
+      probe: {
+        installed: true,
+        version,
+        status: "error",
+        auth: { status: "unknown" },
+        message: `Pi ${version} is unsupported. Update to Pi ${MINIMUM_PI_VERSION} or newer.`,
+      },
+    });
+  }
+
+  const resolvedLaunchArgs = resolvePiLaunchArgs(piSettings.launchArgs);
+  if (!resolvedLaunchArgs.ok) {
+    return buildServerProvider({
+      presentation: PI_PRESENTATION,
+      enabled: piSettings.enabled,
+      checkedAt,
+      models: fallbackModels,
+      probe: {
+        installed: true,
+        version,
+        status: "error",
+        auth: { status: "unknown" },
+        message: resolvedLaunchArgs.message,
+      },
+    });
+  }
+
+  const discoveryExit = yield* discoverPiViaRpc(
+    piSettings,
+    environment,
+    resolvedLaunchArgs.args,
+    cwd,
+  ).pipe(Effect.timeoutOption(PI_RPC_DISCOVERY_TIMEOUT_MS), Effect.exit);
   if (Exit.isFailure(discoveryExit)) {
     yield* Effect.logWarning("Pi RPC discovery failed.", {
       errorTag: causeErrorTag(discoveryExit.cause),
@@ -279,9 +352,10 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
       probe: {
         installed: true,
         version,
-        status: "error",
+        status: "ready",
         auth: { status: "unknown" },
-        message: "Pi CLI is installed but RPC startup failed. Check server logs for details.",
+        message:
+          "Pi is available, but T3 Code could not refresh its models and commands. The live session will retry startup.",
       },
     });
   }
@@ -294,9 +368,10 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
       probe: {
         installed: true,
         version,
-        status: "error",
+        status: "ready",
         auth: { status: "unknown" },
-        message: `Pi CLI is installed but RPC startup timed out after ${PI_RPC_DISCOVERY_TIMEOUT_MS}ms.`,
+        message:
+          "Pi is available, but model and command discovery needs interactive input. The live session will handle it.",
       },
     });
   }

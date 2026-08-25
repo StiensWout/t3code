@@ -143,20 +143,20 @@ T3_MCP_BEARER_TOKEN=<provider-session-token>
 ```
 
 The extension connects to that HTTP endpoint, lists tools, and registers each
-one with `pi.registerTool` under its original name (`delegate_task`,
-`t3_thread_start`, and the rest). Follow-up HTTP requests send
+one with `pi.registerTool` under a `mcp__t3-code__` namespace
+(`mcp__t3-code__delegate_task`, `mcp__t3-code__t3_thread_start`, and the rest).
+The bridge calls the original MCP tool name over HTTP. Follow-up requests send
 `mcp-protocol-version: 2025-06-18`; Effect's MCP transport returns 400
 without it. The first turn of a session also receives the shared T3
 orchestration instructions.
 
-A second T3-owned extension overrides the official `subagent` tool to
-persist `--session` and report `sessionFile`. Duplicate `subagent`
-registrations abort Pi, so the launcher disables extension discovery and
-drops the official tool from `launchArgs`. It then explicitly re-adds the
-T3 extensions and deduplicated user extensions, including project-local
-extensions only under standing project trust. Other user `launchArgs` are
-preserved. The adapter binds each result as a child thread that later sends
-resume through `switch_session`.
+Pi keeps ownership of native extension discovery. T3 does not replace Pi's
+`subagent` tool or reproduce Pi's package and project-trust loader. Durable
+delegation goes through the namespaced T3 MCP `delegate_task` tool and the
+shared orchestration child-thread lifecycle. When Pi's example `subagent`
+extension is installed, the adapter observes its documented `details.results`
+shape and projects task cards with no child thread id. Unknown result shapes
+remain ordinary dynamic tool output.
 
 ### Initial Provider Support
 

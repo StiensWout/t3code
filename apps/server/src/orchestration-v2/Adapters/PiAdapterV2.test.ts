@@ -331,7 +331,7 @@ describe("PiAdapterV2", () => {
       const extensions = spawn.args.flatMap((arg, index) =>
         arg === "--extension" ? [spawn.args[index + 1]] : [],
       );
-      assert.isTrue(extensions.some((path) => path?.endsWith("pi-t3-subagent-extension.ts")));
+      assert.isFalse(spawn.args.includes("--no-extensions"));
       assert.isTrue(extensions.some((path) => path?.endsWith("pi-t3-mcp-extension.ts")));
       assert.equal(spawn.env.T3_MCP_URL, "http://127.0.0.1:43123/mcp");
       assert.equal(spawn.env.T3_MCP_BEARER_TOKEN, "secret-pi-token");
@@ -353,13 +353,7 @@ describe("PiAdapterV2", () => {
       });
       assert.equal(providerThread.nativeThreadRef?.nativeId, FAKE_SESSION_FILE);
       assert.equal(providerThread.driver, PI_PROVIDER);
-      const spawn = fake.lastSpawn();
-      assert.isTrue(
-        spawn.args.some(
-          (arg, index) =>
-            arg === "--extension" && spawn.args[index + 1]?.endsWith("pi-t3-subagent-extension.ts"),
-        ),
-      );
+      assert.isFalse(fake.lastSpawn().args.includes("--no-extensions"));
 
       yield* runtime.resumeThread({ providerThread });
       const switchRequest = yield* fake.takeRequest("switch_session");
@@ -587,6 +581,8 @@ describe("PiAdapterV2", () => {
           assistantItem.turnItem.type === "assistant_message" &&
           assistantItem.turnItem.text === "Hello",
       );
+      const terminal = yield* takeEvent((event) => event.type === "turn.terminal");
+      assert.isTrue(terminal.type === "turn.terminal" && terminal.status === "completed");
       const usage = yield* takeEvent(
         (event) =>
           event.type === "provider_thread.updated" &&
@@ -605,9 +601,6 @@ describe("PiAdapterV2", () => {
           compactsAutomatically: true,
         },
       );
-      const terminal = yield* takeEvent((event) => event.type === "turn.terminal");
-      assert.isTrue(terminal.type === "turn.terminal" && terminal.status === "completed");
-
       // An acknowledged stats request can still omit usable window values.
       // Keep the last good snapshot instead of making the meter disappear.
       yield* startTurn(runtime, providerThread);
@@ -845,7 +838,7 @@ describe("PiAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
-  it.effect("projects the subagent extension's tasks as native subagents", () =>
+  it.effect("observes official subagent results without inventing child threads", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakePi;
       const { runtime, takeEvent } = yield* openRuntime(fake);
@@ -858,61 +851,28 @@ describe("PiAdapterV2", () => {
       yield* fake.takeRequest("prompt");
       yield* fake.emit({ type: "agent_start" });
       yield* fake.emit({
-        type: "tool_execution_start",
-        toolCallId: "call_sub",
-        toolName: "subagent",
-        args: { tasks: [{ agent: "scout", task: "map the repo" }] },
-      });
-      yield* fake.emit({
         type: "tool_execution_update",
         toolCallId: "call_sub",
         toolName: "subagent",
         partialResult: {
           content: [{ type: "text", text: "(running...)" }],
           details: {
-            mode: "parallel",
+            mode: "single",
             results: [
               {
                 agent: "scout",
                 task: "map the repo",
-                finished: false,
                 exitCode: 0,
-                stopReason: "toolUse",
                 stderr: "",
-                sessionFile: "/tmp/pi-children/scout.jsonl",
+                sessionFile: "/ignored/custom-extension-session.jsonl",
                 messages: [
                   { role: "assistant", content: [{ type: "text", text: "scanning files" }] },
                 ],
-              },
-              {
-                agent: "worker",
-                task: "broken task",
-                finished: false,
-                exitCode: -1,
-                stderr: "",
-                messages: [],
               },
             ],
           },
         },
       });
-      const childThread = yield* takeEvent((event) => event.type === "app_thread.created");
-      if (childThread.type !== "app_thread.created") {
-        assert.fail("expected app_thread.created");
-        return;
-      }
-      const childThreadId = childThread.appThread.id;
-      const childProviderThread = yield* takeEvent(
-        (event) =>
-          event.type === "provider_thread.updated" &&
-          event.providerThread.appThreadId === childThreadId,
-      );
-      assert.isTrue(
-        childProviderThread.type === "provider_thread.updated" &&
-          childProviderThread.providerThread.nativeThreadRef?.nativeId ===
-            "/tmp/pi-children/scout.jsonl" &&
-          childProviderThread.providerThread.providerSessionId === null,
-      );
       const running = yield* takeEvent(
         (event) => event.type === "subagent.updated" && event.subagent.status === "running",
       );
@@ -921,14 +881,9 @@ describe("PiAdapterV2", () => {
           running.subagent.title === "scout" &&
           running.subagent.prompt === "map the repo" &&
           running.subagent.progress === "scanning files" &&
-          running.subagent.childThreadId === childThreadId,
+          running.subagent.childThreadId === null,
       );
-      const queuedSibling = yield* takeEvent(
-        (event) => event.type === "subagent.updated" && event.subagent.title === "worker",
-      );
-      assert.isTrue(
-        queuedSibling.type === "subagent.updated" && queuedSibling.subagent.status === "running",
-      );
+
       yield* fake.emit({
         type: "tool_execution_end",
         toolCallId: "call_sub",
@@ -937,27 +892,17 @@ describe("PiAdapterV2", () => {
         result: {
           content: [{ type: "text", text: "done" }],
           details: {
-            mode: "parallel",
+            mode: "single",
             results: [
               {
                 agent: "scout",
                 task: "map the repo",
-                finished: true,
                 exitCode: 0,
                 stopReason: "stop",
                 stderr: "",
-                sessionFile: "/tmp/pi-children/scout.jsonl",
                 messages: [
                   { role: "assistant", content: [{ type: "text", text: "repo has one file" }] },
                 ],
-              },
-              {
-                agent: "worker",
-                task: "broken task",
-                finished: true,
-                exitCode: 1,
-                stderr: "boom",
-                messages: [],
               },
             ],
           },
@@ -969,10 +914,8 @@ describe("PiAdapterV2", () => {
       assert.isTrue(
         doneCard.type === "subagent.updated" &&
           doneCard.subagent.result === "repo has one file" &&
-          doneCard.subagent.childThreadId === childThreadId,
+          doneCard.subagent.childThreadId === null,
       );
-      // Completed turn_item is emitted immediately after the completed card;
-      // waiting for the failed card first would consume it.
       const subagentItem = yield* takeEvent(
         (event) =>
           event.type === "turn_item.updated" &&
@@ -982,16 +925,7 @@ describe("PiAdapterV2", () => {
       assert.isTrue(
         subagentItem.type === "turn_item.updated" &&
           subagentItem.turnItem.type === "subagent" &&
-          subagentItem.turnItem.childThreadId === childThreadId,
-      );
-      const failedCard = yield* takeEvent(
-        (event) => event.type === "subagent.updated" && event.subagent.status === "failed",
-      );
-      assert.isTrue(
-        failedCard.type === "subagent.updated" &&
-          failedCard.subagent.title === "worker" &&
-          failedCard.subagent.result === "boom" &&
-          failedCard.subagent.childThreadId === null,
+          subagentItem.turnItem.childThreadId === null,
       );
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
@@ -1226,6 +1160,8 @@ describe("PiAdapterV2", () => {
         contextUsage: { tokens: null, contextWindow: 200_000, percent: null },
       });
       yield* fake.emit({ type: "agent_settled" });
+      const terminal = yield* takeEvent((event) => event.type === "turn.terminal");
+      assert.isTrue(terminal.type === "turn.terminal" && terminal.status === "completed");
       const usage = yield* takeEvent(
         (event) =>
           event.type === "provider_thread.updated" &&
@@ -1237,8 +1173,6 @@ describe("PiAdapterV2", () => {
           : null,
         3_400,
       );
-      const terminal = yield* takeEvent((event) => event.type === "turn.terminal");
-      assert.isTrue(terminal.type === "turn.terminal" && terminal.status === "completed");
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
@@ -1317,7 +1251,7 @@ describe("PiAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
-  it.effect("projects setStatus as a keyed live row and closes it on settle", () =>
+  it.effect("shows bounded extension errors without failing the turn", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakePi;
       const { runtime, takeEvent } = yield* openRuntime(fake);
@@ -1328,128 +1262,50 @@ describe("PiAdapterV2", () => {
       });
       yield* startTurn(runtime, providerThread);
       yield* fake.takeRequest("prompt");
-      yield* fake.emit({ type: "agent_start" });
       yield* fake.emit({
-        type: "extension_ui_request",
-        id: "ui-s1",
-        method: "setStatus",
-        statusKey: "tps",
-        statusText: "42 tok/s",
+        type: "extension_error",
+        extensionPath: "/home/user/.pi/agent/extensions/broken.ts",
+        event: "before_agent_start",
+        error: `bad extension ${"x".repeat(3_000)}`,
       });
-      const row = yield* takeEvent(
-        (event) =>
-          event.type === "turn_item.updated" &&
-          event.turnItem.type === "dynamic_tool" &&
-          event.turnItem.toolName === "status",
+      const errorItem = yield* takeEvent(
+        (event) => event.type === "turn_item.updated" && event.turnItem.type === "error",
       );
       assert.isTrue(
-        row.type === "turn_item.updated" &&
-          row.turnItem.type === "dynamic_tool" &&
-          row.turnItem.status === "running" &&
-          row.turnItem.nativeItemRef?.nativeId === `status:${row.turnItem.providerTurnId}:tps` &&
-          (row.turnItem.input as { status?: string }).status === "42 tok/s",
+        errorItem.type === "turn_item.updated" &&
+          errorItem.turnItem.type === "error" &&
+          errorItem.turnItem.title === "broken" &&
+          errorItem.turnItem.failure.message.startsWith(
+            "broken failed during before_agent_start.\n\nbad extension",
+          ) &&
+          errorItem.turnItem.failure.message.length < 2_100,
       );
       yield* fake.emit({ type: "agent_settled" });
-      const closed = yield* takeEvent(
-        (event) =>
-          event.type === "turn_item.updated" &&
-          event.turnItem.type === "dynamic_tool" &&
-          event.turnItem.toolName === "status" &&
-          event.turnItem.status === "completed",
-      );
-      assert.equal(closed.type, "turn_item.updated");
+      const terminal = yield* takeEvent((event) => event.type === "turn.terminal");
+      assert.isTrue(terminal.type === "turn.terminal" && terminal.status === "completed");
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
-  it.effect("refuses to open a subagent child session while its task is running", () =>
+  it.effect("advertises portable forks and rejects direct native fork calls", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakePi;
-      const { runtime, takeEvent } = yield* openRuntime(fake);
-      const providerThread = yield* runtime.ensureThread({
-        threadId: THREAD_ID,
-        modelSelection: modelSelection("default"),
-        runtimePolicy,
-      });
-      yield* startTurn(runtime, providerThread);
-      yield* fake.takeRequest("prompt");
-      yield* fake.emit({ type: "agent_start" });
-      const childFile = "/fake/.pi/agent/sessions/children/child-1.jsonl";
-      yield* fake.emit({
-        type: "tool_execution_update",
-        toolCallId: "call_child",
-        toolName: "subagent",
-        partialResult: {
-          content: [{ type: "text", text: "(running...)" }],
-          details: {
-            mode: "single",
-            results: [
-              {
-                agent: "worker",
-                task: "long task",
-                finished: false,
-                exitCode: -1,
-                stopReason: "toolUse",
-                stderr: "",
-                messages: [],
-                sessionFile: childFile,
-              },
-            ],
-          },
-        },
-      });
-      yield* takeEvent(
-        (event) => event.type === "subagent.updated" && event.subagent.status === "running",
-      );
-      const childThread: OrchestrationV2ProviderThread = {
-        ...providerThread,
-        nativeThreadRef: { driver: PI_PROVIDER, nativeId: childFile, strength: "strong" },
-      };
-      const error = yield* runtime.resumeThread({ providerThread: childThread }).pipe(Effect.flip);
-      assert.equal(error._tag, "ProviderAdapterResumeThreadError");
-
-      // A parent teardown releases every child lock, even when the tool never
-      // emitted a final result (for example after provider transport loss).
-      yield* fake.emit({ type: "agent_settled" });
-      yield* takeEvent((event) => event.type === "turn.terminal");
-      fake.queueState({ sessionFile: childFile, sessionId: "child-1" });
-      const resumed = yield* runtime.resumeThread({ providerThread: childThread });
-      assert.equal(resumed.nativeThreadRef?.nativeId, childFile);
-    }).pipe(Effect.scoped, Effect.provide(testLayer)),
-  );
-
-  it.effect("forks a thread by cloning pi's session and switching back", () =>
-    Effect.gen(function* () {
-      const fake = yield* makeFakePi;
+      const adapter = yield* makeAdapter(fake);
+      const capabilities = yield* adapter.getCapabilities();
+      assert.isFalse(capabilities.threads.canForkThread);
       const { runtime } = yield* openRuntime(fake);
       const providerThread = yield* runtime.ensureThread({
         threadId: THREAD_ID,
         modelSelection: modelSelection("default"),
         runtimePolicy,
       });
-      const cloneFile = "/fake/.pi/agent/sessions/--workspace--/0002_clone.jsonl";
-      fake.queueState({ sessionFile: cloneFile, sessionId: "clone" });
-      const forked = yield* runtime.forkThread({
-        sourceProviderThread: providerThread,
-        targetThreadId: ThreadId.make("thread-pi-fork-target"),
-      });
-      assert.equal(forked.nativeThreadRef?.nativeId, cloneFile);
-      assert.isNull(forked.providerSessionId);
-      yield* fake.takeRequest("clone");
-      const switchBack = yield* fake.takeRequest("switch_session");
-      assert.equal(switchBack["sessionPath"], FAKE_SESSION_FILE);
-
-      fake.queueState({
-        sessionFile: "/fake/.pi/agent/sessions/--workspace--/0003_clone.jsonl",
-        sessionId: "clone-2",
-      });
-      fake.vetoNextSwitch();
       const error = yield* runtime
         .forkThread({
           sourceProviderThread: providerThread,
-          targetThreadId: ThreadId.make("thread-pi-fork-vetoed"),
+          targetThreadId: ThreadId.make("thread-pi-fork-target"),
         })
         .pipe(Effect.flip);
       assert.equal(error._tag, "ProviderAdapterForkThreadError");
+      assert.match(String(error.cause), /portable full-thread fork/);
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 

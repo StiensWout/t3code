@@ -11,11 +11,14 @@ import * as Schema from "effect/Schema";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import { TextGenerationError, type ModelSelection, type PiSettings } from "@t3tools/contracts";
-import { tokenizeCliArgs } from "@t3tools/shared/cliArgs";
 import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@t3tools/shared/git";
 import { extractJsonObject } from "@t3tools/shared/schemaJson";
 
 import { makePiRpcConnection, parsePiModelSlug } from "../orchestration-v2/Adapters/PiRpc.ts";
+import {
+  buildPiRpcLaunch,
+  resolvePiLaunchArgs,
+} from "../orchestration-v2/Adapters/piT3McpInjection.ts";
 import * as TextGeneration from "./TextGeneration.ts";
 import {
   buildBranchNamePrompt,
@@ -57,20 +60,30 @@ export const makePiTextGeneration = Effect.fn("makePiTextGeneration")(function* 
     modelSelection: ModelSelection;
   }): Effect.Effect<S["Type"], TextGenerationError, S["DecodingServices"]> =>
     Effect.gen(function* () {
+      const resolvedLaunchArgs = resolvePiLaunchArgs(piSettings.launchArgs);
+      if (!resolvedLaunchArgs.ok) {
+        return yield* new TextGenerationError({
+          operation,
+          detail: resolvedLaunchArgs.message,
+        });
+      }
+      const launch = buildPiRpcLaunch({
+        launchArgs: resolvedLaunchArgs.args,
+        environment,
+        mcpSession: undefined,
+        extensionPath: undefined,
+        ephemeral: true,
+        // No user is present to answer a text-generation extension dialog.
+        disableExtensions: true,
+      });
       const connection = yield* makePiRpcConnection({
         command: piSettings.binaryPath || "pi",
         // --no-extensions is deliberate: an extension raising a dialog here
         // would stall commit-message generation until the timeout, and no
         // one is present to answer it. User model config and auth still apply.
-        args: [
-          "--mode",
-          "rpc",
-          "--no-session",
-          "--no-extensions",
-          ...tokenizeCliArgs(piSettings.launchArgs),
-        ],
+        args: launch.args,
         cwd,
-        env: environment,
+        env: launch.env,
       }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
 
       if (modelSelection.model !== "default") {
