@@ -353,11 +353,7 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
             );
       const resolvedLaunchArgs = resolvePiLaunchArgs(options.settings.launchArgs);
       if (!resolvedLaunchArgs.ok) {
-        return yield* new ProviderAdapterOpenSessionError({
-          driver: PI_PROVIDER,
-          providerSessionId: input.providerSessionId,
-          cause: new Error(resolvedLaunchArgs.message),
-        });
+        return yield* protocolError(resolvedLaunchArgs.message);
       }
       const launch = buildPiRpcLaunch({
         launchArgs: resolvedLaunchArgs.args,
@@ -1178,11 +1174,14 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
 
       const refreshContextUsageAfterTurn = (state: PiThreadState, turn: ActivePiTurn) =>
         readContextUsage(turn).pipe(
-          Effect.flatMap((contextUsage) =>
-            contextUsage === undefined || threadState !== state
+          Effect.flatMap((contextUsage) => {
+            const currentState = threadState;
+            return contextUsage === undefined ||
+              currentState === null ||
+              currentState.providerThread.id !== state.providerThread.id
               ? Effect.void
-              : updateProviderThread(state, { contextUsage }),
-          ),
+              : updateProviderThread(currentState, { contextUsage });
+          }),
           Effect.forkIn(scope),
         );
 
