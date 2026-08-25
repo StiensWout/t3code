@@ -63,8 +63,8 @@ import {
   NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED,
 } from "../layout/native-mail-search-toolbar";
 import {
-  compatibleRuntimeModeForProvider,
-  runtimeModeChoicesForProvider,
+  compatibleRuntimeModeForChoices,
+  runtimeModeChoicesForSupportedModes,
   selectableChoices,
 } from "./thread-settings-options";
 import {
@@ -378,7 +378,7 @@ type ThreadSettingsSessionValue = {
   readonly providerInstanceId?: ProviderInstanceId;
   readonly providerGroups: ReadonlyArray<ProviderGroup>;
   readonly runtimeMode: RuntimeMode;
-  readonly runtimeModeChoices: ReturnType<typeof runtimeModeChoicesForProvider>;
+  readonly runtimeModeChoices: ReturnType<typeof runtimeModeChoicesForSupportedModes>;
   readonly onUpdateRuntimeMode: (mode: RuntimeMode) => void;
   readonly displayedDescriptors: ReadonlyArray<ProviderOptionDescriptor>;
   readonly providerExpansionOverrides: ReadonlySet<string>;
@@ -439,17 +439,19 @@ function ThreadSettingsSessionProvider(
         : props.optionDescriptors,
     [pendingModel, props.optionDescriptors],
   );
-  const displayedProviderDriver = useMemo(
+  const displayedModel = useMemo(
     () =>
-      pendingModel?.providerDriver ??
-      props.providerGroups.flatMap((group) => group.models).find((option) => isApplied(option))
-        ?.providerDriver,
+      pendingModel ??
+      props.providerGroups.flatMap((group) => group.models).find((option) => isApplied(option)) ??
+      null,
     [isApplied, pendingModel, props.providerGroups],
   );
-  const runtimeModeChoices = runtimeModeChoicesForProvider(displayedProviderDriver);
-  const compatibleRuntimeMode = compatibleRuntimeModeForProvider(
+  const runtimeModeChoices = runtimeModeChoicesForSupportedModes(
+    displayedModel?.supportedRuntimeModes,
+  );
+  const compatibleRuntimeMode = compatibleRuntimeModeForChoices(
     props.runtimeMode,
-    displayedProviderDriver,
+    runtimeModeChoices,
   );
 
   const hasLegacyModels = useMemo(

@@ -51,6 +51,7 @@ const PI_PRESENTATION = {
   displayName: "Pi",
   badgeLabel: "Early Access",
   showInteractionModeToggle: false,
+  supportedRuntimeModes: ["approval-required", "auto-accept-edits", "full-access"],
   requiresNewThreadForModelChange: false,
 } as const;
 
