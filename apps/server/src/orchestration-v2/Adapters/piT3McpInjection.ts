@@ -129,7 +129,7 @@ export function resolvePiLaunchArgs(launchArgs: string): PiLaunchArgsResolution 
     }
     if (PI_ARGUMENTS_WITH_VALUES.has(arg)) {
       const value = args[index + 1];
-      if (value === undefined || value.length === 0 || value.startsWith("-")) {
+      if (value === undefined) {
         return { ok: false, message: `Pi launch argument '${arg}' requires a value.` };
       }
       index += 1;
@@ -141,7 +141,13 @@ export function resolvePiLaunchArgs(launchArgs: string): PiLaunchArgsResolution 
     if (arg.startsWith("--")) {
       // Pi extensions may register arbitrary long flags. Treat one following
       // non-flag token as that extension flag's value.
-      if (args[index + 1] !== undefined && !args[index + 1]!.startsWith("-")) index += 1;
+      if (
+        args[index + 1] !== undefined &&
+        !args[index + 1]!.startsWith("-") &&
+        !args[index + 1]!.startsWith("@")
+      ) {
+        index += 1;
+      }
       continue;
     }
     if (arg.startsWith("-")) {

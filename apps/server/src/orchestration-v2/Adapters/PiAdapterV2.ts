@@ -296,6 +296,10 @@ interface ActivePiTurn {
    * the turn instead.
    */
   sawAgentActivity: boolean;
+  /** Only slash-command prompts can complete without starting an agent run. */
+  readonly promptMayBeCommandOnly: boolean;
+  /** Pi's id-less prompt responses are ordered, so retain why each prompt was sent. */
+  readonly pendingPromptResponses: Array<"turn_start" | "steer">;
   /** Pi reports context as unknown immediately after compaction; keep its estimate for the meter. */
   latestCompactionAfterTokens: number | null;
   failure: ReturnType<typeof makeProviderFailure> | null;
@@ -444,6 +448,9 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
       let baselineModel: { provider: string; modelId: string } | null = null;
       let baselineThinking: string | null = null;
       let autoCompactionEnabled: boolean | undefined;
+      // Invalidates optional post-turn stats reads when rollback changes the
+      // active branch before an older read completes.
+      let contextUsageGeneration = 0;
 
       const emit = (event: ProviderAdapterV2Event) =>
         Queue.offer(events, event).pipe(Effect.asVoid);
@@ -1169,11 +1176,13 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
         };
       });
 
-      const refreshContextUsageAfterTurn = (state: PiThreadState, turn: ActivePiTurn) =>
-        readContextUsage(turn.latestCompactionAfterTokens).pipe(
+      const refreshContextUsageAfterTurn = (state: PiThreadState, turn: ActivePiTurn) => {
+        const generation = ++contextUsageGeneration;
+        return readContextUsage(turn.latestCompactionAfterTokens).pipe(
           Effect.flatMap((contextUsage) => {
             const currentState = threadState;
             return contextUsage === undefined ||
+              generation !== contextUsageGeneration ||
               currentState === null ||
               currentState.providerThread.id !== state.providerThread.id
               ? Effect.void
@@ -1181,6 +1190,7 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
           }),
           Effect.forkIn(scope),
         );
+      };
 
       const finalizeTurn = Effect.fnUntraced(function* (
         state: PiThreadState,
@@ -1418,16 +1428,22 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
           }
           case "response": {
             // Correlated responses never reach the pump; an id-less response
-            // is the deferred ack of a fire-and-forget prompt/steer. A
-            // rejection here means the turn never started on the Pi side.
+            // is the deferred ack of a fire-and-forget prompt/steer.
             const command = recordString(event, "command");
+            const promptKind =
+              command === "prompt" ? turn?.pendingPromptResponses.shift() : undefined;
             if (event["success"] === true) {
               // Deferred success ack. Command-only prompts (pure extension
               // slash commands) never start an agent run and never emit
               // `agent_settled`, so probe for idleness. The probe result is
               // re-queued behind any events Pi emitted before answering
               // get_state, which keeps the check stream-ordered.
-              if (command === "prompt" && turn !== null && !turn.sawAgentActivity) {
+              if (
+                promptKind === "turn_start" &&
+                turn !== null &&
+                turn.promptMayBeCommandOnly &&
+                !turn.sawAgentActivity
+              ) {
                 const providerTurnId = turn.providerTurn.id;
                 yield* request({ type: "get_state" }).pipe(
                   Effect.matchEffect({
@@ -1454,7 +1470,7 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
               return;
             }
             if (event["success"] !== false) return;
-            if (command === "steer") {
+            if (command === "steer" || promptKind === "steer") {
               // A rejected steer only means that one message was refused. The
               // turn it was aimed at is still running on Pi, so terminalizing
               // here would report a failure while output keeps streaming.
@@ -1770,7 +1786,9 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
         instanceId: options.instanceId,
         driver: PI_PROVIDER,
         providerSessionId: input.providerSessionId,
-        providerSession: sessionEntity,
+        get providerSession() {
+          return sessionEntity;
+        },
         events: Stream.fromQueue(events),
         ensureThread: (threadInput) =>
           registerThread(threadInput).pipe(
@@ -1866,6 +1884,8 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
               toolStartedAt: new Map(),
               interrupted: false,
               sawAgentActivity: false,
+              promptMayBeCommandOnly: payload.message.trimStart().startsWith("/"),
+              pendingPromptResponses: ["turn_start"],
               latestCompactionAfterTokens: null,
               failure: null,
             };
@@ -1929,19 +1949,22 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
               steerInput.message.text,
               steerInput.message.attachments,
             );
-            // Same fire-and-forget contract as `prompt`: a steer that expands
-            // a slash command must not block on the ack. The final active-turn
-            // check lives inside the permit so settlement cannot overtake it.
+            // Pi only accepts extension slash commands through `prompt`; plain
+            // text uses its native steering queue. Neither path waits on its
+            // deferred ack. The final active-turn check lives inside the permit
+            // so settlement cannot overtake it.
             yield* sessionEventPermit.withPermits(1)(
               Effect.gen(function* () {
                 if (threadState?.activeTurn !== turn) {
                   return yield* protocolError(`Pi turn ${steerInput.providerTurnId} is not active`);
                 }
+                const type = payload.message.trimStart().startsWith("/") ? "prompt" : "steer";
                 yield* connection.send({
-                  type: "steer",
+                  type,
                   message: payload.message,
                   ...(payload.images.length === 0 ? {} : { images: payload.images }),
                 });
+                if (type === "prompt") turn.pendingPromptResponses.push("steer");
               }),
             );
           }).pipe(
@@ -2134,6 +2157,7 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
             if (forkEntryId === undefined) {
               return yield* protocolError("Pi rollback target has no captured session-tree entry");
             }
+            contextUsageGeneration += 1;
             const forkData = yield* request({ type: "fork", entryId: forkEntryId });
             if (recordField(forkData, "cancelled") === true) {
               return yield* protocolError("A Pi extension cancelled the session fork");

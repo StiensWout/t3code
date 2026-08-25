@@ -31,7 +31,7 @@ const mcpSession = {
 describe("pi T3 MCP injection", () => {
   it("always adds the permission bridge and configures MCP when available", () => {
     const resolvedArgs = resolvePiLaunchArgs(
-      "--extension=/home/user/.pi/agent/extensions/demo.ts --session-dir=/tmp/pi-sessions --provider=anthropic --model=claude-sonnet --extension-flag=kept",
+      "--extension=/home/user/.pi/agent/extensions/demo.ts --session-dir=/tmp/pi-sessions --provider=anthropic --model=claude-sonnet --tools='' --name=-review --extension-flag=kept",
     );
     assert.isTrue(resolvedArgs.ok);
     if (!resolvedArgs.ok) return;
@@ -53,6 +53,10 @@ describe("pi T3 MCP injection", () => {
       "anthropic",
       "--model",
       "claude-sonnet",
+      "--tools",
+      "",
+      "--name",
+      "-review",
       "--extension-flag=kept",
       "--extension",
       "/tmp/cache/pi-t3-mcp-extension.ts",
@@ -118,6 +122,7 @@ describe("pi T3 MCP injection", () => {
     });
     assert.deepInclude(resolvePiLaunchArgs("--session old.jsonl"), { ok: false });
     assert.deepInclude(resolvePiLaunchArgs("prompt pi immediately"), { ok: false });
+    assert.deepInclude(resolvePiLaunchArgs("--plan @instructions.md"), { ok: false });
   });
 
   it.effect("materializes the MCP bridge with namespaced tool registration", () =>

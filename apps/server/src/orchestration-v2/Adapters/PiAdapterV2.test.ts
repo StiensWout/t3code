@@ -384,7 +384,10 @@ describe("PiAdapterV2", () => {
       const switchRequest = yield* fake.takeRequest("switch_session");
       assert.equal(switchRequest["sessionPath"], FAKE_SESSION_FILE);
 
-      yield* startTurn(runtime, providerThread);
+      yield* startTurn(runtime, providerThread, "anthropic/claude-sonnet");
+      const setModel = yield* fake.takeRequest("set_model");
+      assert.equal(setModel["provider"], "anthropic");
+      assert.equal(runtime.providerSession.model, "anthropic/claude-sonnet");
       yield* fake.takeRequest("prompt");
       const error = yield* runtime.resumeThread({ providerThread }).pipe(Effect.flip);
       assert.equal(error._tag, "ProviderAdapterResumeThreadError");
@@ -484,6 +487,9 @@ describe("PiAdapterV2", () => {
       // user dialog, so the prompt must carry no correlation id to await.
       assert.equal(prompt["id"], undefined);
 
+      // A normal prompt ack only confirms that Pi accepted the command. Agent
+      // activity may follow it, so the adapter must still wait for settlement.
+      yield* fake.emit({ type: "response", command: "prompt", success: true });
       yield* fake.emit({ type: "agent_start" });
       yield* fake.emit({ type: "message_start", message: { role: "assistant" } });
       yield* fake.emit({
@@ -585,6 +591,11 @@ describe("PiAdapterV2", () => {
       yield* startTurn(runtime, providerThread);
       yield* fake.takeRequest("prompt");
       yield* fake.emit({ type: "agent_start" });
+      fake.queueStats({
+        tokens: { input: 9_000, output: 500, total: 9_500 },
+        contextUsage: { tokens: 9_500, contextWindow: 200_000 },
+      });
+      fake.holdNextStats();
       yield* fake.emit({ type: "agent_settled" });
       const finalTurn = yield* takeEvent(
         (event) =>
@@ -626,6 +637,10 @@ describe("PiAdapterV2", () => {
       const fork = yield* fake.takeRequest("fork");
       assert.equal(fork["entryId"], "u2");
       assert.equal(rollbackSnapshot.providerThread.contextUsage?.usedTokens, 2_100);
+      yield* fake.releaseStats;
+      yield* Effect.yieldNow;
+      const afterStaleStats = yield* runtime.readThreadSnapshot({ providerThread });
+      assert.equal(afterStaleStats.providerThread.contextUsage?.usedTokens, 2_100);
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
@@ -730,7 +745,7 @@ describe("PiAdapterV2", () => {
         modelSelection: modelSelection("default"),
         runtimePolicy,
       });
-      yield* startTurn(runtime, providerThread);
+      yield* startTurn(runtime, providerThread, "default", [], "/command-only");
       yield* fake.takeRequest("prompt");
       // A pure extension command: dialog + notify, then the deferred ack —
       // pi emits no agent_start/agent_settled at all.
@@ -886,6 +901,22 @@ describe("PiAdapterV2", () => {
       });
       const steer = yield* fake.takeRequest("steer");
       assert.equal(steer["message"], "Focus on tests");
+
+      yield* runtime.steerTurn({
+        threadId: THREAD_ID,
+        runId: RunId.make("run:thread-pi-test:1"),
+        providerThread,
+        providerTurnId: providerTurnId!,
+        message: {
+          messageId: "message:thread-pi-test:command" as never,
+          text: "/my-command",
+          attachments: [],
+          createdBy: "user",
+          creationSource: "web",
+        },
+      });
+      const command = yield* fake.takeRequest("prompt");
+      assert.equal(command["message"], "/my-command");
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 });
