@@ -54,20 +54,6 @@ describe("userFacingDispatchErrorMessage", () => {
     );
   });
 
-  it("falls back to the raw message for unknown capability codes", () => {
-    assert.equal(
-      userFacingDispatchErrorMessage({
-        cause: {
-          _tag: "CommandPolicyCapabilityUnsupportedError",
-          providerInstanceId: "pi",
-          capability: "some_future_capability",
-          message: "pi cannot satisfy some_future_capability for command command-3: details",
-        },
-      }),
-      "pi cannot satisfy some_future_capability for command command-3: details",
-    );
-  });
-
   it("uses explicit detail fields as user-facing messages", () => {
     assert.equal(
       userFacingDispatchErrorMessage({

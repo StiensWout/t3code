@@ -14,6 +14,7 @@ export const PI_T3_MCP_EXTENSION_FILENAME = "pi-t3-mcp-extension.ts";
 
 export const T3_MCP_URL_ENV = "T3_MCP_URL";
 export const T3_MCP_BEARER_ENV = "T3_MCP_BEARER_TOKEN";
+export const T3_PI_RUNTIME_MODE_ENV = "T3_PI_RUNTIME_MODE";
 
 export const PI_T3_MCP_EXTENSION_SOURCE = `\
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -21,8 +22,13 @@ import { Type } from "typebox";
 
 const URL_ENV = ${JSON.stringify(T3_MCP_URL_ENV)};
 const TOKEN_ENV = ${JSON.stringify(T3_MCP_BEARER_ENV)};
+const RUNTIME_MODE_ENV = ${JSON.stringify(T3_PI_RUNTIME_MODE_ENV)};
 const ORCHESTRATION_INSTRUCTIONS = ${JSON.stringify(T3_CODE_ORCHESTRATION_INSTRUCTIONS.trim())};
 const PROTOCOL = "2025-06-18";
+const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
+const FILE_CHANGE_TOOLS = new Set(["edit", "write"]);
+
+type RuntimeMode = "approval-required" | "auto-accept-edits" | "auto" | "full-access";
 
 type JsonRpcResponse = {
   readonly id?: number | string;
@@ -39,6 +45,24 @@ type McpTool = {
 function env(name: string): string | undefined {
   const value = process.env[name];
   return value && value.length > 0 ? value : undefined;
+}
+
+function runtimeMode(): RuntimeMode {
+  const value = env(RUNTIME_MODE_ENV);
+  return value === "approval-required" ||
+    value === "auto-accept-edits" ||
+    value === "auto" ||
+    value === "full-access"
+    ? value
+    : "full-access";
+}
+
+function toolInputSummary(input: unknown): string {
+  try {
+    return JSON.stringify(input, null, 2).slice(0, 4_000);
+  } catch {
+    return String(input).slice(0, 4_000);
+  }
 }
 
 function parseSseOrJson(body: string, contentType: string): JsonRpcResponse {
@@ -177,6 +201,24 @@ function createMcpClient(endpoint: string, token: string) {
 }
 
 export default async function t3McpExtension(pi: ExtensionAPI) {
+  // Pi deliberately leaves permission policy to extensions. T3's injected
+  // bridge uses Pi's public blocking tool hook so the shared runtime modes
+  // keep their normal meaning without replacing or shadowing Pi's runtime.
+  pi.on("tool_call", async (event, ctx) => {
+    const mode = runtimeMode();
+    if (mode === "full-access" || READ_ONLY_TOOLS.has(event.toolName)) return;
+    if (mode === "auto-accept-edits" && FILE_CHANGE_TOOLS.has(event.toolName)) {
+      return;
+    }
+    const approved = await ctx.ui.confirm(
+      \`Allow \${event.toolName}?\`,
+      toolInputSummary(event.input),
+    );
+    if (!approved) {
+      return { block: true, reason: \`\${event.toolName} was declined in T3 Code.\` };
+    }
+  });
+
   const endpoint = env(URL_ENV);
   const token = env(TOKEN_ENV);
   if (endpoint === undefined || token === undefined) {

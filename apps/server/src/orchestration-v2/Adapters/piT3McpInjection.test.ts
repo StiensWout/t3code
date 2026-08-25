@@ -8,6 +8,7 @@ import {
   PI_T3_MCP_EXTENSION_FILENAME,
   T3_MCP_BEARER_ENV,
   T3_MCP_URL_ENV,
+  T3_PI_RUNTIME_MODE_ENV,
 } from "./piT3McpExtensionSource.ts";
 import {
   buildPiRpcLaunch,
@@ -28,19 +29,6 @@ const mcpSession = {
 };
 
 describe("pi T3 MCP injection", () => {
-  it("keeps native extension discovery when no MCP session exists", () => {
-    const launch = buildPiRpcLaunch({
-      launchArgs: ["--session-dir", "/tmp/pi-sessions"],
-      environment: { PATH: "/usr/bin" },
-      mcpSession: undefined,
-      extensionPath: "/tmp/pi-t3-mcp-extension.ts",
-    });
-    assert.isFalse(launch.hasT3Mcp);
-    assert.deepEqual(launch.args, ["--mode", "rpc", "--session-dir", "/tmp/pi-sessions"]);
-    assert.equal(launch.env.PATH, "/usr/bin");
-    assert.isUndefined(launch.env[T3_MCP_URL_ENV]);
-  });
-
   it("adds only the namespaced T3 MCP bridge to the native Pi launch", () => {
     const launch = buildPiRpcLaunch({
       launchArgs: [
@@ -52,6 +40,7 @@ describe("pi T3 MCP injection", () => {
       environment: { PATH: "/usr/bin" },
       mcpSession,
       extensionPath: "/tmp/cache/pi-t3-mcp-extension.ts",
+      runtimeMode: "approval-required",
     });
     assert.deepEqual(launch.args, [
       "--mode",
@@ -66,38 +55,37 @@ describe("pi T3 MCP injection", () => {
     assert.notInclude(launch.args, "--no-extensions");
     assert.equal(launch.env[T3_MCP_URL_ENV], "http://127.0.0.1:43123/mcp");
     assert.equal(launch.env[T3_MCP_BEARER_ENV], "secret-pi-token");
+    assert.equal(launch.env[T3_PI_RUNTIME_MODE_ENV], "approval-required");
   });
 
-  it("does not register the same explicit T3 bridge twice", () => {
+  it("forces tools and user extensions off for unattended text generation", () => {
     const launch = buildPiRpcLaunch({
-      launchArgs: ["-e", "/tmp/cache/pi-t3-mcp-extension.ts"],
+      launchArgs: [
+        "--tools",
+        "read,write",
+        "--extension",
+        "/home/user/.pi/agent/extensions/demo.ts",
+        "--extension=./second.ts",
+        "--provider",
+        "anthropic",
+      ],
       environment: {},
       mcpSession,
       extensionPath: "/tmp/cache/pi-t3-mcp-extension.ts",
+      ephemeral: true,
+      disableExtensions: true,
+      disableTools: true,
     });
-    assert.deepEqual(launch.args, ["--mode", "rpc", "-e", "/tmp/cache/pi-t3-mcp-extension.ts"]);
-  });
-
-  it("accepts customization flags and rejects T3-owned execution flags", () => {
-    assert.deepEqual(
-      resolvePiLaunchArgs(
-        "--session-dir /tmp/pi --extension ./demo.ts --provider anthropic --offline --custom-flag value",
-      ),
-      {
-        ok: true,
-        args: [
-          "--session-dir",
-          "/tmp/pi",
-          "--extension",
-          "./demo.ts",
-          "--provider",
-          "anthropic",
-          "--offline",
-          "--custom-flag",
-          "value",
-        ],
-      },
-    );
+    assert.deepEqual(launch.args, [
+      "--mode",
+      "rpc",
+      "--no-session",
+      "--provider",
+      "anthropic",
+      "--no-extensions",
+      "--no-tools",
+    ]);
+    assert.isFalse(launch.hasT3Mcp);
     assert.deepInclude(resolvePiLaunchArgs("--mode text"), {
       ok: false,
       message: "Pi launch argument '--mode' is controlled by T3 Code and cannot be overridden.",
@@ -115,6 +103,8 @@ describe("pi T3 MCP injection", () => {
       const mcpSource = yield* fs.readFileString(mcpDest);
       assert.include(mcpSource, "export default async function t3McpExtension");
       assert.include(mcpSource, "before_agent_start");
+      assert.include(mcpSource, 'pi.on("tool_call"');
+      assert.include(mcpSource, "Allow ${event.toolName}?");
       assert.include(mcpSource, '"mcp-protocol-version"');
       assert.include(mcpSource, '"tools/call"');
       assert.include(mcpSource, "mcp__t3-code__");

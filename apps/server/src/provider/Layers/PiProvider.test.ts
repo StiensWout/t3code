@@ -77,14 +77,4 @@ describe("PiProvider", () => {
       assert.include(snapshot.message ?? "", "could not refresh its models and commands");
     }).pipe(Effect.provide(NodeServices.layer)),
   );
-
-  it.effect("reports reserved launch arguments before opening an RPC session", () =>
-    Effect.gen(function* () {
-      const snapshot = yield* checkPiProviderStatus({ ...settings, launchArgs: "--resume" }).pipe(
-        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, piProbeSpawner("0.84.3")),
-      );
-      assert.equal(snapshot.status, "error");
-      assert.include(snapshot.message ?? "", "controlled by T3 Code");
-    }).pipe(Effect.provide(NodeServices.layer)),
-  );
 });

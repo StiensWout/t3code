@@ -35,6 +35,18 @@ export const RUNTIME_MODE_CHOICES: ReadonlyArray<{
     description: "Allow commands and edits without prompts.",
   },
 ];
+const PI_RUNTIME_MODE_CHOICES = RUNTIME_MODE_CHOICES.filter((choice) => choice.mode !== "auto");
+
+export function runtimeModeChoicesForProvider(providerDriver: string | undefined) {
+  return providerDriver === "pi" ? PI_RUNTIME_MODE_CHOICES : RUNTIME_MODE_CHOICES;
+}
+
+export function compatibleRuntimeModeForProvider(
+  runtimeMode: RuntimeMode,
+  providerDriver: string | undefined,
+): RuntimeMode {
+  return providerDriver === "pi" && runtimeMode === "auto" ? "approval-required" : runtimeMode;
+}
 
 export function selectableChoices(
   descriptor: Extract<ProviderOptionDescriptor, { type: "select" }>,

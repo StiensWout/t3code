@@ -33,6 +33,7 @@ import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import { EventSinkV2 } from "./EventSink.ts";
 import { IdAllocatorV2 } from "./IdAllocator.ts";
 import { makeKeyedSerialExecutor } from "./KeyedSerialExecutor.ts";
+import { ProviderEventIngestorV2 } from "./ProviderEventIngestor.ts";
 import {
   ProviderAdapterEventStreamError,
   ProviderAdapterV2RuntimePolicy,
@@ -231,6 +232,29 @@ function sessionKey(providerSessionId: ProviderSessionId): string {
   return String(providerSessionId);
 }
 
+/**
+ * Runtime requests with no provider turn belong to the live session itself.
+ * Their node and transcript item are runless too, so they bypass the normal
+ * per-run subscriber and are persisted by the session event pump.
+ */
+function sessionScopedRuntimeRequestThreadId(event: ProviderAdapterV2Event): ThreadId | undefined {
+  switch (event.type) {
+    case "runtime_request.updated":
+      return event.runtimeRequest.providerTurnId === null ? event.threadId : undefined;
+    case "node.updated":
+      return event.node.runId === null && event.node.runtimeRequestId !== null
+        ? event.node.threadId
+        : undefined;
+    case "turn_item.updated":
+      return event.turnItem.runId === null &&
+        (event.turnItem.type === "approval_request" || event.turnItem.type === "user_input_request")
+        ? event.turnItem.threadId
+        : undefined;
+    default:
+      return undefined;
+  }
+}
+
 function providerThreadRuntimeKey(
   providerThread: Parameters<ProviderAdapterV2SessionRuntime["resumeThread"]>[0]["providerThread"],
 ): string {
@@ -264,6 +288,7 @@ export const layerWithOptions = (
   | IdAllocatorV2
   | McpSessionRegistry.McpSessionRegistry
   | ProjectionStoreV2
+  | ProviderEventIngestorV2
   | ProviderAdapterRegistryV2
 > =>
   Layer.effect(
@@ -284,6 +309,7 @@ export const layerWithOptions = (
       const projectService = yield* Effect.serviceOption(ProjectService.ProjectService);
       const eventSink = yield* EventSinkV2;
       const idAllocator = yield* IdAllocatorV2;
+      const providerEventIngestor = yield* ProviderEventIngestorV2;
       const projectionStore = yield* ProjectionStoreV2;
       const agentBrowserAccessEnabled = Effect.fn(
         "ProviderSessionManagerV2.agentBrowserAccessEnabled",
@@ -1383,7 +1409,34 @@ export const layerWithOptions = (
                   : Effect.void,
               ),
               Effect.andThen(
-                publishToSubscribers(entry.eventSubscribers, { type: "event", event }),
+                Effect.gen(function* () {
+                  // Some providers can block before a run subscriber exists
+                  // (project trust, login, or session-switch hooks). Persist
+                  // their runless request artifacts directly so the normal T3
+                  // request UI can answer them and unblock session setup.
+                  const threadId = sessionScopedRuntimeRequestThreadId(event);
+                  if (threadId !== undefined) {
+                    yield* providerEventIngestor
+                      .ingestNormalized({
+                        providerSessionId: entry.runtime.providerSessionId,
+                        providerInstanceId: entry.runtime.instanceId,
+                        threadId,
+                        event,
+                      })
+                      .pipe(
+                        Effect.mapError(
+                          (cause) =>
+                            new ProviderAdapterEventStreamError({
+                              driver: entry.runtime.driver,
+                              providerSessionId: entry.runtime.providerSessionId,
+                              cause,
+                            }),
+                        ),
+                      );
+                    return;
+                  }
+                  yield* publishToSubscribers(entry.eventSubscribers, { type: "event", event });
+                }),
               ),
             );
           }),

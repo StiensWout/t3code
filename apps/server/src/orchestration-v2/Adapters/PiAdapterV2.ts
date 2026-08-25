@@ -130,6 +130,8 @@ export const PiProviderCapabilitiesV2 = {
     supportsMultipleProviderThreadsPerSession: false,
     supportsModelSwitchInSession: true,
     supportsProviderSwitchingViaHandoff: true,
+    // Mode changes restart this process so the injected permission hook gets
+    // one immutable policy for its whole lifetime.
     supportsRuntimeModeSwitchInSession: false,
     pendingRequestsSurviveRestart: false,
   },
@@ -170,11 +172,12 @@ export const PiProviderCapabilitiesV2 = {
     supportsDynamicToolCallbacks: false,
   },
   approvals: {
-    // Pi has no native permission system; the only prompts are the ones the
-    // user's own extensions raise through the extension UI protocol.
-    supportsCommandApproval: false,
+    // Pi exposes a blocking tool_call extension hook. The T3 bridge uses it
+    // for supervised and auto-accept modes and forwards its confirmations
+    // through the same extension UI protocol as user-installed extensions.
+    supportsCommandApproval: true,
     supportsFileReadApproval: false,
-    supportsFileChangeApproval: false,
+    supportsFileChangeApproval: true,
     supportsApplyPatchApproval: false,
     approvalsHaveNativeRequestIds: true,
     approvalCallbacksAreLiveOnly: true,
@@ -204,7 +207,9 @@ export const PiProviderCapabilitiesV2 = {
     acceptsSyntheticUserContext: true,
     canGenerateSummaries: false,
     canConsumeHandoffSummaries: true,
-    supportsDeltaHandoff: false,
+    // T3 delivers both full and delta handoffs through Pi's normal user-message
+    // input, so neither strategy depends on a Pi-specific context hook.
+    supportsDeltaHandoff: true,
     supportsFullThreadHandoff: true,
     maxRecommendedHandoffChars: null,
   },
@@ -360,6 +365,7 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
         environment: options.environment,
         mcpSession,
         extensionPath,
+        runtimeMode: input.runtimePolicy.runtimeMode,
       });
       const connection: PiRpcConnection = yield* makePiRpcConnection({
         command: options.settings.binaryPath || "pi",
@@ -384,8 +390,7 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
             (data) => new Set(parsePiDiscoveredCommands(data).skills.map((skill) => skill.name)),
           ),
         );
-      const discoveredSkillNames = yield* discoverSkillNames.pipe(Effect.option);
-      let skillNames = Option.getOrNull(discoveredSkillNames);
+      let skillNames: Set<string> | null = null;
 
       const now = yield* DateTime.now;
       let sessionEntity: OrchestrationV2ProviderSession = {
@@ -419,15 +424,6 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
       let appliedThinking: string | null = null;
       /** Last thread title synced into pi's session name (`/resume` listing). */
       let appliedSessionName: string | null = null;
-      /**
-       * Extension dialogs raised while no turn was active (project trust and
-       * login prompts at session start). Cancelling them would mean
-       * trust-gated extensions silently never load, so they are buffered and
-       * attached to the next turn. Flushing happens only inside the event
-       * pump, triggered by an order-preserving `t3.flush_dialogs` record, so
-       * dialog bookkeeping stays single-threaded. Cancelled on session close.
-       */
-      const outOfTurnDialogs: Array<PiRpcRecord> = [];
       /** Extension failures raised during startup are attached to the next turn. */
       const outOfTurnExtensionErrors: Array<PiRpcRecord> = [];
       /**
@@ -997,23 +993,22 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
         if (nativeRequestId === undefined) return;
         const state = threadState;
         const turn = state?.activeTurn ?? null;
-        if (state === null || turn === null) {
-          outOfTurnDialogs.push(event);
-          yield* Effect.logDebug("Buffered out-of-turn pi extension dialog.", { method });
-          return;
-        }
         const createdAt = yield* DateTime.now;
         const requestId = yield* idAllocator.allocate.runtimeRequest({
           driver: PI_PROVIDER,
-          providerTurnId: turn.providerTurn.id,
+          ...(turn === null ? {} : { providerTurnId: turn.providerTurn.id }),
           nativeRequestId,
         });
         const nodeId = idAllocator.derive.approvalNode({ requestId });
         const title = recordString(event, "title") ?? method;
+        const threadId =
+          turn?.turnInput.threadId ?? state?.providerThread.appThreadId ?? input.threadId;
+        const providerThreadId = state?.providerThread.id ?? null;
+        const providerTurnId = turn?.providerTurn.id ?? null;
         const runtimeRequest: OrchestrationV2RuntimeRequest = {
           id: requestId,
           nodeId,
-          providerTurnId: turn.providerTurn.id,
+          providerTurnId,
           nativeRequestRef: providerRef(nativeRequestId),
           kind: method === "confirm" ? "command" : "user_input",
           status: "pending",
@@ -1023,15 +1018,15 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
         };
         const node: OrchestrationV2ExecutionNode = {
           id: nodeId,
-          threadId: turn.turnInput.threadId,
-          runId: turn.turnInput.runId,
-          parentNodeId: turn.turnInput.rootNodeId,
-          rootNodeId: turn.turnInput.rootNodeId,
+          threadId,
+          runId: turn?.turnInput.runId ?? null,
+          parentNodeId: turn?.turnInput.rootNodeId ?? null,
+          rootNodeId: turn?.turnInput.rootNodeId ?? nodeId,
           kind: method === "confirm" ? "approval_request" : "user_input_request",
           status: "waiting",
           countsForRun: false,
-          providerThreadId: turn.turnInput.providerThread.id,
-          providerTurnId: turn.providerTurn.id,
+          providerThreadId,
+          providerTurnId,
           nativeItemRef: providerRef(nativeRequestId),
           runtimeRequestId: requestId,
           checkpointScopeId: null,
@@ -1040,14 +1035,16 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
         };
         const itemBase = {
           id: idAllocator.derive.approvalTurnItem({ requestId }),
-          threadId: turn.turnInput.threadId,
-          runId: turn.turnInput.runId,
+          threadId,
+          runId: turn?.turnInput.runId ?? null,
           nodeId,
-          providerThreadId: turn.turnInput.providerThread.id,
-          providerTurnId: turn.providerTurn.id,
+          providerThreadId,
+          providerTurnId,
           nativeItemRef: providerRef(nativeRequestId),
           parentItemId: null,
-          ordinal: itemOrdinal(turn, nativeRequestId),
+          // Runless startup/session-switch requests are normalized into the
+          // thread-level ordinal range by TurnItemPositionStore.
+          ordinal: turn === null ? 0 : itemOrdinal(turn, nativeRequestId),
           status: "waiting" as const,
           title,
           startedAt: createdAt,
@@ -1080,7 +1077,7 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
         yield* emit({
           type: "runtime_request.updated",
           driver: PI_PROVIDER,
-          threadId: turn.turnInput.threadId,
+          threadId,
           runtimeRequest,
         });
         yield* emit({ type: "node.updated", driver: PI_PROVIDER, node });
@@ -1472,14 +1469,10 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
             }
             return;
           }
-          case "t3.flush_dialogs": {
-            // Synthetic record queued by startTurn: attach buffered
-            // session-start dialogs to the now-active turn, in order, from
-            // inside the pump so bookkeeping stays single-threaded. The
-            // handler re-buffers any dialog whose turn vanished mid-drain.
-            for (const dialog of outOfTurnDialogs.splice(0)) {
-              yield* handleExtensionUiRequest(dialog);
-            }
+          case "t3.flush_extension_errors": {
+            // Startup extension failures are informational and do not block
+            // Pi, so attach them to the next real turn instead of creating a
+            // standalone failed run.
             for (const extensionError of outOfTurnExtensionErrors.splice(0)) {
               yield* emitExtensionError(extensionError);
             }
@@ -1556,6 +1549,16 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
             }),
           ),
         ),
+        Effect.forkIn(scope),
+      );
+
+      // Discovery can invoke extension code and therefore raise a blocking
+      // UI request. Start it only after the event pump exists, and never hold
+      // session opening on it; startup requests are persisted at session
+      // scope and can be answered before a turn begins.
+      yield* discoverSkillNames.pipe(
+        Effect.tap((discovered) => Effect.sync(() => (skillNames = discovered))),
+        Effect.ignore,
         Effect.forkIn(scope),
       );
 
@@ -1760,23 +1763,6 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
         return { message, images };
       });
 
-      // Buffered dialogs must not strand their extensions when the session
-      // closes before another turn ever starts.
-      yield* Effect.addFinalizer(() =>
-        Effect.forEach(
-          outOfTurnDialogs,
-          (dialog) => {
-            const dialogId = recordString(dialog, "id");
-            return dialogId === undefined
-              ? Effect.void
-              : connection
-                  .send({ type: "extension_ui_response", id: dialogId, cancelled: true })
-                  .pipe(Effect.ignore);
-          },
-          { discard: true },
-        ).pipe(Effect.ignore),
-      );
-
       const runtime: ProviderAdapterV2SessionRuntime = {
         instanceId: options.instanceId,
         driver: PI_PROVIDER,
@@ -1785,7 +1771,6 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
         events: Stream.fromQueue(events),
         ensureThread: (threadInput) =>
           registerThread(threadInput).pipe(
-            sessionEventPermit.withPermits(1),
             Effect.mapError(
               (cause) =>
                 new ProviderAdapterEnsureThreadError({
@@ -1803,7 +1788,6 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
             runtimePolicy: threadInput.runtimePolicy ?? input.runtimePolicy,
             existingProviderThread: threadInput.providerThread,
           }).pipe(
-            sessionEventPermit.withPermits(1),
             Effect.mapError(
               (cause) =>
                 new ProviderAdapterResumeThreadError({
@@ -1882,47 +1866,45 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
               latestCompactionAfterTokens: null,
               failure: null,
             };
-            state.activeTurn = activeTurn;
-            // Install the turn before enqueueing the prompt so Pi events have
-            // an owner, but publish the start only after the enqueue succeeds.
-            // The shared permit keeps the event pump behind this boundary.
-            yield* connection
-              .send({
+            // Only the install/send/start-event boundary excludes the event
+            // pump. Earlier correlated requests must leave the pump free so
+            // project trust, login, and session-switch dialogs can be shown
+            // and answered instead of deadlocking the caller.
+            yield* Effect.gen(function* () {
+              state.activeTurn = activeTurn;
+              yield* connection.send({
                 type: "prompt",
                 message: payload.message,
                 ...(payload.images.length === 0 ? {} : { images: payload.images }),
-              })
-              .pipe(
-                Effect.tapError(() =>
-                  Effect.sync(() => {
-                    if (state.activeTurn === activeTurn) state.activeTurn = null;
-                  }),
-                ),
-              );
-            yield* emit({
-              type: "provider_turn.updated",
-              driver: PI_PROVIDER,
-              threadId: turnInput.threadId,
-              providerTurn,
-            });
-            yield* updateProviderThread(state, {
-              status: "active",
-              firstRunOrdinal: state.providerThread.firstRunOrdinal ?? turnInput.runOrdinal,
-              lastRunOrdinal: turnInput.runOrdinal,
-            });
-            yield* updateProviderSession("running", null);
-            // Attach any dialogs that arrived before this turn existed
-            // (project trust, session-start login prompts). The flush runs
-            // inside the event pump, behind everything pi already emitted.
-            if (outOfTurnDialogs.length > 0 || outOfTurnExtensionErrors.length > 0) {
-              yield* Queue.offer(connection.events, { type: "t3.flush_dialogs" });
-            }
+              });
+              yield* emit({
+                type: "provider_turn.updated",
+                driver: PI_PROVIDER,
+                threadId: turnInput.threadId,
+                providerTurn,
+              });
+              yield* updateProviderThread(state, {
+                status: "active",
+                firstRunOrdinal: state.providerThread.firstRunOrdinal ?? turnInput.runOrdinal,
+                lastRunOrdinal: turnInput.runOrdinal,
+              });
+              yield* updateProviderSession("running", null);
+              if (outOfTurnExtensionErrors.length > 0) {
+                yield* Queue.offer(connection.events, { type: "t3.flush_extension_errors" });
+              }
+            }).pipe(
+              sessionEventPermit.withPermits(1),
+              Effect.tapError(() =>
+                Effect.sync(() => {
+                  if (state.activeTurn === activeTurn) state.activeTurn = null;
+                }),
+              ),
+            );
             // Pi acks `prompt` only after slash-command expansion completes,
             // and extension commands may block on user dialogs indefinitely.
             // Rejections therefore return later as id-less response records
             // handled by the event pump.
           }).pipe(
-            sessionEventPermit.withPermits(1),
             Effect.mapError(
               (cause) =>
                 new ProviderAdapterTurnStartError({
@@ -1952,13 +1934,14 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
             }
             // Same fire-and-forget contract as `prompt`: a steer that expands
             // a slash command must not block on the ack.
-            yield* connection.send({
-              type: "steer",
-              message: payload.message,
-              ...(payload.images.length === 0 ? {} : { images: payload.images }),
-            });
+            yield* sessionEventPermit.withPermits(1)(
+              connection.send({
+                type: "steer",
+                message: payload.message,
+                ...(payload.images.length === 0 ? {} : { images: payload.images }),
+              }),
+            );
           }).pipe(
-            sessionEventPermit.withPermits(1),
             Effect.mapError(
               (cause) =>
                 new ProviderAdapterSteerRunError({
@@ -1991,7 +1974,6 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
               Effect.tapError(() => Effect.sync(() => (turn.interrupted = false))),
             );
           }).pipe(
-            sessionEventPermit.withPermits(1),
             Effect.mapError(
               (cause) =>
                 new ProviderAdapterInterruptError({
@@ -2067,42 +2049,47 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
                 "Pi snapshot requested for a thread this session does not host",
               );
             }
-            const entriesData = yield* request({ type: "get_entries" });
-            const entries = recordField(entriesData, "entries");
+            // get_messages is Pi's active-branch view. get_entries returns the
+            // whole session tree, including abandoned branches after /tree or
+            // fork, which would leak discarded conversation into handoffs.
+            const messagesData = yield* request({ type: "get_messages" });
+            const activeMessages = recordField(messagesData, "messages");
             const threadId = state.providerThread.appThreadId ?? input.threadId;
-            const messages = (Array.isArray(entries) ? entries : []).flatMap((entry) => {
-              if (recordField(entry, "type") !== "message") return [];
-              const entryId = recordString(entry, "id");
-              const message = recordField(entry, "message");
-              const role = recordString(message, "role");
-              if (entryId === undefined || (role !== "user" && role !== "assistant")) return [];
-              const text = contentText(recordField(message, "content"));
-              if (text.length === 0) return [];
-              const timestamp = recordNumber(message, "timestamp");
-              const at = Option.getOrElse(
-                DateTime.make(timestamp ?? Number.NaN),
-                () => state.providerThread.createdAt,
-              );
-              return [
-                {
-                  id: idAllocator.derive.messageFromProviderItem({
-                    driver: PI_PROVIDER,
-                    nativeItemId: entryId,
-                  }),
-                  threadId,
-                  runId: null,
-                  nodeId: null,
-                  role: role as "user" | "assistant",
-                  text,
-                  attachments: [],
-                  streaming: false,
-                  createdBy: role === "user" ? ("user" as const) : ("agent" as const),
-                  creationSource: "provider" as const,
-                  createdAt: at,
-                  updatedAt: at,
-                },
-              ];
-            });
+            const messages = (Array.isArray(activeMessages) ? activeMessages : []).flatMap(
+              (message, index) => {
+                const role = recordString(message, "role");
+                if (role !== "user" && role !== "assistant") return [];
+                const text = contentText(recordField(message, "content"));
+                if (text.length === 0) return [];
+                const timestamp = recordNumber(message, "timestamp");
+                const at = Option.getOrElse(
+                  DateTime.make(timestamp ?? Number.NaN),
+                  () => state.providerThread.createdAt,
+                );
+                return [
+                  {
+                    id: idAllocator.derive.messageFromProviderItem({
+                      driver: PI_PROVIDER,
+                      // RPC messages do not expose session-tree entry ids. The
+                      // active-branch index is stable for the lifetime of this
+                      // snapshot and keeps abandoned branch ids out of it.
+                      nativeItemId: `snapshot-message:${index}`,
+                    }),
+                    threadId,
+                    runId: null,
+                    nodeId: null,
+                    role: role as "user" | "assistant",
+                    text,
+                    attachments: [],
+                    streaming: false,
+                    createdBy: role === "user" ? ("user" as const) : ("agent" as const),
+                    creationSource: "provider" as const,
+                    createdAt: at,
+                    updatedAt: at,
+                  },
+                ];
+              },
+            );
             return {
               providerThread: state.providerThread,
               providerTurns: [],
@@ -2110,7 +2097,6 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
               runtimeRequests: [],
             };
           }).pipe(
-            sessionEventPermit.withPermits(1),
             Effect.mapError(
               (cause) =>
                 new ProviderAdapterReadThreadSnapshotError({
@@ -2162,7 +2148,6 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
             });
             return piThreadSnapshot(state.providerThread);
           }).pipe(
-            sessionEventPermit.withPermits(1),
             Effect.mapError(
               (cause) =>
                 new ProviderAdapterRollbackThreadError({

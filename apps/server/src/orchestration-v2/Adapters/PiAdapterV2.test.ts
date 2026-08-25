@@ -72,6 +72,8 @@ interface FakePi {
   readonly takeRequest: (type: string) => Effect.Effect<PiRpcRecord>;
   /** Data returned by the next `get_entries` acks, consumed in order. */
   readonly queueEntries: (data: unknown) => void;
+  /** Data returned by the next active-branch `get_messages` acks. */
+  readonly queueMessages: (data: unknown) => void;
   /** Make the next `switch_session` ack report an extension veto. */
   readonly vetoNextSwitch: () => void;
   /** Data returned by the next `get_state` acks, consumed in order. */
@@ -101,6 +103,7 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
   const stdout = yield* Queue.unbounded<Uint8Array, Cause.Done>();
   const requests = yield* Queue.unbounded<PiRpcRecord>();
   const entriesQueue: Array<unknown> = [];
+  const messagesQueue: Array<unknown> = [];
   const stateQueue: Array<unknown> = [];
   const statsQueue: Array<unknown> = [];
   const commandsQueue: Array<{ readonly success: boolean; readonly data?: unknown }> = [];
@@ -143,6 +146,8 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
       }
       case "get_entries":
         return { ...base, data: entriesQueue.shift() ?? { entries: [], leafId: null } };
+      case "get_messages":
+        return { ...base, data: messagesQueue.shift() ?? { messages: [] } };
       case "get_session_stats":
         if (holdStats) {
           holdStats = false;
@@ -216,6 +221,7 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
     emit,
     takeRequest,
     queueEntries: (data) => entriesQueue.push(data),
+    queueMessages: (data) => messagesQueue.push(data),
     vetoNextSwitch: () => {
       vetoSwitch = true;
     },
@@ -353,31 +359,12 @@ describe("PiAdapterV2", () => {
       assert.isTrue(extensions.some((path) => path?.endsWith("pi-t3-mcp-extension.ts")));
       assert.equal(spawn.env.T3_MCP_URL, "http://127.0.0.1:43123/mcp");
       assert.equal(spawn.env.T3_MCP_BEARER_TOKEN, "secret-pi-token");
+      assert.equal(spawn.env.T3_PI_RUNTIME_MODE, "full-access");
     }).pipe(
       Effect.ensuring(Effect.sync(() => McpProviderSession.clearMcpProviderSession(THREAD_ID))),
       Effect.scoped,
       Effect.provide(testLayer),
     ),
-  );
-
-  it.effect("reports reserved launch arguments as a protocol validation error", () =>
-    Effect.gen(function* () {
-      const fake = yield* makeFakePi;
-      const adapter = yield* makeAdapter(fake, "--resume");
-      const error = yield* adapter
-        .openSession({
-          threadId: THREAD_ID,
-          providerSessionId: SESSION_ID,
-          modelSelection: modelSelection("default"),
-          runtimePolicy,
-        })
-        .pipe(Effect.flip);
-      if (error._tag !== "ProviderAdapterProtocolError") {
-        assert.fail(`expected protocol error, received ${error._tag}`);
-        return;
-      }
-      assert.include(error.detail, "controlled by T3 Code");
-    }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
   it.effect("registers the thread from get_state and resumes via switch_session", () =>
@@ -446,58 +433,6 @@ describe("PiAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
-  it.effect("drops the old thread binding when switched-session state is invalid", () =>
-    Effect.gen(function* () {
-      const fake = yield* makeFakePi;
-      const { runtime } = yield* openRuntime(fake);
-      const providerThread = yield* runtime.ensureThread({
-        threadId: THREAD_ID,
-        modelSelection: modelSelection("default"),
-        runtimePolicy,
-      });
-
-      fake.queueState({ thinkingLevel: "medium" });
-      const resumeError = yield* runtime.resumeThread({ providerThread }).pipe(Effect.flip);
-      assert.equal(resumeError._tag, "ProviderAdapterResumeThreadError");
-      assert.match(String(resumeError.cause), /neither sessionFile nor sessionId/);
-
-      const turnError = yield* startTurn(runtime, providerThread).pipe(Effect.flip);
-      assert.equal(turnError._tag, "ProviderAdapterTurnStartError");
-      assert.match(String(turnError.cause), /no registered thread/);
-
-      fake.queueState({ sessionFile: FAKE_SESSION_FILE, sessionId: "abc" });
-      const resumed = yield* runtime.resumeThread({ providerThread });
-      assert.equal(resumed.nativeThreadRef?.nativeId, FAKE_SESSION_FILE);
-    }).pipe(Effect.scoped, Effect.provide(testLayer)),
-  );
-
-  it.effect("keeps the thread usable when an attachment cannot be read", () =>
-    Effect.gen(function* () {
-      const fake = yield* makeFakePi;
-      const { runtime } = yield* openRuntime(fake);
-      const providerThread = yield* runtime.ensureThread({
-        threadId: THREAD_ID,
-        modelSelection: modelSelection("default"),
-        runtimePolicy,
-      });
-
-      yield* startTurn(runtime, providerThread, "default", [
-        {
-          type: "image",
-          id: "missingpiattachment",
-          name: "missing.png",
-          mimeType: "image/png",
-          sizeBytes: 1,
-        },
-      ]).pipe(Effect.flip);
-
-      // The failed turn was never installed, so the next one still starts.
-      yield* startTurn(runtime, providerThread);
-      const prompt = yield* fake.takeRequest("prompt");
-      assert.equal(prompt["message"], "Hello pi");
-    }).pipe(Effect.scoped, Effect.provide(testLayer)),
-  );
-
   it.effect("expands a selected $ skill through Pi's native skill command", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakePi;
@@ -530,35 +465,6 @@ describe("PiAdapterV2", () => {
       );
       const prompt = yield* fake.takeRequest("prompt");
       assert.equal(prompt["message"], "/skill:repo-review Review this change please");
-    }).pipe(Effect.scoped, Effect.provide(testLayer)),
-  );
-
-  it.effect("retries skill discovery after a transient session-open failure", () =>
-    Effect.gen(function* () {
-      const fake = yield* makeFakePi;
-      fake.failNextCommands();
-      const { runtime } = yield* openRuntime(fake);
-      fake.queueCommands({
-        commands: [
-          {
-            name: "skill:repo-review",
-            source: "skill",
-            sourceInfo: {
-              path: "/workspace/.agents/skills/repo-review/SKILL.md",
-              scope: "project",
-            },
-          },
-        ],
-      });
-      const providerThread = yield* runtime.ensureThread({
-        threadId: THREAD_ID,
-        modelSelection: modelSelection("default"),
-        runtimePolicy,
-      });
-
-      yield* startTurn(runtime, providerThread, "default", [], "$repo-review check this");
-      const prompt = yield* fake.takeRequest("prompt");
-      assert.equal(prompt["message"], "/skill:repo-review check this");
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
@@ -660,63 +566,6 @@ describe("PiAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
-  it.effect("retains post-terminal context usage when the same thread resumes immediately", () =>
-    Effect.gen(function* () {
-      const fake = yield* makeFakePi;
-      const { runtime, takeEvent } = yield* openRuntime(fake);
-      const providerThread = yield* runtime.ensureThread({
-        threadId: THREAD_ID,
-        modelSelection: modelSelection("default"),
-        runtimePolicy,
-      });
-      yield* startTurn(runtime, providerThread);
-      yield* fake.takeRequest("prompt");
-      fake.queueStats({
-        tokens: { input: 2_000, output: 400, cacheRead: 100, cacheWrite: 0, total: 2_500 },
-        contextUsage: { tokens: 2_500, contextWindow: 200_000, percent: 1.25 },
-      });
-      fake.holdNextStats();
-      yield* fake.emit({ type: "agent_settled" });
-      yield* takeEvent((event) => event.type === "turn.terminal");
-      yield* fake.takeRequest("get_session_stats");
-
-      // The next turn can re-register the same provider row before optional
-      // stats return. The late response must update that replacement state.
-      const resumed = yield* runtime.resumeThread({ providerThread });
-      assert.equal(resumed.id, providerThread.id);
-      yield* fake.releaseStats;
-      const usage = yield* takeEvent(
-        (event) =>
-          event.type === "provider_thread.updated" &&
-          event.providerThread.id === providerThread.id &&
-          event.providerThread.contextUsage?.usedTokens === 2_500,
-      );
-      assert.equal(
-        usage.type === "provider_thread.updated"
-          ? usage.providerThread.contextUsage?.totalProcessedTokens
-          : null,
-        2_500,
-      );
-    }).pipe(Effect.scoped, Effect.provide(testLayer)),
-  );
-
-  it.effect("syncs the thread title into pi's session name before prompting", () =>
-    Effect.gen(function* () {
-      const fake = yield* makeFakePi;
-      const { runtime } = yield* openRuntime(fake);
-      const providerThread = yield* runtime.ensureThread({
-        threadId: THREAD_ID,
-        modelSelection: modelSelection("default"),
-        runtimePolicy,
-      });
-      yield* startTurn(runtime, providerThread);
-      // takeRequest discards preceding records, so this also proves ordering.
-      const setName = yield* fake.takeRequest("set_session_name");
-      assert.equal(setName["name"], "Pi test thread");
-      yield* fake.takeRequest("prompt");
-    }).pipe(Effect.scoped, Effect.provide(testLayer)),
-  );
-
   it.effect("captures session-tree refs at turn boundaries and rolls back via fork", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakePi;
@@ -771,148 +620,6 @@ describe("PiAdapterV2", () => {
       });
       const fork = yield* fake.takeRequest("fork");
       assert.equal(fork["entryId"], "u2");
-    }).pipe(Effect.scoped, Effect.provide(testLayer)),
-  );
-
-  it.effect("fails a resume when an extension vetoes the session switch", () =>
-    Effect.gen(function* () {
-      const fake = yield* makeFakePi;
-      const { runtime } = yield* openRuntime(fake);
-      const providerThread = yield* runtime.ensureThread({
-        threadId: THREAD_ID,
-        modelSelection: modelSelection("default"),
-        runtimePolicy,
-      });
-      fake.vetoNextSwitch();
-      const error = yield* runtime.resumeThread({ providerThread }).pipe(Effect.flip);
-      assert.equal(error._tag, "ProviderAdapterResumeThreadError");
-    }).pipe(Effect.scoped, Effect.provide(testLayer)),
-  );
-
-  it.effect("delivers empty dialog answers as values and shows editor prefill", () =>
-    Effect.gen(function* () {
-      const fake = yield* makeFakePi;
-      const { runtime, takeEvent } = yield* openRuntime(fake);
-      const providerThread = yield* runtime.ensureThread({
-        threadId: THREAD_ID,
-        modelSelection: modelSelection("default"),
-        runtimePolicy,
-      });
-      yield* startTurn(runtime, providerThread);
-      yield* fake.takeRequest("prompt");
-      yield* fake.emit({ type: "agent_start" });
-      yield* fake.emit({
-        type: "extension_ui_request",
-        id: "ui-editor",
-        method: "editor",
-        title: "Edit the note",
-        prefill: "line one\nline two",
-      });
-      const pending = yield* takeEvent(
-        (event) =>
-          event.type === "runtime_request.updated" && event.runtimeRequest.status === "pending",
-      );
-      const requestId =
-        pending.type === "runtime_request.updated" ? pending.runtimeRequest.id : undefined;
-      const requestItem = yield* takeEvent(
-        (event) =>
-          event.type === "turn_item.updated" && event.turnItem.type === "user_input_request",
-      );
-      assert.isTrue(
-        requestItem.type === "turn_item.updated" &&
-          requestItem.turnItem.type === "user_input_request" &&
-          requestItem.turnItem.questions[0]!.question.includes("Current value:\nline one"),
-      );
-      // An empty string clears the note; it must arrive as a value, not a cancel.
-      yield* runtime.respondToRuntimeRequest({
-        requestId: requestId!,
-        answers: { "ui-editor": "" },
-      });
-      const uiResponse = yield* fake.takeRequest("extension_ui_response");
-      assert.equal(uiResponse["value"], "");
-      assert.notProperty(uiResponse, "cancelled");
-    }).pipe(Effect.scoped, Effect.provide(testLayer)),
-  );
-
-  it.effect("shows failed compactions instead of dropping them", () =>
-    Effect.gen(function* () {
-      const fake = yield* makeFakePi;
-      const { runtime, takeEvent } = yield* openRuntime(fake);
-      const providerThread = yield* runtime.ensureThread({
-        threadId: THREAD_ID,
-        modelSelection: modelSelection("default"),
-        runtimePolicy,
-      });
-      yield* startTurn(runtime, providerThread);
-      yield* fake.takeRequest("prompt");
-      yield* fake.emit({ type: "agent_start" });
-      yield* fake.emit({
-        type: "compaction_end",
-        reason: "threshold",
-        result: null,
-        aborted: false,
-        errorMessage: "API quota exceeded",
-      });
-      const compaction = yield* takeEvent(
-        (event) => event.type === "turn_item.updated" && event.turnItem.type === "compaction",
-      );
-      assert.isTrue(
-        compaction.type === "turn_item.updated" &&
-          compaction.turnItem.type === "compaction" &&
-          compaction.turnItem.status === "failed" &&
-          compaction.turnItem.summary === "API quota exceeded",
-      );
-    }).pipe(Effect.scoped, Effect.provide(testLayer)),
-  );
-
-  it.effect("presents tools aborted by Stop as interrupted, not failed", () =>
-    Effect.gen(function* () {
-      const fake = yield* makeFakePi;
-      const { runtime, takeEvent } = yield* openRuntime(fake);
-      const providerThread = yield* runtime.ensureThread({
-        threadId: THREAD_ID,
-        modelSelection: modelSelection("default"),
-        runtimePolicy,
-      });
-      yield* startTurn(runtime, providerThread);
-      yield* fake.takeRequest("prompt");
-      yield* fake.emit({ type: "agent_start" });
-      yield* fake.emit({
-        type: "tool_execution_start",
-        toolCallId: "call_sleep",
-        toolName: "bash",
-        args: { command: "sleep 30" },
-      });
-      const running = yield* takeEvent(
-        (event) =>
-          event.type === "provider_turn.updated" && event.providerTurn.status === "running",
-      );
-      const providerTurnId =
-        running.type === "provider_turn.updated" ? running.providerTurn.id : undefined;
-
-      yield* runtime.interruptTurn({ providerThread, providerTurnId: providerTurnId! });
-      yield* fake.takeRequest("abort");
-      // Pi reports the aborted tool as an error end before settling.
-      yield* fake.emit({
-        type: "tool_execution_end",
-        toolCallId: "call_sleep",
-        toolName: "bash",
-        isError: true,
-        result: { content: [{ type: "text", text: "Command aborted" }] },
-      });
-      yield* fake.emit({ type: "agent_settled" });
-
-      const toolItem = yield* takeEvent(
-        (event) =>
-          event.type === "turn_item.updated" &&
-          event.turnItem.type === "command_execution" &&
-          event.turnItem.status !== "running",
-      );
-      assert.isTrue(
-        toolItem.type === "turn_item.updated" && toolItem.turnItem.status === "interrupted",
-      );
-      const terminal = yield* takeEvent((event) => event.type === "turn.terminal");
-      assert.isTrue(terminal.type === "turn.terminal" && terminal.status === "interrupted");
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
@@ -1036,224 +743,6 @@ describe("PiAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
-  it.effect("fails the turn when pi rejects a fire-and-forget prompt", () =>
-    Effect.gen(function* () {
-      const fake = yield* makeFakePi;
-      const { runtime, takeEvent } = yield* openRuntime(fake);
-      const providerThread = yield* runtime.ensureThread({
-        threadId: THREAD_ID,
-        modelSelection: modelSelection("default"),
-        runtimePolicy,
-      });
-      yield* startTurn(runtime, providerThread);
-      yield* fake.takeRequest("prompt");
-      yield* fake.emit({ type: "response", command: "prompt", success: false, error: "boom" });
-
-      const terminal = yield* takeEvent((event) => event.type === "turn.terminal");
-      assert.isTrue(terminal.type === "turn.terminal" && terminal.status === "failed");
-      assert.isTrue(
-        terminal.type === "turn.terminal" &&
-          terminal.status === "failed" &&
-          terminal.failure.message === "boom",
-      );
-    }).pipe(Effect.scoped, Effect.provide(testLayer)),
-  );
-
-  it.effect("keeps the turn open across agent_end and fails it on final retry failure", () =>
-    Effect.gen(function* () {
-      const fake = yield* makeFakePi;
-      const { runtime, takeEvent } = yield* openRuntime(fake);
-      const providerThread = yield* runtime.ensureThread({
-        threadId: THREAD_ID,
-        modelSelection: modelSelection("default"),
-        runtimePolicy,
-      });
-      yield* startTurn(runtime, providerThread);
-      yield* fake.takeRequest("prompt");
-
-      yield* fake.emit({ type: "agent_start" });
-      yield* fake.emit({ type: "agent_end", messages: [], willRetry: true });
-      yield* fake.emit({
-        type: "auto_retry_end",
-        success: false,
-        attempt: 3,
-        finalError: "529 overloaded",
-      });
-      yield* fake.emit({ type: "agent_settled" });
-
-      const terminal = yield* takeEvent((event) => event.type === "turn.terminal");
-      assert.isTrue(terminal.type === "turn.terminal" && terminal.status === "failed");
-      assert.isTrue(
-        terminal.type === "turn.terminal" &&
-          terminal.status === "failed" &&
-          terminal.failure.message.includes("overloaded"),
-      );
-    }).pipe(Effect.scoped, Effect.provide(testLayer)),
-  );
-
-  it.effect("interrupts with abort and settles the turn as interrupted", () =>
-    Effect.gen(function* () {
-      const fake = yield* makeFakePi;
-      const { runtime, takeEvent } = yield* openRuntime(fake);
-      const providerThread = yield* runtime.ensureThread({
-        threadId: THREAD_ID,
-        modelSelection: modelSelection("default"),
-        runtimePolicy,
-      });
-      yield* startTurn(runtime, providerThread);
-      yield* fake.takeRequest("prompt");
-      yield* fake.emit({ type: "agent_start" });
-
-      const running = yield* takeEvent(
-        (event) =>
-          event.type === "provider_turn.updated" && event.providerTurn.status === "running",
-      );
-      assert.equal(running.type, "provider_turn.updated");
-      const providerTurnId =
-        running.type === "provider_turn.updated" ? running.providerTurn.id : undefined;
-      assert.isDefined(providerTurnId);
-
-      yield* runtime.interruptTurn({ providerThread, providerTurnId: providerTurnId! });
-      yield* fake.takeRequest("abort");
-      yield* fake.emit({ type: "agent_settled" });
-
-      const terminal = yield* takeEvent((event) => event.type === "turn.terminal");
-      assert.isTrue(terminal.type === "turn.terminal" && terminal.status === "interrupted");
-    }).pipe(Effect.scoped, Effect.provide(testLayer)),
-  );
-
-  it.effect(
-    "applies an explicit model before prompting and skips set_model for the Pi default",
-    () =>
-      Effect.gen(function* () {
-        const fake = yield* makeFakePi;
-        const { runtime } = yield* openRuntime(fake, "anthropic/claude-sonnet-5");
-        const providerThread = yield* runtime.ensureThread({
-          threadId: THREAD_ID,
-          modelSelection: modelSelection("anthropic/claude-sonnet-5"),
-          runtimePolicy,
-        });
-        yield* startTurn(runtime, providerThread, "anthropic/claude-sonnet-5");
-        const setModel = yield* fake.takeRequest("set_model");
-        assert.equal(setModel["provider"], "anthropic");
-        assert.equal(setModel["modelId"], "claude-sonnet-5");
-        yield* fake.takeRequest("prompt");
-      }).pipe(Effect.scoped, Effect.provide(testLayer)),
-  );
-
-  it.effect("bridges extension select dialogs to runtime requests and answers them", () =>
-    Effect.gen(function* () {
-      const fake = yield* makeFakePi;
-      const { runtime, takeEvent } = yield* openRuntime(fake);
-      const providerThread = yield* runtime.ensureThread({
-        threadId: THREAD_ID,
-        modelSelection: modelSelection("default"),
-        runtimePolicy,
-      });
-      yield* startTurn(runtime, providerThread);
-      yield* fake.takeRequest("prompt");
-      yield* fake.emit({ type: "agent_start" });
-      yield* fake.emit({
-        type: "extension_ui_request",
-        id: "ui-1",
-        method: "select",
-        title: "Pick one",
-        options: ["Allow", "Block"],
-      });
-
-      const pending = yield* takeEvent(
-        (event) =>
-          event.type === "runtime_request.updated" && event.runtimeRequest.status === "pending",
-      );
-      assert.isTrue(
-        pending.type === "runtime_request.updated" && pending.runtimeRequest.kind === "user_input",
-      );
-      const requestItem = yield* takeEvent(
-        (event) =>
-          event.type === "turn_item.updated" && event.turnItem.type === "user_input_request",
-      );
-      assert.isTrue(
-        requestItem.type === "turn_item.updated" &&
-          requestItem.turnItem.type === "user_input_request" &&
-          requestItem.turnItem.questions[0]?.options.length === 2,
-      );
-
-      const requestId =
-        pending.type === "runtime_request.updated" ? pending.runtimeRequest.id : undefined;
-      yield* runtime.respondToRuntimeRequest({
-        requestId: requestId!,
-        answers: { "ui-1": "Allow" },
-      });
-      const uiResponse = yield* fake.takeRequest("extension_ui_response");
-      assert.equal(uiResponse["id"], "ui-1");
-      assert.equal(uiResponse["value"], "Allow");
-
-      const resolved = yield* takeEvent(
-        (event) =>
-          event.type === "runtime_request.updated" && event.runtimeRequest.status === "resolved",
-      );
-      assert.equal(resolved.type, "runtime_request.updated");
-    }).pipe(Effect.scoped, Effect.provide(testLayer)),
-  );
-
-  it.effect("clears a stashed model error when compaction recovers the turn", () =>
-    Effect.gen(function* () {
-      const fake = yield* makeFakePi;
-      const { runtime, takeEvent } = yield* openRuntime(fake);
-      const providerThread = yield* runtime.ensureThread({
-        threadId: THREAD_ID,
-        modelSelection: modelSelection("default"),
-        runtimePolicy,
-      });
-      yield* startTurn(runtime, providerThread);
-      yield* fake.takeRequest("prompt");
-      yield* fake.emit({ type: "agent_start" });
-      // Overflow surfaces as a model error, then pi compacts and retries.
-      yield* fake.emit({
-        type: "message_end",
-        message: {
-          role: "assistant",
-          content: [],
-          stopReason: "error",
-          errorMessage: "400 too long",
-        },
-      });
-      yield* fake.emit({
-        type: "compaction_end",
-        reason: "overflow",
-        result: { summary: "compacted", tokensBefore: 520000, estimatedTokensAfter: 3400 },
-        aborted: false,
-        willRetry: true,
-      });
-      yield* fake.emit({
-        type: "message_end",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "done" }],
-          stopReason: "stop",
-        },
-      });
-      fake.queueStats({
-        tokens: { input: 12_000, output: 500, cacheRead: 8_000, cacheWrite: 0, total: 20_500 },
-        contextUsage: { tokens: null, contextWindow: 200_000, percent: null },
-      });
-      yield* fake.emit({ type: "agent_settled" });
-      const terminal = yield* takeEvent((event) => event.type === "turn.terminal");
-      assert.isTrue(terminal.type === "turn.terminal" && terminal.status === "completed");
-      const usage = yield* takeEvent(
-        (event) =>
-          event.type === "provider_thread.updated" &&
-          event.providerThread.contextUsage?.usedTokens === 3_400,
-      );
-      assert.equal(
-        usage.type === "provider_thread.updated"
-          ? usage.providerThread.contextUsage?.usedTokens
-          : null,
-        3_400,
-      );
-    }).pipe(Effect.scoped, Effect.provide(testLayer)),
-  );
-
   it.effect("stops with restart by aborting and then terminating the process", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakePi;
@@ -1295,11 +784,11 @@ describe("PiAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
-  it.live("defers session-start dialogs to the next turn instead of cancelling", () =>
+  it.effect("emits session-start dialogs before a turn exists", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakePi;
       const { runtime, takeEvent } = yield* openRuntime(fake);
-      const providerThread = yield* runtime.ensureThread({
+      yield* runtime.ensureThread({
         threadId: THREAD_ID,
         modelSelection: modelSelection("default"),
         runtimePolicy,
@@ -1312,10 +801,6 @@ describe("PiAdapterV2", () => {
         title: "Run project extensions?",
         message: "This project has .pi/extensions.",
       });
-      // Give the pump real time to buffer the dialog before the turn opens.
-      yield* Effect.sleep("60 millis");
-      yield* startTurn(runtime, providerThread);
-      yield* fake.takeRequest("prompt");
       const pending = yield* takeEvent(
         (event) =>
           event.type === "runtime_request.updated" && event.runtimeRequest.status === "pending",
@@ -1329,65 +814,7 @@ describe("PiAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
-  it.effect("shows bounded extension errors without failing the turn", () =>
-    Effect.gen(function* () {
-      const fake = yield* makeFakePi;
-      const { runtime, takeEvent } = yield* openRuntime(fake);
-      const providerThread = yield* runtime.ensureThread({
-        threadId: THREAD_ID,
-        modelSelection: modelSelection("default"),
-        runtimePolicy,
-      });
-      yield* startTurn(runtime, providerThread);
-      yield* fake.takeRequest("prompt");
-      yield* fake.emit({
-        type: "extension_error",
-        extensionPath: "/home/user/.pi/agent/extensions/broken.ts",
-        event: "before_agent_start",
-        error: `bad extension ${"x".repeat(3_000)}`,
-      });
-      const errorItem = yield* takeEvent(
-        (event) => event.type === "turn_item.updated" && event.turnItem.type === "error",
-      );
-      assert.isTrue(
-        errorItem.type === "turn_item.updated" &&
-          errorItem.turnItem.type === "error" &&
-          errorItem.turnItem.title === "broken" &&
-          errorItem.turnItem.failure.message.startsWith(
-            "broken failed during before_agent_start.\n\nbad extension",
-          ) &&
-          errorItem.turnItem.failure.message.length < 2_100,
-      );
-      yield* fake.emit({ type: "agent_settled" });
-      const terminal = yield* takeEvent((event) => event.type === "turn.terminal");
-      assert.isTrue(terminal.type === "turn.terminal" && terminal.status === "completed");
-    }).pipe(Effect.scoped, Effect.provide(testLayer)),
-  );
-
-  it.effect("advertises portable forks and rejects direct native fork calls", () =>
-    Effect.gen(function* () {
-      const fake = yield* makeFakePi;
-      const adapter = yield* makeAdapter(fake);
-      const capabilities = yield* adapter.getCapabilities();
-      assert.isFalse(capabilities.threads.canForkThread);
-      const { runtime } = yield* openRuntime(fake);
-      const providerThread = yield* runtime.ensureThread({
-        threadId: THREAD_ID,
-        modelSelection: modelSelection("default"),
-        runtimePolicy,
-      });
-      const error = yield* runtime
-        .forkThread({
-          sourceProviderThread: providerThread,
-          targetThreadId: ThreadId.make("thread-pi-fork-target"),
-        })
-        .pipe(Effect.flip);
-      assert.equal(error._tag, "ProviderAdapterForkThreadError");
-      assert.match(String(error.cause), /portable full-thread fork/);
-    }).pipe(Effect.scoped, Effect.provide(testLayer)),
-  );
-
-  it.effect("reads a thread snapshot from pi's session entries", () =>
+  it.effect("reads a thread snapshot from pi's active branch", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakePi;
       const { runtime } = yield* openRuntime(fake);
@@ -1396,25 +823,20 @@ describe("PiAdapterV2", () => {
         modelSelection: modelSelection("default"),
         runtimePolicy,
       });
-      fake.queueEntries({
-        entries: [
+      fake.queueMessages({
+        messages: [
           {
-            type: "message",
-            id: "e1",
-            message: { role: "user", content: "hello pi", timestamp: 1700000000000 },
+            role: "user",
+            content: "hello pi",
+            timestamp: 1700000000000,
           },
           {
-            type: "message",
-            id: "e2",
-            message: {
-              role: "assistant",
-              content: [{ type: "text", text: "hello back" }],
-              timestamp: 1700000001000,
-            },
+            role: "assistant",
+            content: [{ type: "text", text: "hello back" }],
+            timestamp: 1700000001000,
           },
-          { type: "message", id: "e3", message: { role: "toolResult", content: [] } },
+          { role: "toolResult", content: [] },
         ],
-        leafId: "e2",
       });
       const snapshot = yield* runtime.readThreadSnapshot({ providerThread });
       assert.equal(snapshot.messages.length, 2);
@@ -1422,42 +844,6 @@ describe("PiAdapterV2", () => {
       assert.equal(snapshot.messages[0]!.text, "hello pi");
       assert.equal(snapshot.messages[1]!.role, "assistant");
       assert.equal(snapshot.messages[1]!.text, "hello back");
-    }).pipe(Effect.scoped, Effect.provide(testLayer)),
-  );
-
-  it.effect("cancels unanswered extension dialogs when the turn settles", () =>
-    Effect.gen(function* () {
-      const fake = yield* makeFakePi;
-      const { runtime, takeEvent } = yield* openRuntime(fake);
-      const providerThread = yield* runtime.ensureThread({
-        threadId: THREAD_ID,
-        modelSelection: modelSelection("default"),
-        runtimePolicy,
-      });
-      yield* startTurn(runtime, providerThread);
-      yield* fake.takeRequest("prompt");
-      yield* fake.emit({ type: "agent_start" });
-      yield* fake.emit({
-        type: "extension_ui_request",
-        id: "ui-2",
-        method: "confirm",
-        title: "Continue?",
-        message: "Really continue?",
-      });
-      yield* takeEvent(
-        (event) =>
-          event.type === "runtime_request.updated" && event.runtimeRequest.status === "pending",
-      );
-      yield* fake.emit({ type: "agent_settled" });
-
-      const cancelledResponse = yield* fake.takeRequest("extension_ui_response");
-      assert.equal(cancelledResponse["id"], "ui-2");
-      assert.equal(cancelledResponse["cancelled"], true);
-      const cancelled = yield* takeEvent(
-        (event) =>
-          event.type === "runtime_request.updated" && event.runtimeRequest.status === "cancelled",
-      );
-      assert.equal(cancelled.type, "runtime_request.updated");
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 

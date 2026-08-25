@@ -8,9 +8,10 @@ import {
   PI_T3_MCP_EXTENSION_SOURCE,
   T3_MCP_BEARER_ENV,
   T3_MCP_URL_ENV,
+  T3_PI_RUNTIME_MODE_ENV,
 } from "./piT3McpExtensionSource.ts";
 
-export { PI_T3_MCP_EXTENSION_FILENAME, T3_MCP_BEARER_ENV, T3_MCP_URL_ENV };
+export { PI_T3_MCP_EXTENSION_FILENAME, T3_MCP_BEARER_ENV, T3_MCP_URL_ENV, T3_PI_RUNTIME_MODE_ENV };
 
 const RESERVED_PI_LAUNCH_ARGUMENTS = new Set([
   "--continue",
@@ -162,6 +163,47 @@ function hasExplicitExtension(args: ReadonlyArray<string>, extensionPath: string
   return false;
 }
 
+function withoutExplicitExtensions(args: ReadonlyArray<string>): ReadonlyArray<string> {
+  const filtered: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === undefined) continue;
+    if (arg === "--extension" || arg === "-e") {
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--extension=") || arg.startsWith("-e=")) continue;
+    filtered.push(arg);
+  }
+  return filtered;
+}
+
+function withoutToolSelectionArgs(args: ReadonlyArray<string>): ReadonlyArray<string> {
+  const filtered: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === undefined) continue;
+    if (arg === "--tools" || arg === "-t" || arg === "--exclude-tools" || arg === "-xt") {
+      index += 1;
+      continue;
+    }
+    if (
+      arg === "--no-tools" ||
+      arg === "-nt" ||
+      arg === "--no-builtin-tools" ||
+      arg === "-nbt" ||
+      arg.startsWith("--tools=") ||
+      arg.startsWith("-t=") ||
+      arg.startsWith("--exclude-tools=") ||
+      arg.startsWith("-xt=")
+    ) {
+      continue;
+    }
+    filtered.push(arg);
+  }
+  return filtered;
+}
+
 function piT3McpExtensionDestPath(cacheDir: string): string {
   return `${cacheDir.replace(/\\/g, "/")}/${PI_T3_MCP_EXTENSION_FILENAME}`;
 }
@@ -186,18 +228,32 @@ export function buildPiRpcLaunch(input: {
   readonly extensionPath: string | undefined;
   readonly ephemeral?: boolean;
   readonly disableExtensions?: boolean;
+  readonly disableTools?: boolean;
+  readonly runtimeMode?: "approval-required" | "auto-accept-edits" | "auto" | "full-access";
 }): {
   readonly args: ReadonlyArray<string>;
   readonly env: NodeJS.ProcessEnv;
   readonly hasT3Mcp: boolean;
 } {
-  const hasT3Mcp = input.mcpSession !== undefined && input.extensionPath !== undefined;
+  const hasT3Mcp =
+    input.disableExtensions !== true &&
+    input.mcpSession !== undefined &&
+    input.extensionPath !== undefined;
+  const extensionSafeArgs =
+    input.disableExtensions === true
+      ? withoutExplicitExtensions(input.launchArgs)
+      : input.launchArgs;
+  const launchArgs =
+    input.disableTools === true ? withoutToolSelectionArgs(extensionSafeArgs) : extensionSafeArgs;
   const args = [
     "--mode",
     "rpc",
     ...(input.ephemeral === true ? ["--no-session"] : []),
+    ...launchArgs,
+    // Restrictions follow user launch args so a configured --tools or
+    // --extension cannot silently re-enable unattended text-generation code.
     ...(input.disableExtensions === true ? ["--no-extensions"] : []),
-    ...input.launchArgs,
+    ...(input.disableTools === true ? ["--no-tools"] : []),
   ];
   if (
     hasT3Mcp &&
@@ -217,6 +273,9 @@ export function buildPiRpcLaunch(input: {
             [T3_MCP_BEARER_ENV]: bearerTokenFromAuthorizationHeader(
               input.mcpSession.authorizationHeader,
             ),
+            ...(input.runtimeMode === undefined
+              ? {}
+              : { [T3_PI_RUNTIME_MODE_ENV]: input.runtimeMode }),
           }
         : {}),
     },

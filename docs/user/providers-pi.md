@@ -30,6 +30,22 @@ Pi loads its normal user and project extensions. Blocking `select`, `confirm`, `
 dialogs work in T3 Code. Notifications appear in the work log. Pi terminal decoration such as
 titles, status lines, and widgets does not have a T3 Code equivalent.
 
+## Permission Modes
+
+T3 Code applies the composer permission mode through Pi's blocking tool hook:
+
+- **Supervised** asks before commands, file changes, and extension tools. Read-only tools continue.
+- **Auto-accept edits** allows Pi's edit and write tools, but asks before commands and extension
+  tools.
+- **Full access** allows tools without T3 Code approval prompts.
+
+The **Auto** option is not shown for Pi because Pi does not expose an AI approval reviewer.
+Threads that already stored Auto before Pi support was added behave and display as Supervised.
+
+Changing the mode restarts the Pi provider session and resumes the same native conversation. The
+policy covers Pi tool calls; it is not an operating-system sandbox, and code that a trusted Pi
+extension runs outside a tool call remains governed by Pi's own extension trust model.
+
 T3 Code's `delegate_task` tool creates durable child threads in the shared subagent UI. If the user
 installs Pi's example `subagent` extension, T3 Code also shows its task progress and results in that
 UI. Pi runs those children without a session, so they cannot be opened or resumed as T3 Code

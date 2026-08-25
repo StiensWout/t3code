@@ -75,12 +75,14 @@ export const makePiTextGeneration = Effect.fn("makePiTextGeneration")(function* 
         ephemeral: true,
         // No user is present to answer a text-generation extension dialog.
         disableExtensions: true,
+        // Background naming/content helpers must never mutate the workspace.
+        disableTools: true,
       });
       const connection = yield* makePiRpcConnection({
         command: piSettings.binaryPath || "pi",
-        // --no-extensions is deliberate: an extension raising a dialog here
-        // would stall commit-message generation until the timeout, and no
-        // one is present to answer it. User model config and auth still apply.
+        // Extensions and tools are disabled because no user is present to
+        // answer a dialog and background text generation is read-only. User
+        // model config and auth still apply.
         args: launch.args,
         cwd,
         env: launch.env,
