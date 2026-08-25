@@ -13,7 +13,8 @@
  * Turn lifecycle: `agent_settled` is the only terminal signal. `agent_end`
  * merely closes one low-level run — compaction retries, auto-retries, and
  * queued continuations may still follow it, so the turn stays open until Pi
- * reports the session settled.
+ * reports the session settled. An extension can start detached compaction as
+ * that signal unwinds, so the adapter confirms Pi is idle before terminalizing.
  *
  * Extension UI: Pi extensions raise dialogs through `extension_ui_request`.
  * Dialog methods become v2 runtime requests (`confirm` → approval_request,
@@ -124,6 +125,8 @@ export const PI_INHERIT_MODEL_SLUG = "default";
 const STREAM_FLUSH_MS = 50;
 const PI_REQUEST_TIMEOUT_MS = 15_000;
 const PI_SKILL_DISCOVERY_TIMEOUT_MS = 4_000;
+const SETTLE_PROBE_MAX_ATTEMPTS = 3;
+const SETTLE_PROBE_RETRY_DELAY = Duration.millis(100);
 
 export const PiProviderCapabilitiesV2 = {
   sessions: {
@@ -327,6 +330,10 @@ interface ActivePiTurn {
   readonly promptMayBeCommandOnly: boolean;
   /** Pi reports context as unknown immediately after compaction; keep its estimate for the meter. */
   latestCompactionAfterTokens: number | null;
+  /** Invalidates idle snapshots when new work starts after a settle probe. */
+  settleProbeGeneration: number;
+  /** An extension may start compaction immediately after Pi emits agent_settled. */
+  settleWhenIdle: boolean;
   activeCompaction: PiCompactionState | null;
   activeProviderRetry: PiProviderRetryState | null;
   failure: ReturnType<typeof makeProviderFailure> | null;
@@ -1403,14 +1410,22 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
 
       // ── event pump ────────────────────────────────────────
 
-      const scheduleCommandOnlySettleProbe = (turn: ActivePiTurn) => {
+      const scheduleSettleProbe = (
+        turn: ActivePiTurn,
+        settleAfterAgentActivity = false,
+        attempt = 1,
+      ) => {
         const providerTurnId = turn.providerTurn.id;
-        return request({ type: "get_state" }).pipe(
+        const settleProbeGeneration = turn.settleProbeGeneration;
+        return request({ type: "get_state" }, 2_000).pipe(
           Effect.matchEffect({
             onSuccess: (data) =>
               Queue.offer(connection.events, {
                 type: "t3.settle_probe",
                 providerTurnId,
+                settleAfterAgentActivity,
+                settleProbeGeneration,
+                attempt,
                 data,
               }),
             // A failed probe still has to reach the pump. Dropping it would
@@ -1420,6 +1435,9 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
               Queue.offer(connection.events, {
                 type: "t3.settle_probe",
                 providerTurnId,
+                settleAfterAgentActivity,
+                settleProbeGeneration,
+                attempt,
                 probeFailed: true,
               }),
           }),
@@ -1433,7 +1451,10 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
         const turn = state?.activeTurn ?? null;
         switch (event["type"]) {
           case "agent_start": {
-            if (turn !== null) turn.sawAgentActivity = true;
+            if (turn !== null) {
+              turn.sawAgentActivity = true;
+              turn.settleProbeGeneration += 1;
+            }
             return;
           }
           case "message_start": {
@@ -1501,6 +1522,7 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
             return;
           case "compaction_start": {
             if (turn === null) return;
+            turn.settleProbeGeneration += 1;
             if (turn.activeCompaction !== null) {
               yield* emitCompaction(turn, turn.activeCompaction, "cancelled");
             }
@@ -1525,7 +1547,9 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
             if (result === null || result === undefined) {
               if (event["aborted"] === true) {
                 yield* emitCompaction(turn, compaction, "cancelled");
-                if (!turn.sawAgentActivity) yield* scheduleCommandOnlySettleProbe(turn);
+                if (turn.settleWhenIdle || !turn.sawAgentActivity) {
+                  yield* scheduleSettleProbe(turn, turn.settleWhenIdle);
+                }
                 return;
               }
               const errorMessage =
@@ -1533,7 +1557,9 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
               yield* emitCompaction(turn, compaction, "failed", {
                 summary: errorMessage.slice(0, 1_000),
               });
-              if (!turn.sawAgentActivity) yield* scheduleCommandOnlySettleProbe(turn);
+              if (turn.settleWhenIdle || !turn.sawAgentActivity) {
+                yield* scheduleSettleProbe(turn, turn.settleWhenIdle);
+              }
               return;
             }
             // An overflow can surface as a model error (`message_end` with
@@ -1552,7 +1578,9 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
               ...(beforeTokenCount === undefined ? {} : { beforeTokenCount }),
               ...(afterTokenCount === undefined ? {} : { afterTokenCount }),
             });
-            if (!turn.sawAgentActivity) yield* scheduleCommandOnlySettleProbe(turn);
+            if (turn.settleWhenIdle || !turn.sawAgentActivity) {
+              yield* scheduleSettleProbe(turn, turn.settleWhenIdle);
+            }
             return;
           }
           case "auto_retry_start": {
@@ -1638,7 +1666,15 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
             return;
           }
           case "agent_settled": {
-            if (state !== null) yield* finalizeTurn(state);
+            if (turn?.interrupted === true) {
+              if (state !== null) yield* finalizeTurn(state);
+              return;
+            }
+            if (turn !== null) {
+              turn.settleWhenIdle = true;
+              turn.settleProbeGeneration += 1;
+              yield* scheduleSettleProbe(turn, true);
+            }
             return;
           }
           case "response": {
@@ -1660,7 +1696,7 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
                 responseTurn.promptMayBeCommandOnly &&
                 !responseTurn.sawAgentActivity
               ) {
-                yield* scheduleCommandOnlySettleProbe(responseTurn);
+                yield* scheduleSettleProbe(responseTurn);
               }
               return;
             }
@@ -1699,25 +1735,43 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
             return;
           }
           case "t3.settle_probe": {
-            // Synthetic idle probe queued after a command-only prompt ack.
-            // Any agent activity Pi emitted before answering get_state has
-            // already been processed, so an untouched turn that reports
-            // no streaming and no pending messages is genuinely done.
+            // New work increments the generation before the pump can consume
+            // a stale idle snapshot, so only a current snapshot may settle.
             const data = event["data"];
-            // A probe that could not be answered settles the turn too: the
-            // prompt was acked, and the no-agent-activity guard below still
-            // keeps a genuinely running turn open.
             const probeFailed = event["probeFailed"] === true;
+            const settleAfterAgentActivity = event["settleAfterAgentActivity"] === true;
+            const attempt = Math.max(1, Math.trunc(recordNumber(event, "attempt") ?? 1));
             if (
-              turn !== null &&
-              turn.providerTurn.id === event["providerTurnId"] &&
-              !turn.sawAgentActivity &&
-              turn.activeCompaction === null &&
-              (probeFailed ||
-                (recordField(data, "isStreaming") !== true &&
-                  recordField(data, "isCompacting") !== true &&
-                  (recordNumber(data, "pendingMessageCount") ?? 0) === 0))
+              turn === null ||
+              turn.providerTurn.id !== event["providerTurnId"] ||
+              turn.settleProbeGeneration !== event["settleProbeGeneration"] ||
+              (!settleAfterAgentActivity && turn.sawAgentActivity) ||
+              turn.activeCompaction !== null
             ) {
+              return;
+            }
+            if (probeFailed) {
+              if (!settleAfterAgentActivity) {
+                if (state !== null) yield* finalizeTurn(state);
+                return;
+              }
+              if (attempt < SETTLE_PROBE_MAX_ATTEMPTS) {
+                yield* Effect.sleep(SETTLE_PROBE_RETRY_DELAY).pipe(
+                  Effect.andThen(scheduleSettleProbe(turn, true, attempt + 1)),
+                  Effect.forkIn(scope),
+                );
+                return;
+              }
+              stopRequested = true;
+              yield* connection.terminate;
+              return;
+            }
+            if (
+              recordField(data, "isStreaming") !== true &&
+              recordField(data, "isCompacting") !== true &&
+              (recordNumber(data, "pendingMessageCount") ?? 0) === 0
+            ) {
+              turn.settleWhenIdle = false;
               if (state !== null) yield* finalizeTurn(state);
             }
             return;
@@ -2097,6 +2151,8 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
               sawAgentActivity: false,
               promptMayBeCommandOnly: payload.message.trimStart().startsWith("/"),
               latestCompactionAfterTokens: null,
+              settleProbeGeneration: 0,
+              settleWhenIdle: false,
               activeCompaction: null,
               activeProviderRetry: null,
               failure: null,
@@ -2162,27 +2218,28 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
               steerInput.message.text,
               steerInput.message.attachments,
             );
-            // Pi only accepts extension slash commands through `prompt`; plain
-            // text uses its native steering queue. Neither path waits on its
-            // deferred ack. The final active-turn check lives inside the permit
-            // so settlement cannot overtake it.
+            // Prompt with streamingBehavior steer is atomic on Pi's side: it
+            // queues during an active run and starts a new run if settlement
+            // won the race. A direct `steer` sent after Pi became idle would
+            // remain queued forever. Send fire-and-forget under the session
+            // permit so a slash-command dialog cannot block the turn, and so
+            // settlement cannot overtake the active-turn check.
             yield* sessionEventPermit.withPermits(1)(
               Effect.gen(function* () {
                 if (threadState?.activeTurn !== turn) {
                   return yield* protocolError(`Pi turn ${steerInput.providerTurnId} is not active`);
                 }
-                const type = payload.message.trimStart().startsWith("/") ? "prompt" : "steer";
                 yield* connection.send({
-                  type,
+                  type: "prompt",
                   message: payload.message,
+                  streamingBehavior: "steer",
                   ...(payload.images.length === 0 ? {} : { images: payload.images }),
                 });
-                if (type === "prompt") {
-                  pendingPromptResponses.push({
-                    providerTurnId: turn.providerTurn.id,
-                    kind: "steer",
-                  });
-                }
+                pendingPromptResponses.push({
+                  providerTurnId: turn.providerTurn.id,
+                  kind: "steer",
+                });
+                turn.settleProbeGeneration += 1;
               }),
             );
           }).pipe(
@@ -2203,14 +2260,14 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
               return yield* protocolError(`Pi turn ${interruptInput.providerTurnId} is not active`);
             }
             turn.interrupted = true;
-            if (interruptInput.requestRuntimeRestart === true) {
-              // User Stop with restart: the process may be wedged, so give
-              // abort one short chance and then kill the process group. The
-              // transport closure finalizes the turn as interrupted and the
-              // session manager respawns a fresh process on the next turn,
-              // resuming the same session file.
+            if (interruptInput.requestRuntimeRestart === true || turn.settleWhenIdle) {
+              // Pi's generic abort does not cancel detached manual compaction.
+              // Once settlement has begun, terminate the process so Stop also
+              // prevents a recovery provider call from starting afterward.
               stopRequested = true;
-              yield* request({ type: "abort" }, 2_000).pipe(Effect.ignore);
+              if (interruptInput.requestRuntimeRestart === true && !turn.settleWhenIdle) {
+                yield* request({ type: "abort" }, 2_000).pipe(Effect.ignore);
+              }
               yield* connection.terminate;
               return;
             }

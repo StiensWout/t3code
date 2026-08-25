@@ -82,6 +82,14 @@ interface FakePi {
   readonly vetoNextSwitch: () => void;
   /** Data returned by the next `get_state` acks, consumed in order. */
   readonly queueState: (data: unknown) => void;
+  /** Hold the next `get_state` response until the test resolves it. */
+  readonly deferNextState: () => void;
+  /** Resolve the held `get_state` request. */
+  readonly resolveDeferredState: (data: unknown) => Effect.Effect<void>;
+  /** Reject the next `get_state` request. */
+  readonly failNextState: () => void;
+  /** Every request received by the fake process. */
+  readonly allRequests: () => ReadonlyArray<PiRpcRecord>;
   /** Data returned by the next `get_session_stats` acks, consumed in order. */
   readonly queueStats: (data: unknown) => void;
   /** Hold the next stats response until `releaseStats` is called. */
@@ -111,6 +119,10 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
   const stateQueue: Array<unknown> = [];
   const statsQueue: Array<unknown> = [];
   const commandsQueue: Array<{ readonly success: boolean; readonly data?: unknown }> = [];
+  const allRequests: Array<PiRpcRecord> = [];
+  let deferState = false;
+  let deferredStateRequest: PiRpcRecord | undefined;
+  let failState = false;
   let vetoSwitch = false;
   let holdStats = false;
   let pendingStatsResponse: PiRpcRecord | null = null;
@@ -131,6 +143,10 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
     };
     switch (record["type"]) {
       case "get_state":
+        if (failState) {
+          failState = false;
+          return { ...base, success: false, error: "state unavailable" };
+        }
         return {
           ...base,
           data: stateQueue.shift() ?? {
@@ -178,7 +194,13 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
         stdinBuffer = stdinBuffer.slice(newline + 1);
         if (line.length === 0) continue;
         const record = decodeJsonLine(line) as PiRpcRecord;
+        allRequests.push(record);
         yield* Queue.offer(requests, record);
+        if (record["type"] === "get_state" && deferState) {
+          deferState = false;
+          deferredStateRequest = record;
+          continue;
+        }
         const response = respondTo(record);
         if (response !== null) yield* emit(response);
       }
@@ -226,6 +248,26 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
     takeRequest,
     queueEntries: (data) => entriesQueue.push(data),
     queueMessages: (data) => messagesQueue.push(data),
+    deferNextState: () => {
+      deferState = true;
+    },
+    resolveDeferredState: (data) =>
+      Effect.gen(function* () {
+        const record = deferredStateRequest;
+        assert.isDefined(record);
+        deferredStateRequest = undefined;
+        yield* emit({
+          type: "response",
+          id: record!["id"],
+          command: "get_state",
+          success: true,
+          data,
+        });
+      }),
+    failNextState: () => {
+      failState = true;
+    },
+    allRequests: () => allRequests,
     vetoNextSwitch: () => {
       vetoSwitch = true;
     },
@@ -521,10 +563,18 @@ describe("PiAdapterV2", () => {
       yield* takeEvent((event) => event.type === "turn.terminal");
 
       // Back to Pi default with no explicit thinking choice of its own.
-      yield* startTurn(runtime, providerThread, "default", [], "Hello pi", {
-        instanceId: PI_INSTANCE_ID,
-        model: "default",
-      }, 2);
+      yield* startTurn(
+        runtime,
+        providerThread,
+        "default",
+        [],
+        "Hello pi",
+        {
+          instanceId: PI_INSTANCE_ID,
+          model: "default",
+        },
+        2,
+      );
       const replayModel = yield* fake.takeRequest("set_model");
       assert.equal(replayModel["provider"], "xai");
       assert.equal(replayModel["modelId"], "grok-4.6");
@@ -906,7 +956,7 @@ describe("PiAdapterV2", () => {
         modelSelection: modelSelection("default"),
         runtimePolicy,
       });
-      yield* startTurn(runtime, providerThread);
+      yield* startTurn(runtime, providerThread, "default", [], "/compact");
       yield* fake.takeRequest("prompt");
       yield* fake.emit({ type: "compaction_start", reason: "manual" });
       yield* takeEvent(
@@ -1089,8 +1139,9 @@ describe("PiAdapterV2", () => {
           creationSource: "web",
         },
       });
-      const steer = yield* fake.takeRequest("steer");
+      const steer = yield* fake.takeRequest("prompt");
       assert.equal(steer["message"], "Focus on tests");
+      assert.equal(steer["streamingBehavior"], "steer");
 
       yield* runtime.steerTurn({
         threadId: THREAD_ID,
@@ -1112,7 +1163,7 @@ describe("PiAdapterV2", () => {
       const firstTerminal = yield* takeEvent((event) => event.type === "turn.terminal");
       assert.isTrue(firstTerminal.type === "turn.terminal" && firstTerminal.status === "completed");
 
-      yield* startTurn(runtime, providerThread, "default", [], "Second turn", 2);
+      yield* startTurn(runtime, providerThread, "default", [], "Second turn", undefined, 2);
       yield* fake.takeRequest("prompt");
       // The slash command's response belongs to the settled first turn. It
       // must not consume or fail the second turn's prompt acknowledgement.
@@ -1130,170 +1181,7 @@ describe("PiAdapterV2", () => {
       );
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
-});
 
-describe("PiRpc framing", () => {
-  it.effect("reassembles records across chunk boundaries and strips CR", () =>
-    Effect.gen(function* () {
-      const stdout = yield* Queue.unbounded<Uint8Array>();
-      const spawner = ChildProcessSpawner.make(() =>
-        Effect.succeed(
-          ChildProcessSpawner.makeHandle({
-            pid: ChildProcessSpawner.ProcessId(FAKE_PID),
-            exitCode: Effect.never,
-            isRunning: Effect.succeed(true),
-            kill: () => Effect.void,
-            unref: Effect.succeed(Effect.void),
-            stdin: Sink.drain,
-            stdout: Stream.fromQueue(stdout),
-            stderr: Stream.empty,
-            all: Stream.empty,
-            getInputFd: () => Sink.drain,
-            getOutputFd: () => Stream.empty,
-          }),
-        ),
-      );
-      const connection = yield* makePiRpcConnection({
-        command: "pi",
-        args: ["--mode", "rpc"],
-        cwd: undefined,
-        env: {},
-      }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
-
-      const push = (text: string) =>
-        Queue.offer(stdout, new TextEncoder().encode(text)).pipe(Effect.asVoid);
-      yield* push('{"type":"agent_');
-      yield* push('start"}\r\n{"type":"agent_settled"}\nnot json\n{"type":"queue_update"}\n');
-
-      const first = yield* Queue.take(connection.events);
-      assert.equal(first["type"], "agent_start");
-      const second = yield* Queue.take(connection.events);
-      assert.equal(second["type"], "agent_settled");
-      const third = yield* Queue.take(connection.events);
-      assert.equal(third["type"], "queue_update");
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-  );
-});
-
-// This fails before a provider transcript exists, so a replay fixture is not
-// an honest fit. The boundary is the stdio transport seeing stdout end.
-describe("PiRpc early process exit", () => {
-  const makeHandle = (options: {
-    readonly exitCode: Effect.Effect<ChildProcessSpawner.ExitCode>;
-    readonly stderr: Stream.Stream<Uint8Array>;
-  }) =>
-    ChildProcessSpawner.makeHandle({
-      pid: ChildProcessSpawner.ProcessId(FAKE_PID),
-      exitCode: options.exitCode,
-      isRunning: Effect.succeed(true),
-      kill: () => Effect.void,
-      unref: Effect.succeed(Effect.void),
-      stdin: Sink.drain,
-      stdout: Stream.empty,
-      stderr: options.stderr,
-      all: Stream.empty,
-      getInputFd: () => Sink.drain,
-      getOutputFd: () => Stream.empty,
-    });
-
-  it.effect("reports a nonzero exit code instead of an unexplained stdout close", () =>
-    Effect.gen(function* () {
-      const secret = "API_KEY=super-secret\n";
-      const spawner = ChildProcessSpawner.make(() =>
-        Effect.succeed(
-          makeHandle({
-            exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(1)),
-            stderr: Stream.fromIterable([new TextEncoder().encode(secret)]),
-          }),
-        ),
-      );
-      const connection = yield* makePiRpcConnection({
-        command: "pi",
-        args: ["--mode", "rpc"],
-        cwd: undefined,
-        env: {},
-      }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
-
-      const error = yield* Queue.take(connection.events).pipe(Effect.flip);
-      assert.equal(error._tag, "PiRpcError");
-      assert.equal(error.operation, "read");
-      assert.equal(error.detail, "pi process exited with code 1");
-      assert.isFalse((error.detail ?? "").includes("API_KEY"));
-      assert.isFalse((error.detail ?? "").includes("super-secret"));
-      assert.isFalse(error.message.includes("API_KEY"));
-      assert.isFalse(error.message.includes("super-secret"));
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("keeps the unexplained stdout-close message when the process has not exited", () =>
-    Effect.gen(function* () {
-      const spawner = ChildProcessSpawner.make(() =>
-        Effect.succeed(
-          makeHandle({
-            exitCode: Effect.never,
-            stderr: Stream.empty,
-          }),
-        ),
-      );
-      const connection = yield* makePiRpcConnection({
-        command: "pi",
-        args: ["--mode", "rpc"],
-        cwd: undefined,
-        env: {},
-      }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
-
-      const fiber = yield* Effect.forkChild(Queue.take(connection.events).pipe(Effect.flip));
-      yield* TestClock.adjust(Duration.millis(300));
-      const error = yield* Fiber.join(fiber);
-      assert.equal(error._tag, "PiRpcError");
-      assert.equal(error.operation, "read");
-      assert.equal(error.detail, "pi process closed stdout");
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("keeps the exit-code diagnosis when stdin breaks while exit is still pending", () =>
-    Effect.gen(function* () {
-      const spawner = ChildProcessSpawner.make(() =>
-        Effect.succeed(
-          ChildProcessSpawner.makeHandle({
-            pid: ChildProcessSpawner.ProcessId(FAKE_PID),
-            exitCode: Effect.sleep(Duration.millis(50)).pipe(
-              Effect.andThen(Effect.succeed(ChildProcessSpawner.ExitCode(1))),
-            ),
-            isRunning: Effect.succeed(true),
-            kill: () => Effect.void,
-            unref: Effect.succeed(Effect.void),
-            stdin: Sink.fail(
-              PlatformError.systemError({
-                _tag: "Unknown",
-                module: "ChildProcess",
-                method: "stdin",
-                description: "broken pipe",
-              }),
-            ),
-            stdout: Stream.empty,
-            stderr: Stream.empty,
-            all: Stream.empty,
-            getInputFd: () => Sink.drain,
-            getOutputFd: () => Stream.empty,
-          }),
-        ),
-      );
-      const connection = yield* makePiRpcConnection({
-        command: "pi",
-        args: ["--mode", "rpc"],
-        cwd: undefined,
-        env: {},
-      }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
-
-      const fiber = yield* Effect.forkChild(Queue.take(connection.events).pipe(Effect.flip));
-      yield* TestClock.adjust(Duration.millis(300));
-      const error = yield* Fiber.join(fiber);
-      assert.equal(error._tag, "PiRpcError");
-      assert.equal(error.operation, "read");
-      assert.equal(error.detail, "pi process exited with code 1");
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-  );
   it.effect("shows compaction progress and completes the same activity row", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakePi;
@@ -1716,4 +1604,408 @@ describe("PiRpc early process exit", () => {
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
+  it.effect("keeps extension-started compaction and recovery in the settled turn", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, providerThread);
+      yield* fake.takeRequest("prompt");
+      yield* fake.emit({ type: "agent_start" });
+
+      // Extension ctx.compact() waits for this first settlement, then starts
+      // compaction in a detached continuation.
+      fake.queueState({ isStreaming: false, isCompacting: true, pendingMessageCount: 0 });
+      yield* fake.emit({ type: "agent_settled" });
+      yield* fake.takeRequest("get_state");
+      yield* fake.emit({ type: "compaction_start", reason: "manual" });
+      yield* takeEvent(
+        (event) => event.type === "turn_item.updated" && event.turnItem.type === "compaction",
+      );
+
+      fake.queueState({ isStreaming: true, isCompacting: false, pendingMessageCount: 0 });
+      yield* fake.emit({
+        type: "compaction_end",
+        reason: "manual",
+        result: { summary: "smaller", tokensBefore: 10_000, estimatedTokensAfter: 2_000 },
+        aborted: false,
+        willRetry: false,
+      });
+      yield* fake.emit({ type: "agent_start" });
+      yield* takeEvent(
+        (event) =>
+          event.type === "turn_item.updated" &&
+          event.turnItem.type === "compaction" &&
+          event.turnItem.status === "completed",
+      );
+      yield* fake.takeRequest("get_state");
+
+      fake.queueState({ isStreaming: false, isCompacting: false, pendingMessageCount: 0 });
+      yield* fake.emit({ type: "agent_settled" });
+      yield* fake.takeRequest("get_state");
+      const terminal = yield* takeEvent((event) => event.type === "turn.terminal");
+      assert.isTrue(terminal.type === "turn.terminal" && terminal.status === "completed");
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("keeps working after a settle probe fails before detached compaction", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, providerThread);
+      yield* fake.takeRequest("prompt");
+      yield* fake.emit({ type: "agent_start" });
+
+      fake.failNextState();
+      yield* fake.emit({ type: "agent_settled" });
+      yield* fake.takeRequest("get_state");
+      yield* fake.emit({ type: "compaction_start", reason: "manual" });
+      yield* takeEvent(
+        (event) => event.type === "turn_item.updated" && event.turnItem.type === "compaction",
+      );
+
+      fake.queueState({ isStreaming: false, isCompacting: false, pendingMessageCount: 0 });
+      yield* fake.emit({
+        type: "compaction_end",
+        reason: "manual",
+        result: { summary: "smaller", tokensBefore: 10_000, estimatedTokensAfter: 2_000 },
+        aborted: false,
+        willRetry: false,
+      });
+      yield* takeEvent(
+        (event) =>
+          event.type === "turn_item.updated" &&
+          event.turnItem.type === "compaction" &&
+          event.turnItem.status === "completed",
+      );
+      yield* fake.takeRequest("get_state");
+      const terminal = yield* takeEvent((event) => event.type === "turn.terminal");
+      assert.isTrue(terminal.type === "turn.terminal" && terminal.status === "completed");
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("restarts Pi when Stop interrupts detached compaction", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, providerThread);
+      yield* fake.takeRequest("prompt");
+      const running = yield* takeEvent(
+        (event) =>
+          event.type === "provider_turn.updated" && event.providerTurn.status === "running",
+      );
+      assert.equal(running.type, "provider_turn.updated");
+      const providerTurnId =
+        running.type === "provider_turn.updated" ? running.providerTurn.id : undefined;
+      assert.isDefined(providerTurnId);
+      yield* fake.emit({ type: "agent_start" });
+
+      fake.queueState({ isStreaming: false, isCompacting: true, pendingMessageCount: 0 });
+      yield* fake.emit({ type: "agent_settled" });
+      yield* fake.takeRequest("get_state");
+      yield* fake.emit({ type: "compaction_start", reason: "manual" });
+      yield* takeEvent(
+        (event) => event.type === "turn_item.updated" && event.turnItem.type === "compaction",
+      );
+
+      yield* runtime.interruptTurn({ providerThread, providerTurnId: providerTurnId! });
+      assert.isFalse(fake.allRequests().some((request) => request["type"] === "abort"));
+      yield* fake.closeStdout;
+      const terminal = yield* takeEvent((event) => event.type === "turn.terminal");
+      assert.isTrue(terminal.type === "turn.terminal" && terminal.status === "interrupted");
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("steers through an atomic prompt that can restart an idle Pi run", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, providerThread);
+      yield* fake.takeRequest("prompt");
+      const running = yield* takeEvent(
+        (event) =>
+          event.type === "provider_turn.updated" && event.providerTurn.status === "running",
+      );
+      const providerTurnId =
+        running.type === "provider_turn.updated" ? running.providerTurn.id : undefined;
+
+      yield* runtime.steerTurn({
+        threadId: THREAD_ID,
+        runId: RunId.make("run:thread-pi-test:1"),
+        providerThread,
+        providerTurnId: providerTurnId!,
+        message: {
+          messageId: "message:thread-pi-test:steer" as never,
+          text: "Focus on tests",
+          attachments: [],
+          createdBy: "user",
+          creationSource: "web",
+        },
+      });
+      const steer = yield* fake.takeRequest("prompt");
+      assert.equal(steer["message"], "Focus on tests");
+      assert.equal(steer["streamingBehavior"], "steer");
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("ignores an idle snapshot made stale by a steer", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, providerThread);
+      yield* fake.takeRequest("prompt");
+      const running = yield* takeEvent(
+        (event) =>
+          event.type === "provider_turn.updated" && event.providerTurn.status === "running",
+      );
+      assert.equal(running.type, "provider_turn.updated");
+      const providerTurnId =
+        running.type === "provider_turn.updated" ? running.providerTurn.id : undefined;
+      assert.isDefined(providerTurnId);
+      yield* fake.emit({ type: "agent_start" });
+
+      fake.deferNextState();
+      yield* fake.emit({ type: "agent_settled" });
+      yield* fake.takeRequest("get_state");
+      yield* runtime.steerTurn({
+        threadId: THREAD_ID,
+        runId: RunId.make("run:thread-pi-test:1"),
+        providerThread,
+        providerTurnId: providerTurnId!,
+        message: {
+          messageId: "message:thread-pi-test:late-steer" as never,
+          text: "Continue after settlement",
+          attachments: [],
+          createdBy: "user",
+          creationSource: "web",
+        },
+      });
+      yield* fake.takeRequest("prompt");
+      yield* fake.resolveDeferredState({
+        isStreaming: false,
+        isCompacting: false,
+        pendingMessageCount: 0,
+      });
+
+      yield* fake.emit({ type: "agent_start" });
+      yield* fake.emit({ type: "message_start", message: { role: "assistant" } });
+      yield* fake.emit({
+        type: "message_update",
+        assistantMessageEvent: { type: "text_end", contentIndex: 0, content: "Recovered" },
+      });
+      yield* fake.emit({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Recovered" }],
+          stopReason: "stop",
+        },
+      });
+      const assistantItem = yield* takeEvent(
+        (event) =>
+          event.type === "turn_item.updated" &&
+          event.turnItem.type === "assistant_message" &&
+          event.turnItem.streaming === false,
+      );
+      assert.isTrue(
+        assistantItem.type === "turn_item.updated" &&
+          assistantItem.turnItem.type === "assistant_message" &&
+          assistantItem.turnItem.text === "Recovered",
+      );
+
+      fake.queueState({ isStreaming: false, isCompacting: false, pendingMessageCount: 0 });
+      yield* fake.emit({ type: "agent_settled" });
+      yield* fake.takeRequest("get_state");
+      const terminal = yield* takeEvent((event) => event.type === "turn.terminal");
+      assert.isTrue(terminal.type === "turn.terminal" && terminal.status === "completed");
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+});
+
+describe("PiRpc framing", () => {
+  it.effect("reassembles records across chunk boundaries and strips CR", () =>
+    Effect.gen(function* () {
+      const stdout = yield* Queue.unbounded<Uint8Array>();
+      const spawner = ChildProcessSpawner.make(() =>
+        Effect.succeed(
+          ChildProcessSpawner.makeHandle({
+            pid: ChildProcessSpawner.ProcessId(FAKE_PID),
+            exitCode: Effect.never,
+            isRunning: Effect.succeed(true),
+            kill: () => Effect.void,
+            unref: Effect.succeed(Effect.void),
+            stdin: Sink.drain,
+            stdout: Stream.fromQueue(stdout),
+            stderr: Stream.empty,
+            all: Stream.empty,
+            getInputFd: () => Sink.drain,
+            getOutputFd: () => Stream.empty,
+          }),
+        ),
+      );
+      const connection = yield* makePiRpcConnection({
+        command: "pi",
+        args: ["--mode", "rpc"],
+        cwd: undefined,
+        env: {},
+      }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
+
+      const push = (text: string) =>
+        Queue.offer(stdout, new TextEncoder().encode(text)).pipe(Effect.asVoid);
+      yield* push('{"type":"agent_');
+      yield* push('start"}\r\n{"type":"agent_settled"}\nnot json\n{"type":"queue_update"}\n');
+
+      const first = yield* Queue.take(connection.events);
+      assert.equal(first["type"], "agent_start");
+      const second = yield* Queue.take(connection.events);
+      assert.equal(second["type"], "agent_settled");
+      const third = yield* Queue.take(connection.events);
+      assert.equal(third["type"], "queue_update");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+});
+
+// This fails before a provider transcript exists, so a replay fixture is not
+// an honest fit. The boundary is the stdio transport seeing stdout end.
+describe("PiRpc early process exit", () => {
+  const makeHandle = (options: {
+    readonly exitCode: Effect.Effect<ChildProcessSpawner.ExitCode>;
+    readonly stderr: Stream.Stream<Uint8Array>;
+  }) =>
+    ChildProcessSpawner.makeHandle({
+      pid: ChildProcessSpawner.ProcessId(FAKE_PID),
+      exitCode: options.exitCode,
+      isRunning: Effect.succeed(true),
+      kill: () => Effect.void,
+      unref: Effect.succeed(Effect.void),
+      stdin: Sink.drain,
+      stdout: Stream.empty,
+      stderr: options.stderr,
+      all: Stream.empty,
+      getInputFd: () => Sink.drain,
+      getOutputFd: () => Stream.empty,
+    });
+
+  it.effect("reports a nonzero exit code instead of an unexplained stdout close", () =>
+    Effect.gen(function* () {
+      const secret = "API_KEY=super-secret\n";
+      const spawner = ChildProcessSpawner.make(() =>
+        Effect.succeed(
+          makeHandle({
+            exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(1)),
+            stderr: Stream.fromIterable([new TextEncoder().encode(secret)]),
+          }),
+        ),
+      );
+      const connection = yield* makePiRpcConnection({
+        command: "pi",
+        args: ["--mode", "rpc"],
+        cwd: undefined,
+        env: {},
+      }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
+
+      const error = yield* Queue.take(connection.events).pipe(Effect.flip);
+      assert.equal(error._tag, "PiRpcError");
+      assert.equal(error.operation, "read");
+      assert.equal(error.detail, "pi process exited with code 1");
+      assert.isFalse((error.detail ?? "").includes("API_KEY"));
+      assert.isFalse((error.detail ?? "").includes("super-secret"));
+      assert.isFalse(error.message.includes("API_KEY"));
+      assert.isFalse(error.message.includes("super-secret"));
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("keeps the unexplained stdout-close message when the process has not exited", () =>
+    Effect.gen(function* () {
+      const spawner = ChildProcessSpawner.make(() =>
+        Effect.succeed(
+          makeHandle({
+            exitCode: Effect.never,
+            stderr: Stream.empty,
+          }),
+        ),
+      );
+      const connection = yield* makePiRpcConnection({
+        command: "pi",
+        args: ["--mode", "rpc"],
+        cwd: undefined,
+        env: {},
+      }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
+
+      const fiber = yield* Effect.forkChild(Queue.take(connection.events).pipe(Effect.flip));
+      yield* TestClock.adjust(Duration.millis(300));
+      const error = yield* Fiber.join(fiber);
+      assert.equal(error._tag, "PiRpcError");
+      assert.equal(error.operation, "read");
+      assert.equal(error.detail, "pi process closed stdout");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("keeps the exit-code diagnosis when stdin breaks while exit is still pending", () =>
+    Effect.gen(function* () {
+      const spawner = ChildProcessSpawner.make(() =>
+        Effect.succeed(
+          ChildProcessSpawner.makeHandle({
+            pid: ChildProcessSpawner.ProcessId(FAKE_PID),
+            exitCode: Effect.sleep(Duration.millis(50)).pipe(
+              Effect.andThen(Effect.succeed(ChildProcessSpawner.ExitCode(1))),
+            ),
+            isRunning: Effect.succeed(true),
+            kill: () => Effect.void,
+            unref: Effect.succeed(Effect.void),
+            stdin: Sink.fail(
+              PlatformError.systemError({
+                _tag: "Unknown",
+                module: "ChildProcess",
+                method: "stdin",
+                description: "broken pipe",
+              }),
+            ),
+            stdout: Stream.empty,
+            stderr: Stream.empty,
+            all: Stream.empty,
+            getInputFd: () => Sink.drain,
+            getOutputFd: () => Stream.empty,
+          }),
+        ),
+      );
+      const connection = yield* makePiRpcConnection({
+        command: "pi",
+        args: ["--mode", "rpc"],
+        cwd: undefined,
+        env: {},
+      }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
+
+      const fiber = yield* Effect.forkChild(Queue.take(connection.events).pipe(Effect.flip));
+      yield* TestClock.adjust(Duration.millis(300));
+      const error = yield* Fiber.join(fiber);
+      assert.equal(error._tag, "PiRpcError");
+      assert.equal(error.operation, "read");
+      assert.equal(error.detail, "pi process exited with code 1");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
 });
