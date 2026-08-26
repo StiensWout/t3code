@@ -18,6 +18,7 @@ import type {
   ServerProvider,
   ServerProviderState,
   ModelCapabilities,
+  ProviderUsageLimits,
   ProviderOptionDescriptor,
   ServerProviderModel,
   ServerProviderSkill,
@@ -45,6 +46,7 @@ const CODEX_PRESENTATION = {
 
 export interface CodexAppServerProviderSnapshot {
   readonly account: CodexSchema.V2GetAccountResponse;
+  readonly usageLimits: ProviderUsageLimits;
   readonly version: string | undefined;
   readonly models: ReadonlyArray<ServerProviderModel>;
   readonly skills: ReadonlyArray<ServerProviderSkill>;
@@ -72,39 +74,46 @@ function reasoningEffortLabel(reasoningEffort: string): string {
   return REASONING_EFFORT_LABELS[reasoningEffort] ?? reasoningEffort;
 }
 
+function codexPlanLabel(
+  planType:
+    | CodexSchema.V2GetAccountResponse__PlanType
+    | CodexSchema.V2GetAccountRateLimitsResponse__PlanType,
+): string {
+  switch (planType) {
+    case "free":
+      return "ChatGPT Free";
+    case "go":
+      return "ChatGPT Go";
+    case "plus":
+      return "ChatGPT Plus";
+    case "pro":
+      return "ChatGPT Pro 20x";
+    case "prolite":
+      return "ChatGPT Pro 5x";
+    case "team":
+      return "ChatGPT Team";
+    case "self_serve_business_usage_based":
+    case "business":
+      return "ChatGPT Business";
+    case "enterprise_cbp_usage_based":
+    case "enterprise":
+      return "ChatGPT Enterprise";
+    case "edu":
+      return "ChatGPT Edu";
+    case "unknown":
+      return "ChatGPT";
+    default:
+      planType satisfies never;
+      return "ChatGPT";
+  }
+}
+
 function codexAccountAuthLabel(account: CodexSchema.V2GetAccountResponse["account"]) {
   if (!account) return undefined;
   if (account.type === "apiKey") return "OpenAI API Key";
   if (account.type === "amazonBedrock") return "Amazon Bedrock";
   if (account.type !== "chatgpt") return undefined;
-
-  switch (account.planType) {
-    case "free":
-      return "ChatGPT Free Subscription";
-    case "go":
-      return "ChatGPT Go Subscription";
-    case "plus":
-      return "ChatGPT Plus Subscription";
-    case "pro":
-      return "ChatGPT Pro 20x Subscription";
-    case "prolite":
-      return "ChatGPT Pro 5x Subscription";
-    case "team":
-      return "ChatGPT Team Subscription";
-    case "self_serve_business_usage_based":
-    case "business":
-      return "ChatGPT Business Subscription";
-    case "enterprise_cbp_usage_based":
-    case "enterprise":
-      return "ChatGPT Enterprise Subscription";
-    case "edu":
-      return "ChatGPT Edu Subscription";
-    case "unknown":
-      return "ChatGPT Subscription";
-    default:
-      account.planType satisfies never;
-      return undefined;
-  }
+  return `${codexPlanLabel(account.planType)} Subscription`;
 }
 
 function codexAccountEmail(account: CodexSchema.V2GetAccountResponse["account"]) {
@@ -306,6 +315,87 @@ const requestAllCodexModels = Effect.fn("requestAllCodexModels")(function* (
   return models;
 });
 
+function clampUsagePercent(value: number): number {
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function codexWindowLabel(durationMinutes: number | null | undefined, fallback: string): string {
+  if (durationMinutes === 300) return "5h";
+  if (durationMinutes === 10_080) return "Week";
+  if (durationMinutes !== null && durationMinutes !== undefined) {
+    if (durationMinutes % 1_440 === 0) return `${durationMinutes / 1_440}d`;
+    if (durationMinutes % 60 === 0) return `${durationMinutes / 60}h`;
+    return `${durationMinutes}m`;
+  }
+  return fallback;
+}
+
+function codexUsageWindow(
+  id: string,
+  fallbackLabel: string,
+  window: CodexSchema.V2GetAccountRateLimitsResponse__RateLimitWindow | null | undefined,
+) {
+  if (!window) return undefined;
+  const durationMinutes = window.windowDurationMins ?? undefined;
+  return {
+    id,
+    label: codexWindowLabel(durationMinutes, fallbackLabel),
+    remainingPercent: clampUsagePercent(100 - window.usedPercent),
+    resetsAt:
+      window.resetsAt === null || window.resetsAt === undefined
+        ? null
+        : DateTime.formatIso(DateTime.makeUnsafe(window.resetsAt * 1_000)),
+    ...(durationMinutes === undefined ? {} : { durationMinutes }),
+  } satisfies ProviderUsageLimits["windows"][number];
+}
+
+/** Normalize the app-server's account snapshot before it crosses the T3 wire. */
+export function mapCodexUsageLimits(
+  response: CodexSchema.V2GetAccountRateLimitsResponse,
+  observedAt: string,
+): ProviderUsageLimits {
+  const fallbackBucket = response.rateLimitsByLimitId
+    ? (response.rateLimitsByLimitId.codex ?? Object.values(response.rateLimitsByLimitId)[0])
+    : undefined;
+  const rateLimits =
+    response.rateLimits.primary || response.rateLimits.secondary
+      ? response.rateLimits
+      : (fallbackBucket ?? response.rateLimits);
+  const windows = [
+    codexUsageWindow("primary", "Primary", rateLimits.primary),
+    codexUsageWindow("secondary", "Secondary", rateLimits.secondary),
+  ].filter((window): window is NonNullable<typeof window> => window !== undefined);
+  const planLabel = rateLimits.planType ? codexPlanLabel(rateLimits.planType) : undefined;
+
+  return {
+    status: windows.length > 0 ? "available" : "unavailable",
+    ...(planLabel ? { planLabel } : {}),
+    observedAt,
+    windows,
+  };
+}
+
+const readCodexUsageLimits = Effect.fn("readCodexUsageLimits")(function* (
+  client: CodexClient.CodexAppServerClient["Service"],
+  account: CodexSchema.V2GetAccountResponse["account"],
+) {
+  if (!account || account.type !== "chatgpt") {
+    return { status: "unsupported", windows: [] } satisfies ProviderUsageLimits;
+  }
+
+  const observedAt = DateTime.formatIso(yield* DateTime.now);
+  const result = yield* client.request("account/rateLimits/read", undefined).pipe(Effect.result);
+  if (Result.isFailure(result)) {
+    return {
+      status: "unavailable",
+      planLabel: codexPlanLabel(account.planType),
+      observedAt,
+      windows: [],
+    } satisfies ProviderUsageLimits;
+  }
+  return mapCodexUsageLimits(result.success, observedAt);
+});
+
 export function buildCodexInitializeParams(): CodexSchema.V1InitializeParams {
   return {
     clientInfo: {
@@ -389,24 +479,27 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
   if (!accountResponse.account && accountResponse.requiresOpenaiAuth) {
     return {
       account: accountResponse,
+      usageLimits: { status: "unavailable", windows: [] },
       version,
       models: appendCustomCodexModels([], input.customModels ?? []),
       skills: [],
     } satisfies CodexAppServerProviderSnapshot;
   }
 
-  const [skillsResponse, models] = yield* Effect.all(
+  const [skillsResponse, models, usageLimits] = yield* Effect.all(
     [
       client.request("skills/list", {
         cwds: [input.cwd],
       }),
       requestAllCodexModels(client),
+      readCodexUsageLimits(client, accountResponse.account),
     ],
     { concurrency: "unbounded" },
   );
 
   return {
     account: accountResponse,
+    usageLimits,
     version,
     models: applyPreferredCodexDefaultModel(
       appendCustomCodexModels(models, input.customModels ?? []),
@@ -445,6 +538,7 @@ const makePendingCodexProvider = (
         checkedAt,
         models,
         skills: [],
+        usageLimits: { status: "unsupported", windows: [] },
         probe: {
           installed: false,
           version: null,
@@ -461,6 +555,7 @@ const makePendingCodexProvider = (
       checkedAt,
       models,
       skills: [],
+      usageLimits: { status: "loading", windows: [] },
       probe: {
         installed: false,
         version: null,
@@ -531,6 +626,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
       checkedAt,
       models: emptyModels,
       skills: [],
+      usageLimits: { status: "unsupported", windows: [] },
       probe: {
         installed: false,
         version: null,
@@ -563,6 +659,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
       checkedAt,
       models: emptyModels,
       skills: [],
+      usageLimits: { status: "unavailable", windows: [] },
       probe: {
         installed,
         version: null,
@@ -582,6 +679,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
       checkedAt,
       models: emptyModels,
       skills: [],
+      usageLimits: { status: "unavailable", windows: [] },
       probe: {
         installed: true,
         version: null,
@@ -601,6 +699,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
     checkedAt,
     models: snapshot.models,
     skills: snapshot.skills,
+    usageLimits: snapshot.usageLimits,
     probe: {
       installed: true,
       version: snapshot.version ?? null,

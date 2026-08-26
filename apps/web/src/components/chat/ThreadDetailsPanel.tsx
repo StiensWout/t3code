@@ -1,12 +1,17 @@
-import type {
-  EditorId,
-  EnvironmentId,
-  ProjectScript,
-  ResolvedKeybindingsConfig,
-  ThreadId,
+import {
+  type EditorId,
+  type EnvironmentId,
+  type ProjectScript,
+  type ProviderInstanceId,
+  type ProviderUsageLimitWindow,
+  type ProviderUsageLimits,
+  type ResolvedKeybindingsConfig,
+  type ServerProvider,
+  type ThreadId,
 } from "@t3tools/contracts";
 import type { EnvironmentConnectionPresentation } from "@t3tools/client-runtime/connection";
-import { AlertTriangleIcon, XIcon } from "lucide-react";
+import { AlertTriangleIcon, ChevronDownIcon, XIcon } from "lucide-react";
+import { useRef, useState } from "react";
 
 import type { DraftId } from "../../composerDraftStore";
 import { useT3ProjectFileScripts } from "../../hooks/useT3ProjectFileScripts";
@@ -19,9 +24,21 @@ import ProjectScriptsControl, {
   type ProjectScriptActionResult,
 } from "../ProjectScriptsControl";
 import { Button } from "../ui/button";
+import { Menu, MenuPopup, MenuTrigger } from "../ui/menu";
 import { ScrollArea } from "../ui/scroll-area";
 import { cn } from "../../lib/utils";
+import { formatElapsedDurationLabel, formatRelativeTimeUntilLabel } from "../../timestampFormat";
 import { OpenInPicker } from "./OpenInPicker";
+import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
+import {
+  THREAD_DETAILS_PANEL_CHEVRON_CLASS,
+  THREAD_DETAILS_PANEL_ICON_CLASS,
+  THREAD_DETAILS_PANEL_ROW_POPUP_CLASS,
+  THREAD_DETAILS_PANEL_SPLIT_GROUP_CLASS,
+  THREAD_DETAILS_PANEL_SPLIT_PRIMARY_CLASS,
+  THREAD_DETAILS_PANEL_SPLIT_SECONDARY_CLASS,
+  THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS,
+} from "./threadDetailsPanelStyles";
 import { ThreadAutomationsPanel } from "./ThreadAutomationsPanel";
 import { ThreadRelationshipsPanel } from "./ThreadRelationshipsControl";
 
@@ -29,6 +46,194 @@ interface VersionMismatchIssue {
   readonly clientVersion: string;
   readonly serverVersion: string;
   readonly serverLabel: string;
+}
+
+function formatLimitReset(resetsAt: string | null): string | null {
+  if (resetsAt === null) return null;
+  const remaining = formatRelativeTimeUntilLabel(resetsAt);
+  if (!remaining) return null;
+  if (remaining === "Expired") return "resets soon";
+  return `resets in ${remaining.replace(/ left$/, "")}`;
+}
+
+function LimitBar({ window }: { window: ProviderUsageLimitWindow }) {
+  const reset = formatLimitReset(window.resetsAt);
+  const meterColor = window.remainingPercent <= 30 ? "bg-warning" : "bg-foreground/55";
+
+  return (
+    <div className="grid gap-1.5">
+      <div className="flex items-baseline gap-2 text-[11px]">
+        <span className="font-medium text-foreground/80">{window.label}</span>
+        {reset ? <span className="text-muted-foreground">{reset}</span> : null}
+        <span className="ml-auto font-mono tabular-nums text-foreground">
+          {window.remainingPercent}% left
+        </span>
+      </div>
+      <div
+        aria-label={`${window.label} provider limit: ${window.remainingPercent}% remaining`}
+        aria-valuemax={100}
+        aria-valuemin={0}
+        aria-valuenow={window.remainingPercent}
+        className="h-1.5 overflow-hidden bg-muted/60"
+        role="progressbar"
+      >
+        <div
+          className={cn("h-full", meterColor)}
+          style={{ width: `${window.remainingPercent}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function usageSummary(usageLimits: ProviderUsageLimits): string {
+  if (usageLimits.status === "loading") return "Checking…";
+  if (usageLimits.status === "unavailable") return "Unavailable";
+  const lowestRemaining = usageLimits.windows.reduce<number | null>(
+    (lowest, window) =>
+      lowest === null ? window.remainingPercent : Math.min(lowest, window.remainingPercent),
+    null,
+  );
+  if (lowestRemaining === null) return "Unavailable";
+  return lowestRemaining === 0 ? "Limit reached" : `${lowestRemaining}% left`;
+}
+
+function ProviderLimitRow({
+  provider,
+  usageLimits,
+}: {
+  provider: ServerProvider;
+  usageLimits: ProviderUsageLimits;
+}) {
+  const [open, setOpen] = useState(false);
+  const anchorRef = useRef<HTMLDivElement | null>(null);
+  const displayName = provider.displayName ?? String(provider.driver);
+  const staleAge = usageLimits.observedAt ? formatElapsedDurationLabel(usageLimits.observedAt) : "";
+
+  return (
+    <div
+      aria-label={`${displayName} provider limits`}
+      className={THREAD_DETAILS_PANEL_SPLIT_GROUP_CLASS}
+      ref={anchorRef}
+      role="group"
+    >
+      <Button
+        aria-expanded={open}
+        aria-haspopup="menu"
+        aria-label={`Show ${displayName} provider limits`}
+        className={THREAD_DETAILS_PANEL_SPLIT_PRIMARY_CLASS}
+        onClick={() => setOpen((current) => !current)}
+        size="sm"
+        type="button"
+        variant="ghost"
+      >
+        <ProviderInstanceIcon
+          displayName={displayName}
+          driverKind={provider.driver}
+          iconClassName={THREAD_DETAILS_PANEL_ICON_CLASS}
+        />
+        <span className="ml-0.5 min-w-0 truncate">{displayName}</span>
+        {usageLimits.planLabel ? (
+          <span className="min-w-0 truncate text-[10px] font-normal text-muted-foreground/70">
+            {usageLimits.planLabel}
+          </span>
+        ) : null}
+        <span
+          className={cn(
+            "ml-auto shrink-0 font-mono text-[10px] tabular-nums",
+            usageLimits.windows.some((window) => window.remainingPercent <= 30)
+              ? "text-warning"
+              : "text-muted-foreground",
+          )}
+        >
+          {usageSummary(usageLimits)}
+        </span>
+      </Button>
+      <span aria-hidden="true" className={THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS} />
+      <Menu highlightItemOnHover={false} onOpenChange={setOpen} open={open}>
+        <MenuTrigger
+          render={
+            <Button
+              aria-label={`Show ${displayName} provider limit details`}
+              className={THREAD_DETAILS_PANEL_SPLIT_SECONDARY_CLASS}
+              size="sm"
+              type="button"
+              variant="ghost"
+            />
+          }
+        >
+          <ChevronDownIcon aria-hidden className={THREAD_DETAILS_PANEL_CHEVRON_CLASS} />
+        </MenuTrigger>
+        <MenuPopup align="end" anchor={anchorRef} className={THREAD_DETAILS_PANEL_ROW_POPUP_CLASS}>
+          <div className="grid gap-3 p-2">
+            {usageLimits.windows.length > 0 ? (
+              usageLimits.windows.map((window) => <LimitBar key={window.id} window={window} />)
+            ) : (
+              <span className="px-0.5 py-1 text-[11px] text-muted-foreground">
+                {usageSummary(usageLimits)}
+              </span>
+            )}
+            {usageLimits.status === "stale" ? (
+              <span className="text-[10px] text-muted-foreground">
+                Last checked {staleAge === "just now" ? staleAge : `${staleAge || "earlier"} ago`}
+              </span>
+            ) : null}
+          </div>
+        </MenuPopup>
+      </Menu>
+    </div>
+  );
+}
+
+function ProviderUsageSection({
+  providers,
+  providerInstanceIds,
+  show,
+}: {
+  providers: ReadonlyArray<ServerProvider>;
+  providerInstanceIds: ReadonlyArray<ProviderInstanceId>;
+  show: boolean;
+}) {
+  if (!show) return null;
+
+  const providersById = new Map(providers.map((provider) => [provider.instanceId, provider]));
+  const relevantProviders = providerInstanceIds.flatMap((providerInstanceId, index) => {
+    const provider = providersById.get(providerInstanceId);
+    const usageLimits = provider?.usageLimits;
+    if (
+      !provider ||
+      !usageLimits ||
+      usageLimits.status === "unsupported" ||
+      (index > 0 && usageLimits.status === "unavailable")
+    ) {
+      return [];
+    }
+    return [{ provider, usageLimits }];
+  });
+
+  if (relevantProviders.length === 0) return null;
+
+  return (
+    <section aria-labelledby="thread-details-usage-heading" className="border-t border-border/65">
+      <div className="px-3.5 pb-1 pt-3">
+        <h3
+          id="thread-details-usage-heading"
+          className="text-[11px] font-medium text-muted-foreground"
+        >
+          Usage
+        </h3>
+      </div>
+      <div aria-label="Provider limits" className="flex flex-col px-2 pb-2.5">
+        {relevantProviders.map(({ provider, usageLimits }) => (
+          <ProviderLimitRow
+            key={provider.instanceId}
+            provider={provider}
+            usageLimits={usageLimits}
+          />
+        ))}
+      </div>
+    </section>
+  );
 }
 
 export interface ThreadDetailsPanelProps {
@@ -40,6 +245,9 @@ export interface ThreadDetailsPanelProps {
   draftId?: DraftId;
   activeProjectName: string | undefined;
   activeProjectScripts: ReadonlyArray<ProjectScript> | undefined;
+  providers: ReadonlyArray<ServerProvider>;
+  providerInstanceIds: ReadonlyArray<ProviderInstanceId>;
+  showProviderUsage: boolean;
   preferredScriptId: string | null;
   keybindings: ResolvedKeybindingsConfig;
   availableEditors: ReadonlyArray<EditorId>;
@@ -222,6 +430,14 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
             ) : null}
           </div>
         </section>
+
+        {!props.draftId && props.activeProjectName ? (
+          <ProviderUsageSection
+            providers={props.providers}
+            providerInstanceIds={props.providerInstanceIds}
+            show={props.showProviderUsage}
+          />
+        ) : null}
 
         {props.gitCwd ? (
           <section

@@ -80,7 +80,20 @@ it.layer(NodeServices.layer)("providerStatusCache", (it) => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-provider-cache-" });
-      const codexProvider = makeProvider(CODEX_DRIVER);
+      const codexProvider = makeProvider(CODEX_DRIVER, {
+        usageLimits: {
+          status: "available",
+          observedAt: "2026-04-11T00:00:00.000Z",
+          windows: [
+            {
+              id: "primary",
+              label: "5h",
+              remainingPercent: 28,
+              resetsAt: "2026-04-11T02:00:00.000Z",
+            },
+          ],
+        },
+      });
       const claudeProvider = makeProvider(CLAUDE_AGENT_DRIVER, {
         status: "warning",
         auth: { status: "unknown" },
@@ -133,6 +146,18 @@ it.layer(NodeServices.layer)("providerStatusCache", (it) => {
         },
       ],
       message: "Cached message",
+      usageLimits: {
+        status: "available",
+        observedAt: "2026-04-10T12:00:00.000Z",
+        windows: [
+          {
+            id: "primary",
+            label: "5h",
+            remainingPercent: 28,
+            resetsAt: "2026-04-10T14:00:00.000Z",
+          },
+        ],
+      },
       skills: [
         {
           name: "github:gh-fix-ci",
@@ -152,7 +177,11 @@ it.layer(NodeServices.layer)("providerStatusCache", (it) => {
         },
       ],
       message: "Pending refresh",
+      usageLimits: { status: "loading", windows: [] },
     });
+
+    const cachedUsageLimits = cachedCodex.usageLimits;
+    assert.ok(cachedUsageLimits);
 
     assert.deepStrictEqual(
       hydrateCachedProvider({
@@ -177,6 +206,7 @@ it.layer(NodeServices.layer)("providerStatusCache", (it) => {
         checkedAt: cachedCodex.checkedAt,
         slashCommands: cachedCodex.slashCommands,
         skills: cachedCodex.skills,
+        usageLimits: { ...cachedUsageLimits, status: "stale" },
         message: cachedCodex.message,
       },
     );

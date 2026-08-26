@@ -25,6 +25,13 @@ describe("ClientSettings composer context strip", () => {
   });
 });
 
+describe("ClientSettings provider usage", () => {
+  it("shows provider usage by default and accepts a hidden preference", () => {
+    expect(decodeClientSettings({}).showProviderUsage).toBe(true);
+    expect(decodeClientSettingsPatch({ showProviderUsage: false }).showProviderUsage).toBe(false);
+  });
+});
+
 describe("ClientSettings word wrap", () => {
   it("defaults word wrap on", () => {
     expect(decodeClientSettings({}).wordWrap).toBe(true);

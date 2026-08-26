@@ -2,6 +2,7 @@ import {
   type ClaudeSettings,
   type ModelCapabilities,
   type ModelSelection,
+  type ProviderUsageLimits,
   type ServerProviderModel,
   type ServerProviderSlashCommand,
 } from "@t3tools/contracts";
@@ -23,8 +24,10 @@ import { compareSemverVersions } from "@t3tools/shared/semver";
 import {
   query as claudeQuery,
   type Options as ClaudeQueryOptions,
+  type Query as ClaudeQuery,
   type SlashCommand as ClaudeSlashCommand,
   type SDKUserMessage,
+  type SDKControlGetUsageResponse,
   type SettingSource,
 } from "@anthropic-ai/claude-agent-sdk";
 
@@ -549,6 +552,59 @@ function formatClaudeSubscriptionAuthLabel(subscriptionType: string): string {
   return `Claude ${subscriptionLabel} Subscription`;
 }
 
+function clampUsagePercent(value: number): number {
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function claudeUsageWindow(
+  id: string,
+  label: string,
+  window:
+    | { readonly utilization: number | null; readonly resets_at: string | null }
+    | null
+    | undefined,
+) {
+  if (!window || window.utilization === null) return undefined;
+  return {
+    id,
+    label,
+    remainingPercent: clampUsagePercent(100 - window.utilization),
+    resetsAt: window.resets_at,
+  } satisfies ProviderUsageLimits["windows"][number];
+}
+
+/** Keep the experimental SDK response behind a stable T3-owned shape. */
+export function mapClaudeUsageLimits(
+  response: SDKControlGetUsageResponse,
+  observedAt: string,
+): ProviderUsageLimits {
+  if (!response.rate_limits_available || !response.rate_limits) {
+    return { status: "unsupported", windows: [] };
+  }
+
+  const limits = response.rate_limits;
+  const windows = [
+    claudeUsageWindow("five_hour", "5h", limits.five_hour),
+    claudeUsageWindow("seven_day", "Week", limits.seven_day),
+    claudeUsageWindow("seven_day_oauth_apps", "OAuth apps", limits.seven_day_oauth_apps),
+    claudeUsageWindow("seven_day_opus", "Opus", limits.seven_day_opus),
+    claudeUsageWindow("seven_day_sonnet", "Sonnet", limits.seven_day_sonnet),
+    ...(limits.model_scoped ?? []).map((window, index) =>
+      claudeUsageWindow(`model_${index}`, window.display_name, window),
+    ),
+  ].filter((window): window is NonNullable<typeof window> => window !== undefined);
+  const planLabel = response.subscription_type
+    ? claudeSubscriptionLabel(response.subscription_type)
+    : undefined;
+
+  return {
+    status: windows.length > 0 ? "available" : "unavailable",
+    ...(planLabel ? { planLabel } : {}),
+    observedAt,
+    windows,
+  };
+}
+
 function claudeAuthMetadata(input: {
   readonly subscriptionType: string | undefined;
   readonly authMethod: string | undefined;
@@ -583,6 +639,7 @@ function apiProviderAuthMetadata(
 // account info. The previous 8s budget expired mid-init, so the probe returned
 // `undefined` and left the provider unverified and unselectable in the picker.
 const CAPABILITIES_PROBE_TIMEOUT_MS = 25_000;
+const USAGE_PROBE_TIMEOUT_MS = 4_000;
 
 /**
  * Keep workspace-scoped command discovery intact while isolating the periodic
@@ -641,6 +698,7 @@ type ClaudeCapabilitiesProbe = {
    * the subscription/token fields are absent and auth is external AWS creds.
    */
   readonly apiProvider: string | undefined;
+  readonly usageLimits: ProviderUsageLimits;
   readonly slashCommands: ReadonlyArray<ServerProviderSlashCommand>;
 };
 
@@ -716,6 +774,15 @@ function waitForAbortSignal(signal: AbortSignal): Promise<void> {
   });
 }
 
+const readClaudeUsage = (
+  query: Pick<ClaudeQuery, "usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET">,
+) =>
+  Effect.tryPromise(() => query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET()).pipe(
+    Effect.timeoutOption(USAGE_PROBE_TIMEOUT_MS),
+    Effect.map(Option.getOrUndefined),
+    Effect.orElseSucceed(() => undefined),
+  );
+
 /**
  * Probe account information by spawning a lightweight Claude Agent SDK
  * session and reading the initialization result.
@@ -741,22 +808,24 @@ const probeClaudeCapabilities = (
       claudeSettings.binaryPath,
       claudeEnvironment,
     );
-    return yield* Effect.tryPromise(async () => {
-      const q = claudeQuery({
-        // Never yield — we only need initialization data, not a conversation.
-        // This prevents any prompt from reaching the Anthropic API.
-        // oxlint-disable-next-line require-yield
-        prompt: (async function* (): AsyncGenerator<SDKUserMessage> {
-          await waitForAbortSignal(abort.signal);
-        })(),
-        options: buildClaudeCapabilitiesProbeQueryOptions({
-          executablePath,
-          abortController: abort,
-          environment: claudeEnvironment,
-          cwd,
+    return yield* Effect.gen(function* () {
+      const q = yield* Effect.try(() =>
+        claudeQuery({
+          // Never yield — we only need initialization data, not a conversation.
+          // This prevents any prompt from reaching the Anthropic API.
+          // oxlint-disable-next-line require-yield
+          prompt: (async function* (): AsyncGenerator<SDKUserMessage> {
+            await waitForAbortSignal(abort.signal);
+          })(),
+          options: buildClaudeCapabilitiesProbeQueryOptions({
+            executablePath,
+            abortController: abort,
+            environment: claudeEnvironment,
+            cwd,
+          }),
         }),
-      });
-      const init = await q.initializationResult();
+      );
+      const init = yield* Effect.tryPromise(() => q.initializationResult());
       const account = init.account as
         | {
             readonly email?: string;
@@ -765,11 +834,24 @@ const probeClaudeCapabilities = (
             readonly apiProvider?: string;
           }
         | undefined;
+      const usageResponse = yield* readClaudeUsage(q);
+      const observedAt = DateTime.formatIso(DateTime.nowUnsafe());
+      const usageLimits = usageResponse
+        ? mapClaudeUsageLimits(usageResponse, observedAt)
+        : account?.subscriptionType
+          ? ({
+              status: "unavailable",
+              planLabel: claudeSubscriptionLabel(account.subscriptionType),
+              observedAt,
+              windows: [],
+            } satisfies ProviderUsageLimits)
+          : ({ status: "unsupported", windows: [] } satisfies ProviderUsageLimits);
       return {
         email: account?.email,
         subscriptionType: account?.subscriptionType,
         tokenSource: account?.tokenSource,
         apiProvider: account?.apiProvider,
+        usageLimits,
         slashCommands: parseClaudeInitializationCommands(init.commands),
       } satisfies ClaudeCapabilitiesProbe;
     });
@@ -830,6 +912,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
       enabled: false,
       checkedAt,
       models: allModels,
+      usageLimits: { status: "unsupported", windows: [] },
       probe: {
         installed: false,
         version: null,
@@ -856,6 +939,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
       enabled: claudeSettings.enabled,
       checkedAt,
       models: allModels,
+      usageLimits: { status: "unavailable", windows: [] },
       probe: {
         installed: !isCommandMissingCause(error),
         version: null,
@@ -874,6 +958,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
       enabled: claudeSettings.enabled,
       checkedAt,
       models: allModels,
+      usageLimits: { status: "unavailable", windows: [] },
       probe: {
         installed: true,
         version: null,
@@ -898,6 +983,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
       enabled: claudeSettings.enabled,
       checkedAt,
       models: allModels,
+      usageLimits: { status: "unavailable", windows: [] },
       probe: {
         installed: true,
         version: parsedVersion,
@@ -938,6 +1024,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
       models,
       slashCommands: dedupedSlashCommands,
       skills,
+      usageLimits: { status: "unavailable", windows: [] },
       probe: {
         installed: true,
         version: parsedVersion,
@@ -960,6 +1047,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     models,
     slashCommands: dedupedSlashCommands,
     skills,
+    usageLimits: capabilities.usageLimits,
     probe: {
       installed: true,
       version: parsedVersion,
@@ -993,6 +1081,7 @@ export const makePendingClaudeProvider = (
         enabled: false,
         checkedAt,
         models,
+        usageLimits: { status: "unsupported", windows: [] },
         probe: {
           installed: false,
           version: null,
@@ -1008,6 +1097,7 @@ export const makePendingClaudeProvider = (
       enabled: true,
       checkedAt,
       models,
+      usageLimits: { status: "loading", windows: [] },
       probe: {
         installed: false,
         version: null,

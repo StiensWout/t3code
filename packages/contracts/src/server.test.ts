@@ -43,6 +43,7 @@ describe("ServerProvider", () => {
 
     expect(parsed.slashCommands).toEqual([]);
     expect(parsed.skills).toEqual([]);
+    expect(parsed.usageLimits).toBeUndefined();
     expect(parsed.versionAdvisory).toBeUndefined();
     expect(parsed.updateState).toBeUndefined();
   });
@@ -114,6 +115,41 @@ describe("ServerProvider", () => {
     });
 
     expect(parsed.models[0]?.isLegacy).toBe(true);
+  });
+
+  it("decodes normalized subscription usage windows", () => {
+    const parsed = decodeServerProvider({
+      ...baseProviderSnapshot,
+      usageLimits: {
+        status: "available",
+        planLabel: "ChatGPT Plus",
+        observedAt: "2026-08-26T10:00:00.000Z",
+        windows: [
+          {
+            id: "primary",
+            label: "5h",
+            remainingPercent: 28,
+            resetsAt: "2026-08-26T12:00:00.000Z",
+            durationMinutes: 300,
+          },
+        ],
+      },
+    });
+
+    expect(parsed.usageLimits).toEqual({
+      status: "available",
+      planLabel: "ChatGPT Plus",
+      observedAt: "2026-08-26T10:00:00.000Z",
+      windows: [
+        {
+          id: "primary",
+          label: "5h",
+          remainingPercent: 28,
+          resetsAt: "2026-08-26T12:00:00.000Z",
+          durationMinutes: 300,
+        },
+      ],
+    });
   });
 });
 

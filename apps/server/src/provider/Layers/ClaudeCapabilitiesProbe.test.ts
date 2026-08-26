@@ -10,6 +10,7 @@ import {
   buildClaudeCapabilitiesProbeQueryOptions,
   CLAUDE_CAPABILITIES_PROBE_SETTING_SOURCES,
   isLegacyClaudeModel,
+  mapClaudeUsageLimits,
   probeClaudeCapabilities,
 } from "./ClaudeProvider.ts";
 
@@ -55,6 +56,50 @@ it("isolates Claude capability probes without dropping workspace setting sources
   assert.equal(options.env?.ENABLE_CLAUDEAI_MCP_SERVERS, "false");
 });
 
+it("normalizes Claude subscription utilization as remaining usage", () => {
+  const observedAt = "2026-08-26T10:00:00.000Z";
+  const usage = mapClaudeUsageLimits(
+    {
+      session: {
+        total_cost_usd: 0,
+        total_api_duration_ms: 0,
+        total_duration_ms: 0,
+        total_lines_added: 0,
+        total_lines_removed: 0,
+        model_usage: {},
+      },
+      subscription_type: "max",
+      rate_limits_available: true,
+      rate_limits: {
+        five_hour: { utilization: 72, resets_at: "2026-08-26T12:00:00.000Z" },
+        seven_day: { utilization: 26, resets_at: null },
+      },
+      behaviors: null,
+    },
+    observedAt,
+  );
+
+  assert.deepEqual(usage, {
+    status: "available",
+    planLabel: "Max",
+    observedAt,
+    windows: [
+      {
+        id: "five_hour",
+        label: "5h",
+        remainingPercent: 28,
+        resetsAt: "2026-08-26T12:00:00.000Z",
+      },
+      {
+        id: "seven_day",
+        label: "Week",
+        remainingPercent: 74,
+        resetsAt: null,
+      },
+    ],
+  });
+});
+
 it.layer(NodeServices.layer)("Claude capability probe SDK boundary", (it) => {
   it.effect("serializes strict no-MCP options and still resolves account capabilities", () =>
     Effect.gen(function* () {
@@ -89,20 +134,37 @@ it.layer(NodeServices.layer)("Claude capability probe SDK boundary", (it) => {
           "const lines = createInterface({ input: process.stdin });",
           'lines.on("line", (line) => {',
           "  const message = JSON.parse(line);",
-          '  if (message.type !== "control_request" || message.request?.subtype !== "initialize") return;',
+          '  if (message.type !== "control_request") return;',
+          "  let response;",
+          '  if (message.request?.subtype === "initialize") {',
+          "    response = {",
+          '      commands: [{ name: "review", description: "Review changes", argumentHint: "[path]" }],',
+          "      agents: [],",
+          '      output_style: "default",',
+          '      available_output_styles: ["default"],',
+          "      models: [],",
+          '      account: { email: "dev@example.com", subscriptionType: "pro", tokenSource: "oauth" },',
+          "    };",
+          '  } else if (message.request?.subtype === "get_usage") {',
+          "    response = {",
+          "      session: { total_cost_usd: 0, total_api_duration_ms: 0, total_duration_ms: 0, total_lines_added: 0, total_lines_removed: 0, model_usage: {} },",
+          '      subscription_type: "pro",',
+          "      rate_limits_available: true,",
+          "      rate_limits: {",
+          '        five_hour: { utilization: 25, resets_at: "2026-08-26T12:00:00.000Z" },',
+          '        seven_day: { utilization: 60, resets_at: "2026-09-01T00:00:00.000Z" },',
+          "      },",
+          "      behaviors: null,",
+          "    };",
+          "  } else {",
+          "    return;",
+          "  }",
           "  process.stdout.write(JSON.stringify({",
           '    type: "control_response",',
           "    response: {",
           '      subtype: "success",',
           "      request_id: message.request_id,",
-          "      response: {",
-          '        commands: [{ name: "review", description: "Review changes", argumentHint: "[path]" }],',
-          "        agents: [],",
-          '        output_style: "default",',
-          '        available_output_styles: ["default"],',
-          "        models: [],",
-          '        account: { email: "dev@example.com", subscriptionType: "pro", tokenSource: "oauth" },',
-          "      },",
+          "      response,",
           "    },",
           '  }) + "\\n");',
           "});",
@@ -122,7 +184,9 @@ it.layer(NodeServices.layer)("Claude capability probe SDK boundary", (it) => {
         workspaceCwd,
       );
 
-      assert.deepEqual(capabilities, {
+      assert.ok(capabilities);
+      const { usageLimits, ...capabilitiesWithoutUsage } = capabilities;
+      assert.deepEqual(capabilitiesWithoutUsage, {
         email: "dev@example.com",
         subscriptionType: "pro",
         tokenSource: "oauth",
@@ -135,6 +199,23 @@ it.layer(NodeServices.layer)("Claude capability probe SDK boundary", (it) => {
           },
         ],
       });
+      assert.equal(usageLimits.status, "available");
+      assert.equal(usageLimits.planLabel, "Pro");
+      assert.deepEqual(usageLimits.windows, [
+        {
+          id: "five_hour",
+          label: "5h",
+          remainingPercent: 75,
+          resetsAt: "2026-08-26T12:00:00.000Z",
+        },
+        {
+          id: "seven_day",
+          label: "Week",
+          remainingPercent: 40,
+          resetsAt: "2026-09-01T00:00:00.000Z",
+        },
+      ]);
+      assert.match(usageLimits.observedAt ?? "", /^\d{4}-\d{2}-\d{2}T/);
 
       // @effect-diagnostics-next-line preferSchemaOverJson:off
       const invocation = JSON.parse(yield* fs.readFileString(invocationPath)) as {

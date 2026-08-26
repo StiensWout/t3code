@@ -134,19 +134,21 @@ type TestClaudeCapabilities = {
   readonly subscriptionType: string | undefined;
   readonly tokenSource: string | undefined;
   readonly apiProvider: string | undefined;
+  readonly usageLimits: NonNullable<ServerProvider["usageLimits"]>;
   readonly slashCommands: ReadonlyArray<ServerProviderSlashCommand>;
 };
 
 function claudeCapabilities(overrides: Partial<TestClaudeCapabilities> = {}) {
-  return () =>
-    Effect.succeed({
-      email: undefined,
-      subscriptionType: undefined,
-      tokenSource: undefined,
-      apiProvider: undefined,
-      slashCommands: [],
-      ...overrides,
-    });
+  const capabilities: TestClaudeCapabilities = {
+    email: undefined,
+    subscriptionType: undefined,
+    tokenSource: undefined,
+    apiProvider: undefined,
+    usageLimits: { status: "unsupported", windows: [] },
+    slashCommands: [],
+    ...overrides,
+  };
+  return () => Effect.succeed(capabilities);
 }
 
 const noClaudeCapabilities = () =>
@@ -293,6 +295,7 @@ function makeCodexProbeSnapshot(
       },
       requiresOpenaiAuth: false,
     },
+    usageLimits: { status: "available", windows: [] },
     models: [
       {
         slug: "gpt-live-codex",
@@ -598,6 +601,52 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
         assert.deepStrictEqual(mergeProviderSnapshot(previousProvider, refreshedProvider).models, [
           ...previousProvider.models,
         ]);
+      });
+
+      it("keeps the last available usage snapshot when a refresh is unavailable", () => {
+        const previousProvider = {
+          instanceId: ProviderInstanceId.make("codex"),
+          driver: ProviderDriverKind.make("codex"),
+          status: "ready",
+          enabled: true,
+          installed: true,
+          auth: { status: "authenticated" },
+          checkedAt: "2026-08-26T10:00:00.000Z",
+          version: "1.0.0",
+          models: [],
+          slashCommands: [],
+          skills: [],
+          usageLimits: {
+            status: "available",
+            planLabel: "ChatGPT Plus",
+            observedAt: "2026-08-26T10:00:00.000Z",
+            windows: [
+              {
+                id: "primary",
+                label: "5h",
+                remainingPercent: 28,
+                resetsAt: "2026-08-26T12:00:00.000Z",
+              },
+            ],
+          },
+        } as const satisfies ServerProvider;
+        const refreshedProvider = {
+          ...previousProvider,
+          checkedAt: "2026-08-26T10:05:00.000Z",
+          usageLimits: {
+            status: "unavailable",
+            observedAt: "2026-08-26T10:05:00.000Z",
+            windows: [],
+          },
+        } as const satisfies ServerProvider;
+
+        assert.deepStrictEqual(
+          mergeProviderSnapshot(previousProvider, refreshedProvider).usageLimits,
+          {
+            ...previousProvider.usageLimits,
+            status: "stale",
+          },
+        );
       });
 
       it("drops stale OpenCode models missing from a successful refresh", () => {

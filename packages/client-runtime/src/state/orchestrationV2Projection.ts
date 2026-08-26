@@ -2,13 +2,50 @@ import type {
   OrchestrationV2DomainEvent,
   OrchestrationV2ThreadProjection,
   OrchestrationV2TurnItem,
+  ProviderInstanceId,
 } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import { isOrchestrationV2TurnItemVisible } from "@t3tools/shared/orchestrationV2Timeline";
 
 export type ApplyOrchestrationV2ProjectionEventOptions = {
   readonly partialTimeline?: boolean;
   readonly latestLocalTurnOrdinal?: number | null;
 };
+
+/**
+ * Resolve the provider instances whose subscription limits belong in a
+ * thread's details menu. The current selection leads, followed by root
+ * provider threads in most-recently-used order. Provider-owned child work is
+ * deliberately excluded.
+ */
+export function resolveThreadProviderInstanceIds(
+  projection: Pick<OrchestrationV2ThreadProjection, "thread" | "providerThreads">,
+  currentProviderInstanceId: ProviderInstanceId = projection.thread.providerInstanceId,
+): ReadonlyArray<ProviderInstanceId> {
+  const latestUseByInstance = new Map<ProviderInstanceId, number>();
+
+  for (const providerThread of projection.providerThreads) {
+    if (
+      providerThread.appThreadId !== projection.thread.id ||
+      providerThread.ownerNodeId !== null ||
+      providerThread.providerInstanceId === currentProviderInstanceId
+    ) {
+      continue;
+    }
+    const updatedAt = DateTime.toEpochMillis(providerThread.updatedAt);
+    const previous = latestUseByInstance.get(providerThread.providerInstanceId);
+    if (previous === undefined || updatedAt > previous) {
+      latestUseByInstance.set(providerThread.providerInstanceId, updatedAt);
+    }
+  }
+
+  return [
+    currentProviderInstanceId,
+    ...[...latestUseByInstance.entries()]
+      .sort((left, right) => right[1] - left[1])
+      .map(([providerInstanceId]) => providerInstanceId),
+  ];
+}
 
 function upsertEntity<T extends { readonly id: unknown }>(
   items: ReadonlyArray<T>,

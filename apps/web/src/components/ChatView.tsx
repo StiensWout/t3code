@@ -37,6 +37,7 @@ import { resolveThreadProviderSession } from "@t3tools/client-runtime/state/thre
 import { shouldShowLoadEarlierControl } from "@t3tools/client-runtime/state/threads";
 import { resolveThreadLastVisitedAt } from "./Sidebar.logic";
 import { derivePendingThreadRequests } from "@t3tools/client-runtime/state/thread-requests";
+import { resolveThreadProviderInstanceIds } from "@t3tools/client-runtime/state/orchestration-v2-projection";
 import {
   parseScopedThreadKey,
   scopedThreadKey,
@@ -2687,6 +2688,12 @@ function ChatViewContent(props: ChatViewProps) {
     activeThread?.modelSelection.instanceId ??
     activeProject?.defaultModelSelection?.instanceId ??
     null;
+  const threadProviderInstanceIds = useMemo(() => {
+    if (!isServerThread || !activeProviderInstanceId) return [];
+    return serverProjection === null
+      ? [activeProviderInstanceId]
+      : resolveThreadProviderInstanceIds(serverProjection, activeProviderInstanceId);
+  }, [activeProviderInstanceId, isServerThread, serverProjection]);
   const activeProviderStatus = useMemo(() => {
     if (activeProviderInstanceId) {
       return (
@@ -6244,6 +6251,9 @@ function ChatViewContent(props: ChatViewProps) {
     ...(draftId ? { draftId } : {}),
     activeProjectName: activeProject?.title,
     activeProjectScripts: activeProject?.scripts,
+    providers: providerStatuses,
+    providerInstanceIds: threadProviderInstanceIds,
+    showProviderUsage: settings.showProviderUsage,
     preferredScriptId: activeProject
       ? (lastInvokedScriptByProjectId[activeProject.id] ?? null)
       : null,

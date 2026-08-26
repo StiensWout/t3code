@@ -1,10 +1,49 @@
 import { assert, it } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
 
 import {
   applyPreferredCodexDefaultModel,
   isLegacyCodexModel,
   mapCodexModelCapabilities,
+  mapCodexUsageLimits,
 } from "./CodexProvider.ts";
+
+it("normalizes Codex subscription windows as remaining usage", () => {
+  const observedAt = "2026-08-26T10:00:00.000Z";
+  const resetsAt = 1_800_000_000;
+  const usage = mapCodexUsageLimits(
+    {
+      rateLimits: {
+        planType: "plus",
+        primary: { usedPercent: 72, windowDurationMins: 300, resetsAt },
+        secondary: { usedPercent: 26, windowDurationMins: 10_080, resetsAt: null },
+      },
+    },
+    observedAt,
+  );
+
+  assert.deepStrictEqual(usage, {
+    status: "available",
+    planLabel: "ChatGPT Plus",
+    observedAt,
+    windows: [
+      {
+        id: "primary",
+        label: "5h",
+        remainingPercent: 28,
+        resetsAt: DateTime.formatIso(DateTime.makeUnsafe(resetsAt * 1_000)),
+        durationMinutes: 300,
+      },
+      {
+        id: "secondary",
+        label: "Week",
+        remainingPercent: 74,
+        resetsAt: null,
+        durationMinutes: 10_080,
+      },
+    ],
+  });
+});
 
 it("keeps only the GPT-5.6 Codex family out of legacy models", () => {
   assert.deepStrictEqual(

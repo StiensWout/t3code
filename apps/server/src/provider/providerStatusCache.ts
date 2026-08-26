@@ -57,6 +57,11 @@ export const hydrateCachedProvider = (input: {
   }
 
   const { message: _fallbackMessage, ...fallbackWithoutMessage } = input.fallbackProvider;
+  const cachedUsageLimits = input.cachedProvider.usageLimits;
+  const usageLimits =
+    cachedUsageLimits?.status === "available"
+      ? { ...cachedUsageLimits, status: "stale" as const }
+      : cachedUsageLimits;
   const hydratedProvider: ServerProvider = {
     ...fallbackWithoutMessage,
     models: mergeProviderModels(input.fallbackProvider.models, input.cachedProvider.models),
@@ -67,6 +72,7 @@ export const hydrateCachedProvider = (input: {
     checkedAt: input.cachedProvider.checkedAt,
     slashCommands: input.cachedProvider.slashCommands,
     skills: input.cachedProvider.skills,
+    ...(usageLimits ? { usageLimits } : {}),
   };
 
   return input.cachedProvider.message

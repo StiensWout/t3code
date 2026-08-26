@@ -5,15 +5,21 @@ import {
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2TurnItem,
   MessageId,
+  NodeId,
   ProjectId,
+  ProviderDriverKind,
   ProviderInstanceId,
+  ProviderThreadId,
   RunId,
   ThreadId,
   TurnItemId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
-import { applyOrchestrationV2ProjectionEvent } from "./orchestrationV2Projection.ts";
+import {
+  applyOrchestrationV2ProjectionEvent,
+  resolveThreadProviderInstanceIds,
+} from "./orchestrationV2Projection.ts";
 
 const now = DateTime.makeUnsafe("2026-06-20T00:00:00.000Z");
 const threadId = ThreadId.make("thread-reducer");
@@ -268,5 +274,53 @@ describe("applyOrchestrationV2ProjectionEvent", () => {
     const next = applyOrchestrationV2ProjectionEvent(projection, event);
     expect(next?.visibleTurnItems).toEqual([inheritedRow]);
     expect(next?.visibleTurnItems[0]).toBe(inheritedRow);
+  });
+});
+
+describe("resolveThreadProviderInstanceIds", () => {
+  it("keeps the current provider first and deduplicates root provider history", () => {
+    const codex = ProviderInstanceId.make("codex");
+    const claude = ProviderInstanceId.make("claude_work");
+    const cursor = ProviderInstanceId.make("cursor");
+    const providerThread = (
+      id: string,
+      providerInstanceId: ProviderInstanceId,
+      updatedAt: string,
+      ownerNodeId: OrchestrationV2ThreadProjection["providerThreads"][number]["ownerNodeId"] = null,
+    ): OrchestrationV2ThreadProjection["providerThreads"][number] => ({
+      id: ProviderThreadId.make(id),
+      driver: ProviderDriverKind.make(providerInstanceId === claude ? "claudeAgent" : "codex"),
+      providerInstanceId,
+      providerSessionId: null,
+      appThreadId: threadId,
+      ownerNodeId,
+      nativeThreadRef: null,
+      nativeConversationHeadRef: null,
+      status: "idle",
+      firstRunOrdinal: 1,
+      lastRunOrdinal: 1,
+      handoffIds: [],
+      forkedFrom: null,
+      pendingBackgroundTasks: [],
+      createdAt: DateTime.makeUnsafe("2026-06-20T00:00:00.000Z"),
+      updatedAt: DateTime.makeUnsafe(updatedAt),
+    });
+    const projection = {
+      thread: { ...emptyProjection.thread, providerInstanceId: codex },
+      providerThreads: [
+        providerThread("provider-claude-old", claude, "2026-06-20T01:00:00.000Z"),
+        providerThread("provider-cursor", cursor, "2026-06-20T02:00:00.000Z"),
+        providerThread("provider-claude-new", claude, "2026-06-20T03:00:00.000Z"),
+        providerThread(
+          "provider-owned-child",
+          ProviderInstanceId.make("codex_child"),
+          "2026-06-20T04:00:00.000Z",
+          NodeId.make("node-child"),
+        ),
+      ],
+    };
+
+    expect(resolveThreadProviderInstanceIds(projection)).toEqual([codex, claude, cursor]);
+    expect(resolveThreadProviderInstanceIds(projection, cursor)).toEqual([cursor, claude]);
   });
 });

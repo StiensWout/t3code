@@ -126,13 +126,23 @@ const mergeProviderModels = (
 export const mergeProviderSnapshot = (
   previousProvider: ServerProvider | undefined,
   nextProvider: ServerProvider,
-): ServerProvider =>
-  !previousProvider
-    ? nextProvider
-    : {
-        ...nextProvider,
-        models: mergeProviderModels(nextProvider, previousProvider.models, nextProvider.models),
-      };
+): ServerProvider => {
+  if (!previousProvider) return nextProvider;
+
+  const previousUsage = previousProvider.usageLimits;
+  const nextUsage = nextProvider.usageLimits;
+  const usageLimits =
+    nextUsage?.status === "unavailable" &&
+    (previousUsage?.status === "available" || previousUsage?.status === "stale")
+      ? { ...previousUsage, status: "stale" as const }
+      : nextUsage;
+
+  return {
+    ...nextProvider,
+    models: mergeProviderModels(nextProvider, previousProvider.models, nextProvider.models),
+    ...(usageLimits ? { usageLimits } : {}),
+  };
+};
 
 export const mergeProviderSnapshots = (
   previousProviders: ReadonlyArray<ServerProvider>,

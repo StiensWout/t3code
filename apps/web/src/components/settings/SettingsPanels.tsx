@@ -498,6 +498,9 @@ export function useSettingsRestore(onRestored?: () => void) {
         ? ["Auto-settle merged threads"]
         : []),
       ...(settings.wordWrap !== DEFAULT_UNIFIED_SETTINGS.wordWrap ? ["Word wrap"] : []),
+      ...(settings.showProviderUsage !== DEFAULT_UNIFIED_SETTINGS.showProviderUsage
+        ? ["Provider usage"]
+        : []),
       ...getChangedTypographySettingLabels(settings),
       ...(settings.diffIgnoreWhitespace !== DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace
         ? ["Diff whitespace changes"]
@@ -563,6 +566,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.glassOpacity,
       settings.enableLegacyTokenStreaming,
       settings.persistComposerContextStrip,
+      settings.showProviderUsage,
       settings.enableProviderUpdateChecks,
       settings.sidebarAutoSettleAfterDays,
       settings.sidebarAutoSettleOnMerge,
@@ -642,6 +646,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,
       wordWrap: DEFAULT_UNIFIED_SETTINGS.wordWrap,
       persistComposerContextStrip: DEFAULT_UNIFIED_SETTINGS.persistComposerContextStrip,
+      showProviderUsage: DEFAULT_UNIFIED_SETTINGS.showProviderUsage,
       diffIgnoreWhitespace: DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace,
       environmentIdentificationMode: DEFAULT_UNIFIED_SETTINGS.environmentIdentificationMode,
       glassOpacity: DEFAULT_UNIFIED_SETTINGS.glassOpacity,
@@ -1144,6 +1149,30 @@ export function AppearanceSettingsPanel() {
                 updateSettings({ persistComposerContextStrip: Boolean(checked) })
               }
               aria-label="Keep composer context visible in active threads"
+            />
+          }
+        />
+
+        <SettingsRow
+          {...searchableSetting("provider-usage")}
+          description="Show subscription limits in the thread details panel."
+          resetAction={
+            settings.showProviderUsage !== DEFAULT_UNIFIED_SETTINGS.showProviderUsage ? (
+              <SettingResetButton
+                label="provider usage"
+                onClick={() =>
+                  updateSettings({
+                    showProviderUsage: DEFAULT_UNIFIED_SETTINGS.showProviderUsage,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.showProviderUsage}
+              onCheckedChange={(checked) => updateSettings({ showProviderUsage: Boolean(checked) })}
+              aria-label="Show provider usage in thread details"
             />
           }
         />

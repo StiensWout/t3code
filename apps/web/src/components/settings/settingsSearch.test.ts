@@ -88,6 +88,10 @@ describe("searchSettings", () => {
       id: "composer-context",
       to: "/settings/appearance",
     });
+    expect(searchSettings("provider usage")[0]).toMatchObject({
+      id: "provider-usage",
+      to: "/settings/appearance",
+    });
     expect(searchSettings("environment identification")[0]).toMatchObject({
       id: "environment-identification",
       to: "/settings/appearance",
