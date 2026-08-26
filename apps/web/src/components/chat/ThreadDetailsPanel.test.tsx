@@ -201,6 +201,23 @@ describe("ThreadDetailsPanel", () => {
     expect(markup.indexOf("Claude Work")).toBeLessThan(markup.indexOf("Codex"));
   });
 
+  it("disambiguates multiple instances of the same provider", () => {
+    testState.useT3ProjectFileScripts.mockReturnValue([]);
+    const personalCodex = makeProvider("codex-personal", "Codex");
+
+    const markup = renderToStaticMarkup(
+      <ThreadDetailsPanel
+        {...makeProps({
+          providers: [codexProvider, personalCodex],
+          providerInstanceIds: [codexProvider.instanceId, personalCodex.instanceId],
+        })}
+      />,
+    );
+
+    expect(markup).toContain('aria-label="Show Codex provider limits"');
+    expect(markup).toContain('aria-label="Show Codex Personal provider limits"');
+  });
+
   it("hides unsupported limits and unavailable historical providers", () => {
     testState.useT3ProjectFileScripts.mockReturnValue([]);
     const unsupported = makeProvider("codex", "Codex", {

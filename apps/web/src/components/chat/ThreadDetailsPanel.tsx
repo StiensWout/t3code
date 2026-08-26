@@ -15,6 +15,11 @@ import { useRef, useState } from "react";
 
 import type { DraftId } from "../../composerDraftStore";
 import { useT3ProjectFileScripts } from "../../hooks/useT3ProjectFileScripts";
+import {
+  deriveProviderInstanceEntries,
+  type ProviderInstanceEntry,
+  shouldShowInstanceBadge,
+} from "../../providerInstances";
 import type { EnvMode, EnvironmentOption } from "../BranchToolbar.logic";
 import { BranchToolbar } from "../BranchToolbar";
 import { BranchToolbarEnvironmentSelector } from "../BranchToolbarEnvironmentSelector";
@@ -52,7 +57,7 @@ function formatLimitReset(resetsAt: string | null): string | null {
   if (resetsAt === null) return null;
   const remaining = formatRelativeTimeUntilLabel(resetsAt);
   if (!remaining) return null;
-  if (remaining === "Expired") return "resets soon";
+  if (remaining === "Expired" || remaining === "Soon") return "resets soon";
   return `resets in ${remaining.replace(/ left$/, "")}`;
 }
 
@@ -99,15 +104,18 @@ function usageSummary(usageLimits: ProviderUsageLimits): string {
 }
 
 function ProviderLimitRow({
-  provider,
+  providerEntry,
+  showInstanceBadge,
   usageLimits,
 }: {
-  provider: ServerProvider;
+  providerEntry: ProviderInstanceEntry;
+  showInstanceBadge: boolean;
   usageLimits: ProviderUsageLimits;
 }) {
   const [open, setOpen] = useState(false);
   const anchorRef = useRef<HTMLDivElement | null>(null);
-  const displayName = provider.displayName ?? String(provider.driver);
+  const provider = providerEntry.snapshot;
+  const displayName = providerEntry.displayName;
   const staleAge = usageLimits.observedAt ? formatElapsedDurationLabel(usageLimits.observedAt) : "";
 
   return (
@@ -127,9 +135,11 @@ function ProviderLimitRow({
         variant="ghost"
       >
         <ProviderInstanceIcon
+          accentColor={providerEntry.accentColor}
           displayName={displayName}
           driverKind={provider.driver}
           iconClassName={THREAD_DETAILS_PANEL_ICON_CLASS}
+          showBadge={showInstanceBadge}
         />
         <span className="ml-0.5 min-w-0 truncate">{displayName}</span>
         {usageLimits.planLabel ? (
@@ -201,19 +211,20 @@ function ProviderUsageSection({
 }) {
   if (!show) return null;
 
-  const providersById = new Map(providers.map((provider) => [provider.instanceId, provider]));
+  const providerEntries = deriveProviderInstanceEntries(providers);
+  const providersById = new Map(providerEntries.map((entry) => [entry.instanceId, entry]));
   const relevantProviders = providerInstanceIds.flatMap((providerInstanceId, index) => {
-    const provider = providersById.get(providerInstanceId);
-    const usageLimits = provider?.usageLimits;
+    const providerEntry = providersById.get(providerInstanceId);
+    const usageLimits = providerEntry?.snapshot.usageLimits;
     if (
-      !provider ||
+      !providerEntry ||
       !usageLimits ||
       usageLimits.status === "unsupported" ||
       (index > 0 && usageLimits.status === "unavailable")
     ) {
       return [];
     }
-    return [{ provider, usageLimits }];
+    return [{ providerEntry, usageLimits }];
   });
 
   if (relevantProviders.length === 0) return null;
@@ -229,10 +240,11 @@ function ProviderUsageSection({
         </h3>
       </div>
       <div aria-label="Provider limits" className="flex flex-col px-2 pb-2.5">
-        {relevantProviders.map(({ provider, usageLimits }) => (
+        {relevantProviders.map(({ providerEntry, usageLimits }) => (
           <ProviderLimitRow
-            key={provider.instanceId}
-            provider={provider}
+            key={providerEntry.instanceId}
+            providerEntry={providerEntry}
+            showInstanceBadge={shouldShowInstanceBadge(providerEntry, providerEntries)}
             usageLimits={usageLimits}
           />
         ))}
