@@ -11,6 +11,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   type ProviderSessionId,
+  type ServerSettingsError,
   ThreadId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -339,7 +340,10 @@ function makeTestLayer(input: {
   readonly failReleaseEventWrites?: boolean;
   readonly hasPendingBackgroundWork?: Effect.Effect<boolean>;
   readonly hangSessionScopeClose?: boolean;
-  readonly serverSettingsLayer?: Layer.Layer<ServerSettings.ServerSettingsService>;
+  readonly serverSettingsLayer?: Layer.Layer<
+    ServerSettings.ServerSettingsService,
+    ServerSettingsError
+  >;
 }) {
   const configuredEventSinkLayer = input.failReleaseEventWrites
     ? FailingReleaseEventSinkLayer
