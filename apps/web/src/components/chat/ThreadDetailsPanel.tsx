@@ -167,6 +167,7 @@ function ProviderLimitRow({
           align="end"
           anchor={anchorRef}
           className={THREAD_DETAILS_PANEL_ROW_POPUP_CLASS}
+          positionerClassName="w-(--anchor-width)"
           viewportClassName="p-0"
         >
           <div className="grid gap-3 p-2">
