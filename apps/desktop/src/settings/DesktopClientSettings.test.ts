@@ -37,6 +37,7 @@ const clientSettings: ClientSettings = {
   planModeEnabled: false,
   persistComposerContextStrip: true,
   providerModelPreferences: {},
+  showProviderUsage: true,
   sidebarAutoSettleAfterDays: 3,
   sidebarAutoSettleOnMerge: true,
   sidebarProjectGroupingMode: "repository_path",
