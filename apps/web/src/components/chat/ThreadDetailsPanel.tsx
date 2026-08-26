@@ -24,7 +24,7 @@ import ProjectScriptsControl, {
   type ProjectScriptActionResult,
 } from "../ProjectScriptsControl";
 import { Button } from "../ui/button";
-import { Menu, MenuPopup, MenuTrigger } from "../ui/menu";
+import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { ScrollArea } from "../ui/scroll-area";
 import { cn } from "../../lib/utils";
 import { formatElapsedDurationLabel, formatRelativeTimeUntilLabel } from "../../timestampFormat";
@@ -74,11 +74,11 @@ function LimitBar({ window }: { window: ProviderUsageLimitWindow }) {
         aria-valuemax={100}
         aria-valuemin={0}
         aria-valuenow={window.remainingPercent}
-        className="h-1.5 overflow-hidden bg-muted/60"
+        className="h-1.5 w-full overflow-hidden rounded-full bg-muted/60"
         role="progressbar"
       >
         <div
-          className={cn("h-full", meterColor)}
+          className={cn("h-full rounded-full", meterColor)}
           style={{ width: `${window.remainingPercent}%` }}
         />
       </div>
@@ -119,10 +119,9 @@ function ProviderLimitRow({
     >
       <Button
         aria-expanded={open}
-        aria-haspopup="menu"
         aria-label={`Show ${displayName} provider limits`}
         className={THREAD_DETAILS_PANEL_SPLIT_PRIMARY_CLASS}
-        onClick={() => setOpen((current) => !current)}
+        onClick={() => setOpen(true)}
         size="sm"
         type="button"
         variant="ghost"
@@ -150,8 +149,8 @@ function ProviderLimitRow({
         </span>
       </Button>
       <span aria-hidden="true" className={THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS} />
-      <Menu highlightItemOnHover={false} onOpenChange={setOpen} open={open}>
-        <MenuTrigger
+      <Popover onOpenChange={setOpen} open={open}>
+        <PopoverTrigger
           render={
             <Button
               aria-label={`Show ${displayName} provider limit details`}
@@ -163,8 +162,13 @@ function ProviderLimitRow({
           }
         >
           <ChevronDownIcon aria-hidden className={THREAD_DETAILS_PANEL_CHEVRON_CLASS} />
-        </MenuTrigger>
-        <MenuPopup align="end" anchor={anchorRef} className={THREAD_DETAILS_PANEL_ROW_POPUP_CLASS}>
+        </PopoverTrigger>
+        <PopoverPopup
+          align="end"
+          anchor={anchorRef}
+          className={THREAD_DETAILS_PANEL_ROW_POPUP_CLASS}
+          viewportClassName="p-0"
+        >
           <div className="grid gap-3 p-2">
             {usageLimits.windows.length > 0 ? (
               usageLimits.windows.map((window) => <LimitBar key={window.id} window={window} />)
@@ -179,8 +183,8 @@ function ProviderLimitRow({
               </span>
             ) : null}
           </div>
-        </MenuPopup>
-      </Menu>
+        </PopoverPopup>
+      </Popover>
     </div>
   );
 }
