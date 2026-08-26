@@ -4406,14 +4406,24 @@ function ChatViewContent(props: ChatViewProps) {
     linkedPullRequest: linkedThreadPullRequest,
     linkedPullRequestStatus,
   });
-  // The right panel offers the thread's own change request, so it can only offer it once the
-  // branch has one; until then the picker says so rather than opening an empty panel.
+  // The right panel offers the thread's own change request, else the checkout's: the same one
+  // the git menu's "View PR" opens in this panel. A shared checkout keeps the recorded thread
+  // branch strict (#4460), so an agent that branches and opens a PR mid-thread leaves the thread
+  // without one while the checkout has it. Without either the picker says so rather than
+  // opening an empty panel.
+  const checkoutPr = gitStatusQuery.data?.pr ?? null;
   const addPullRequestSurface = useCallback(() => {
-    if (activeThreadPr === null) return;
-    openThreadPullRequest(activeThreadPr.number);
-  }, [activeThreadPr, openThreadPullRequest]);
+    if (activeThreadPr !== null) {
+      openThreadPullRequest(activeThreadPr.number);
+    } else if (checkoutPr !== null) {
+      openProjectPullRequest(checkoutPr.number);
+    }
+  }, [activeThreadPr, checkoutPr, openProjectPullRequest, openThreadPullRequest]);
   const pullRequestSurfaceAvailable =
-    supportsPullRequests && activeThreadPr !== null && threadRepository !== null;
+    supportsPullRequests &&
+    (activeThreadPr !== null
+      ? threadRepository !== null
+      : checkoutPr !== null && activeProjectRepository !== null);
   // Primitive slice of the displayed PR for the settle-rule memos below:
   // resolveDisplayedThreadPr returns a fresh object every render, so memoize
   // on the fields the rules read instead of the object identity.

@@ -99,7 +99,7 @@ const SURFACE_DISABLED_REASONS = {
   terminal: "Terminal surfaces are only available from a project thread.",
   files: "Files are only available when a project is open.",
   diff: "Diff is only available for server threads in Git repositories.",
-  pullRequest: "This thread's branch has no pull request yet.",
+  pullRequest: "This branch has no pull request yet.",
   agents: "Agents are only available from a thread.",
 } as const;
 
