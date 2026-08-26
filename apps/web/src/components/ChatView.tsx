@@ -4406,12 +4406,12 @@ function ChatViewContent(props: ChatViewProps) {
     linkedPullRequest: linkedThreadPullRequest,
     linkedPullRequestStatus,
   });
-  // The right panel offers the thread's own change request, else the checkout's: the same one
-  // the git menu's "View PR" opens in this panel. A shared checkout keeps the recorded thread
-  // branch strict (#4460), so an agent that branches and opens a PR mid-thread leaves the thread
-  // without one while the checkout has it. Without either the picker says so rather than
+  // The right panel offers the thread's own change request, else the checkout's open one: the
+  // same one the git menu's "View PR" opens in this panel. A shared checkout keeps the recorded
+  // thread branch strict (#4460), so an agent that branches and opens a PR mid-thread leaves the
+  // thread without one while the checkout has it. Without either the picker says so rather than
   // opening an empty panel.
-  const checkoutPr = gitStatusQuery.data?.pr ?? null;
+  const checkoutPr = gitStatusQuery.data?.pr?.state === "open" ? gitStatusQuery.data.pr : null;
   const addPullRequestSurface = useCallback(() => {
     if (activeThreadPr !== null) {
       openThreadPullRequest(activeThreadPr.number);
