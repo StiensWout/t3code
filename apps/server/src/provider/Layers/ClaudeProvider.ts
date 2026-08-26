@@ -861,7 +861,7 @@ const probeClaudeCapabilities = (
         if (!abort.signal.aborted) abort.abort();
       }),
     ),
-    Effect.timeoutOption(CAPABILITIES_PROBE_TIMEOUT_MS),
+    Effect.timeoutOption(CAPABILITIES_PROBE_TIMEOUT_MS + USAGE_PROBE_TIMEOUT_MS),
     Effect.result,
     Effect.map((result) => {
       if (Result.isFailure(result)) return undefined;

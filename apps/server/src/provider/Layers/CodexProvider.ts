@@ -38,6 +38,7 @@ import packageJson from "../../../package.json" with { type: "json" };
 const isCodexAppServerSpawnError = Schema.is(CodexErrors.CodexAppServerSpawnError);
 
 const CODEX_APP_SERVER_PROBE_FORCE_KILL_AFTER = "2 seconds" as const;
+const USAGE_PROBE_TIMEOUT_MS = 4_000;
 
 const CODEX_PRESENTATION = {
   displayName: "Codex",
@@ -384,8 +385,10 @@ const readCodexUsageLimits = Effect.fn("readCodexUsageLimits")(function* (
   }
 
   const observedAt = DateTime.formatIso(yield* DateTime.now);
-  const result = yield* client.request("account/rateLimits/read", undefined).pipe(Effect.result);
-  if (Result.isFailure(result)) {
+  const result = yield* client
+    .request("account/rateLimits/read", undefined)
+    .pipe(Effect.timeoutOption(Duration.millis(USAGE_PROBE_TIMEOUT_MS)), Effect.result);
+  if (Result.isFailure(result) || Option.isNone(result.success)) {
     return {
       status: "unavailable",
       planLabel: codexPlanLabel(account.planType),
@@ -393,7 +396,7 @@ const readCodexUsageLimits = Effect.fn("readCodexUsageLimits")(function* (
       windows: [],
     } satisfies ProviderUsageLimits;
   }
-  return mapCodexUsageLimits(result.success, observedAt);
+  return mapCodexUsageLimits(result.success.value, observedAt);
 });
 
 export function buildCodexInitializeParams(): CodexSchema.V1InitializeParams {
@@ -646,7 +649,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
     environment: resolvedEnvironment,
   }).pipe(
     Effect.scoped,
-    Effect.timeoutOption(Duration.millis(AUTH_PROBE_TIMEOUT_MS)),
+    Effect.timeoutOption(Duration.millis(AUTH_PROBE_TIMEOUT_MS + USAGE_PROBE_TIMEOUT_MS)),
     Effect.result,
   );
 

@@ -515,7 +515,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           );
 
           yield* Effect.yieldNow;
-          yield* TestClock.adjust("11 seconds");
+          yield* TestClock.adjust("15 seconds");
           yield* Effect.yieldNow;
 
           const status = yield* Fiber.join(statusFiber);
@@ -646,6 +646,44 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             ...previousProvider.usageLimits,
             status: "stale",
           },
+        );
+      });
+
+      it("clears the previous account usage snapshot after logout", () => {
+        const previousProvider = {
+          instanceId: ProviderInstanceId.make("codex"),
+          driver: ProviderDriverKind.make("codex"),
+          status: "ready",
+          enabled: true,
+          installed: true,
+          auth: { status: "authenticated" },
+          checkedAt: "2026-08-26T10:00:00.000Z",
+          version: "1.0.0",
+          models: [],
+          slashCommands: [],
+          skills: [],
+          usageLimits: {
+            status: "available",
+            planLabel: "ChatGPT Plus",
+            observedAt: "2026-08-26T10:00:00.000Z",
+            windows: [],
+          },
+        } as const satisfies ServerProvider;
+        const loggedOutProvider = {
+          ...previousProvider,
+          status: "error",
+          auth: { status: "unauthenticated" },
+          checkedAt: "2026-08-26T10:05:00.000Z",
+          usageLimits: {
+            status: "unavailable",
+            observedAt: "2026-08-26T10:05:00.000Z",
+            windows: [],
+          },
+        } as const satisfies ServerProvider;
+
+        assert.deepStrictEqual(
+          mergeProviderSnapshot(previousProvider, loggedOutProvider).usageLimits,
+          loggedOutProvider.usageLimits,
         );
       });
 
