@@ -131,9 +131,14 @@ export const mergeProviderSnapshot = (
 
   const previousUsage = previousProvider.usageLimits;
   const nextUsage = nextProvider.usageLimits;
+  const hasSameAuthenticatedAccount =
+    previousProvider.auth.status === "authenticated" &&
+    nextProvider.auth.status === "authenticated" &&
+    previousProvider.auth.email !== undefined &&
+    previousProvider.auth.email === nextProvider.auth.email;
   const usageLimits =
     nextUsage?.status === "unavailable" &&
-    nextProvider.auth.status === "authenticated" &&
+    hasSameAuthenticatedAccount &&
     (previousUsage?.status === "available" || previousUsage?.status === "stale")
       ? { ...previousUsage, status: "stale" as const }
       : nextUsage;

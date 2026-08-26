@@ -610,7 +610,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           status: "ready",
           enabled: true,
           installed: true,
-          auth: { status: "authenticated" },
+          auth: { status: "authenticated", email: "previous@example.com" },
           checkedAt: "2026-08-26T10:00:00.000Z",
           version: "1.0.0",
           models: [],
@@ -656,7 +656,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           status: "ready",
           enabled: true,
           installed: true,
-          auth: { status: "authenticated" },
+          auth: { status: "authenticated", email: "previous@example.com" },
           checkedAt: "2026-08-26T10:00:00.000Z",
           version: "1.0.0",
           models: [],
@@ -684,6 +684,43 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
         assert.deepStrictEqual(
           mergeProviderSnapshot(previousProvider, loggedOutProvider).usageLimits,
           loggedOutProvider.usageLimits,
+        );
+      });
+
+      it("clears the previous account usage snapshot after an authenticated account switch", () => {
+        const previousProvider = {
+          instanceId: ProviderInstanceId.make("codex"),
+          driver: ProviderDriverKind.make("codex"),
+          status: "ready",
+          enabled: true,
+          installed: true,
+          auth: { status: "authenticated", email: "previous@example.com" },
+          checkedAt: "2026-08-26T10:00:00.000Z",
+          version: "1.0.0",
+          models: [],
+          slashCommands: [],
+          skills: [],
+          usageLimits: {
+            status: "available",
+            planLabel: "ChatGPT Plus",
+            observedAt: "2026-08-26T10:00:00.000Z",
+            windows: [],
+          },
+        } as const satisfies ServerProvider;
+        const switchedProvider = {
+          ...previousProvider,
+          auth: { status: "authenticated", email: "next@example.com" },
+          checkedAt: "2026-08-26T10:05:00.000Z",
+          usageLimits: {
+            status: "unavailable",
+            observedAt: "2026-08-26T10:05:00.000Z",
+            windows: [],
+          },
+        } as const satisfies ServerProvider;
+
+        assert.deepStrictEqual(
+          mergeProviderSnapshot(previousProvider, switchedProvider).usageLimits,
+          switchedProvider.usageLimits,
         );
       });
 

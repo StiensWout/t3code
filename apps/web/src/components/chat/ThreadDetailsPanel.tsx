@@ -239,7 +239,7 @@ function ProviderUsageSection({
           Usage
         </h3>
       </div>
-      <div aria-label="Provider limits" className="flex flex-col px-2 pb-2.5">
+      <div aria-label="Provider limits" className="flex flex-col px-2 pb-2.5" role="group">
         {relevantProviders.map(({ providerEntry, usageLimits }) => (
           <ProviderLimitRow
             key={providerEntry.instanceId}
