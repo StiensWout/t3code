@@ -136,9 +136,11 @@ function ProviderLimitRow({
       >
         <ProviderInstanceIcon
           accentColor={providerEntry.accentColor}
+          badgeClassName="right-[-0.125rem] bottom-[-0.125rem] h-3 min-w-3 px-0.5 text-[7px]"
           displayName={displayName}
           driverKind={provider.driver}
           iconClassName={THREAD_DETAILS_PANEL_ICON_CLASS}
+          indicatorBackground="var(--popover)"
           showBadge={showInstanceBadge}
         />
         <span className="ml-0.5 min-w-0 truncate">{displayName}</span>
