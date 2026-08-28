@@ -189,7 +189,7 @@ it.effect("rechecks unpublished commits immediately before pruning a worktree", 
       statusDetailsLocal: (cwd) => {
         if (cwd !== worktreePath) return driver.statusDetailsLocal(cwd);
         worktreeStatusChecks += 1;
-        if (worktreeStatusChecks !== 2) return driver.statusDetailsLocal(cwd);
+        if (worktreeStatusChecks !== 1) return driver.statusDetailsLocal(cwd);
         return Effect.gen(function* () {
           yield* driver.execute({
             operation: "WorktreeServicePruneRaceTest.lateCommit",
@@ -211,7 +211,7 @@ it.effect("rechecks unpublished commits immediately before pruning a worktree", 
       return yield* service.pruneWorktrees({ paths: [worktreePath] });
     }).pipe(Effect.provide(layer));
 
-    assert.equal(worktreeStatusChecks, 2);
+    assert.equal(worktreeStatusChecks, 1);
     assert.deepEqual(result.removed, []);
     assert.deepEqual(result.skipped, [{ path: worktreePath, reason: "unpushed" }]);
     assert.isTrue(yield* fs.exists(worktreePath));
@@ -415,5 +415,69 @@ it.effect("fails inventory when a repository worktree listing fails", () =>
     assert.equal(error.stage, "inspect_repository");
     assert.equal(error.workspaceRoot, workspaceRoot);
     assert.equal(error.message, "Failed to inspect a repository for the worktree inventory.");
+  }).pipe(Effect.provide(Layer.mergeAll(serverConfigLiveLayer, NodeServices.layer, gitLayer))),
+);
+
+it.effect("treats a detached worktree as safe only once its commit is on the default ref", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const config = yield* ServerConfig.ServerConfig;
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+
+    const repositoryRoot = yield* fs.makeTempDirectoryScoped({
+      prefix: "t3-worktree-v2-detached-repo-",
+    });
+    const run = (operation: string, cwd: string, args: ReadonlyArray<string>) =>
+      driver.execute({ operation: `WorktreeServiceDetachedTest.${operation}`, cwd, args });
+    yield* run("init", repositoryRoot, ["init", "-b", "main"]);
+    yield* run("userEmail", repositoryRoot, ["config", "user.email", "test@example.com"]);
+    yield* run("userName", repositoryRoot, ["config", "user.name", "T3 Test"]);
+    yield* fs.writeFileString(path.join(repositoryRoot, "README.md"), "hello\n");
+    yield* run("add", repositoryRoot, ["add", "README.md"]);
+    yield* run("commit", repositoryRoot, ["commit", "-m", "initial"]);
+
+    const mergedPath = path.join(config.worktreesDir, "detached", "merged");
+    const aheadPath = path.join(config.worktreesDir, "detached", "ahead");
+    yield* run("addMerged", repositoryRoot, ["worktree", "add", "--detach", mergedPath, "main"]);
+    yield* run("addAhead", repositoryRoot, ["worktree", "add", "--detach", aheadPath, "main"]);
+    yield* run("aheadCommit", aheadPath, ["commit", "--allow-empty", "-m", "detached work"]);
+
+    const mergedRealPath = yield* fs.realPath(mergedPath);
+
+    const aheadRealPath = yield* fs.realPath(aheadPath);
+
+    const layer = makeTestLayer(
+      () => [makeProject(projectA, repositoryRoot)],
+      () => [],
+    );
+    const { inventory, pruned } = yield* Effect.gen(function* () {
+      const service = yield* WorktreeService;
+      const inventory = yield* service.listWorktrees({});
+      const pruned = yield* service.pruneWorktrees({ paths: [mergedPath, aheadPath] });
+      return { inventory, pruned };
+    }).pipe(Effect.provide(layer));
+
+    const byPath = new Map(inventory.worktrees.map((worktree) => [worktree.path, worktree]));
+    const merged = byPath.get(mergedRealPath);
+    const ahead = byPath.get(aheadRealPath);
+    assert.isDefined(merged);
+    assert.isDefined(ahead);
+    assert.isNull(merged.branch);
+    assert.isTrue(merged.safeToPrune);
+    assert.deepEqual(merged.pruneBlockers, []);
+    assert.equal(ahead.aheadOfDefaultCount, 1);
+    assert.deepEqual(ahead.pruneBlockers, ["unpushed"]);
+
+    assert.deepEqual(
+      pruned.removed.map((entry) => entry.path),
+      [mergedRealPath],
+    );
+    assert.deepEqual(
+      pruned.skipped.map((entry) => ({ path: entry.path, reason: entry.reason })),
+      [{ path: aheadRealPath, reason: "unpushed" }],
+    );
+    assert.isFalse(yield* fs.exists(mergedPath));
+    assert.isTrue(yield* fs.exists(aheadPath));
   }).pipe(Effect.provide(Layer.mergeAll(serverConfigLiveLayer, NodeServices.layer, gitLayer))),
 );

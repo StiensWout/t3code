@@ -202,15 +202,18 @@ export const make = Effect.gen(function* () {
     return null;
   });
 
+  /** Commits on `revision` that the default ref does not have. A branch passes
+      its ref from the repository root; a detached worktree passes HEAD from its
+      own path. */
   const countAheadOfDefault = Effect.fn("WorktreeService.countAheadOfDefault")(function* (
     cwd: string,
-    branch: string,
+    revision: string,
     defaultRef: string,
   ) {
     const stdout = yield* executeLenient("WorktreeService.countAheadOfDefault", cwd, [
       "rev-list",
       "--count",
-      `refs/heads/${branch}`,
+      revision,
       "--not",
       defaultRef,
     ]);
@@ -223,11 +226,19 @@ export const make = Effect.gen(function* () {
     worktree: WorktreeInfo,
   ): Effect.fn.Return<WorktreePruneSkipReason | null, GitCommandError> {
     const status = yield* git.statusDetailsLocal(worktree.path);
-    if (!status.isRepo || status.branch === null || status.branch !== worktree.branch) {
+    if (!status.isRepo || status.branch !== worktree.branch) {
       return "status_unavailable";
     }
     if (status.hasWorkingTreeChanges) {
       return "dirty";
+    }
+    if (status.branch === null) {
+      // Detached HEAD: safe once its commit is already on the default ref.
+      const defaultRef = yield* resolveDefaultRef(worktree.workspaceRoot);
+      if (defaultRef === null) return "status_unavailable";
+      const aheadOfDefaultCount = yield* countAheadOfDefault(worktree.path, "HEAD", defaultRef);
+      if (aheadOfDefaultCount === null) return "status_unavailable";
+      return aheadOfDefaultCount > 0 ? "unpushed" : null;
     }
 
     const branchSyncStdout = yield* executeLenient(
@@ -260,7 +271,7 @@ export const make = Effect.gen(function* () {
     }
     const aheadOfDefaultCount = yield* countAheadOfDefault(
       worktree.workspaceRoot,
-      status.branch,
+      `refs/heads/${status.branch}`,
       defaultRef,
     );
     if (aheadOfDefaultCount === null) {
@@ -268,6 +279,39 @@ export const make = Effect.gen(function* () {
     }
     return aheadOfDefaultCount > 0 ? "unpushed" : null;
   });
+
+  /** Working-tree change count from one `git status` call; null when status
+      cannot be read. The inventory does not need the diffs and remote lookups
+      that statusDetails also performs, and they dominate its cost. */
+  const readWorkingTreeChanges = Effect.fn("WorktreeService.readWorkingTreeChanges")(
+    function* (worktreePath: string) {
+      const stdout = yield* executeLenient("WorktreeService.readWorkingTreeChanges", worktreePath, [
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=normal",
+      ]);
+      if (stdout === null) return { dirty: null, dirtyFileCount: null };
+      const tokens = stdout.split("\0");
+      let count = 0;
+      for (let index = 0; index < tokens.length; index += 1) {
+        const token = tokens[index];
+        if (token === undefined || token.length === 0) continue;
+        count += 1;
+        // Renames and copies carry the original path as the following token.
+        if (token[0] === "R" || token[0] === "C" || token[1] === "R" || token[1] === "C") {
+          index += 1;
+        }
+      }
+      return { dirty: count > 0, dirtyFileCount: count };
+    },
+    Effect.catchCause((cause) =>
+      Effect.gen(function* () {
+        yield* Effect.logWarning("worktrees.inventory.status-failed", { cause });
+        return { dirty: null, dirtyFileCount: null };
+      }),
+    ),
+  );
 
   const worktreeMtime = (worktreePath: string) =>
     fs.stat(worktreePath).pipe(
@@ -287,17 +331,30 @@ export const make = Effect.gen(function* () {
     const primaryProject = group.projects[0];
     if (primaryProject === undefined) return [] as WorktreeInfo[];
 
-    const entries = yield* git.listWorkspaces(group.canonicalWorkspaceRoot).pipe(
-      Effect.flatMap((rawEntries) =>
-        Effect.forEach(rawEntries, (entry) =>
-          canonicalizePath(entry.path).pipe(
-            Effect.map((canonicalPath) => ({ ...entry, path: canonicalPath })),
+    // The workspace listing, branch sync counters, and default ref only need
+    // the group root, so they run together instead of as three spawn rounds.
+    const [entries, branchSyncStdout, defaultRef] = yield* Effect.all(
+      [
+        git.listWorkspaces(group.canonicalWorkspaceRoot).pipe(
+          Effect.flatMap((rawEntries) =>
+            Effect.forEach(rawEntries, (entry) =>
+              canonicalizePath(entry.path).pipe(
+                Effect.map((canonicalPath) => ({ ...entry, path: canonicalPath })),
+              ),
+            ),
+          ),
+          Effect.map((rawEntries) =>
+            rawEntries.filter((entry) => isPathInside(managedWorktreesRoot, entry.path, path)),
           ),
         ),
-      ),
-      Effect.map((rawEntries) =>
-        rawEntries.filter((entry) => isPathInside(managedWorktreesRoot, entry.path, path)),
-      ),
+        executeLenient("WorktreeService.listGroup.branchSync", group.canonicalWorkspaceRoot, [
+          "for-each-ref",
+          "refs/heads",
+          "--format=%(refname:short)%09%(upstream:short)%09%(upstream:track,nobracket)",
+        ]),
+        resolveDefaultRef(group.canonicalWorkspaceRoot),
+      ],
+      { concurrency: 3 },
     );
     if (entries.length === 0) return [] as WorktreeInfo[];
 
@@ -314,17 +371,6 @@ export const make = Effect.gen(function* () {
       }
     }
 
-    const [branchSyncStdout, defaultRef] = yield* Effect.all(
-      [
-        executeLenient("WorktreeService.listGroup.branchSync", group.canonicalWorkspaceRoot, [
-          "for-each-ref",
-          "refs/heads",
-          "--format=%(refname:short)%09%(upstream:short)%09%(upstream:track,nobracket)",
-        ]),
-        resolveDefaultRef(group.canonicalWorkspaceRoot),
-      ],
-      { concurrency: 2 },
-    );
     const branchSyncUnavailable = branchSyncStdout === null;
     const branchSync = parseBranchSyncInfo(branchSyncStdout ?? "");
 
@@ -350,22 +396,6 @@ export const make = Effect.gen(function* () {
             ) ??
             (yield* worktreeMtime(entry.path));
 
-          const status = yield* git.statusDetailsLocal(entry.path).pipe(
-            Effect.map((value) => ({
-              dirty: value.hasWorkingTreeChanges as boolean | null,
-              dirtyFileCount: value.workingTree.files.length as number | null,
-            })),
-            Effect.catchCause((cause) =>
-              Effect.gen(function* () {
-                yield* Effect.logWarning("worktrees.inventory.status-failed", {
-                  worktreePath: entry.path,
-                  cause,
-                });
-                return { dirty: null, dirtyFileCount: null };
-              }),
-            ),
-          );
-
           const sync = entry.refName === null ? undefined : branchSync.get(entry.refName);
           const upstreamUnavailable =
             branchSyncUnavailable || (entry.refName !== null && sync === undefined);
@@ -375,10 +405,22 @@ export const make = Effect.gen(function* () {
           const upstreamGone = sync?.upstreamGone ?? false;
           const aheadOfUpstreamCount = sync?.aheadOfUpstreamCount ?? null;
           const behindUpstreamCount = sync?.behindUpstreamCount ?? null;
-          const aheadOfDefaultCount =
-            entry.refName !== null && defaultRef !== null
-              ? yield* countAheadOfDefault(group.canonicalWorkspaceRoot, entry.refName, defaultRef)
-              : null;
+
+          const [status, aheadOfDefaultCount] = yield* Effect.all(
+            [
+              readWorkingTreeChanges(entry.path),
+              defaultRef === null
+                ? Effect.succeed(null)
+                : entry.refName === null
+                  ? countAheadOfDefault(entry.path, "HEAD", defaultRef)
+                  : countAheadOfDefault(
+                      group.canonicalWorkspaceRoot,
+                      `refs/heads/${entry.refName}`,
+                      defaultRef,
+                    ),
+            ],
+            { concurrency: 2 },
+          );
 
           const blockers = new Set<WorktreePruneBlocker>();
           if (threadRefs.some((thread) => thread.status === "active")) {
@@ -389,17 +431,22 @@ export const make = Effect.gen(function* () {
           } else if (status.dirty === null) {
             blockers.add("status_unavailable");
           }
-          if (entry.refName === null || upstreamUnavailable) {
+          if (entry.refName !== null && upstreamUnavailable) {
             blockers.add("status_unavailable");
-          } else if (sync?.upstream !== null && sync !== undefined && !sync.upstreamGone) {
+          } else if (
+            entry.refName !== null &&
+            sync?.upstream !== null &&
+            sync !== undefined &&
+            !sync.upstreamGone
+          ) {
             if (aheadOfUpstreamCount === null) {
               blockers.add("status_unavailable");
             } else if (aheadOfUpstreamCount > 0) {
               blockers.add("unpushed");
             }
           } else if (aheadOfDefaultCount === null) {
-            // A branch with no usable upstream is only safe once its commits
-            // can be compared with the repository's default ref.
+            // A branch with no usable upstream, or a detached HEAD, is only
+            // safe once its commits can be compared with the default ref.
             blockers.add("status_unavailable");
           } else if (aheadOfDefaultCount > 0) {
             blockers.add("unpushed");
