@@ -75,10 +75,11 @@ no unpushed commits. Removing a safe worktree keeps its local branch and T3 chec
 thread needs that worktree again, T3 Code recreates it from the retained branch before starting the
 next turn.
 
-Open **Automatic cleanup** to choose how long inactive safe worktrees are retained. Enable **Clean
-up with last thread** to remove safe worktrees as soon as their final linked thread is deleted.
-Protected worktrees remain listed for you to inspect; T3 Code never automatically removes dirty or
-unpushed worktrees.
+**Auto-remove after** sets how long an unused safe worktree is kept. Enable **Remove with last
+thread** to remove a safe worktree as soon as its last linked thread is deleted instead of waiting
+out that period. Protected worktrees remain listed for you to inspect; T3 Code never automatically
+removes dirty or unpushed worktrees. A detached worktree counts as unpushed until its commit is on
+the default branch.
 
 ## Getting Started
 
