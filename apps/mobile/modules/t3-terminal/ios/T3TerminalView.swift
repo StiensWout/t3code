@@ -611,7 +611,7 @@ public final class T3TerminalView: ExpoView, UITextFieldDelegate {
     while start < bytes.endIndex, bytes[start] & 0xC0 == 0x80 {
       bytes.formIndex(after: &start)
     }
-    pendingRemoteData = String(decoding: bytes[start...], as: UTF8.self)
+    pendingRemoteData = String(bytes: bytes[start...], encoding: .utf8) ?? ""
   }
 
   private func feedData(_ data: Data, redraw: Bool = true) {
