@@ -493,11 +493,13 @@ export function TerminalViewport({
     },
   );
   const terminalVersion = terminalSession.version;
+  const terminalReplayStartVersion = terminalSession.replayStartVersion;
   const terminalReplayCompleteVersion = terminalSession.replayCompleteVersion;
   const previousSessionRef = useRef({
     output: terminalOutput,
     error: terminalError,
     status: terminalStatus,
+    replayStartVersion: terminalReplayStartVersion,
     replayCompleteVersion: terminalReplayCompleteVersion,
     version: terminalVersion,
   });
@@ -506,6 +508,7 @@ export function TerminalViewport({
     output: terminalOutput,
     error: terminalError,
     status: terminalStatus,
+    replayStartVersion: terminalReplayStartVersion,
     replayCompleteVersion: terminalReplayCompleteVersion,
     version: terminalVersion,
   };
@@ -985,6 +988,7 @@ export function TerminalViewport({
       output: terminalOutput,
       error: terminalError,
       status: terminalStatus,
+      replayStartVersion: terminalReplayStartVersion,
       replayCompleteVersion: terminalReplayCompleteVersion,
       version: terminalVersion,
     };
@@ -1001,11 +1005,18 @@ export function TerminalViewport({
 
     const outputUpdate = readTerminalOutputUpdate(current.output, outputCursorRef.current);
     outputCursorRef.current = outputUpdate.cursor;
+    if (
+      replayBytes === EXTENDED_TERMINAL_REPLAY_BYTES &&
+      current.replayStartVersion !== previous.replayStartVersion
+    ) {
+      scrollbackReplayRendererStateRef.current = "waiting";
+    }
     const scrollbackReplayPending =
       pendingScrollbackReplayIdentityRef.current === terminalAttachIdentity;
+    const streamingReplay = scrollbackReplayRendererStateRef.current !== "idle";
     let didWriteOutput = false;
     if (outputUpdate.type === "append") {
-      if (scrollbackReplayPending) {
+      if (streamingReplay) {
         if (scrollbackReplayRendererStateRef.current === "waiting") {
           terminal.beginStreamingReplay(outputUpdate.data);
           scrollbackReplayRendererStateRef.current = "replaying";
@@ -1017,11 +1028,11 @@ export function TerminalViewport({
       }
       didWriteOutput = outputUpdate.data.length > 0;
     } else if (outputUpdate.type === "reset") {
-      if (scrollbackReplayPending && outputUpdate.data.length === 0) {
+      if (streamingReplay && outputUpdate.data.length === 0) {
         // The extended attach begins with an empty snapshot. Keep the current
         // screen visible until its first retained-history chunk arrives.
         scrollbackReplayRendererStateRef.current = "waiting";
-      } else if (scrollbackReplayPending) {
+      } else if (streamingReplay) {
         terminal.beginStreamingReplay(outputUpdate.data);
         scrollbackReplayRendererStateRef.current = "replaying";
         didWriteOutput = true;
@@ -1035,7 +1046,7 @@ export function TerminalViewport({
     if (
       current.replayCompleteVersion > 0 &&
       current.version !== previous.version &&
-      scrollbackReplayPending
+      streamingReplay
     ) {
       if (scrollbackReplayRendererStateRef.current === "waiting") {
         terminal.beginStreamingReplay(terminalOutputText(current.output));
@@ -1043,8 +1054,10 @@ export function TerminalViewport({
       }
       terminal.completeStreamingReplay();
       scrollbackReplayRendererStateRef.current = "idle";
-      pendingScrollbackReplayIdentityRef.current = null;
-      terminal.scrollToTopAfterWrites();
+      if (scrollbackReplayPending) {
+        pendingScrollbackReplayIdentityRef.current = null;
+        terminal.scrollToTopAfterWrites();
+      }
     }
 
     if (current.error !== null && current.error !== previous.error) {
@@ -1062,10 +1075,12 @@ export function TerminalViewport({
     terminalError,
     terminalOutput,
     terminalReplayCompleteVersion,
+    terminalReplayStartVersion,
     terminalStatus,
     terminalAttachIdentity,
     terminalSubscriptionIdentity,
     terminalVersion,
+    replayBytes,
   ]);
 
   useEffect(() => {

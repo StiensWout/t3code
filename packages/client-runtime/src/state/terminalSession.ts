@@ -44,6 +44,7 @@ export interface TerminalSessionState {
   readonly error: string | null;
   readonly hasRunningSubprocess: boolean;
   readonly updatedAt: string | null;
+  readonly replayStartVersion: number;
   readonly replayCompleteVersion: number;
   readonly version: number;
 }
@@ -53,6 +54,7 @@ export interface TerminalBufferState {
   readonly status: TerminalSessionSnapshot["status"] | "closed";
   readonly error: string | null;
   readonly updatedAt: string | null;
+  readonly replayStartVersion: number;
   readonly replayCompleteVersion: number;
   readonly version: number;
 }
@@ -86,6 +88,7 @@ export const EMPTY_TERMINAL_BUFFER_STATE = Object.freeze<TerminalBufferState>({
   status: "closed",
   error: null,
   updatedAt: null,
+  replayStartVersion: 0,
   replayCompleteVersion: 0,
   version: 0,
 });
@@ -97,6 +100,7 @@ export const EMPTY_TERMINAL_SESSION_STATE = Object.freeze<TerminalSessionState>(
   error: null,
   hasRunningSubprocess: false,
   updatedAt: null,
+  replayStartVersion: 0,
   replayCompleteVersion: 0,
   version: 0,
 });
@@ -290,6 +294,7 @@ export function terminalBufferStateFromSnapshot(
     status: snapshot.status,
     error: null,
     updatedAt: snapshot.updatedAt,
+    replayStartVersion: current.replayStartVersion + 1,
     replayCompleteVersion: current.replayCompleteVersion,
     version: current.version + 1,
   };
@@ -312,6 +317,7 @@ export function combineTerminalSessionState(
     error: buffer.error,
     hasRunningSubprocess: summary?.hasRunningSubprocess ?? false,
     updatedAt: latestTimestamp(summary?.updatedAt ?? null, buffer.updatedAt),
+    replayStartVersion: buffer.replayStartVersion,
     replayCompleteVersion: buffer.replayCompleteVersion,
     version: buffer.version,
   };

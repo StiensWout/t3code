@@ -145,8 +145,16 @@ describe("terminal session reducers", () => {
       type: "snapshot",
       snapshot: { ...BASE_SNAPSHOT, history: "resynced" },
     });
+    const cleared = applyTerminalAttachStreamEvent(second, {
+      type: "cleared",
+      threadId: TARGET.threadId,
+      terminalId: TARGET.terminalId,
+      sequence: 1,
+    });
 
     expect(second.version).toBe(2);
+    expect(second.replayStartVersion).toBe(2);
+    expect(cleared.replayStartVersion).toBe(2);
     expect(terminalOutputText(second.output)).toBe("resynced");
   });
 
