@@ -378,18 +378,17 @@ export function ProviderModelsSection({
             </Tooltip>
           ) : null}
         </span>
+        {/* The trigger is a wrapper span: a disabled switch gets no pointer events, so it could not open the tooltip itself. */}
         <Tooltip>
-          <TooltipTrigger
-            render={
-              <Switch
-                className="sm:[--thumb-size:--spacing(3.5)]"
-                checked={!isHidden}
-                disabled={model.isCustom}
-                onCheckedChange={(checked) => setHidden(model.slug, !checked)}
-                aria-label={`Show ${model.name} in the model picker`}
-              />
-            }
-          />
+          <TooltipTrigger render={<span className="flex shrink-0 items-center" />}>
+            <Switch
+              className="sm:[--thumb-size:--spacing(3.5)]"
+              checked={!isHidden}
+              disabled={model.isCustom}
+              onCheckedChange={(checked) => setHidden(model.slug, !checked)}
+              aria-label={`Show ${model.name} in the model picker`}
+            />
+          </TooltipTrigger>
           <TooltipPopup side="top">
             {model.isCustom
               ? "Custom models are always shown in the picker"

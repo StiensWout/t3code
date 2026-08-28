@@ -796,7 +796,7 @@ export function ProviderInstanceCard({
               variant="ghost"
               className="[--control-icon-color:currentColor] text-muted-foreground hover:text-destructive"
               onClick={onDelete}
-              aria-label={`Delete provider instance ${instanceId}`}
+              aria-label={`Delete instance ${instanceId}`}
             >
               <Trash2Icon className="size-3" />
               Delete instance
