@@ -873,13 +873,13 @@ export function EnvironmentProviderSettings({
                         variant="ghost-muted"
                         disabled={isRefreshingProviders}
                         onClick={() => void refreshProviders()}
-                        aria-label="Refresh provider status"
                       >
                         {isRefreshingProviders ? (
                           <LoaderIcon className="animate-spin" />
                         ) : (
                           <RefreshCwIcon />
                         )}
+                        <span className="sr-only">Refresh provider status</span>
                         <span className="hidden min-w-0 truncate sm:inline">
                           <ProviderLastChecked lastCheckedAt={lastCheckedAt} />
                         </span>
