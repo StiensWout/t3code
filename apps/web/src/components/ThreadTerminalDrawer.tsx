@@ -411,6 +411,7 @@ export function TerminalViewport({
   );
   const terminalFontRef = useRef({ family: terminalFontFamily, size: terminalFontSize });
   const pendingScrollbackReplayIdentityRef = useRef<string | null>(null);
+  const scrollbackReplayRendererStateRef = useRef<"idle" | "waiting" | "replaying">("idle");
   const terminalAttachIdentity = useMemo(
     () =>
       JSON.stringify([
@@ -431,12 +432,14 @@ export function TerminalViewport({
   const requestExtendedReplay = useEffectEvent(() => {
     if (extendedReplayIdentity === terminalAttachIdentity) return;
     pendingScrollbackReplayIdentityRef.current = terminalAttachIdentity;
+    scrollbackReplayRendererStateRef.current = "waiting";
     setExtendedReplayIdentity(terminalAttachIdentity);
   });
   useEffect(() => {
     setExtendedReplayIdentity(null);
     if (pendingScrollbackReplayIdentityRef.current !== terminalAttachIdentity) {
       pendingScrollbackReplayIdentityRef.current = null;
+      scrollbackReplayRendererStateRef.current = "idle";
     }
   }, [terminalAttachIdentity]);
   const terminalSession = useAttachedTerminalSession({
@@ -571,13 +574,6 @@ export function TerminalViewport({
         resetVersion: latestSession.output.resetVersion,
         lastChunkId: latestSession.output.latestChunkId,
       };
-      if (
-        pendingScrollbackReplayIdentityRef.current === terminalAttachIdentity &&
-        latestSession.replayCompleteVersion > 0
-      ) {
-        pendingScrollbackReplayIdentityRef.current = null;
-        terminal.scrollToTopAfterWrites();
-      }
       if (latestSession.error !== null) writeSystemMessage(terminal, latestSession.error);
       // Attaching to a session that already exited must still run exit handling
       // once, so mount synchronization starts from the empty "closed" state.
@@ -1005,18 +1001,48 @@ export function TerminalViewport({
 
     const outputUpdate = readTerminalOutputUpdate(current.output, outputCursorRef.current);
     outputCursorRef.current = outputUpdate.cursor;
+    const scrollbackReplayPending =
+      pendingScrollbackReplayIdentityRef.current === terminalAttachIdentity;
+    let didWriteOutput = false;
     if (outputUpdate.type === "append") {
-      terminal.write(outputUpdate.data);
+      if (scrollbackReplayPending) {
+        if (scrollbackReplayRendererStateRef.current === "waiting") {
+          terminal.beginStreamingReplay(outputUpdate.data);
+          scrollbackReplayRendererStateRef.current = "replaying";
+        } else {
+          terminal.appendStreamingReplay(outputUpdate.data);
+        }
+      } else {
+        terminal.write(outputUpdate.data);
+      }
+      didWriteOutput = outputUpdate.data.length > 0;
     } else if (outputUpdate.type === "reset") {
-      writeTerminalBuffer(terminal, outputUpdate.data);
+      if (scrollbackReplayPending && outputUpdate.data.length === 0) {
+        // The extended attach begins with an empty snapshot. Keep the current
+        // screen visible until its first retained-history chunk arrives.
+        scrollbackReplayRendererStateRef.current = "waiting";
+      } else if (scrollbackReplayPending) {
+        terminal.beginStreamingReplay(outputUpdate.data);
+        scrollbackReplayRendererStateRef.current = "replaying";
+        didWriteOutput = true;
+      } else {
+        writeTerminalBuffer(terminal, outputUpdate.data);
+        didWriteOutput = true;
+      }
     }
-    if (outputUpdate.type !== "none") terminal.clearSelection();
+    if (didWriteOutput) terminal.clearSelection();
 
     if (
       current.replayCompleteVersion > 0 &&
       current.version !== previous.version &&
-      pendingScrollbackReplayIdentityRef.current === terminalAttachIdentity
+      scrollbackReplayPending
     ) {
+      if (scrollbackReplayRendererStateRef.current === "waiting") {
+        terminal.beginStreamingReplay(terminalOutputText(current.output));
+        terminal.clearSelection();
+      }
+      terminal.completeStreamingReplay();
+      scrollbackReplayRendererStateRef.current = "idle";
       pendingScrollbackReplayIdentityRef.current = null;
       terminal.scrollToTopAfterWrites();
     }

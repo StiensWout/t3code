@@ -572,6 +572,7 @@ export class GhosttyTerminalSurface {
   private writeQueue: Array<{ data: string; offset: number; replay: boolean }> = [];
   private writeQueueIndex = 0;
   private replayActive = false;
+  private replayStreamOpen = false;
   private scrollToTopWhenWritesDrain = false;
   private cursorTimer: number | null = null;
   private compositionInputToSuppress: string | null = null;
@@ -782,6 +783,46 @@ export class GhosttyTerminalSurface {
     this.requestRender();
   }
 
+  /** Reset once, then accept ordered replay chunks until the caller marks the stream complete. */
+  beginStreamingReplay(data: string): void {
+    if (this.disposed) return;
+    this.cancelPendingWrites();
+    this.lastMouseMotionData = "";
+    this.core.beginReplay();
+    this.replayActive = true;
+    this.replayStreamOpen = true;
+    if (data.length > 0) {
+      this.writeQueue.push({ data, offset: 0, replay: true });
+      this.requestWriteDrain();
+    }
+    this.synchronizeMouseTrackingState();
+    this.cursorOn = true;
+    this.forceFullRender = true;
+    this.scrollbarDirty = true;
+    this.requestRender();
+  }
+
+  appendStreamingReplay(data: string): void {
+    if (this.disposed || data.length === 0) return;
+    if (!this.replayStreamOpen) {
+      this.beginStreamingReplay(data);
+      return;
+    }
+    this.writeQueue.push({ data, offset: 0, replay: true });
+    this.requestWriteDrain();
+  }
+
+  completeStreamingReplay(): void {
+    if (this.disposed || !this.replayStreamOpen) return;
+    this.replayStreamOpen = false;
+    if (this.writeQueueIndex < this.writeQueue.length) return;
+    this.finishReplay();
+    if (this.scrollToTopWhenWritesDrain) {
+      this.scrollToTopWhenWritesDrain = false;
+      this.scrollToTop();
+    }
+  }
+
   scrollToTopAfterWrites(): void {
     if (this.disposed) return;
     if (this.writeQueueIndex < this.writeQueue.length || this.replayActive) {
@@ -831,10 +872,12 @@ export class GhosttyTerminalSurface {
     if (this.writeQueueIndex >= this.writeQueue.length) {
       this.writeQueue = [];
       this.writeQueueIndex = 0;
-      this.finishReplay();
-      if (this.scrollToTopWhenWritesDrain) {
-        this.scrollToTopWhenWritesDrain = false;
-        this.scrollToTop();
+      if (!this.replayStreamOpen) {
+        this.finishReplay();
+        if (this.scrollToTopWhenWritesDrain) {
+          this.scrollToTopWhenWritesDrain = false;
+          this.scrollToTop();
+        }
       }
     } else {
       this.requestWriteDrain();
@@ -846,6 +889,7 @@ export class GhosttyTerminalSurface {
     if (!this.replayActive) return;
     this.core.endReplay();
     this.replayActive = false;
+    this.replayStreamOpen = false;
   }
 
   private cancelPendingWrites(): void {
@@ -855,6 +899,7 @@ export class GhosttyTerminalSurface {
     }
     this.writeQueue = [];
     this.writeQueueIndex = 0;
+    this.replayStreamOpen = false;
     this.scrollToTopWhenWritesDrain = false;
     this.finishReplay();
   }
