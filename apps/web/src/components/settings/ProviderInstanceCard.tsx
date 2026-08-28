@@ -263,7 +263,7 @@ function ProviderEnvironmentSection(props: {
             spellCheck={false}
             aria-label={`Environment variable name ${index + 1}`}
           />
-          <span className="text-muted-foreground" aria-hidden>
+          <span className="text-xs text-muted-foreground" aria-hidden>
             =
           </span>
           <DraftInput
@@ -598,7 +598,7 @@ export function ProviderInstanceCard({
         className={cn(
           // Sidebar-style selection with a fixed row height so the list stays
           // even; the status line clamps to two lines instead of growing.
-          "group flex h-19 items-start gap-3 rounded-md px-3 py-2 transition-colors",
+          "group flex min-h-19 items-start gap-3 rounded-md px-3 py-2 transition-colors",
           // Foreground-alpha tint so the fill reads the same in light and dark themes.
           selected ? "bg-foreground/8" : "hover:bg-foreground/4",
         )}
@@ -676,7 +676,7 @@ export function ProviderInstanceCard({
                         size="icon-xs"
                         variant="ghost"
                         className={cn(
-                          "size-5 rounded-sm p-0",
+                          "size-5 rounded-sm p-0 [--control-icon-color:currentColor]",
                           versionAdvisory.emphasis === "strong"
                             ? "text-warning hover:text-warning"
                             : "text-muted-foreground hover:text-foreground",

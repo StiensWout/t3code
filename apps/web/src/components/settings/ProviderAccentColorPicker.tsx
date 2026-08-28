@@ -305,7 +305,11 @@ export function ProviderAccentColorPicker(props: {
   const customSelected = Boolean(normalized && selectedValue === "");
 
   const swatchRow = (
-    <div className="flex min-w-0 flex-wrap items-center gap-2">
+    <div
+      role="group"
+      aria-label="Accent color"
+      className="flex min-w-0 flex-wrap items-center gap-2"
+    >
       <ProviderCustomColorPicker
         displayName={displayName}
         value={normalized}
