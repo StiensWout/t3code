@@ -1,4 +1,9 @@
-import { DEFAULT_TERMINAL_ID, type EnvironmentId, type ThreadId } from "@t3tools/contracts";
+import {
+  DEFAULT_TERMINAL_ID,
+  EXTENDED_TERMINAL_REPLAY_BYTES,
+  type EnvironmentId,
+  type ThreadId,
+} from "@t3tools/contracts";
 import { SymbolView } from "../../components/AppSymbol";
 import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import { Pressable, View } from "react-native";
@@ -8,7 +13,10 @@ import { terminalEnvironment } from "../../state/terminal";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useAttachedTerminalSession } from "../../state/use-terminal-session";
 import { TerminalSurface } from "./NativeTerminalSurface";
-import { hasNativeTerminalSurface } from "./nativeTerminalModule";
+import {
+  getNativeTerminalStreamingRevision,
+  hasNativeTerminalSurface,
+} from "./nativeTerminalModule";
 import {
   buildThreadTerminalAttachInput,
   type TerminalGridSize,
@@ -35,6 +43,7 @@ export const ThreadTerminalPanel = memo(function ThreadTerminalPanel(
   const closeTerminal = useAtomCommand(terminalEnvironment.close, "terminal close");
   const openTerminal = useAtomCommand(terminalEnvironment.open, "terminal open");
   const nativeTerminalAvailable = hasNativeTerminalSurface();
+  const supportsStreaming = (getNativeTerminalStreamingRevision() ?? 0) >= 1;
   const terminalId = DEFAULT_TERMINAL_ID;
   const lastGridSizeRef = useRef<TerminalGridSize>({
     cols: DEFAULT_TERMINAL_COLS,
@@ -53,9 +62,13 @@ export const ThreadTerminalPanel = memo(function ThreadTerminalPanel(
   const attachInput = useMemo(
     () =>
       props.visible
-        ? buildThreadTerminalAttachInput(subscriptionIdentity, lastGridSizeRef.current)
+        ? buildThreadTerminalAttachInput(
+            subscriptionIdentity,
+            lastGridSizeRef.current,
+            supportsStreaming ? EXTENDED_TERMINAL_REPLAY_BYTES : undefined,
+          )
         : null,
-    [props.visible, subscriptionIdentity],
+    [props.visible, subscriptionIdentity, supportsStreaming],
   );
   const terminal = useAttachedTerminalSession({
     environmentId: props.environmentId,
@@ -71,10 +84,9 @@ export const ThreadTerminalPanel = memo(function ThreadTerminalPanel(
   const runningTerminalKeyRef = useRef<string | null>(null);
   const reopenedStaleTerminalKeyRef = useRef<string | null>(null);
 
-  // Attach subscriptions are cached with an idle TTL; reopening the panel
-  // after its session ended reuses the stale stream without a new attach
-  // RPC. Issue an explicit open so the server respawns the session and its
-  // snapshot flows into the live subscription.
+  // Attaching to an exited session preserves its final history. The panel is
+  // an interactive shell, so explicitly reopen that session after the
+  // snapshot arrives.
   useEffect(() => {
     if (isRunning) {
       reopenedStaleTerminalKeyRef.current = null;
@@ -245,10 +257,10 @@ export const ThreadTerminalPanel = memo(function ThreadTerminalPanel(
       </View>
       <TerminalSurface
         terminalKey={terminalKey}
-        buffer={terminal.buffer}
         isRunning={isRunning}
         onInput={handleInput}
         onResize={handleResize}
+        output={terminal.output}
         style={{ flex: 1 }}
       />
     </View>

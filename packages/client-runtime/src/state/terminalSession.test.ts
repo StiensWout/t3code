@@ -7,7 +7,9 @@ import {
   applyTerminalMetadataStreamEvent,
   combineTerminalSessionState,
   EMPTY_TERMINAL_BUFFER_STATE,
+  readTerminalOutputUpdate,
   selectRunningSubprocessTerminalIds,
+  terminalOutputText,
 } from "./terminalSession.ts";
 
 const TARGET = {
@@ -126,11 +128,12 @@ describe("terminal session reducers", () => {
     );
 
     expect(output).toMatchObject({
-      buffer: "lo world",
       status: "running",
       error: null,
       version: 2,
     });
+    expect(output.output.retainedBytes).toBeLessThanOrEqual(8);
+    expect(terminalOutputText(output.output)).toBe(" world");
   });
 
   it("reduces terminal metadata snapshots, upserts, and removals", () => {
@@ -182,6 +185,125 @@ describe("terminal session reducers", () => {
       4,
     );
 
-    expect(state.buffer).toBe("🙂");
+    expect(terminalOutputText(state.output)).toBe("🙂");
+    expect(state.output.retainedBytes).toBe(4);
+  });
+
+  it("clears a renderer when the byte budget cannot retain an output character", () => {
+    const initial = applyTerminalAttachStreamEvent(
+      EMPTY_TERMINAL_BUFFER_STATE,
+      {
+        type: "output",
+        threadId: TARGET.threadId,
+        terminalId: TARGET.terminalId,
+        data: "a",
+      },
+      1,
+    );
+    const cursor = {
+      resetVersion: initial.output.resetVersion,
+      lastChunkId: initial.output.latestChunkId,
+    };
+    const dropped = applyTerminalAttachStreamEvent(
+      initial,
+      {
+        type: "output",
+        threadId: TARGET.threadId,
+        terminalId: TARGET.terminalId,
+        data: "🙂",
+      },
+      1,
+    );
+
+    expect(readTerminalOutputUpdate(dropped.output, cursor)).toMatchObject({
+      type: "reset",
+      data: "",
+    });
+  });
+
+  it("delivers every append when multiple events reduce before the renderer reads", () => {
+    const snapshot = applyTerminalAttachStreamEvent(EMPTY_TERMINAL_BUFFER_STATE, {
+      type: "snapshot",
+      snapshot: BASE_SNAPSHOT,
+    });
+    const cursor = {
+      resetVersion: snapshot.output.resetVersion,
+      lastChunkId: snapshot.output.latestChunkId,
+    };
+    const first = applyTerminalAttachStreamEvent(snapshot, {
+      type: "output",
+      threadId: TARGET.threadId,
+      terminalId: TARGET.terminalId,
+      data: " first",
+    });
+    const second = applyTerminalAttachStreamEvent(first, {
+      type: "output",
+      threadId: TARGET.threadId,
+      terminalId: TARGET.terminalId,
+      data: " second",
+    });
+
+    expect(readTerminalOutputUpdate(second.output, cursor)).toMatchObject({
+      type: "append",
+      data: " first second",
+    });
+  });
+
+  it("resets a renderer that falls behind retained output", () => {
+    const first = applyTerminalAttachStreamEvent(
+      EMPTY_TERMINAL_BUFFER_STATE,
+      {
+        type: "output",
+        threadId: TARGET.threadId,
+        terminalId: TARGET.terminalId,
+        data: "first",
+      },
+      6,
+    );
+    const staleCursor = {
+      resetVersion: first.output.resetVersion,
+      lastChunkId: first.output.latestChunkId,
+    };
+    const second = applyTerminalAttachStreamEvent(
+      first,
+      {
+        type: "output",
+        threadId: TARGET.threadId,
+        terminalId: TARGET.terminalId,
+        data: "second",
+      },
+      6,
+    );
+    const third = applyTerminalAttachStreamEvent(
+      second,
+      {
+        type: "output",
+        threadId: TARGET.threadId,
+        terminalId: TARGET.terminalId,
+        data: "third",
+      },
+      6,
+    );
+
+    expect(readTerminalOutputUpdate(third.output, staleCursor)).toMatchObject({
+      type: "reset",
+      data: "third",
+    });
+  });
+
+  it("bounds chunk metadata without losing small output events", () => {
+    let state = EMPTY_TERMINAL_BUFFER_STATE;
+    for (let index = 0; index < 1_025; index += 1) {
+      state = applyTerminalAttachStreamEvent(state, {
+        type: "output",
+        threadId: TARGET.threadId,
+        terminalId: TARGET.terminalId,
+        data: "x",
+      });
+    }
+
+    expect(state.output.chunks.length).toBeLessThan(1_025);
+    expect(terminalOutputText(state.output)).toBe("x".repeat(1_025));
+    expect(state.output.resetVersion).toBe(1);
   });
 });

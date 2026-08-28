@@ -1051,12 +1051,12 @@ const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDra
     [onAddTerminalContext, visible],
   );
 
-  if (!project || !terminalUiState.terminalOpen || !cwd) {
+  if (!project || !terminalUiState.terminalOpen || !cwd || !visible) {
     return null;
   }
 
   return (
-    <div className={visible ? undefined : "hidden"}>
+    <div>
       <ThreadTerminalDrawer
         threadRef={threadRef}
         threadId={threadId}

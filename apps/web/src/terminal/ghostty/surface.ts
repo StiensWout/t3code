@@ -36,6 +36,8 @@ const CONTENT_PADDING = 4;
 const MIN_SCROLLBAR_THUMB_HEIGHT = 18;
 /** Half a blink cycle: the visible and hidden phases are equally long. */
 const CURSOR_BLINK_INTERVAL_MS = 500;
+const TERMINAL_WRITE_CHUNK_CODE_UNITS = 64 * 1024;
+const TERMINAL_IMMEDIATE_WRITE_CODE_UNITS = 16 * 1024;
 const TERMINAL_FONT_LOAD_TEXT = "iMW0@# .";
 const TERMINAL_FONT_LOAD_VARIANTS = [
   "normal 400",
@@ -534,6 +536,7 @@ export interface GhosttyTerminalSurfaceOptions {
   readonly onData: (data: string) => void;
   readonly onResize: (cols: number, rows: number) => void;
   readonly onSelectionChange: () => void;
+  readonly onScrollbackTop?: () => void;
   readonly beforeKey: (event: KeyboardEvent) => boolean;
   readonly onLinkActivate: (text: string, event: MouseEvent) => void;
   /**
@@ -565,6 +568,10 @@ export class GhosttyTerminalSurface {
   private readonly scrollbarThumb: HTMLDivElement;
   private snapshot: GhosttySnapshot | null = null;
   private frame = 0;
+  private writeFrame = 0;
+  private writeQueue: Array<{ data: string; offset: number; replay: boolean }> = [];
+  private writeQueueIndex = 0;
+  private replayActive = false;
   private cursorTimer: number | null = null;
   private compositionInputToSuppress: string | null = null;
   private compositionSuppressionTimer: number | null = null;
@@ -729,8 +736,22 @@ export class GhosttyTerminalSurface {
   }
 
   write(data: string): void {
-    if (this.disposed) return;
-    this.core.write(data);
+    if (this.disposed || data.length === 0) return;
+    if (
+      !this.replayActive &&
+      this.writeQueueIndex >= this.writeQueue.length &&
+      data.length <= TERMINAL_IMMEDIATE_WRITE_CODE_UNITS
+    ) {
+      this.core.write(data);
+      this.didWriteOutput();
+      return;
+    }
+
+    this.writeQueue.push({ data, offset: 0, replay: false });
+    this.requestWriteDrain();
+  }
+
+  private didWriteOutput(): void {
     this.synchronizeMouseTrackingState();
     // Restart the blink cycle from the visible phase so the cursor never sits
     // invisible through a stream of output or a burst of typing echo.
@@ -741,8 +762,16 @@ export class GhosttyTerminalSurface {
 
   resetAndWrite(data: string): void {
     if (this.disposed) return;
+    this.cancelPendingWrites();
     this.lastMouseMotionData = "";
-    this.core.resetAndWrite(data);
+    this.core.beginReplay();
+    this.replayActive = true;
+    if (data.length > 0) {
+      this.writeQueue.push({ data, offset: 0, replay: true });
+      this.requestWriteDrain();
+    } else {
+      this.finishReplay();
+    }
     this.synchronizeMouseTrackingState();
     // A replayed session starts from the visible phase like any other write:
     // reattaching mid-blink must not open on an invisible cursor.
@@ -750,6 +779,63 @@ export class GhosttyTerminalSurface {
     this.forceFullRender = true;
     this.scrollbarDirty = true;
     this.requestRender();
+  }
+
+  private requestWriteDrain(): void {
+    if (this.disposed || this.writeFrame !== 0) return;
+    this.writeFrame = window.requestAnimationFrame(this.drainWrites);
+  }
+
+  private readonly drainWrites = () => {
+    this.writeFrame = 0;
+    if (this.disposed) return;
+
+    const pending = this.writeQueue[this.writeQueueIndex];
+    if (pending) {
+      if (this.replayActive && !pending.replay) this.finishReplay();
+      let end = Math.min(pending.data.length, pending.offset + TERMINAL_WRITE_CHUNK_CODE_UNITS);
+      const lastCodeUnit = pending.data.charCodeAt(end - 1);
+      const nextCodeUnit = pending.data.charCodeAt(end);
+      if (
+        end < pending.data.length &&
+        lastCodeUnit >= 0xd800 &&
+        lastCodeUnit <= 0xdbff &&
+        nextCodeUnit >= 0xdc00 &&
+        nextCodeUnit <= 0xdfff
+      ) {
+        end -= 1;
+      }
+      const chunk = pending.data.slice(pending.offset, end);
+      if (pending.replay) this.core.writeReplay(chunk);
+      else this.core.write(chunk);
+      pending.offset = end;
+      if (pending.offset >= pending.data.length) this.writeQueueIndex += 1;
+    }
+
+    if (this.writeQueueIndex >= this.writeQueue.length) {
+      this.writeQueue = [];
+      this.writeQueueIndex = 0;
+      this.finishReplay();
+    } else {
+      this.requestWriteDrain();
+    }
+    this.didWriteOutput();
+  };
+
+  private finishReplay(): void {
+    if (!this.replayActive) return;
+    this.core.endReplay();
+    this.replayActive = false;
+  }
+
+  private cancelPendingWrites(): void {
+    if (this.writeFrame !== 0) {
+      window.cancelAnimationFrame(this.writeFrame);
+      this.writeFrame = 0;
+    }
+    this.writeQueue = [];
+    this.writeQueueIndex = 0;
+    this.finishReplay();
   }
 
   setTheme(theme: GhosttyTheme): void {
@@ -982,6 +1068,7 @@ export class GhosttyTerminalSurface {
       this.options.onResize(this.cols, this.rows);
     }
     if (this.frame !== 0) window.cancelAnimationFrame(this.frame);
+    if (this.writeFrame !== 0) window.cancelAnimationFrame(this.writeFrame);
     if (this.cursorTimer !== null) window.clearTimeout(this.cursorTimer);
     if (this.compositionSuppressionTimer !== null) {
       window.clearTimeout(this.compositionSuppressionTimer);
@@ -1555,12 +1642,27 @@ export class GhosttyTerminalSurface {
       case "PageDown":
         delta = Math.max(1, state.len);
         break;
-      case "Home":
-        delta = -state.offset;
-        break;
-      case "End":
-        delta = state.total - state.len - state.offset;
-        break;
+      case "Home": {
+        event.preventDefault();
+        event.stopPropagation();
+        this.core.scrollToTop();
+        this.scrollbarState = { ...state, offset: 0 };
+        this.options.onScrollbackTop?.();
+        this.forceFullRender = true;
+        this.scrollbarDirty = true;
+        this.requestRender();
+        return;
+      }
+      case "End": {
+        event.preventDefault();
+        event.stopPropagation();
+        this.core.scrollToBottom();
+        this.scrollbarState = { ...state, offset: Math.max(0, state.total - state.len) };
+        this.forceFullRender = true;
+        this.scrollbarDirty = true;
+        this.requestRender();
+        return;
+      }
       default:
         return;
     }
@@ -1627,6 +1729,7 @@ export class GhosttyTerminalSurface {
       const offset = Math.max(0, Math.min(state.offset + delta, maxOffset));
       delta = offset - state.offset;
       this.scrollbarState = { ...state, offset };
+      if (deltaRows < 0 && offset === 0) this.options.onScrollbackTop?.();
     }
     if (delta === 0) return;
     this.core.scroll(delta);

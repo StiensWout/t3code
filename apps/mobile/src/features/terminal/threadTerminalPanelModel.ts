@@ -16,6 +16,7 @@ export interface TerminalGridSize {
 export function buildThreadTerminalAttachInput(
   identity: ThreadTerminalSubscriptionIdentity,
   gridSize: TerminalGridSize,
+  replayBytes?: number,
 ): TerminalAttachInput {
   return {
     threadId: identity.threadId,
@@ -24,5 +25,6 @@ export function buildThreadTerminalAttachInput(
     worktreePath: identity.worktreePath,
     cols: gridSize.cols,
     rows: gridSize.rows,
+    ...(replayBytes === undefined ? {} : { replayBytes }),
   };
 }

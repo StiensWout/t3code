@@ -58,6 +58,28 @@ background-activity layers) and differ beyond that only in the platform layer th
 UI they build on top. React components never construct transports, retry loops,
 or RPC clients. See [connection-runtime.md](./connection-runtime.md).
 
+## Terminal streaming
+
+The server owns each PTY and keeps two histories with different budgets. [`Manager.ts`][terminal]
+allows durable history to grow to 12 MB before compacting it toward 8 MB. Its recent recovery
+snapshot is separate and grows to 64 KB before compacting toward 48 KB. Incremental renderers can
+request up to 8 MB when attaching. Web starts from the recent snapshot and requests 4 MB when the
+user reaches its top; extended history arrives as ordered 64 KB chunks before live output begins.
+
+PTY output is coalesced for up to 8 ms or 16 KB before `terminal.attach` publishes it. Initial
+history uses backpressure and cancels with the attach scope. Live delivery buffers at most 32 events.
+If a client cannot consume that queue, the server replaces queued deltas with its latest bounded
+snapshot. This applies equally to loopback, LAN, Tailscale, relay, and SSH-forwarded connections
+because they all use the same RPC stream.
+
+[`terminalSession.ts`][terminal-state] retains replay as byte-bounded chunks instead of rebuilding a
+growing string for every event. Web and native mobile renderers consume those chunks incrementally;
+if their cursor falls behind retained history, they reset from the current snapshot. The web
+renderer also yields between large Ghostty writes so extended replay does not monopolize the main
+thread. Hidden web drawers unmount their renderer and attach subscription while the server-owned PTY
+continues running. Ghostty renderers use a 64 MB internal scrollback budget so the 4 MB text replay
+remains available after it expands into styled terminal cells.
+
 ## Orchestration is event-sourced
 
 The server does not mutate app state directly. Clients dispatch typed commands; the engine turns them
@@ -152,3 +174,5 @@ already dispatch.
 [checkpoint]: ../../apps/server/src/orchestration/Layers/CheckpointReactor.ts
 [receipts]: ../../apps/server/src/orchestration/Layers/RuntimeReceiptBus.ts
 [drivers]: ../../apps/server/src/provider/builtInDrivers.ts
+[terminal]: ../../apps/server/src/terminal/Manager.ts
+[terminal-state]: ../../packages/client-runtime/src/state/terminalSession.ts

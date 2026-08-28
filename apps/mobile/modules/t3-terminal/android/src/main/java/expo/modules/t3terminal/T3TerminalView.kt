@@ -34,6 +34,7 @@ class T3TerminalView(context: Context, appContext: AppContext) : ExpoView(contex
   private var mutedForegroundColorValue = Color.parseColor("#959DA5")
   private var cursorColorValue = Color.parseColor("#009FFF")
   private var paletteColors = IntArray(0)
+  private var renderSnapshotScheduled = false
 
   var terminalKey: String = ""
     set(value) {
@@ -49,6 +50,23 @@ class T3TerminalView(context: Context, appContext: AppContext) : ExpoView(contex
       field = value
       feedPendingBuffer()
     }
+
+  fun writeRemoteData(data: String) {
+    if (terminalHandle == 0L || data.isEmpty()) return
+    emitResponse(GhosttyBridge.nativeFeed(terminalHandle, data.toByteArray(Charsets.UTF_8)))
+    if (terminalCanvas.hasActiveSelection()) {
+      GhosttyBridge.nativeClearSelection(terminalHandle)
+      terminalCanvas.resetSelectionState()
+    }
+    scheduleRenderSnapshot()
+  }
+
+  fun resetRemoteData(data: String) {
+    destroyTerminal()
+    initialBuffer = data
+    createTerminal()
+    feedPendingBuffer()
+  }
 
   var fontSize: Float = 10f
     set(value) {
@@ -363,6 +381,15 @@ class T3TerminalView(context: Context, appContext: AppContext) : ExpoView(contex
     TerminalFrame.decode(
       GhosttyBridge.nativeSnapshot(terminalHandle)
     )?.let(terminalCanvas::setFrame)
+  }
+
+  private fun scheduleRenderSnapshot() {
+    if (renderSnapshotScheduled) return
+    renderSnapshotScheduled = true
+    postOnAnimation {
+      renderSnapshotScheduled = false
+      renderSnapshot()
+    }
   }
 
   private fun emitResponse(response: ByteArray) {

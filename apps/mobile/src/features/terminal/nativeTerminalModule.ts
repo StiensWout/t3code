@@ -1,4 +1,4 @@
-import type { ComponentType } from "react";
+import type { ComponentType, Ref } from "react";
 import type { NativeSyntheticEvent, ViewProps } from "react-native";
 import { requireNativeView, requireOptionalNativeModule } from "expo";
 
@@ -22,6 +22,7 @@ interface TerminalResizeEvent {
 }
 
 export interface NativeTerminalSurfaceProps extends ViewProps {
+  readonly ref?: Ref<NativeTerminalSurfaceHandle>;
   readonly appearanceScheme?: "light" | "dark";
   readonly autoFocus?: boolean;
   readonly focusRequest?: number;
@@ -34,6 +35,11 @@ export interface NativeTerminalSurfaceProps extends ViewProps {
   readonly fontSize: number;
   readonly onInput?: (event: NativeSyntheticEvent<TerminalInputEvent>) => void;
   readonly onResize?: (event: NativeSyntheticEvent<TerminalResizeEvent>) => void;
+}
+
+export interface NativeTerminalSurfaceHandle {
+  readonly write?: (data: string) => Promise<void>;
+  readonly reset?: (data: string) => Promise<void>;
 }
 
 let cachedNativeTerminalSurfaceView: ComponentType<NativeTerminalSurfaceProps> | undefined;
@@ -90,6 +96,21 @@ export function getNativeTerminalHardwareKeyRevision(): number | null {
       NATIVE_TERMINAL_MODULE_NAME,
     );
     return module?.hardwareKeyRevision ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Revision 1 accepts append/reset commands instead of a growing buffer prop. */
+export function getNativeTerminalStreamingRevision(): number | null {
+  try {
+    if (typeof requireOptionalNativeModule !== "function") {
+      return null;
+    }
+    const module = requireOptionalNativeModule<{ readonly streamingRevision?: number }>(
+      NATIVE_TERMINAL_MODULE_NAME,
+    );
+    return module?.streamingRevision ?? null;
   } catch {
     return null;
   }

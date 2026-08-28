@@ -3,7 +3,12 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { type TerminalSessionState } from "@t3tools/client-runtime/state/terminal";
+import {
+  readTerminalOutputUpdate,
+  terminalOutputText,
+  type TerminalOutputCursor,
+  type TerminalSessionState,
+} from "@t3tools/client-runtime/state/terminal";
 import {
   Plus,
   Square,
@@ -13,6 +18,8 @@ import {
   Trash2,
 } from "lucide-react";
 import {
+  DEFAULT_TERMINAL_REPLAY_BYTES,
+  EXTENDED_TERMINAL_REPLAY_BYTES,
   type ContextMenuItem,
   type ResolvedKeybindingsConfig,
   type ScopedThreadRef,
@@ -403,6 +410,10 @@ export function TerminalViewport({
     }),
   );
   const terminalFontRef = useRef({ family: terminalFontFamily, size: terminalFontSize });
+  const [replayBytes, setReplayBytes] = useState(DEFAULT_TERMINAL_REPLAY_BYTES);
+  const requestExtendedReplay = useEffectEvent(() => {
+    setReplayBytes(EXTENDED_TERMINAL_REPLAY_BYTES);
+  });
   const terminalSession = useAttachedTerminalSession({
     environmentId,
     terminal: {
@@ -411,6 +422,7 @@ export function TerminalViewport({
       cwd,
       ...(worktreePath !== undefined ? { worktreePath } : {}),
       ...(runtimeEnv ? { env: runtimeEnv } : {}),
+      replayBytes,
     },
   });
   const writeTerminal = useEffectEvent((data: string) =>
@@ -425,9 +437,13 @@ export function TerminalViewport({
       input: { threadId, terminalId, cols, rows },
     }),
   );
-  const terminalBuffer = terminalSession.buffer;
+  const terminalOutput = terminalSession.output;
   const terminalError = terminalSession.error;
   const terminalStatus = terminalSession.status;
+  const outputCursorRef = useRef<TerminalOutputCursor>({
+    resetVersion: -1,
+    lastChunkId: 0,
+  });
   const synchronizedStatusRef = useRef<TerminalSessionState["status"]>("closed");
   const synchronizeTerminalStatus = useEffectEvent(
     (terminal: GhosttyTerminalSurface, status: TerminalSessionState["status"]) => {
@@ -448,14 +464,14 @@ export function TerminalViewport({
   );
   const terminalVersion = terminalSession.version;
   const previousSessionRef = useRef({
-    buffer: terminalBuffer,
+    output: terminalOutput,
     error: terminalError,
     status: terminalStatus,
     version: terminalVersion,
   });
   const latestSessionRef = useRef(previousSessionRef.current);
   latestSessionRef.current = {
-    buffer: terminalBuffer,
+    output: terminalOutput,
     error: terminalError,
     status: terminalStatus,
     version: terminalVersion,
@@ -490,6 +506,7 @@ export function TerminalViewport({
         onData: (data) => handleData(data),
         onResize: (cols, rows) => void resizeTerminal(cols, rows),
         onSelectionChange: () => handleSelectionChange(),
+        onScrollbackTop: () => requestExtendedReplay(),
         beforeKey: (event) => handleBeforeKey(event),
         onLinkActivate: (text, event) => handleLinkActivate(text, event),
         // The surface listens from construction, so a right-click can land
@@ -518,7 +535,12 @@ export function TerminalViewport({
       }
       const latestSession = latestSessionRef.current;
       previousSessionRef.current = latestSession;
-      if (latestSession.buffer.length > 0) terminal.resetAndWrite(latestSession.buffer);
+      const replay = terminalOutputText(latestSession.output);
+      if (replay.length > 0) terminal.resetAndWrite(replay);
+      outputCursorRef.current = {
+        resetVersion: latestSession.output.resetVersion,
+        lastChunkId: latestSession.output.latestChunkId,
+      };
       if (latestSession.error !== null) writeSystemMessage(terminal, latestSession.error);
       // Attaching to a session that already exited must still run exit handling
       // once, so mount synchronization starts from the empty "closed" state.
@@ -910,7 +932,7 @@ export function TerminalViewport({
   useEffect(() => {
     const terminal = terminalRef.current;
     const current = {
-      buffer: terminalBuffer,
+      output: terminalOutput,
       error: terminalError,
       status: terminalStatus,
       version: terminalVersion,
@@ -926,15 +948,14 @@ export function TerminalViewport({
       return;
     }
 
-    if (
-      current.buffer.length >= previous.buffer.length &&
-      current.buffer.startsWith(previous.buffer)
-    ) {
-      terminal.write(current.buffer.slice(previous.buffer.length));
-    } else {
-      writeTerminalBuffer(terminal, current.buffer);
+    const outputUpdate = readTerminalOutputUpdate(current.output, outputCursorRef.current);
+    outputCursorRef.current = outputUpdate.cursor;
+    if (outputUpdate.type === "append") {
+      terminal.write(outputUpdate.data);
+    } else if (outputUpdate.type === "reset") {
+      writeTerminalBuffer(terminal, outputUpdate.data);
     }
-    terminal.clearSelection();
+    if (outputUpdate.type !== "none") terminal.clearSelection();
 
     if (current.error !== null && current.error !== previous.error) {
       writeSystemMessage(terminal, current.error);
@@ -946,7 +967,7 @@ export function TerminalViewport({
       });
     }
     previousSessionRef.current = current;
-  }, [autoFocus, terminalBuffer, terminalError, terminalStatus, terminalVersion]);
+  }, [autoFocus, terminalError, terminalOutput, terminalStatus, terminalVersion]);
 
   useEffect(() => {
     if (!autoFocus) return;

@@ -196,6 +196,11 @@ describe("vendored libghostty-vt WebAssembly", () => {
     expect(call("ghostty_terminal_get", terminal, 9, scrollbar)).toBe(0);
     expect(Number(scrollbarView.getBigUint64(8, true))).toBe(36);
 
+    scrollView.setUint32(0, 0, true);
+    call("ghostty_terminal_scroll_viewport", terminal, scroll);
+    expect(call("ghostty_terminal_get", terminal, 9, scrollbar)).toBe(0);
+    expect(Number(scrollbarView.getBigUint64(8, true))).toBe(0);
+
     call("ghostty_wasm_free_u8_array", scroll, 24);
     call("ghostty_wasm_free_u8_array", scrollbar, 24);
     call("ghostty_wasm_free_u8_array", inputPointer, input.length);

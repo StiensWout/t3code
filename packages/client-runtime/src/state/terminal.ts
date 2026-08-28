@@ -39,9 +39,14 @@ export function createTerminalEnvironmentAtoms<R, E>(
   return {
     attach: createEnvironmentSubscriptionAtomFamily(runtime, {
       label: "environment-data:terminal:attach",
+      // PTYs live on the server. Keeping an idle attach stream alive only
+      // burns output parsing and network work for a renderer that is gone.
+      idleTtlMs: 0,
       subscribe: (input: EnvironmentRpcInput<typeof WS_METHODS.terminalAttach>) =>
         subscribe(WS_METHODS.terminalAttach, input).pipe(
-          Stream.scan(EMPTY_TERMINAL_BUFFER_STATE, applyTerminalAttachStreamEvent),
+          Stream.scan(EMPTY_TERMINAL_BUFFER_STATE, (state, event) =>
+            applyTerminalAttachStreamEvent(state, event, input.replayBytes),
+          ),
         ),
     }),
     events: createEnvironmentRpcSubscriptionAtomFamily(runtime, {

@@ -196,6 +196,7 @@ private extension UIColor {
 public final class T3TerminalView: ExpoView, UITextFieldDelegate {
   private static let minimumVerticalScrollStepPoints: CGFloat = 18
   private static let verticalScrollStepMultiplier: CGFloat = 1.15
+  private static let maxScrollbackBytes = 64 * 1024 * 1024
 
   private let terminalViewport = UIView()
   private let inputField = TerminalInputField()
@@ -205,6 +206,7 @@ public final class T3TerminalView: ExpoView, UITextFieldDelegate {
   private var lastContentScale: CGFloat = 0
   private var lastReportedGrid: (cols: Int, rows: Int)?
   private var lastAppliedBuffer = ""
+  private var redrawDisplayLink: CADisplayLink?
   private var pendingVerticalScrollPoints: CGFloat = 0
   private var app: ghostty_app_t?
   private var surface: ghostty_surface_t?
@@ -229,6 +231,21 @@ public final class T3TerminalView: ExpoView, UITextFieldDelegate {
     didSet {
       applyRemoteBuffer(initialBuffer)
     }
+  }
+
+  func writeRemoteData(_ data: String) {
+    guard !data.isEmpty else { return }
+    if surface == nil {
+      createSurfaceIfPossible()
+    }
+    feedData(Data(data.utf8), redraw: false)
+    scheduleRedraw()
+  }
+
+  func resetRemoteData(_ data: String) {
+    resetSurface()
+    initialBuffer = data
+    createSurfaceIfPossible()
   }
 
   var fontSize: CGFloat = 10 {
@@ -518,6 +535,8 @@ public final class T3TerminalView: ExpoView, UITextFieldDelegate {
   }
 
   private func destroySurface() {
+    redrawDisplayLink?.invalidate()
+    redrawDisplayLink = nil
     if let surface {
       ghostty_surface_set_write_callback(surface, nil, nil)
       ghostty_surface_free(surface)
@@ -558,7 +577,7 @@ public final class T3TerminalView: ExpoView, UITextFieldDelegate {
     lastAppliedBuffer = buffer
   }
 
-  private func feedData(_ data: Data) {
+  private func feedData(_ data: Data, redraw: Bool = true) {
     guard let surface, !data.isEmpty else { return }
 
     data.withUnsafeBytes { buffer in
@@ -568,6 +587,22 @@ public final class T3TerminalView: ExpoView, UITextFieldDelegate {
       ghostty_surface_feed_data(surface, pointer, buffer.count)
     }
 
+    if redraw {
+      redrawSurface()
+    }
+  }
+
+  private func scheduleRedraw() {
+    guard redrawDisplayLink == nil else { return }
+    let displayLink = CADisplayLink(target: self, selector: #selector(handleScheduledRedraw))
+    redrawDisplayLink = displayLink
+    displayLink.add(to: .main, forMode: .common)
+  }
+
+  @objc
+  private func handleScheduledRedraw() {
+    redrawDisplayLink?.invalidate()
+    redrawDisplayLink = nil
     redrawSurface()
   }
 
@@ -703,8 +738,9 @@ public final class T3TerminalView: ExpoView, UITextFieldDelegate {
   }
 
   private func writeThemeConfigFile() -> String? {
-    guard !themeConfig.isEmpty else { return nil }
-    let configContents = themeConfig
+    // Ghostty budgets its internal cell storage rather than raw replay bytes,
+    // so the configured limit must account for the expansion of terminal text.
+    let configContents = "scrollback-limit = \(Self.maxScrollbackBytes)\n\(themeConfig)"
     let url = URL(fileURLWithPath: NSTemporaryDirectory())
       .appendingPathComponent("t3-terminal-theme-\(appearance.rawValue).ghostty")
 

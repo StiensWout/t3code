@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
   DEFAULT_TERMINAL_ID,
+  EXTENDED_TERMINAL_REPLAY_BYTES,
   type TerminalAttachStreamEvent,
   type TerminalEvent,
   type TerminalMetadataStreamEvent,
@@ -10,6 +11,7 @@ import {
 } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Data from "effect/Data";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Encoding from "effect/Encoding";
@@ -42,6 +44,7 @@ class FakePtyProcess implements PtyAdapter.PtyProcess {
   readonly pid: number;
   writeFailure: unknown | undefined;
   resizeFailure: unknown | undefined;
+  killObserver: ((signal: string | undefined) => void) | undefined;
   private readonly dataListeners = new Set<(data: string) => void>();
   private readonly exitListeners = new Set<(event: PtyAdapter.PtyExitEvent) => void>();
   killed = false;
@@ -67,6 +70,7 @@ class FakePtyProcess implements PtyAdapter.PtyProcess {
   kill(signal?: string): void {
     this.killed = true;
     this.killSignals.push(signal);
+    this.killObserver?.(signal);
   }
 
   onData(callback: (data: string) => void): () => void {
@@ -203,6 +207,12 @@ const multiTerminalHistoryLogPath = (
   );
 
 interface CreateManagerOptions {
+  historyTargetBytes?: number;
+  historyMaxBytes?: number;
+  replayHistoryTargetBytes?: number;
+  replayHistoryMaxBytes?: number;
+  outputBatchWindowMs?: number;
+  outputBatchMaxBytes?: number;
   shellResolver?: () => string;
   env?: NodeJS.ProcessEnv;
   subprocessInspector?: (terminalPid: number) => Effect.Effect<{
@@ -214,6 +224,7 @@ interface CreateManagerOptions {
   processKillGraceMs?: number;
   maxRetainedInactiveSessions?: number;
   ptyAdapter?: FakePtyAdapter;
+  managerScope?: Scope.Scope;
 }
 
 interface ManagerFixture {
@@ -225,7 +236,6 @@ interface ManagerFixture {
 }
 
 const createManager = (
-  historyLineLimit = 5,
   options: CreateManagerOptions = {},
 ): Effect.Effect<
   ManagerFixture,
@@ -239,9 +249,26 @@ const createManager = (
       const logsDir = join(baseDir, "userdata", "logs", "terminals");
       const ptyAdapter = options.ptyAdapter ?? new FakePtyAdapter();
 
-      const manager = yield* TerminalManager.makeWithOptions({
+      const managerEffect = TerminalManager.makeWithOptions({
         logsDir,
-        historyLineLimit,
+        ...(options.historyTargetBytes !== undefined
+          ? { historyTargetBytes: options.historyTargetBytes }
+          : {}),
+        ...(options.historyMaxBytes !== undefined
+          ? { historyMaxBytes: options.historyMaxBytes }
+          : {}),
+        ...(options.replayHistoryTargetBytes !== undefined
+          ? { replayHistoryTargetBytes: options.replayHistoryTargetBytes }
+          : {}),
+        ...(options.replayHistoryMaxBytes !== undefined
+          ? { replayHistoryMaxBytes: options.replayHistoryMaxBytes }
+          : {}),
+        ...(options.outputBatchWindowMs !== undefined
+          ? { outputBatchWindowMs: options.outputBatchWindowMs }
+          : {}),
+        ...(options.outputBatchMaxBytes !== undefined
+          ? { outputBatchMaxBytes: options.outputBatchMaxBytes }
+          : {}),
         ptyAdapter,
         ...(options.shellResolver !== undefined ? { shellResolver: options.shellResolver } : {}),
         ...(options.env !== undefined ? { env: options.env } : {}),
@@ -256,6 +283,9 @@ const createManager = (
           ? { maxRetainedInactiveSessions: options.maxRetainedInactiveSessions }
           : {}),
       });
+      const manager = yield* options.managerScope === undefined
+        ? managerEffect
+        : managerEffect.pipe(Effect.provideService(Scope.Scope, options.managerScope));
       const eventsRef = yield* Ref.make<ReadonlyArray<TerminalEvent>>([]);
       const unsubscribe = yield* manager.subscribe((event) =>
         Ref.update(eventsRef, (events) => [...events, event]),
@@ -444,6 +474,25 @@ it.layer(
       fs.writeFileString(filePath, contents),
     );
 
+  interface RecordedHistoryWrite {
+    readonly contents: string;
+    readonly flag: FileSystem.OpenFlag | undefined;
+  }
+
+  const recordHistoryWrites = (
+    fileSystem: FileSystem.FileSystem,
+    writes: Array<RecordedHistoryWrite>,
+  ): FileSystem.FileSystem =>
+    FileSystem.FileSystem.of({
+      ...fileSystem,
+      writeFileString: (filePath, contents, options) =>
+        Effect.sync(() => {
+          if (filePath.endsWith(".log")) {
+            writes.push({ contents, flag: options?.flag });
+          }
+        }).pipe(Effect.andThen(fileSystem.writeFileString(filePath, contents, options))),
+    });
+
   it.effect("reports a missing cwd without an artificial cause", () =>
     Effect.gen(function* () {
       const path = yield* Path.Path;
@@ -505,7 +554,7 @@ it.layer(
 
   it.effect("supports asynchronous PTY spawn effects", () =>
     Effect.gen(function* () {
-      const { manager, ptyAdapter } = yield* createManager(5, {
+      const { manager, ptyAdapter } = yield* createManager({
         ptyAdapter: new FakePtyAdapter("async"),
       });
 
@@ -609,6 +658,25 @@ it.layer(
         terminalId: DEFAULT_TERMINAL_ID,
         deleteHistory: true,
       });
+      yield* manager.resize({
+        threadId: "thread-1",
+        terminalId: DEFAULT_TERMINAL_ID,
+        cols: 120,
+        rows: 30,
+      });
+
+      expect(process.resizeCalls).toEqual([]);
+    }),
+  );
+
+  it.effect("ignores duplicate resize requests", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager();
+      yield* manager.open(openInput({ cols: 120, rows: 30 }));
+      const process = ptyAdapter.processes[0];
+      expect(process).toBeDefined();
+      if (!process) return;
+
       yield* manager.resize({
         threadId: "thread-1",
         terminalId: DEFAULT_TERMINAL_ID,
@@ -892,7 +960,7 @@ it.layer(
         readonly childCommand: string | null;
         readonly processIds: ReadonlyArray<number>;
       } = { hasRunningSubprocess: false, childCommand: null, processIds: [] };
-      const { manager, getEvents } = yield* createManager(5, {
+      const { manager, getEvents } = yield* createManager({
         subprocessInspector: () => Effect.succeed(inspect),
         subprocessPollIntervalMs: 20,
       });
@@ -931,7 +999,7 @@ it.layer(
   it.effect("does not invoke subprocess polling until a terminal session is running", () =>
     Effect.gen(function* () {
       let checks = 0;
-      const { manager } = yield* createManager(5, {
+      const { manager } = yield* createManager({
         subprocessInspector: () => {
           checks += 1;
           return Effect.succeed({
@@ -979,7 +1047,7 @@ it.layer(
           }),
       };
 
-      const { manager, getEvents } = yield* createManager(5, {
+      const { manager, getEvents } = yield* createManager({
         subprocessPollIntervalMs: 20,
       }).pipe(
         Effect.provideService(ProcessRunner.ProcessRunner, processRunner),
@@ -1040,7 +1108,7 @@ it.layer(
           }),
       };
 
-      const { manager, getEvents } = yield* createManager(5, {
+      const { manager, getEvents } = yield* createManager({
         subprocessPollIntervalMs: 20,
       }).pipe(
         Effect.provideService(ProcessRunner.ProcessRunner, processRunner),
@@ -1073,20 +1141,182 @@ it.layer(
     }),
   );
 
-  it.effect("caps persisted history to configured line limit", () =>
+  it.effect("appends normal terminal output without rewriting history", () =>
     Effect.gen(function* () {
-      const { manager, ptyAdapter } = yield* createManager(3);
+      const fileSystem = yield* FileSystem.FileSystem;
+      const writes: Array<RecordedHistoryWrite> = [];
+      const { manager, ptyAdapter, logsDir } = yield* createManager().pipe(
+        Effect.provideService(FileSystem.FileSystem, recordHistoryWrites(fileSystem, writes)),
+      );
       yield* manager.open(openInput());
       const process = ptyAdapter.processes[0];
       expect(process).toBeDefined();
       if (!process) return;
 
-      process.emitData("line1\nline2\nline3\nline4\n");
+      const output = Array.from({ length: 100 }, (_, index) => `redraw ${index}\r`).join("");
+      for (let index = 0; index < 100; index += 1) {
+        process.emitData(`redraw ${index}\r`);
+      }
       yield* manager.close({ threadId: "thread-1" });
 
-      const reopened = yield* manager.open(openInput());
-      const nonEmptyLines = reopened.history.split("\n").filter((line) => line.length > 0);
-      expect(nonEmptyLines).toEqual(["line2", "line3", "line4"]);
+      expect(writes.length).toBeLessThan(100);
+      expect(writes.every((write) => write.flag === "a")).toBe(true);
+      expect(writes.map((write) => write.contents).join("")).toBe(output);
+      expect(yield* historyLogPath(logsDir).pipe(Effect.flatMap(readFileString))).toBe(output);
+    }),
+  );
+
+  it.effect("uses truncation only for clear and restart resets", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const writes: Array<RecordedHistoryWrite> = [];
+      const { manager, ptyAdapter, logsDir } = yield* createManager().pipe(
+        Effect.provideService(FileSystem.FileSystem, recordHistoryWrites(fileSystem, writes)),
+      );
+      yield* manager.open(openInput());
+      const firstProcess = ptyAdapter.processes[0];
+      expect(firstProcess).toBeDefined();
+      if (!firstProcess) return;
+
+      firstProcess.emitData("before clear\r");
+      yield* manager.clear({ threadId: "thread-1", terminalId: DEFAULT_TERMINAL_ID });
+      firstProcess.emitData("before restart\r");
+      yield* manager.restart(restartInput());
+
+      expect(writes.filter((write) => write.flag === "w")).toEqual([
+        { contents: "", flag: "w" },
+        { contents: "", flag: "w" },
+      ]);
+      expect(yield* historyLogPath(logsDir).pipe(Effect.flatMap(readFileString))).toBe("");
+    }),
+  );
+
+  it.effect("compacts carriage-return history at the configured byte limit", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter, logsDir } = yield* createManager({
+        historyTargetBytes: 12,
+        historyMaxBytes: 24,
+      });
+      yield* manager.open(openInput());
+      const process = ptyAdapter.processes[0];
+      expect(process).toBeDefined();
+      if (!process) return;
+
+      process.emitData("old-one\r");
+      process.emitData("old-two\r");
+      process.emitData("new-one\rnew-two\r");
+      yield* manager.close({ threadId: "thread-1" });
+
+      const persisted = yield* historyLogPath(logsDir).pipe(Effect.flatMap(readFileString));
+      expect(persisted).toBe("new-two\r");
+      expect(Buffer.byteLength(persisted)).toBeLessThanOrEqual(12);
+    }),
+  );
+
+  it.effect("compacts oversized existing history on open", () =>
+    Effect.gen(function* () {
+      const { manager, logsDir } = yield* createManager({
+        historyTargetBytes: 12,
+        historyMaxBytes: 24,
+      });
+      const filePath = yield* historyLogPath(logsDir);
+      yield* writeFileString(filePath, "old-one\rold-two\rnew-one\rnew-two\r");
+
+      const opened = yield* manager.open(openInput());
+
+      expect(opened.history).toBe("new-two\r");
+      expect(yield* readFileString(filePath)).toBe("new-two\r");
+    }),
+  );
+
+  it.effect("keeps durable history larger than snapshots sent to clients", () =>
+    Effect.gen(function* () {
+      const { manager, logsDir } = yield* createManager({
+        historyTargetBytes: 64,
+        historyMaxBytes: 96,
+        replayHistoryTargetBytes: 12,
+        replayHistoryMaxBytes: 24,
+      });
+      const filePath = yield* historyLogPath(logsDir);
+      const durableHistory = "old-one\rold-two\rnew-one\rnew-two\r";
+      yield* writeFileString(filePath, durableHistory);
+
+      const opened = yield* manager.open(openInput());
+      const resynced = yield* manager.readSnapshot({
+        threadId: "thread-1",
+        terminalId: DEFAULT_TERMINAL_ID,
+      });
+
+      expect(opened.history).toBe("new-two\r");
+      expect(Option.getOrThrow(resynced).history).toBe("new-two\r");
+      expect(yield* readFileString(filePath)).toBe(durableHistory);
+    }),
+  );
+
+  it.effect("recovers a partially written append with bounded history", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const failedAppend = yield* Deferred.make<void>();
+      const cause = PlatformError.systemError({
+        _tag: "PermissionDenied",
+        module: "FileSystem",
+        method: "writeFileString",
+        pathOrDescriptor: "terminal-history",
+      });
+      let shouldFailAppend = true;
+      const recoveringFileSystem = FileSystem.FileSystem.of({
+        ...fileSystem,
+        writeFileString: (filePath, contents, options) => {
+          if (
+            filePath.endsWith(".log") &&
+            options?.flag === "a" &&
+            contents.length > 0 &&
+            shouldFailAppend
+          ) {
+            shouldFailAppend = false;
+            return fileSystem
+              .writeFileString(filePath, contents.slice(0, 4), options)
+              .pipe(
+                Effect.andThen(Deferred.succeed(failedAppend, undefined)),
+                Effect.andThen(Effect.fail(cause)),
+              );
+          }
+          return fileSystem.writeFileString(filePath, contents, options);
+        },
+      });
+      const { manager, ptyAdapter, logsDir } = yield* createManager().pipe(
+        Effect.provideService(FileSystem.FileSystem, recoveringFileSystem),
+      );
+      yield* manager.open(openInput());
+      const process = ptyAdapter.processes[0];
+      expect(process).toBeDefined();
+      if (!process) return;
+
+      process.emitData("survives recovery\r");
+      yield* Deferred.await(failedAppend);
+      yield* manager.close({ threadId: "thread-1" });
+
+      expect(yield* historyLogPath(logsDir).pipe(Effect.flatMap(readFileString))).toBe(
+        "survives recovery\r",
+      );
+    }),
+  );
+
+  it.effect("preserves Unicode split across terminal output chunks", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter, logsDir } = yield* createManager();
+      yield* manager.open(openInput());
+      const process = ptyAdapter.processes[0];
+      expect(process).toBeDefined();
+      if (!process) return;
+
+      process.emitData("before \ud83d");
+      process.emitData("\ude00 after\r");
+      yield* manager.close({ threadId: "thread-1" });
+
+      expect(yield* historyLogPath(logsDir).pipe(Effect.flatMap(readFileString))).toBe(
+        "before 😀 after\r",
+      );
     }),
   );
 
@@ -1307,7 +1537,7 @@ it.layer(
 
   it.effect("escalates terminal shutdown to SIGKILL when process does not exit in time", () =>
     Effect.gen(function* () {
-      const { manager, ptyAdapter } = yield* createManager(5, { processKillGraceMs: 10 });
+      const { manager, ptyAdapter } = yield* createManager({ processKillGraceMs: 10 });
       yield* manager.open(openInput());
       const process = ptyAdapter.processes[0];
       expect(process).toBeDefined();
@@ -1340,7 +1570,7 @@ it.layer(
 
   it.effect("evicts oldest inactive terminal sessions when retention limit is exceeded", () =>
     Effect.gen(function* () {
-      const { manager, ptyAdapter, logsDir, getEvents } = yield* createManager(5, {
+      const { manager, ptyAdapter, logsDir, getEvents } = yield* createManager({
         maxRetainedInactiveSessions: 1,
       });
 
@@ -1403,7 +1633,7 @@ it.layer(
       const platform = yield* HostProcessPlatform;
       const missingShell =
         platform === "win32" ? "C:\\definitely\\missing-shell.exe" : "/definitely/missing-shell -l";
-      const { manager, ptyAdapter } = yield* createManager(5, {
+      const { manager, ptyAdapter } = yield* createManager({
         shellResolver: () => missingShell,
       });
       ptyAdapter.spawnFailures.push(new Error("posix_spawnp failed."));
@@ -1437,7 +1667,7 @@ it.layer(
 
   it.effect("prefers PowerShell over ComSpec for Windows terminals", () =>
     Effect.gen(function* () {
-      const { manager, ptyAdapter } = yield* createManager(5, {
+      const { manager, ptyAdapter } = yield* createManager({
         env: {
           ComSpec: "C:\\Windows\\System32\\cmd.exe",
           PATH: "C:\\Windows\\System32",
@@ -1459,7 +1689,7 @@ it.layer(
   it.effect("falls back to built-in PowerShell by absolute path on Windows", () =>
     Effect.gen(function* () {
       const ptyAdapter = new FakePtyAdapter();
-      const { manager } = yield* createManager(5, {
+      const { manager } = yield* createManager({
         ptyAdapter,
         shellResolver: () => "C:\\missing\\custom-shell.exe",
         env: {
@@ -1487,7 +1717,7 @@ it.layer(
 
   it.effect("filters app runtime env variables from terminal sessions", () =>
     Effect.gen(function* () {
-      const { manager, ptyAdapter } = yield* createManager(5, {
+      const { manager, ptyAdapter } = yield* createManager({
         env: {
           PORT: "5173",
           T3CODE_PORT: "3773",
@@ -1512,7 +1742,7 @@ it.layer(
   it.effect("strips AppImage runtime env from terminal sessions", () =>
     Effect.gen(function* () {
       const appDir = "/tmp/.mount_T3Codeabc123";
-      const { manager, ptyAdapter } = yield* createManager(5, {
+      const { manager, ptyAdapter } = yield* createManager({
         env: {
           APPIMAGE: "/home/user/T3-Code.AppImage",
           APPDIR: appDir,
@@ -1553,7 +1783,7 @@ it.layer(
 
   it.effect("leaves the environment untouched when not launched from an AppImage", () =>
     Effect.gen(function* () {
-      const { manager, ptyAdapter } = yield* createManager(5, {
+      const { manager, ptyAdapter } = yield* createManager({
         env: {
           PATH: "/usr/local/bin:/usr/bin:/bin",
           LD_LIBRARY_PATH: "/home/user/.local/lib",
@@ -1598,7 +1828,7 @@ it.layer(
   it.effect("starts zsh with prompt spacer disabled to avoid `%` end markers", () =>
     Effect.gen(function* () {
       if ((yield* HostProcessPlatform) === "win32") return;
-      const { manager, ptyAdapter } = yield* createManager(5, {
+      const { manager, ptyAdapter } = yield* createManager({
         shellResolver: () => "/bin/zsh",
       });
       yield* manager.open(openInput());
@@ -1612,7 +1842,7 @@ it.layer(
 
   it.effect("bridges PTY callbacks back into Effect-managed event streaming", () =>
     Effect.gen(function* () {
-      const { manager, ptyAdapter, getEvents } = yield* createManager(5, {
+      const { manager, ptyAdapter, getEvents } = yield* createManager({
         ptyAdapter: new FakePtyAdapter("async"),
       });
 
@@ -1634,7 +1864,7 @@ it.layer(
 
   it.effect("pushes PTY callbacks to direct event subscribers", () =>
     Effect.gen(function* () {
-      const { manager, ptyAdapter } = yield* createManager(5, {
+      const { manager, ptyAdapter } = yield* createManager({
         ptyAdapter: new FakePtyAdapter("async"),
       });
       const subscriberEvents = yield* Ref.make<ReadonlyArray<TerminalEvent>>([]);
@@ -1738,7 +1968,7 @@ it.layer(
     "streams attach snapshots followed by live events without duplicate start snapshots",
     () =>
       Effect.gen(function* () {
-        const { manager, ptyAdapter } = yield* createManager(5, {
+        const { manager, ptyAdapter } = yield* createManager({
           ptyAdapter: new FakePtyAdapter("async"),
         });
         const attachEvents = yield* Ref.make<ReadonlyArray<TerminalAttachStreamEvent>>([]);
@@ -1775,9 +2005,80 @@ it.layer(
       }),
   );
 
+  it.effect("streams extended persisted history before live terminal output", () =>
+    Effect.gen(function* () {
+      const { manager, logsDir } = yield* createManager();
+      const history = Array.from(
+        { length: 12_000 },
+        (_, index) => `${String(index).padStart(5, "0")} ${"x".repeat(64)}\n`,
+      ).join("");
+      yield* historyLogPath(logsDir).pipe(
+        Effect.flatMap((filePath) => writeFileString(filePath, history)),
+      );
+
+      const deliveries: Array<{
+        readonly event: TerminalAttachStreamEvent;
+        readonly delivery: "replay" | "live";
+      }> = [];
+      const unsubscribe = yield* manager.attachStream(
+        { ...openInput(), replayBytes: EXTENDED_TERMINAL_REPLAY_BYTES },
+        (event, delivery) => Effect.sync(() => deliveries.push({ event, delivery })),
+      );
+      yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
+
+      expect(deliveries[0]).toMatchObject({
+        event: { type: "snapshot", snapshot: { history: "" } },
+        delivery: "replay",
+      });
+      const replayEvents = deliveries
+        .map(({ event }) => event)
+        .filter((event) => event.type === "output");
+      expect(replayEvents.length).toBeGreaterThan(1);
+      expect(replayEvents.every((event) => Buffer.byteLength(event.data) <= 64 * 1024)).toBe(true);
+      expect(replayEvents.map((event) => event.data).join("")).toBe(history);
+      expect(deliveries.every(({ delivery }) => delivery === "replay")).toBe(true);
+    }),
+  );
+
+  it.effect("cancels extended history replay when its attach scope closes", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter, logsDir, getEvents } = yield* createManager();
+      const history = "history line\n".repeat(20_000);
+      yield* historyLogPath(logsDir).pipe(
+        Effect.flatMap((filePath) => writeFileString(filePath, history)),
+      );
+      const replayStarted = yield* Deferred.make<void>();
+      const replayChunks = yield* Ref.make(0);
+      const attachFiber = yield* manager
+        .attachStream({ ...openInput(), replayBytes: EXTENDED_TERMINAL_REPLAY_BYTES }, (event) => {
+          if (event.type !== "output") return Effect.void;
+          return Ref.update(replayChunks, (count) => count + 1).pipe(
+            Effect.andThen(Deferred.succeed(replayStarted, undefined)),
+            Effect.andThen(Effect.never),
+          );
+        })
+        .pipe(Effect.forkScoped);
+
+      yield* Deferred.await(replayStarted);
+      yield* Fiber.interrupt(attachFiber);
+
+      const process = ptyAdapter.processes[0];
+      expect(process).toBeDefined();
+      if (!process) return;
+      process.emitData("after cancel\n");
+      process.emitExit({ exitCode: 0, signal: 0 });
+      yield* waitFor(
+        Effect.map(getEvents, (events) => events.some((event) => event.type === "exited")),
+        "1200 millis",
+      );
+
+      expect(yield* Ref.get(replayChunks)).toBe(1);
+    }),
+  );
+
   it.effect("buffers attach output delivered during the initial snapshot callback", () =>
     Effect.gen(function* () {
-      const { manager, ptyAdapter } = yield* createManager(5, {
+      const { manager, ptyAdapter } = yield* createManager({
         ptyAdapter: new FakePtyAdapter("async"),
       });
       yield* manager.open(openInput());
@@ -1812,9 +2113,47 @@ it.layer(
     }),
   );
 
+  it.effect("does not duplicate pending output across extended replay and live events", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter, getEvents } = yield* createManager({
+        ptyAdapter: new FakePtyAdapter("async"),
+      });
+      yield* manager.open(openInput());
+
+      const process = ptyAdapter.processes[0];
+      expect(process).toBeDefined();
+      if (!process) return;
+
+      process.emitData("pending\n");
+
+      const attachEvents = yield* Ref.make<ReadonlyArray<TerminalAttachStreamEvent>>([]);
+      const unsubscribe = yield* manager.attachStream(
+        { ...openInput(), replayBytes: EXTENDED_TERMINAL_REPLAY_BYTES },
+        (event) => Ref.update(attachEvents, (events) => [...events, event]),
+      );
+      yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
+
+      yield* waitFor(
+        Effect.map(getEvents, (events) =>
+          events.some((event) => event.type === "output" && event.data === "pending\n"),
+        ),
+        "1200 millis",
+      );
+
+      const replayedText = (yield* Ref.get(attachEvents))
+        .map((event) => {
+          if (event.type === "snapshot") return event.snapshot.history;
+          if (event.type === "output") return event.data;
+          return "";
+        })
+        .join("");
+      expect(replayedText.split("pending\n")).toHaveLength(2);
+    }),
+  );
+
   it.effect("preserves queued PTY output ordering through exit callbacks", () =>
     Effect.gen(function* () {
-      const { manager, ptyAdapter, getEvents } = yield* createManager(5, {
+      const { manager, ptyAdapter, getEvents } = yield* createManager({
         ptyAdapter: new FakePtyAdapter("async"),
       });
 
@@ -1832,7 +2171,7 @@ it.layer(
           const relevant = events.filter(
             (event) => event.type === "output" || event.type === "exited",
           );
-          return relevant.length >= 3;
+          return relevant.length >= 2;
         }),
         "1200 millis",
       );
@@ -1841,9 +2180,8 @@ it.layer(
         (event) => event.type === "output" || event.type === "exited",
       );
       expect(relevant).toEqual([
-        expect.objectContaining({ type: "output", data: "first\n", sequence: 2 }),
-        expect.objectContaining({ type: "output", data: "second\n", sequence: 3 }),
-        expect.objectContaining({ type: "exited", exitCode: 0, exitSignal: 0, sequence: 4 }),
+        expect.objectContaining({ type: "output", data: "first\nsecond\n", sequence: 2 }),
+        expect.objectContaining({ type: "exited", exitCode: 0, exitSignal: 0, sequence: 3 }),
       ]);
 
       const attachEvents = yield* Ref.make<ReadonlyArray<TerminalAttachStreamEvent>>([]);
@@ -1859,26 +2197,70 @@ it.layer(
       const snapshot = (yield* Ref.get(attachEvents)).find((event) => event.type === "snapshot");
       expect(snapshot).toBeDefined();
       if (!snapshot || snapshot.type !== "snapshot") return;
-      expect(snapshot.snapshot.sequence).toBe(4);
+      expect(snapshot.snapshot.sequence).toBe(3);
     }),
   );
 
-  it.effect("scoped runtime shutdown stops active terminals cleanly", () =>
+  it.effect("coalesces burst output without changing its bytes", () =>
     Effect.gen(function* () {
-      const scope = yield* Scope.make("sequential");
-      const { manager, ptyAdapter } = yield* createManager(5, {
-        processKillGraceMs: 10,
-      }).pipe(Effect.provideService(Scope.Scope, scope));
+      const { manager, ptyAdapter, getEvents } = yield* createManager({
+        ptyAdapter: new FakePtyAdapter("async"),
+        outputBatchMaxBytes: 16 * 1024,
+      });
       yield* manager.open(openInput());
       const process = ptyAdapter.processes[0];
       expect(process).toBeDefined();
       if (!process) return;
 
+      const chunk = "x".repeat(1_024);
+      for (let index = 0; index < 64; index += 1) {
+        process.emitData(chunk);
+      }
+      const oversizedChunk = chunk.repeat(64);
+      process.emitData(oversizedChunk);
+      process.emitExit({ exitCode: 0, signal: 0 });
+
+      yield* waitFor(
+        Effect.map(getEvents, (events) => events.some((event) => event.type === "exited")),
+        "1200 millis",
+      );
+
+      const outputEvents = (yield* getEvents).filter((event) => event.type === "output");
+      expect(outputEvents).toHaveLength(8);
+      expect(outputEvents.every((event) => Buffer.byteLength(event.data) <= 16 * 1024)).toBe(true);
+      expect(outputEvents.map((event) => event.data).join("")).toBe(
+        `${chunk.repeat(64)}${oversizedChunk}`,
+      );
+    }),
+  );
+
+  it.effect("scoped runtime shutdown flushes history and stops active terminals", () =>
+    Effect.gen(function* () {
+      const scope = yield* Scope.make("sequential");
+      const { manager, ptyAdapter, logsDir } = yield* createManager({
+        processKillGraceMs: 10,
+        managerScope: scope,
+      });
+      yield* manager.open(openInput());
+      const process = ptyAdapter.processes[0];
+      expect(process).toBeDefined();
+      if (!process) return;
+      const sigtermSent = yield* Effect.callback<void>((resume) => {
+        process.killObserver = (signal) => {
+          if (signal === "SIGTERM") {
+            resume(Effect.void);
+          }
+        };
+      }).pipe(Effect.forkScoped);
+      const output = "x".repeat(64 * 1024);
+      process.emitData(output);
+
       const closeScope = yield* Scope.close(scope, Exit.void).pipe(Effect.forkScoped);
-      yield* Effect.yieldNow;
+      yield* Fiber.join(sigtermSent);
       yield* TestClock.adjust("10 millis");
       yield* Fiber.join(closeScope);
 
+      expect(yield* historyLogPath(logsDir).pipe(Effect.flatMap(readFileString))).toBe(output);
       assert.equal(process.killSignals[0], "SIGTERM");
       expect(process.killSignals).toContain("SIGKILL");
     }).pipe(Effect.provide(TestClock.layer())),

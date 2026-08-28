@@ -9,7 +9,10 @@ import { GhosttyRuntime, loadGhosttyRuntime } from "./runtime";
 
 const GHOSTTY_SUCCESS = 0;
 const GHOSTTY_OUT_OF_SPACE = -3;
-const MAX_SCROLLBACK_ROWS = 10_000;
+// Despite the older libghostty-vt header calling this a line count, Ghostty's
+// screen implementation applies the value to its internal cell storage. A
+// 4 MB text replay expands substantially once every cell has terminal state.
+const MAX_SCROLLBACK_BYTES = 64 * 1024 * 1024;
 // wasm32 C ABI layout for GhosttyTerminalSelectionFormatOptions at the
 // libghostty-vt revision pinned alongside this module.
 const SELECTION_FORMAT_OPTIONS_SIZE = 16;
@@ -205,6 +208,7 @@ export class GhosttyTerminalCore {
   private mouseEvent = 0;
   private ptyWriterId = 0;
   private ptyWriter: ((data: string) => void) | null = null;
+  private replayActive = false;
   private scratch = 0;
   private style = 0;
   private scrollbar = 0;
@@ -249,7 +253,12 @@ export class GhosttyTerminalCore {
     const options = this.runtime.alloc(optionsSize);
     this.runtime.setField(options, "GhosttyTerminalOptions", "cols", cols);
     this.runtime.setField(options, "GhosttyTerminalOptions", "rows", rows);
-    this.runtime.setField(options, "GhosttyTerminalOptions", "max_scrollback", MAX_SCROLLBACK_ROWS);
+    this.runtime.setField(
+      options,
+      "GhosttyTerminalOptions",
+      "max_scrollback",
+      MAX_SCROLLBACK_BYTES,
+    );
     this.terminalSlot = this.runtime.allocOpaque();
     const terminalResult = this.runtime.call("ghostty_terminal_new", 0, this.terminalSlot, options);
     this.runtime.free(options, optionsSize);
@@ -323,24 +332,43 @@ export class GhosttyTerminalCore {
   }
 
   resetAndWrite(data: string): void {
+    this.beginReplay();
+    try {
+      this.writeReplay(data);
+    } finally {
+      this.endReplay();
+    }
+  }
+
+  /** Reset for ordered history replay while suppressing replay-generated PTY replies. */
+  beginReplay(): void {
     this.ensureActive();
+    if (this.replayActive) this.endReplay();
     this.runtime.call("ghostty_terminal_reset", this.terminal);
     // RIS returns the cursor to Ghostty's built-in steady default, so the
     // embedder default has to be applied again before the replay runs.
     this.applyDefaultCursorBlink();
     this.rows = [];
-    if (data.length === 0) return;
-    const writer = this.ptyWriter;
     if (this.ptyWriterId !== 0) {
       this.runtime.detachPtyWriter(this.terminal, this.ptyWriterId);
       this.ptyWriterId = 0;
     }
-    try {
-      this.write(data);
-    } finally {
-      if (writer !== null && !this.disposed) {
-        this.ptyWriterId = this.runtime.attachPtyWriter(this.terminal, writer);
-      }
+    this.replayActive = true;
+  }
+
+  writeReplay(data: string): void {
+    this.ensureActive();
+    if (!this.replayActive) {
+      throw new Error("Ghostty replay is not active");
+    }
+    this.write(data);
+  }
+
+  endReplay(): void {
+    if (!this.replayActive) return;
+    this.replayActive = false;
+    if (this.ptyWriter !== null && !this.disposed) {
+      this.ptyWriterId = this.runtime.attachPtyWriter(this.terminal, this.ptyWriter);
     }
   }
 
@@ -394,6 +422,15 @@ export class GhosttyTerminalCore {
     this.runtime.setField(scroll, "GhosttyTerminalScrollViewport", "tag", 2);
     const value = layout.fields.value!;
     this.runtime.view(scroll + value.offset, value.size).setInt32(0, deltaRows, true);
+    this.runtime.call("ghostty_terminal_scroll_viewport", this.terminal, scroll);
+    this.runtime.free(scroll, layout.size);
+  }
+
+  scrollToTop(): void {
+    this.ensureActive();
+    const layout = this.runtime.layout("GhosttyTerminalScrollViewport");
+    const scroll = this.runtime.alloc(layout.size);
+    this.runtime.setField(scroll, "GhosttyTerminalScrollViewport", "tag", 0);
     this.runtime.call("ghostty_terminal_scroll_viewport", this.terminal, scroll);
     this.runtime.free(scroll, layout.size);
   }
