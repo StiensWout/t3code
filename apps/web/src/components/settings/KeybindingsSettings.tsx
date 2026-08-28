@@ -230,6 +230,41 @@ function defaultWhenGroup(operator: BooleanOperator = "and"): KeybindingWhenNode
   };
 }
 
+/** Warning glyph whose explanation lives in a tooltip; the one owner of that affordance here. */
+function WarningTooltipIcon({
+  label,
+  focusable = true,
+  className,
+  children,
+}: {
+  label: string;
+  focusable?: boolean;
+  className?: string | undefined;
+  children: ReactNode;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            tabIndex={focusable ? 0 : undefined}
+            aria-label={label}
+            className={cn(
+              "inline-flex size-5 shrink-0 items-center justify-center rounded-sm text-warning outline-none transition-colors hover:bg-warning/10 focus-visible:ring-[3px] focus-visible:ring-warning/25",
+              className,
+            )}
+          />
+        }
+      >
+        <TriangleAlertIcon className="size-3.5" />
+      </TooltipTrigger>
+      <TooltipPopup side="top" className="max-w-72 whitespace-normal leading-relaxed">
+        {children}
+      </TooltipPopup>
+    </Tooltip>
+  );
+}
+
 function UnknownWhenVariableWarning({
   identifiers,
   focusable = true,
@@ -244,23 +279,10 @@ function UnknownWhenVariableWarning({
       : `Unknown conditions: ${identifiers.join(", ")}`;
 
   return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <span
-            tabIndex={focusable ? 0 : undefined}
-            aria-label={label}
-            className="inline-flex size-4.5 shrink-0 items-center justify-center rounded-sm text-warning outline-none transition-colors hover:bg-warning/10 focus-visible:ring-[3px] focus-visible:ring-warning/25"
-          >
-            <TriangleAlertIcon className="size-3.5" />
-          </span>
-        }
-      />
-      <TooltipPopup side="top" className="max-w-72 whitespace-normal leading-relaxed">
-        T3 Code does not recognize this condition yet. It can still be saved, but it may not match
-        unless the runtime provides it.
-      </TooltipPopup>
-    </Tooltip>
+    <WarningTooltipIcon label={label} focusable={focusable} className="size-4.5">
+      T3 Code does not recognize this condition yet. It can still be saved, but it may not match
+      unless the runtime provides it.
+    </WarningTooltipIcon>
   );
 }
 
@@ -272,22 +294,9 @@ function KeybindingConflictWarning({ labels }: { labels: ReadonlyArray<string> }
       : `Conflicts with ${labels.slice(0, 3).join(", ")}${labels.length > 3 ? ", and more" : ""}.`;
 
   return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <span
-            tabIndex={0}
-            aria-label={description}
-            className="inline-flex size-5 shrink-0 items-center justify-center rounded-sm text-warning outline-none transition-colors hover:bg-warning/10 focus-visible:ring-[3px] focus-visible:ring-warning/25"
-          >
-            <TriangleAlertIcon className="size-3.5" />
-          </span>
-        }
-      />
-      <TooltipPopup side="top" className="max-w-72 whitespace-normal leading-relaxed">
-        {description} The most recent matching binding wins when both conditions can apply.
-      </TooltipPopup>
-    </Tooltip>
+    <WarningTooltipIcon label={description}>
+      {description} The most recent matching binding wins when both conditions can apply.
+    </WarningTooltipIcon>
   );
 }
 
@@ -877,8 +886,8 @@ function WhenClauseControl({
         render={
           <Button
             variant={expression ? "ghost" : "ghost-muted"}
-            size="compact"
-            className="h-6 min-w-0 shrink gap-1 px-1 font-mono font-normal text-[12px] sm:text-[12px]"
+            size="micro"
+            className="min-w-0 shrink font-mono"
           />
         }
         aria-label={`Edit when clause for ${label}`}
@@ -964,10 +973,13 @@ function KeybindingSettingsRow(props: KeybindingRowProps) {
     <SettingsRow
       className="rounded-none hover:bg-accent/30"
       title={
-        <span className="flex items-center gap-2">
-          {commandLabel(row.command)}
-          <KeybindingSourceBadge source={row.source} />
-        </span>
+        <Tooltip>
+          <TooltipTrigger render={<span className="flex items-center gap-2" />}>
+            {commandLabel(row.command)}
+            <KeybindingSourceBadge source={row.source} />
+          </TooltipTrigger>
+          <TooltipPopup side="top">{row.command}</TooltipPopup>
+        </Tooltip>
       }
       description={
         <span className="flex h-6 items-center gap-1.5">
@@ -983,11 +995,11 @@ function KeybindingSettingsRow(props: KeybindingRowProps) {
         </span>
       }
       control={
-        <>
+        <div className="flex flex-wrap items-center justify-end gap-2">
           <KeybindingConflictWarning labels={editor.conflictLabels} />
           <KeybindingKeyControl row={row} editor={editor} isSaving={isSaving} />
           <KeybindingRowMenu row={row} isSaving={isSaving} onReset={onReset} onRemove={onRemove} />
-        </>
+        </div>
       }
     />
   );
@@ -1250,23 +1262,10 @@ function KeybindingsList(props: KeybindingsListProps) {
 function BrowserKeybindingNotice() {
   return (
     <div className="flex items-center gap-1.5 px-3 pb-2 text-[12px] text-muted-foreground sm:px-4">
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <span
-              tabIndex={0}
-              aria-label="Browser keybinding limitations"
-              className="inline-flex size-4.5 shrink-0 items-center justify-center rounded-sm text-warning outline-none transition-colors hover:bg-warning/10 focus-visible:ring-[3px] focus-visible:ring-warning/25"
-            />
-          }
-        >
-          <TriangleAlertIcon className="size-3.5" />
-        </TooltipTrigger>
-        <TooltipPopup side="top" className="max-w-72 whitespace-normal leading-relaxed">
-          Some shortcuts are claimed by the browser before T3 Code sees them. Use the desktop app
-          for better keybinding support.
-        </TooltipPopup>
-      </Tooltip>
+      <WarningTooltipIcon label="Browser keybinding limitations" className="size-4.5">
+        Some shortcuts are claimed by the browser before T3 Code sees them. Use the desktop app for
+        better keybinding support.
+      </WarningTooltipIcon>
       <span>Browser shortcuts may take precedence.</span>
     </div>
   );
