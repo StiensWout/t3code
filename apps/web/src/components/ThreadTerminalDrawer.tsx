@@ -1045,6 +1045,7 @@ export function TerminalViewport({
 
     if (
       current.replayCompleteVersion > 0 &&
+      current.replayCompleteVersion >= current.replayStartVersion &&
       current.version !== previous.version &&
       streamingReplay
     ) {

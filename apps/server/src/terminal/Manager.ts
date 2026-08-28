@@ -2749,6 +2749,18 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
 
       yield* listener(
         {
+          type: "replay-start",
+          threadId: input.threadId,
+          terminalId: input.terminalId,
+          ...(typeof bootstrap.snapshot.sequence === "number"
+            ? { sequence: bootstrap.snapshot.sequence }
+            : {}),
+        },
+        "replay",
+      );
+
+      yield* listener(
+        {
           type: "snapshot",
           snapshot: bootstrap.snapshot,
         },

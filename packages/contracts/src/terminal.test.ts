@@ -152,7 +152,15 @@ describe("TerminalAttachInput", () => {
 });
 
 describe("TerminalAttachStreamEvent", () => {
-  it("accepts an ordered replay completion marker", () => {
+  it("accepts ordered replay boundary markers", () => {
+    expect(
+      decodes(TerminalAttachStreamEvent, {
+        type: "replay-start",
+        threadId: "thread-1",
+        terminalId: DEFAULT_TERMINAL_ID,
+        sequence: 42,
+      }),
+    ).toBe(true);
     expect(
       decodes(TerminalAttachStreamEvent, {
         type: "replay-complete",

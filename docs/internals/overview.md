@@ -64,8 +64,9 @@ The server owns each PTY and keeps two histories with different budgets. [`Manag
 allows durable history to grow to 12 MB before compacting it toward 8 MB. Its recent recovery
 snapshot is separate and grows to 64 KB before compacting toward 48 KB. Incremental renderers can
 request up to 8 MB when attaching. Web starts from the recent snapshot and requests 4 MB when the
-user reaches its top; extended history arrives as ordered 64 KB chunks plus a completion marker
-before live output begins, allowing the renderer to restore the user's top-of-scrollback position.
+user reaches its top; extended history arrives as ordered 64 KB chunks between explicit replay
+start and completion markers before live output begins. Those boundaries re-arm replay suppression
+after a transport reconnect without forcing the viewport to jump.
 
 PTY output is coalesced for up to 8 ms or 16 KB before `terminal.attach` publishes it. Initial
 history uses backpressure and cancels with the attach scope. Live delivery buffers at most 32 events.

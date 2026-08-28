@@ -153,20 +153,37 @@ describe("terminal session reducers", () => {
     });
 
     expect(second.version).toBe(2);
-    expect(second.replayStartVersion).toBe(2);
-    expect(cleared.replayStartVersion).toBe(2);
+    expect(second.replayStartVersion).toBe(0);
+    expect(cleared.replayStartVersion).toBe(0);
     expect(terminalOutputText(second.output)).toBe("resynced");
   });
 
-  it("exposes replay completion independently from output versions", () => {
-    const completed = applyTerminalAttachStreamEvent(EMPTY_TERMINAL_BUFFER_STATE, {
+  it("tracks replay boundaries independently from snapshots and output", () => {
+    const started = applyTerminalAttachStreamEvent(EMPTY_TERMINAL_BUFFER_STATE, {
+      type: "replay-start",
+      threadId: TARGET.threadId,
+      terminalId: TARGET.terminalId,
+      sequence: 1,
+    });
+    const snapshot = applyTerminalAttachStreamEvent(started, {
+      type: "snapshot",
+      snapshot: BASE_SNAPSHOT,
+    });
+    const completed = applyTerminalAttachStreamEvent(snapshot, {
       type: "replay-complete",
       threadId: TARGET.threadId,
       terminalId: TARGET.terminalId,
       sequence: 1,
     });
+    const reconnected = applyTerminalAttachStreamEvent(completed, {
+      type: "replay-start",
+      threadId: TARGET.threadId,
+      terminalId: TARGET.terminalId,
+      sequence: 2,
+    });
 
-    expect(completed).toMatchObject({ replayCompleteVersion: 1, version: 1 });
+    expect(completed).toMatchObject({ replayStartVersion: 1, replayCompleteVersion: 1 });
+    expect(reconnected).toMatchObject({ replayStartVersion: 2, replayCompleteVersion: 1 });
   });
 
   it("reduces terminal metadata snapshots, upserts, and removals", () => {

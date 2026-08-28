@@ -371,6 +371,7 @@ it.layer(
 
       const events = yield* Ref.get(attachEvents);
       expect(events.map((event) => event.type)).toEqual([
+        "replay-start",
         "snapshot",
         "replay-complete",
         "closed",
@@ -2004,6 +2005,11 @@ it.layer(
 
         expect(yield* Ref.get(attachEvents)).toMatchObject([
           {
+            type: "replay-start",
+            threadId: "thread-1",
+            terminalId: DEFAULT_TERMINAL_ID,
+          },
+          {
             type: "snapshot",
             snapshot: {
               threadId: "thread-1",
@@ -2053,6 +2059,10 @@ it.layer(
       yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
 
       expect(deliveries[0]).toMatchObject({
+        event: { type: "replay-start" },
+        delivery: "replay",
+      });
+      expect(deliveries[1]).toMatchObject({
         event: { type: "snapshot", snapshot: { history: "" } },
         delivery: "replay",
       });
@@ -2134,6 +2144,7 @@ it.layer(
       );
 
       expect(yield* Ref.get(attachEvents)).toMatchObject([
+        { type: "replay-start" },
         { type: "snapshot" },
         { type: "replay-complete" },
         { type: "output", data: "during snapshot\n" },

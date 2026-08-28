@@ -294,7 +294,7 @@ export function terminalBufferStateFromSnapshot(
     status: snapshot.status,
     error: null,
     updatedAt: snapshot.updatedAt,
-    replayStartVersion: current.replayStartVersion + 1,
+    replayStartVersion: current.replayStartVersion,
     replayCompleteVersion: current.replayCompleteVersion,
     version: current.version + 1,
   };
@@ -329,6 +329,12 @@ export function applyTerminalAttachStreamEvent(
   maxBufferBytes = DEFAULT_MAX_TERMINAL_BUFFER_BYTES,
 ): TerminalBufferState {
   switch (event.type) {
+    case "replay-start":
+      return {
+        ...current,
+        replayStartVersion: current.replayStartVersion + 1,
+        version: current.version + 1,
+      };
     case "snapshot":
     case "restarted":
       return terminalBufferStateFromSnapshot(event.snapshot, maxBufferBytes, current);
