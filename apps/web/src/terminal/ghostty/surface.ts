@@ -749,7 +749,11 @@ export class GhosttyTerminalSurface {
       return;
     }
 
-    this.writeQueue.push({ data, offset: 0, replay: false });
+    // Output from the PTY only follows the server's replay-complete marker.
+    // Anything written while a streamed replay is open is renderer-local
+    // status text, so keep it ordered inside the replay instead of ending the
+    // stream before later history chunks arrive.
+    this.writeQueue.push({ data, offset: 0, replay: this.replayStreamOpen });
     this.requestWriteDrain();
   }
 
@@ -862,7 +866,7 @@ export class GhosttyTerminalSurface {
       // A one-code-unit remainder can land before a surrogate pair. Leave it
       // for the next frame, whose full budget can consume the pair together.
       if (chunk.length === 0) break;
-      if (pending.replay) this.core.writeReplay(chunk);
+      if (pending.replay && this.replayActive) this.core.writeReplay(chunk);
       else this.core.write(chunk);
       budget -= chunk.length;
       pending.offset = end;
