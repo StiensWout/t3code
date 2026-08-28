@@ -895,7 +895,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const listWorkspaces: GitVcsDriver.GitVcsDriver["Service"]["listWorkspaces"] = Effect.fn(
     "GitVcsDriver.listWorkspaces",
   )(function* (cwd) {
-    const args = ["worktree", "list", "--porcelain"] as const;
+    const args = ["worktree", "list", "--porcelain", "-z"] as const;
     const result = yield* executeGit("GitVcsDriver.listWorkspaces", cwd, args, {
       timeoutMs: 30_000,
       maxOutputBytes: WORKTREE_LIST_MAX_OUTPUT_BYTES,
@@ -2544,7 +2544,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         executeGit(
           "GitVcsDriver.listRefs.worktreeList",
           fetchCwd,
-          [...gitDirArgs, "worktree", "list", "--porcelain"],
+          [...gitDirArgs, "worktree", "list", "--porcelain", "-z"],
           {
             timeoutMs: 30_000,
             allowNonZeroExit: true,

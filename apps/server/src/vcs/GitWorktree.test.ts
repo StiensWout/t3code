@@ -3,13 +3,13 @@ import { describe, expect, it } from "vite-plus/test";
 import { parseGitWorktreeBranchPaths, parseGitWorktreeListPorcelain } from "./GitWorktree.ts";
 
 describe("Git worktree porcelain parsing", () => {
-  it("parses newline porcelain and filters detached or prunable branch paths", () => {
+  it("parses NUL-terminated porcelain and filters detached or prunable branch paths", () => {
     const stdout = [
       "worktree /repo/main",
       "HEAD 1111111",
       "branch refs/heads/main",
       "",
-      "worktree /repo/feature",
+      "worktree /repo/line\nbreak",
       "HEAD 2222222",
       "branch refs/heads/feature/demo",
       "",
@@ -22,18 +22,18 @@ describe("Git worktree porcelain parsing", () => {
       "branch refs/heads/stale",
       "prunable gitdir file points to non-existent location",
       "",
-    ].join("\n");
+    ].join("\0");
 
     expect(parseGitWorktreeListPorcelain(stdout)).toEqual([
       { path: "/repo/main", refName: "main", prunable: false },
-      { path: "/repo/feature", refName: "feature/demo", prunable: false },
+      { path: "/repo/line\nbreak", refName: "feature/demo", prunable: false },
       { path: "/repo/detached", refName: null, prunable: false },
       { path: "/repo/stale", refName: "stale", prunable: true },
     ]);
     expect(parseGitWorktreeBranchPaths(stdout)).toEqual(
       new Map([
         ["main", "/repo/main"],
-        ["feature/demo", "/repo/feature"],
+        ["feature/demo", "/repo/line\nbreak"],
       ]),
     );
   });

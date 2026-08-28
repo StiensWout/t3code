@@ -1,9 +1,9 @@
 import type { VcsWorkspace } from "@t3tools/contracts";
 
 /**
- * Parse the newline format from `git worktree list --porcelain`. We avoid
- * `-z` because it requires Git 2.36, newer than Ubuntu 22.04's Git 2.34.
- * Paths containing newlines are unsupported, matching the rest of the driver.
+ * Parse `git worktree list --porcelain -z`. Fields are NUL-terminated and
+ * records end with an extra NUL, so paths may contain newlines. `-z` needs
+ * Git 2.36, which listRefs already requires.
  */
 export function parseGitWorktreeListPorcelain(stdout: string): VcsWorkspace[] {
   const entries: VcsWorkspace[] = [];
@@ -24,7 +24,7 @@ export function parseGitWorktreeListPorcelain(stdout: string): VcsWorkspace[] {
     currentPrunable = false;
   };
 
-  for (const field of stdout.split(/\r?\n/)) {
+  for (const field of stdout.split("\0")) {
     if (field === "") {
       flush();
     } else if (field.startsWith("worktree ")) {

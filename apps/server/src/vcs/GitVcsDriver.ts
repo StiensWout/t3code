@@ -578,7 +578,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
   const listWorkspaces: VcsDriver.VcsDriver["Service"]["listWorkspaces"] = Effect.fn(
     "GitVcsDriver.listWorkspaces",
   )(function* (cwd) {
-    const args = ["worktree", "list", "--porcelain"] as const;
+    const args = ["worktree", "list", "--porcelain", "-z"] as const;
     const result = yield* gitCommand(vcsProcess, "GitVcsDriver.listWorkspaces", cwd, args, {
       timeoutMs: 30_000,
       maxOutputBytes: WORKTREE_LIST_MAX_OUTPUT_BYTES,
