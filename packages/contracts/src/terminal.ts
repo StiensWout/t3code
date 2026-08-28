@@ -234,8 +234,14 @@ const TerminalAttachSnapshotEvent = Schema.Struct({
   snapshot: TerminalSessionSnapshot,
 });
 
+const TerminalReplayCompleteEvent = Schema.Struct({
+  ...TerminalEventBaseSchema.fields,
+  type: Schema.Literal("replay-complete"),
+});
+
 export const TerminalAttachStreamEvent = Schema.Union([
   TerminalAttachSnapshotEvent,
+  TerminalReplayCompleteEvent,
   TerminalOutputEvent,
   TerminalExitedEvent,
   TerminalClosedEvent,

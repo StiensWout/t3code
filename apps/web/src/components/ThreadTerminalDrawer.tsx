@@ -410,10 +410,35 @@ export function TerminalViewport({
     }),
   );
   const terminalFontRef = useRef({ family: terminalFontFamily, size: terminalFontSize });
-  const [replayBytes, setReplayBytes] = useState(DEFAULT_TERMINAL_REPLAY_BYTES);
+  const pendingScrollbackReplayIdentityRef = useRef<string | null>(null);
+  const terminalAttachIdentity = useMemo(
+    () =>
+      JSON.stringify([
+        environmentId,
+        threadId,
+        terminalId,
+        cwd,
+        worktreePath ?? null,
+        runtimeEnvKey,
+      ]),
+    [cwd, environmentId, runtimeEnvKey, terminalId, threadId, worktreePath],
+  );
+  const [extendedReplayIdentity, setExtendedReplayIdentity] = useState<string | null>(null);
+  const replayBytes =
+    extendedReplayIdentity === terminalAttachIdentity
+      ? EXTENDED_TERMINAL_REPLAY_BYTES
+      : DEFAULT_TERMINAL_REPLAY_BYTES;
   const requestExtendedReplay = useEffectEvent(() => {
-    setReplayBytes(EXTENDED_TERMINAL_REPLAY_BYTES);
+    if (extendedReplayIdentity === terminalAttachIdentity) return;
+    pendingScrollbackReplayIdentityRef.current = terminalAttachIdentity;
+    setExtendedReplayIdentity(terminalAttachIdentity);
   });
+  useEffect(() => {
+    setExtendedReplayIdentity(null);
+    if (pendingScrollbackReplayIdentityRef.current !== terminalAttachIdentity) {
+      pendingScrollbackReplayIdentityRef.current = null;
+    }
+  }, [terminalAttachIdentity]);
   const terminalSession = useAttachedTerminalSession({
     environmentId,
     terminal: {
@@ -444,6 +469,8 @@ export function TerminalViewport({
     resetVersion: -1,
     lastChunkId: 0,
   });
+  const terminalSubscriptionIdentity = `${terminalAttachIdentity}:${replayBytes}`;
+  const outputSubscriptionIdentityRef = useRef(terminalSubscriptionIdentity);
   const synchronizedStatusRef = useRef<TerminalSessionState["status"]>("closed");
   const synchronizeTerminalStatus = useEffectEvent(
     (terminal: GhosttyTerminalSurface, status: TerminalSessionState["status"]) => {
@@ -463,10 +490,12 @@ export function TerminalViewport({
     },
   );
   const terminalVersion = terminalSession.version;
+  const terminalReplayCompleteVersion = terminalSession.replayCompleteVersion;
   const previousSessionRef = useRef({
     output: terminalOutput,
     error: terminalError,
     status: terminalStatus,
+    replayCompleteVersion: terminalReplayCompleteVersion,
     version: terminalVersion,
   });
   const latestSessionRef = useRef(previousSessionRef.current);
@@ -474,6 +503,7 @@ export function TerminalViewport({
     output: terminalOutput,
     error: terminalError,
     status: terminalStatus,
+    replayCompleteVersion: terminalReplayCompleteVersion,
     version: terminalVersion,
   };
 
@@ -541,6 +571,13 @@ export function TerminalViewport({
         resetVersion: latestSession.output.resetVersion,
         lastChunkId: latestSession.output.latestChunkId,
       };
+      if (
+        pendingScrollbackReplayIdentityRef.current === terminalAttachIdentity &&
+        latestSession.replayCompleteVersion > 0
+      ) {
+        pendingScrollbackReplayIdentityRef.current = null;
+        terminal.scrollToTopAfterWrites();
+      }
       if (latestSession.error !== null) writeSystemMessage(terminal, latestSession.error);
       // Attaching to a session that already exited must still run exit handling
       // once, so mount synchronization starts from the empty "closed" state.
@@ -927,14 +964,32 @@ export function TerminalViewport({
     };
     // autoFocus is intentionally omitted;
     // it is only read at mount time and must not trigger terminal teardown/recreation.
-  }, [cwd, environmentId, runtimeEnvKey, terminalId, threadId, worktreePath]);
+  }, [
+    cwd,
+    environmentId,
+    runtimeEnvKey,
+    terminalAttachIdentity,
+    terminalId,
+    threadId,
+    worktreePath,
+  ]);
 
   useEffect(() => {
     const terminal = terminalRef.current;
+    const subscriptionChanged =
+      outputSubscriptionIdentityRef.current !== terminalSubscriptionIdentity;
+    if (subscriptionChanged) {
+      outputSubscriptionIdentityRef.current = terminalSubscriptionIdentity;
+      outputCursorRef.current = {
+        resetVersion: -1,
+        lastChunkId: 0,
+      };
+    }
     const current = {
       output: terminalOutput,
       error: terminalError,
       status: terminalStatus,
+      replayCompleteVersion: terminalReplayCompleteVersion,
       version: terminalVersion,
     };
     if (!terminal) {
@@ -944,7 +999,7 @@ export function TerminalViewport({
 
     const previous = previousSessionRef.current;
     synchronizeTerminalStatus(terminal, current.status);
-    if (current.version === previous.version) {
+    if (!subscriptionChanged && current.version === previous.version) {
       return;
     }
 
@@ -957,6 +1012,15 @@ export function TerminalViewport({
     }
     if (outputUpdate.type !== "none") terminal.clearSelection();
 
+    if (
+      (current.replayCompleteVersion !== previous.replayCompleteVersion ||
+        (subscriptionChanged && current.replayCompleteVersion > 0)) &&
+      pendingScrollbackReplayIdentityRef.current === terminalAttachIdentity
+    ) {
+      pendingScrollbackReplayIdentityRef.current = null;
+      terminal.scrollToTopAfterWrites();
+    }
+
     if (current.error !== null && current.error !== previous.error) {
       writeSystemMessage(terminal, current.error);
     }
@@ -967,7 +1031,16 @@ export function TerminalViewport({
       });
     }
     previousSessionRef.current = current;
-  }, [autoFocus, terminalError, terminalOutput, terminalStatus, terminalVersion]);
+  }, [
+    autoFocus,
+    terminalError,
+    terminalOutput,
+    terminalReplayCompleteVersion,
+    terminalStatus,
+    terminalAttachIdentity,
+    terminalSubscriptionIdentity,
+    terminalVersion,
+  ]);
 
   useEffect(() => {
     if (!autoFocus) return;

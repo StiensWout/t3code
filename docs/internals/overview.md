@@ -64,7 +64,8 @@ The server owns each PTY and keeps two histories with different budgets. [`Manag
 allows durable history to grow to 12 MB before compacting it toward 8 MB. Its recent recovery
 snapshot is separate and grows to 64 KB before compacting toward 48 KB. Incremental renderers can
 request up to 8 MB when attaching. Web starts from the recent snapshot and requests 4 MB when the
-user reaches its top; extended history arrives as ordered 64 KB chunks before live output begins.
+user reaches its top; extended history arrives as ordered 64 KB chunks plus a completion marker
+before live output begins, allowing the renderer to restore the user's top-of-scrollback position.
 
 PTY output is coalesced for up to 8 ms or 16 KB before `terminal.attach` publishes it. Initial
 history uses backpressure and cancels with the attach scope. Live delivery buffers at most 32 events.
@@ -76,7 +77,8 @@ because they all use the same RPC stream.
 growing string for every event. Web and native mobile renderers consume those chunks incrementally;
 if their cursor falls behind retained history, they reset from the current snapshot. The web
 renderer also yields between large Ghostty writes so extended replay does not monopolize the main
-thread. Hidden web drawers unmount their renderer and attach subscription while the server-owned PTY
+thread. Web and native renderers suppress terminal query replies while replaying retained history.
+Hidden web drawers unmount their renderer and attach subscription while the server-owned PTY
 continues running. Ghostty renderers use a 64 MB internal scrollback budget so the 4 MB text replay
 remains available after it expands into styled terminal cells.
 

@@ -572,6 +572,7 @@ export class GhosttyTerminalSurface {
   private writeQueue: Array<{ data: string; offset: number; replay: boolean }> = [];
   private writeQueueIndex = 0;
   private replayActive = false;
+  private scrollToTopWhenWritesDrain = false;
   private cursorTimer: number | null = null;
   private compositionInputToSuppress: string | null = null;
   private compositionSuppressionTimer: number | null = null;
@@ -781,6 +782,15 @@ export class GhosttyTerminalSurface {
     this.requestRender();
   }
 
+  scrollToTopAfterWrites(): void {
+    if (this.disposed) return;
+    if (this.writeQueueIndex < this.writeQueue.length || this.replayActive) {
+      this.scrollToTopWhenWritesDrain = true;
+      return;
+    }
+    this.scrollToTop();
+  }
+
   private requestWriteDrain(): void {
     if (this.disposed || this.writeFrame !== 0) return;
     this.writeFrame = window.requestAnimationFrame(this.drainWrites);
@@ -816,6 +826,10 @@ export class GhosttyTerminalSurface {
       this.writeQueue = [];
       this.writeQueueIndex = 0;
       this.finishReplay();
+      if (this.scrollToTopWhenWritesDrain) {
+        this.scrollToTopWhenWritesDrain = false;
+        this.scrollToTop();
+      }
     } else {
       this.requestWriteDrain();
     }
@@ -835,6 +849,7 @@ export class GhosttyTerminalSurface {
     }
     this.writeQueue = [];
     this.writeQueueIndex = 0;
+    this.scrollToTopWhenWritesDrain = false;
     this.finishReplay();
   }
 
@@ -1042,6 +1057,13 @@ export class GhosttyTerminalSurface {
 
   scrollToBottom(): void {
     this.core.scrollToBottom();
+    this.forceFullRender = true;
+    this.scrollbarDirty = true;
+    this.requestRender();
+  }
+
+  scrollToTop(): void {
+    this.core.scrollToTop();
     this.forceFullRender = true;
     this.scrollbarDirty = true;
     this.requestRender();

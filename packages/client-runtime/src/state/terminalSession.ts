@@ -44,6 +44,7 @@ export interface TerminalSessionState {
   readonly error: string | null;
   readonly hasRunningSubprocess: boolean;
   readonly updatedAt: string | null;
+  readonly replayCompleteVersion: number;
   readonly version: number;
 }
 
@@ -52,6 +53,7 @@ export interface TerminalBufferState {
   readonly status: TerminalSessionSnapshot["status"] | "closed";
   readonly error: string | null;
   readonly updatedAt: string | null;
+  readonly replayCompleteVersion: number;
   readonly version: number;
 }
 
@@ -84,6 +86,7 @@ export const EMPTY_TERMINAL_BUFFER_STATE = Object.freeze<TerminalBufferState>({
   status: "closed",
   error: null,
   updatedAt: null,
+  replayCompleteVersion: 0,
   version: 0,
 });
 
@@ -94,6 +97,7 @@ export const EMPTY_TERMINAL_SESSION_STATE = Object.freeze<TerminalSessionState>(
   error: null,
   hasRunningSubprocess: false,
   updatedAt: null,
+  replayCompleteVersion: 0,
   version: 0,
 });
 
@@ -279,14 +283,15 @@ export function readTerminalOutputUpdate(
 export function terminalBufferStateFromSnapshot(
   snapshot: TerminalSessionSnapshot,
   maxBufferBytes: number,
-  currentOutput: TerminalOutputState = EMPTY_TERMINAL_BUFFER_STATE.output,
+  current: TerminalBufferState = EMPTY_TERMINAL_BUFFER_STATE,
 ): TerminalBufferState {
   return {
-    output: resetOutput(currentOutput, snapshot.history, maxBufferBytes),
+    output: resetOutput(current.output, snapshot.history, maxBufferBytes),
     status: snapshot.status,
     error: null,
     updatedAt: snapshot.updatedAt,
-    version: 1,
+    replayCompleteVersion: current.replayCompleteVersion,
+    version: current.version + 1,
   };
 }
 
@@ -307,6 +312,7 @@ export function combineTerminalSessionState(
     error: buffer.error,
     hasRunningSubprocess: summary?.hasRunningSubprocess ?? false,
     updatedAt: latestTimestamp(summary?.updatedAt ?? null, buffer.updatedAt),
+    replayCompleteVersion: buffer.replayCompleteVersion,
     version: buffer.version,
   };
 }
@@ -319,13 +325,19 @@ export function applyTerminalAttachStreamEvent(
   switch (event.type) {
     case "snapshot":
     case "restarted":
-      return terminalBufferStateFromSnapshot(event.snapshot, maxBufferBytes, current.output);
+      return terminalBufferStateFromSnapshot(event.snapshot, maxBufferBytes, current);
     case "output":
       return {
         ...current,
         output: appendOutput(current.output, event.data, maxBufferBytes),
         status: current.status === "closed" ? "running" : current.status,
         error: null,
+        version: current.version + 1,
+      };
+    case "replay-complete":
+      return {
+        ...current,
+        replayCompleteVersion: current.replayCompleteVersion + 1,
         version: current.version + 1,
       };
     case "cleared":

@@ -136,6 +136,31 @@ describe("terminal session reducers", () => {
     expect(terminalOutputText(output.output)).toBe(" world");
   });
 
+  it("advances repeated snapshots so renderers apply overflow resyncs", () => {
+    const first = applyTerminalAttachStreamEvent(EMPTY_TERMINAL_BUFFER_STATE, {
+      type: "snapshot",
+      snapshot: BASE_SNAPSHOT,
+    });
+    const second = applyTerminalAttachStreamEvent(first, {
+      type: "snapshot",
+      snapshot: { ...BASE_SNAPSHOT, history: "resynced" },
+    });
+
+    expect(second.version).toBe(2);
+    expect(terminalOutputText(second.output)).toBe("resynced");
+  });
+
+  it("exposes replay completion independently from output versions", () => {
+    const completed = applyTerminalAttachStreamEvent(EMPTY_TERMINAL_BUFFER_STATE, {
+      type: "replay-complete",
+      threadId: TARGET.threadId,
+      terminalId: TARGET.terminalId,
+      sequence: 1,
+    });
+
+    expect(completed).toMatchObject({ replayCompleteVersion: 1, version: 1 });
+  });
+
   it("reduces terminal metadata snapshots, upserts, and removals", () => {
     const initial = applyTerminalMetadataStreamEvent([], {
       type: "snapshot",

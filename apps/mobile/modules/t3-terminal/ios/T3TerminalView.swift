@@ -205,6 +205,8 @@ public final class T3TerminalView: ExpoView, UITextFieldDelegate {
   private var lastViewportSize: CGSize = .zero
   private var lastContentScale: CGFloat = 0
   private var lastReportedGrid: (cols: Int, rows: Int)?
+  private var bufferedOutput = ""
+  private var pendingRemoteData = ""
   private var lastAppliedBuffer = ""
   private var redrawDisplayLink: CADisplayLink?
   private var pendingVerticalScrollPoints: CGFloat = 0
@@ -212,6 +214,7 @@ public final class T3TerminalView: ExpoView, UITextFieldDelegate {
   private var surface: ghostty_surface_t?
   private var isCreatingSurface = false
   private var surfaceCreationFailed = false
+  private var suppressInput = false
   private var appearance = TerminalAppearanceScheme.dark
   private var backgroundColorValue = UIColor(hexString: "#24292e")
 
@@ -227,16 +230,21 @@ public final class T3TerminalView: ExpoView, UITextFieldDelegate {
     }
   }
 
-  var initialBuffer: String = "" {
-    didSet {
-      applyRemoteBuffer(initialBuffer)
+  var initialBuffer: String {
+    get { bufferedOutput }
+    set {
+      guard bufferedOutput != newValue else { return }
+      bufferedOutput = newValue
+      applyRemoteBuffer(bufferedOutput)
     }
   }
 
   func writeRemoteData(_ data: String) {
     guard !data.isEmpty else { return }
     if surface == nil {
+      pendingRemoteData += data
       createSurfaceIfPossible()
+      return
     }
     feedData(Data(data.utf8), redraw: false)
     scheduleRedraw()
@@ -244,7 +252,8 @@ public final class T3TerminalView: ExpoView, UITextFieldDelegate {
 
   func resetRemoteData(_ data: String) {
     resetSurface()
-    initialBuffer = data
+    bufferedOutput = data
+    pendingRemoteData = ""
     createSurfaceIfPossible()
   }
 
@@ -517,6 +526,7 @@ public final class T3TerminalView: ExpoView, UITextFieldDelegate {
     setupWriteCallback()
     resizeSurface()
     feedBuffer(initialBuffer)
+    feedPendingRemoteData()
   }
 
   private func resetSurface() {
@@ -555,14 +565,14 @@ public final class T3TerminalView: ExpoView, UITextFieldDelegate {
     }
 
     if buffer.isEmpty {
-      feedData(Data("\u{1B}[3J\u{1B}[H\u{1B}[2J".utf8))
+      feedReplayData(Data("\u{1B}[3J\u{1B}[H\u{1B}[2J".utf8))
       lastAppliedBuffer = ""
       return
     }
 
     if buffer.hasPrefix(lastAppliedBuffer) {
       let suffix = String(buffer.dropFirst(lastAppliedBuffer.count))
-      feedData(Data(suffix.utf8))
+      feedReplayData(Data(suffix.utf8))
       lastAppliedBuffer = buffer
       return
     }
@@ -573,8 +583,21 @@ public final class T3TerminalView: ExpoView, UITextFieldDelegate {
 
   private func feedBuffer(_ buffer: String) {
     guard !buffer.isEmpty else { return }
-    feedData(Data(buffer.utf8))
+    feedReplayData(Data(buffer.utf8))
     lastAppliedBuffer = buffer
+  }
+
+  private func feedReplayData(_ data: Data) {
+    suppressInput = true
+    defer { suppressInput = false }
+    feedData(data)
+  }
+
+  private func feedPendingRemoteData() {
+    guard !pendingRemoteData.isEmpty else { return }
+    let pending = pendingRemoteData
+    pendingRemoteData = ""
+    feedData(Data(pending.utf8))
   }
 
   private func feedData(_ data: Data, redraw: Bool = true) {
@@ -615,6 +638,7 @@ public final class T3TerminalView: ExpoView, UITextFieldDelegate {
       let view = Unmanaged<T3TerminalView>.fromOpaque(userdata).takeUnretainedValue()
       let bytes = Data(bytes: data, count: len)
       guard let input = String(data: bytes, encoding: .utf8), !input.isEmpty else { return }
+      guard !view.suppressInput else { return }
 
       DispatchQueue.main.async {
         view.onInput(["data": input])

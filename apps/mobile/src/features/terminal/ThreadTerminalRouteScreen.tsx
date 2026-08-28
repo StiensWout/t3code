@@ -678,7 +678,8 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
     lastBufferReplayKeyRef.current = bufferReplayKey;
     clearBufferReplayTimer();
     setReadyBufferReplayKey(null);
-  }, [bufferReplayKey, clearBufferReplayTimer]);
+    scheduleBufferReplayReady();
+  }, [bufferReplayKey, clearBufferReplayTimer, scheduleBufferReplayReady]);
 
   useEffect(() => clearBufferReplayTimer, [clearBufferReplayTimer]);
 

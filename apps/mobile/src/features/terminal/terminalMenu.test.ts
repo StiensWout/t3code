@@ -63,6 +63,7 @@ function makeKnownSession(input: {
       error: null,
       hasRunningSubprocess: false,
       updatedAt: input.updatedAt ?? "2026-04-15T20:00:00.000Z",
+      replayCompleteVersion: 0,
       version: 1,
     },
   };

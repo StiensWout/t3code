@@ -25,6 +25,8 @@ class T3TerminalView(context: Context, appContext: AppContext) : ExpoView(contex
   private val onResize by EventDispatcher()
   private var terminalHandle = 0L
   private var fedBuffer = ""
+  private var bufferedOutput = ""
+  private var pendingRemoteData = ""
   private var cols = 0
   private var rows = 0
   private var clearingInput = false
@@ -44,15 +46,20 @@ class T3TerminalView(context: Context, appContext: AppContext) : ExpoView(contex
       recreateTerminal()
     }
 
-  var initialBuffer: String = ""
+  var initialBuffer: String
+    get() = bufferedOutput
     set(value) {
-      if (field == value) return
-      field = value
+      if (bufferedOutput == value) return
+      bufferedOutput = value
       feedPendingBuffer()
     }
 
   fun writeRemoteData(data: String) {
-    if (terminalHandle == 0L || data.isEmpty()) return
+    if (data.isEmpty()) return
+    if (terminalHandle == 0L) {
+      pendingRemoteData += data
+      return
+    }
     emitResponse(GhosttyBridge.nativeFeed(terminalHandle, data.toByteArray(Charsets.UTF_8)))
     if (terminalCanvas.hasActiveSelection()) {
       GhosttyBridge.nativeClearSelection(terminalHandle)
@@ -63,7 +70,9 @@ class T3TerminalView(context: Context, appContext: AppContext) : ExpoView(contex
 
   fun resetRemoteData(data: String) {
     destroyTerminal()
-    initialBuffer = data
+    bufferedOutput = data
+    pendingRemoteData = ""
+    if (data.isEmpty()) terminalCanvas.clearFrame()
     createTerminal()
     feedPendingBuffer()
   }
@@ -364,7 +373,9 @@ class T3TerminalView(context: Context, appContext: AppContext) : ExpoView(contex
     }
     val suffix = initialBuffer.substring(fedBuffer.length)
     if (suffix.isNotEmpty()) {
-      emitResponse(GhosttyBridge.nativeFeed(terminalHandle, suffix.toByteArray(Charsets.UTF_8)))
+      // Retained history is renderer input, not live PTY output. Discard any
+      // terminal query replies it generates instead of forwarding them to the shell.
+      GhosttyBridge.nativeFeed(terminalHandle, suffix.toByteArray(Charsets.UTF_8))
       // New output invalidates an active selection (matches the web drawer);
       // otherwise the copy toolbar drifts out of sync with the grid.
       if (terminalCanvas.hasActiveSelection()) {
@@ -373,6 +384,11 @@ class T3TerminalView(context: Context, appContext: AppContext) : ExpoView(contex
       }
     }
     fedBuffer = initialBuffer
+    if (pendingRemoteData.isNotEmpty()) {
+      val pending = pendingRemoteData
+      pendingRemoteData = ""
+      emitResponse(GhosttyBridge.nativeFeed(terminalHandle, pending.toByteArray(Charsets.UTF_8)))
+    }
     renderSnapshot()
   }
 

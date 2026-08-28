@@ -370,7 +370,12 @@ it.layer(
       yield* manager.open(openInput());
 
       const events = yield* Ref.get(attachEvents);
-      expect(events.map((event) => event.type)).toEqual(["snapshot", "closed", "snapshot"]);
+      expect(events.map((event) => event.type)).toEqual([
+        "snapshot",
+        "replay-complete",
+        "closed",
+        "snapshot",
+      ]);
       expect(
         events.filter((event) => event.type === "snapshot").map((event) => event.snapshot.status),
       ).toEqual(["running", "running"]);
@@ -1229,6 +1234,22 @@ it.layer(
     }),
   );
 
+  it.effect("does not start compacted history inside a terminal control sequence", () =>
+    Effect.gen(function* () {
+      const { manager, logsDir } = yield* createManager({
+        historyTargetBytes: 8,
+        historyMaxBytes: 12,
+      });
+      const filePath = yield* historyLogPath(logsDir);
+      yield* writeFileString(filePath, "123456\u001b[31mhello");
+
+      const opened = yield* manager.open(openInput());
+
+      expect(opened.history).toBe("hello");
+      expect(yield* readFileString(filePath)).toBe("hello");
+    }),
+  );
+
   it.effect("keeps durable history larger than snapshots sent to clients", () =>
     Effect.gen(function* () {
       const { manager, logsDir } = yield* createManager({
@@ -1989,6 +2010,11 @@ it.layer(
               terminalId: DEFAULT_TERMINAL_ID,
             },
           },
+          {
+            type: "replay-complete",
+            threadId: "thread-1",
+            terminalId: DEFAULT_TERMINAL_ID,
+          },
         ]);
 
         process.emitData("hello from attach\n");
@@ -2036,6 +2062,7 @@ it.layer(
       expect(replayEvents.length).toBeGreaterThan(1);
       expect(replayEvents.every((event) => Buffer.byteLength(event.data) <= 64 * 1024)).toBe(true);
       expect(replayEvents.map((event) => event.data).join("")).toBe(history);
+      expect(deliveries.at(-1)?.event.type).toBe("replay-complete");
       expect(deliveries.every(({ delivery }) => delivery === "replay")).toBe(true);
     }),
   );
@@ -2108,6 +2135,7 @@ it.layer(
 
       expect(yield* Ref.get(attachEvents)).toMatchObject([
         { type: "snapshot" },
+        { type: "replay-complete" },
         { type: "output", data: "during snapshot\n" },
       ]);
     }),
@@ -2231,6 +2259,34 @@ it.layer(
       expect(outputEvents.map((event) => event.data).join("")).toBe(
         `${chunk.repeat(64)}${oversizedChunk}`,
       );
+    }),
+  );
+
+  it.effect("preserves a Unicode scalar split across PTY callbacks", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter, getEvents, logsDir } = yield* createManager({
+        ptyAdapter: new FakePtyAdapter("async"),
+      });
+      yield* manager.open(openInput());
+      const process = ptyAdapter.processes[0];
+      expect(process).toBeDefined();
+      if (!process) return;
+
+      process.emitData("\ud83d");
+      process.emitData("\ude42");
+      process.emitExit({ exitCode: 0, signal: 0 });
+
+      yield* waitFor(
+        Effect.map(getEvents, (events) => events.some((event) => event.type === "exited")),
+        "1200 millis",
+      );
+
+      const output = (yield* getEvents)
+        .filter((event) => event.type === "output")
+        .map((event) => event.data)
+        .join("");
+      expect(output).toBe("🙂");
+      expect(yield* historyLogPath(logsDir).pipe(Effect.flatMap(readFileString))).toBe("🙂");
     }),
   );
 

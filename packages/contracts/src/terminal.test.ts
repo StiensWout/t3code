@@ -7,6 +7,7 @@ import {
   EXTENDED_TERMINAL_REPLAY_BYTES,
   MAX_TERMINAL_REPLAY_BYTES,
   TerminalAttachInput,
+  TerminalAttachStreamEvent,
   TerminalClearInput,
   TerminalCloseInput,
   TerminalEvent,
@@ -147,6 +148,19 @@ describe("TerminalAttachInput", () => {
         replayBytes: MAX_TERMINAL_REPLAY_BYTES + 1,
       }),
     ).toBe(false);
+  });
+});
+
+describe("TerminalAttachStreamEvent", () => {
+  it("accepts an ordered replay completion marker", () => {
+    expect(
+      decodes(TerminalAttachStreamEvent, {
+        type: "replay-complete",
+        threadId: "thread-1",
+        terminalId: DEFAULT_TERMINAL_ID,
+        sequence: 42,
+      }),
+    ).toBe(true);
   });
 });
 
