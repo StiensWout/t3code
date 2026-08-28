@@ -428,7 +428,7 @@ export function ProviderModelsSection({
           {hiddenCount > 0 ? ` · ${hiddenCount} hidden` : ""}
         </span>
       </div>
-      <div className="mt-2 -mx-2 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
+      <div className="mt-2 -mx-2 max-h-64 overflow-y-auto lg:max-h-none lg:min-h-0 lg:flex-1">
         {visibleModels.length === 0 ? (
           <p className="px-2 py-2 text-xs text-muted-foreground">
             {isFiltering ? "No models match." : "No models reported for this provider yet."}
