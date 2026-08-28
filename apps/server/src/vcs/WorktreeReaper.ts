@@ -12,7 +12,6 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schedule from "effect/Schedule";
-import type * as Scope from "effect/Scope";
 
 import { ServerSettingsService } from "../serverSettings.ts";
 import { WorktreeService } from "./WorktreeService.ts";
@@ -29,7 +28,9 @@ export interface WorktreeReaperOptions {
 export class WorktreeReaper extends Context.Service<
   WorktreeReaper,
   {
-    readonly start: () => Effect.Effect<void, never, Scope.Scope>;
+    /** The sweep loop. Never returns; the runtime forks it behind the
+        activation boundary so a runtime that never activates never prunes. */
+    readonly run: Effect.Effect<void, never>;
     readonly sweep: Effect.Effect<void, never>;
   }
 >()("t3/vcs/WorktreeReaper") {}
@@ -76,16 +77,12 @@ export const make = (options?: WorktreeReaperOptions) =>
       Effect.catchCause((cause) => Effect.logWarning("worktree.reaper.sweep-failed", { cause })),
     );
 
-    const start = () =>
-      Effect.forkScoped(
-        Effect.sleep(Duration.millis(initialDelayMs)).pipe(
-          Effect.andThen(
-            sweep.pipe(Effect.repeat(Schedule.spaced(Duration.millis(sweepIntervalMs)))),
-          ),
-        ),
-      ).pipe(Effect.asVoid);
+    const run = Effect.sleep(Duration.millis(initialDelayMs)).pipe(
+      Effect.andThen(sweep.pipe(Effect.repeat(Schedule.spaced(Duration.millis(sweepIntervalMs))))),
+      Effect.asVoid,
+    );
 
-    return WorktreeReaper.of({ start, sweep });
+    return WorktreeReaper.of({ run, sweep });
   });
 
 export const layer = Layer.effect(WorktreeReaper, make());

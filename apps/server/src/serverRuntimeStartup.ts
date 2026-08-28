@@ -500,7 +500,7 @@ export const make = (options?: StartupOptions) =>
             workerFiberRef: effectWorkerFiber,
           }).pipe(
             Effect.andThen(worktreeDeletionCleanup.start()),
-            Effect.andThen(worktreeReaper.start()),
+            Effect.andThen(forkParked(worktreeReaper.run)),
           ),
         ),
         autoBootstrap: (serverConfig.autoBootstrapProjectFromCwd
