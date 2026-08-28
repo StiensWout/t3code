@@ -1032,7 +1032,8 @@ function WorktreeEnvironmentGroup({
   const [pruneCandidate, setPruneCandidate] = useState<WorktreeInfo | null>(null);
   const [pruneDialogOpen, setPruneDialogOpen] = useState(false);
   // Paths the server confirmed removed but the inventory has not re-read yet.
-  // Hides them right away; entries drop out once the inventory agrees.
+  // Hides them right away; the next inventory read clears the set, so a
+  // worktree revived at the same path shows up again with that read.
   const [removedPaths, setRemovedPaths] = useState<ReadonlySet<string>>(() => new Set());
   const inventoryWorktrees = inventory.data?.worktrees ?? [];
   const worktrees =
@@ -1058,12 +1059,7 @@ function WorktreeEnvironmentGroup({
 
   useEffect(() => {
     if (inventory.data === null) return;
-    const listed = new Set(inventory.data.worktrees.map((worktree) => worktree.path));
-    setRemovedPaths((current) => {
-      if (current.size === 0) return current;
-      const next = new Set([...current].filter((path) => listed.has(path)));
-      return next.size === current.size ? current : next;
-    });
+    setRemovedPaths((current) => (current.size === 0 ? current : new Set()));
   }, [inventory.data]);
 
   useEffect(() => {
