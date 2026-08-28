@@ -135,11 +135,11 @@ function ProviderLastChecked({ lastCheckedAt }: { lastCheckedAt: string | null }
   }
 
   if (lastCheckedRelative.status === "invalid") {
-    return <span className="text-[11px] text-muted-foreground/50">Checked unavailable</span>;
+    return <span>Checked unavailable</span>;
   }
 
   return (
-    <span className="text-[11px] text-muted-foreground/60">
+    <span>
       {lastCheckedRelative.suffix ? (
         <>
           Checked <span className="font-mono tabular-nums">{lastCheckedRelative.value}</span>{" "}
@@ -858,33 +858,31 @@ export function EnvironmentProviderSettings({
       <SettingsSection
         {...searchableSetting("providers")}
         headerAction={
-          <div className="flex min-w-0 items-center gap-1.5">
-            {/*
-              The 11px size must sit on this flex item, not just the span
-              inside: the item's line box is struck from its own font size,
-              and an inherited 16px strut hangs the smaller text below the
-              vertical center of the row.
-            */}
-            <span className="hidden min-w-0 truncate text-[11px] sm:inline">
-              <ProviderLastChecked lastCheckedAt={lastCheckedAt} />
-            </span>
-            {!readOnly ? (
+          <div className="flex min-w-0 items-center gap-2">
+            {readOnly ? (
+              <span className="hidden min-w-0 truncate text-xs text-muted-foreground sm:inline">
+                <ProviderLastChecked lastCheckedAt={lastCheckedAt} />
+              </span>
+            ) : (
               <>
                 <Tooltip>
                   <TooltipTrigger
                     render={
                       <Button
-                        size="icon-micro"
+                        size="compact"
                         variant="ghost-muted"
                         disabled={isRefreshingProviders}
                         onClick={() => void refreshProviders()}
                         aria-label="Refresh provider status"
                       >
                         {isRefreshingProviders ? (
-                          <LoaderIcon className="size-3 animate-spin" />
+                          <LoaderIcon className="animate-spin" />
                         ) : (
-                          <RefreshCwIcon className="size-3" />
+                          <RefreshCwIcon />
                         )}
+                        <span className="hidden min-w-0 truncate sm:inline">
+                          <ProviderLastChecked lastCheckedAt={lastCheckedAt} />
+                        </span>
                       </Button>
                     }
                   />
@@ -906,7 +904,7 @@ export function EnvironmentProviderSettings({
                   <TooltipPopup side="top">Add provider</TooltipPopup>
                 </Tooltip>
               </>
-            ) : null}
+            )}
           </div>
         }
       >
