@@ -92,9 +92,6 @@ interface FakePi {
   readonly allRequests: () => ReadonlyArray<PiRpcRecord>;
   /** Data returned by the next `get_session_stats` acks, consumed in order. */
   readonly queueStats: (data: unknown) => void;
-  /** Hold the next stats response until `releaseStats` is called. */
-  readonly holdNextStats: () => void;
-  readonly releaseStats: Effect.Effect<void>;
   /** Data returned by the next `get_commands` acks, consumed in order. */
   readonly queueCommands: (data: unknown) => void;
   /** Make the next `get_commands` ack fail. */
@@ -124,8 +121,6 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
   let deferredStateRequest: PiRpcRecord | undefined;
   let failState = false;
   let vetoSwitch = false;
-  let holdStats = false;
-  let pendingStatsResponse: PiRpcRecord | null = null;
   let stdinBuffer = "";
 
   const emit = (record: PiRpcRecord) =>
@@ -169,11 +164,6 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
       case "get_messages":
         return { ...base, data: messagesQueue.shift() ?? { messages: [] } };
       case "get_session_stats":
-        if (holdStats) {
-          holdStats = false;
-          pendingStatsResponse = { ...base, data: statsQueue.shift() ?? {} };
-          return null;
-        }
         return { ...base, data: statsQueue.shift() ?? {} };
       case "get_commands":
         return { ...base, ...(commandsQueue.shift() ?? { data: { commands: [] } }) };
@@ -273,14 +263,6 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
     },
     queueState: (data) => stateQueue.push(data),
     queueStats: (data) => statsQueue.push(data),
-    holdNextStats: () => {
-      holdStats = true;
-    },
-    releaseStats: Effect.suspend(() => {
-      const response = pendingStatsResponse;
-      pendingStatsResponse = null;
-      return response === null ? Effect.void : emit(response);
-    }),
     queueCommands: (data) => commandsQueue.push({ success: true, data }),
     failNextCommands: () => commandsQueue.push({ success: false }),
     closeStdout: Queue.end(stdout),
@@ -714,43 +696,40 @@ describe("PiAdapterV2", () => {
           assistantItem.turnItem.type === "assistant_message" &&
           assistantItem.turnItem.text === "Hello",
       );
+      // Session stats ride on the settled provider turn so the shared meter
+      // picks them up through the base's per-turn `tokenUsage` (#8144).
+      const completedTurn = yield* takeEvent(
+        (event) =>
+          event.type === "provider_turn.updated" && event.providerTurn.status === "completed",
+      );
+      const { updatedAt, ...tokenUsage } =
+        completedTurn.type === "provider_turn.updated"
+          ? (completedTurn.providerTurn.tokenUsage ?? {})
+          : {};
+      assert.isString(updatedAt);
+      assert.deepEqual(tokenUsage, {
+        usedTokens: 20_500,
+        maxTokens: 200_000,
+        inputTokens: 12_000,
+        cachedInputTokens: 8_000,
+        outputTokens: 500,
+      });
       const terminal = yield* takeEvent((event) => event.type === "turn.terminal");
       assert.isTrue(terminal.type === "turn.terminal" && terminal.status === "completed");
-      const usage = yield* takeEvent(
-        (event) =>
-          event.type === "provider_thread.updated" &&
-          event.providerThread.contextUsage?.usedTokens === 20_500,
-      );
-      assert.deepEqual(
-        usage.type === "provider_thread.updated" ? usage.providerThread.contextUsage : null,
-        {
-          usedTokens: 20_500,
-          totalProcessedTokens: 20_500,
-          maxTokens: 200_000,
-          inputTokens: 12_000,
-          cachedInputTokens: 8_000,
-          outputTokens: 500,
-          toolUses: 3,
-          compactsAutomatically: true,
-        },
-      );
       // An acknowledged stats request can still omit usable window values.
-      // Keep the last good snapshot instead of making the meter disappear.
+      // That turn then carries no report, so the meter keeps the last one.
       yield* startTurn(runtime, providerThread);
       yield* fake.takeRequest("prompt");
       fake.queueStats({ contextUsage: { tokens: null, contextWindow: 200_000 } });
       yield* fake.emit({ type: "agent_settled" });
-      const preservedUsage = yield* takeEvent(
+      const unreportedTurn = yield* takeEvent(
         (event) =>
-          event.type === "provider_thread.updated" &&
-          event.providerThread.status === "idle" &&
-          event.providerThread.contextUsage?.totalProcessedTokens === 20_500,
+          event.type === "provider_turn.updated" && event.providerTurn.status === "completed",
       );
-      assert.equal(
-        preservedUsage.type === "provider_thread.updated"
-          ? preservedUsage.providerThread.contextUsage?.usedTokens
+      assert.isUndefined(
+        unreportedTurn.type === "provider_turn.updated"
+          ? unreportedTurn.providerTurn.tokenUsage
           : null,
-        20_500,
       );
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
@@ -774,18 +753,12 @@ describe("PiAdapterV2", () => {
       yield* startTurn(runtime, providerThread);
       yield* fake.takeRequest("prompt");
       yield* fake.emit({ type: "agent_start" });
-      fake.queueStats({
-        tokens: { input: 9_000, output: 500, total: 9_500 },
-        contextUsage: { tokens: 9_500, contextWindow: 200_000 },
-      });
-      fake.holdNextStats();
       yield* fake.emit({ type: "agent_settled" });
       const finalTurn = yield* takeEvent(
         (event) =>
           event.type === "provider_turn.updated" && event.providerTurn.status === "completed",
       );
       yield* takeEvent((event) => event.type === "turn.terminal");
-      yield* fake.takeRequest("get_session_stats");
       assert.isTrue(
         finalTurn.type === "provider_turn.updated" &&
           finalTurn.providerTurn.nativeTurnRef?.nativeId === "u1" &&
@@ -803,10 +776,6 @@ describe("PiAdapterV2", () => {
         startedAt: null,
         completedAt: null,
       });
-      fake.queueStats({
-        tokens: { input: 2_000, output: 100, total: 2_100 },
-        contextUsage: { tokens: 2_100, contextWindow: 200_000 },
-      });
       const rollbackSnapshot = yield* runtime.rollbackThread({
         providerThread,
         target: {
@@ -819,11 +788,7 @@ describe("PiAdapterV2", () => {
       });
       const fork = yield* fake.takeRequest("fork");
       assert.equal(fork["entryId"], "u2");
-      assert.equal(rollbackSnapshot.providerThread.contextUsage?.usedTokens, 2_100);
-      yield* fake.releaseStats;
-      yield* Effect.yieldNow;
-      const afterStaleStats = yield* runtime.readThreadSnapshot({ providerThread });
-      assert.equal(afterStaleStats.providerThread.contextUsage?.usedTokens, 2_100);
+      assert.equal(rollbackSnapshot.providerThread.id, providerThread.id);
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
