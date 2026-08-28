@@ -860,7 +860,7 @@ export function EnvironmentProviderSettings({
         headerAction={
           <div className="flex min-w-0 items-center gap-2">
             {readOnly ? (
-              <span className="hidden min-w-0 truncate text-xs text-muted-foreground sm:inline">
+              <span className="min-w-0 truncate text-xs text-muted-foreground">
                 <ProviderLastChecked lastCheckedAt={lastCheckedAt} />
               </span>
             ) : (
@@ -946,27 +946,24 @@ export function EnvironmentProviderSettings({
               Advanced
             </CollapsibleTrigger>
             <CollapsibleContent>
-              <div
-                inert={readOnly}
-                aria-disabled={readOnly || undefined}
-                className={readOnly ? "opacity-50 select-none" : undefined}
-              >
-                <SettingsRow
-                  id={searchableSetting("provider-health-check-interval").id}
-                  title={
-                    <span className="inline-flex items-center gap-1.5">
-                      {searchableSetting("provider-health-check-interval").title}
-                      <PolicyTooltip>
-                        This interval is configured here, then the shared Background activity policy
-                        decides whether provider probes may run when the timer fires. Custom
-                        intervals appear as Advanced in General settings.
-                      </PolicyTooltip>
-                    </span>
-                  }
-                  description="Refresh availability, versions, auth state, and models in the background. 0 seconds turns background checks off."
-                  resetAction={
-                    providerHealthRefreshIntervalSeconds !==
-                    defaultProviderHealthRefreshIntervalSeconds ? (
+              {/* Only the write controls go inert; the title and its policy tooltip stay readable. */}
+              <SettingsRow
+                id={searchableSetting("provider-health-check-interval").id}
+                title={
+                  <span className="inline-flex items-center gap-1.5">
+                    {searchableSetting("provider-health-check-interval").title}
+                    <PolicyTooltip>
+                      This interval is configured here, then the shared Background activity policy
+                      decides whether provider probes may run when the timer fires. Custom intervals
+                      appear as Advanced in General settings.
+                    </PolicyTooltip>
+                  </span>
+                }
+                description="Refresh availability, versions, auth state, and models in the background. 0 seconds turns background checks off."
+                resetAction={
+                  providerHealthRefreshIntervalSeconds !==
+                  defaultProviderHealthRefreshIntervalSeconds ? (
+                    <span inert={readOnly} className={readOnly ? "opacity-50" : undefined}>
                       <SettingResetButton
                         label="provider health check interval"
                         onClick={() =>
@@ -979,41 +976,48 @@ export function EnvironmentProviderSettings({
                           )
                         }
                       />
-                    ) : null
-                  }
-                  control={
-                    <div className="flex shrink-0 items-center gap-2">
-                      <NumberField
-                        value={providerHealthRefreshIntervalSeconds}
-                        min={0}
-                        step={PROVIDER_HEALTH_INTERVAL_STEP_SECONDS}
-                        size="sm"
-                        className="w-32"
-                        onValueChange={(value) =>
-                          updateSettings(
-                            backgroundActivityOverrideSettings(
-                              settings.backgroundActivity,
-                              resolvedBackgroundActivity,
-                              {
-                                providerHealthRefreshInterval: Duration.seconds(
-                                  normalizeIntervalSeconds(value),
-                                ),
-                              },
-                            ),
-                          )
-                        }
-                      >
-                        <NumberFieldGroup>
-                          <NumberFieldDecrement aria-label="Decrease provider health check interval" />
-                          <NumberFieldInput aria-label="Provider health check interval in seconds" />
-                          <NumberFieldIncrement aria-label="Increase provider health check interval" />
-                        </NumberFieldGroup>
-                      </NumberField>
-                      <span className="text-xs text-muted-foreground">seconds</span>
-                    </div>
-                  }
-                />
-              </div>
+                    </span>
+                  ) : null
+                }
+                control={
+                  <div
+                    inert={readOnly}
+                    aria-disabled={readOnly || undefined}
+                    className={cn(
+                      "flex shrink-0 items-center gap-2",
+                      readOnly && "opacity-50 select-none",
+                    )}
+                  >
+                    <NumberField
+                      value={providerHealthRefreshIntervalSeconds}
+                      min={0}
+                      step={PROVIDER_HEALTH_INTERVAL_STEP_SECONDS}
+                      size="sm"
+                      className="w-32"
+                      onValueChange={(value) =>
+                        updateSettings(
+                          backgroundActivityOverrideSettings(
+                            settings.backgroundActivity,
+                            resolvedBackgroundActivity,
+                            {
+                              providerHealthRefreshInterval: Duration.seconds(
+                                normalizeIntervalSeconds(value),
+                              ),
+                            },
+                          ),
+                        )
+                      }
+                    >
+                      <NumberFieldGroup>
+                        <NumberFieldDecrement aria-label="Decrease provider health check interval" />
+                        <NumberFieldInput aria-label="Provider health check interval in seconds" />
+                        <NumberFieldIncrement aria-label="Increase provider health check interval" />
+                      </NumberFieldGroup>
+                    </NumberField>
+                    <span className="text-xs text-muted-foreground">seconds</span>
+                  </div>
+                }
+              />
             </CollapsibleContent>
           </Collapsible>
         </div>
