@@ -321,14 +321,8 @@ function ProviderEnvironmentSection(props: {
           </Button>
         </div>
       ))}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-        <Button
-          type="button"
-          size="xs"
-          variant="ghost-muted"
-          className="-ml-2"
-          onClick={addVariable}
-        >
+      <div className="flex min-h-[1.875rem] flex-wrap items-center gap-x-3 gap-y-1">
+        <Button type="button" size="xs" variant="ghost-muted" onClick={addVariable}>
           <PlusIcon className="size-3" />
           Add variable
         </Button>

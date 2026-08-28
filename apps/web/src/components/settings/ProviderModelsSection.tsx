@@ -1,14 +1,6 @@
 "use client";
 
-import {
-  ArrowDownIcon,
-  ArrowUpIcon,
-  EyeIcon,
-  EyeOffIcon,
-  PlusIcon,
-  StarIcon,
-  XIcon,
-} from "lucide-react";
+import { ArrowDownIcon, ArrowUpIcon, PlusIcon, StarIcon, XIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 import {
   ProviderDriverKind,
@@ -22,6 +14,7 @@ import { sortModelsForProviderInstance } from "../../modelOrdering";
 import { MAX_CUSTOM_MODEL_LENGTH } from "../../modelSelection";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { Switch } from "../ui/switch";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 /**
@@ -35,6 +28,42 @@ const CUSTOM_MODEL_PLACEHOLDER_BY_KIND: Partial<Record<ProviderDriverKind, strin
   [ProviderDriverKind.make("cursor")]: "claude-sonnet-4-6",
   [ProviderDriverKind.make("opencode")]: "openai/gpt-5",
 };
+
+/** Above this many models the list gets a filter input. */
+const FILTER_THRESHOLD = 8;
+
+/**
+ * Short capability words shown after a model's slug. Claude and Cursor report
+ * fast mode as a boolean `fastMode` option; Codex reports it as a
+ * `serviceTier` select whose fast tier is labelled "Fast" (catalog id
+ * `priority`, or `fast` from the speed-tier fallback), matching the composer.
+ */
+function describeModelCapabilities(model: ServerProviderModel): string[] {
+  const descriptors = model.capabilities?.optionDescriptors ?? [];
+  const labels: string[] = [];
+  const hasFastMode = descriptors.some(
+    (descriptor) =>
+      descriptor.id === "fastMode" ||
+      (descriptor.id === "serviceTier" &&
+        descriptor.type === "select" &&
+        descriptor.options.some((option) => option.id === "fast" || option.label === "Fast")),
+  );
+  if (hasFastMode) labels.push("Fast mode");
+  if (descriptors.some((descriptor) => descriptor.id === "thinking")) labels.push("Thinking");
+  if (
+    descriptors.some(
+      (descriptor) =>
+        descriptor.type === "select" &&
+        (descriptor.id === "reasoningEffort" ||
+          descriptor.id === "effort" ||
+          descriptor.id === "reasoning" ||
+          descriptor.id === "variant"),
+    )
+  ) {
+    labels.push("Reasoning");
+  }
+  return labels;
+}
 
 /**
  * Display order for the models list: favorites first (in user order), then
@@ -127,6 +156,8 @@ export function ProviderModelsSection({
   onModelOrderChange,
 }: ProviderModelsSectionProps) {
   const [input, setInput] = useState("");
+  const [isAdding, setIsAdding] = useState(false);
+  const [filter, setFilter] = useState("");
   const [error, setError] = useState<string | null>(null);
   const hiddenModelSet = useMemo(() => new Set(hiddenModels), [hiddenModels]);
   const favoriteModelSet = useMemo(() => new Set(favoriteModels), [favoriteModels]);
@@ -143,6 +174,16 @@ export function ProviderModelsSection({
   const hiddenCount = displayModels.filter(
     (model) => !model.isCustom && hiddenModelSet.has(model.slug),
   ).length;
+  const showFilter = models.length > FILTER_THRESHOLD;
+  const normalizedFilter = filter.trim().toLowerCase();
+  const isFiltering = showFilter && normalizedFilter.length > 0;
+  const visibleModels = isFiltering
+    ? displayModels.filter(
+        (model) =>
+          model.name.toLowerCase().includes(normalizedFilter) ||
+          model.slug.toLowerCase().includes(normalizedFilter),
+      )
+    : displayModels;
 
   const handleAdd = () => {
     const normalized = normalizeCustomModelSlug(input);
@@ -166,6 +207,13 @@ export function ProviderModelsSection({
     onChange([...customModels, normalized]);
     setInput("");
     setError(null);
+    setIsAdding(false);
+  };
+
+  const cancelAdd = () => {
+    setInput("");
+    setError(null);
+    setIsAdding(false);
   };
 
   const handleRemove = (slug: string) => {
@@ -175,12 +223,11 @@ export function ProviderModelsSection({
     setError(null);
   };
 
-  const handleToggleHidden = (slug: string) => {
-    if (hiddenModelSet.has(slug)) {
-      onHiddenModelsChange(hiddenModels.filter((model) => model !== slug));
-      return;
-    }
-    onHiddenModelsChange([...hiddenModels, slug]);
+  const setHidden = (slug: string, hidden: boolean) => {
+    if (hidden === hiddenModelSet.has(slug)) return;
+    onHiddenModelsChange(
+      hidden ? [...hiddenModels, slug] : hiddenModels.filter((model) => model !== slug),
+    );
   };
 
   const handleToggleFavorite = (slug: string) => {
@@ -209,30 +256,19 @@ export function ProviderModelsSection({
     onModelOrderChange(next);
   };
 
-  const renderRow = (model: (typeof displayModels)[number], index: number) => {
-    const descriptors = model.capabilities?.optionDescriptors ?? [];
-    const capLabels: string[] = [];
-    if (descriptors.some((descriptor) => descriptor.id === "fastMode")) capLabels.push("Fast mode");
-    if (descriptors.some((descriptor) => descriptor.id === "thinking")) capLabels.push("Thinking");
-    if (
-      descriptors.some(
-        (descriptor) =>
-          descriptor.type === "select" &&
-          (descriptor.id === "reasoningEffort" ||
-            descriptor.id === "effort" ||
-            descriptor.id === "reasoning" ||
-            descriptor.id === "variant"),
-      )
-    ) {
-      capLabels.push("Reasoning");
-    }
+  const renderRow = (model: (typeof displayModels)[number]) => {
+    const capLabels = describeModelCapabilities(model);
     const group = groupOf(model);
     const isHidden = group === "hidden";
     const isFavorite = group === "favorite";
+    const index = displayModels.indexOf(model);
     const previousModel = displayModels[index - 1];
     const nextModel = displayModels[index + 1];
-    const canMoveUp = previousModel !== undefined && groupOf(previousModel) === group;
-    const canMoveDown = nextModel !== undefined && groupOf(nextModel) === group;
+    // Reordering a filtered view would be ambiguous, so arrows only show on
+    // the full list.
+    const canMoveUp =
+      !isFiltering && previousModel !== undefined && groupOf(previousModel) === group;
+    const canMoveDown = !isFiltering && nextModel !== undefined && groupOf(nextModel) === group;
 
     return (
       <div
@@ -285,7 +321,7 @@ export function ProviderModelsSection({
           ) : null}
         </span>
         <span className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
-          {!isHidden ? (
+          {!isHidden && !isFiltering ? (
             <>
               <Tooltip>
                 <TooltipTrigger
@@ -321,25 +357,7 @@ export function ProviderModelsSection({
               </Tooltip>
             </>
           ) : null}
-          {!model.isCustom ? (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    size="icon-micro"
-                    variant="ghost-muted"
-                    onClick={() => handleToggleHidden(model.slug)}
-                    aria-label={`${isHidden ? "Show" : "Hide"} ${model.name}`}
-                  />
-                }
-              >
-                {isHidden ? <EyeIcon className="size-3" /> : <EyeOffIcon className="size-3" />}
-              </TooltipTrigger>
-              <TooltipPopup side="top">
-                {isHidden ? "Show in picker" : "Hide from picker"}
-              </TooltipPopup>
-            </Tooltip>
-          ) : (
+          {model.isCustom ? (
             <Tooltip>
               <TooltipTrigger
                 render={
@@ -355,62 +373,126 @@ export function ProviderModelsSection({
               </TooltipTrigger>
               <TooltipPopup side="top">Remove custom model</TooltipPopup>
             </Tooltip>
-          )}
+          ) : null}
         </span>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Switch
+                className="[--thumb-size:--spacing(3.5)] sm:[--thumb-size:--spacing(3.5)]"
+                checked={!isHidden}
+                disabled={model.isCustom}
+                onCheckedChange={(checked) => setHidden(model.slug, !checked)}
+                aria-label={`Show ${model.name} in the model picker`}
+              />
+            }
+          />
+          <TooltipPopup side="top">
+            {model.isCustom
+              ? "Custom models are always shown in the picker"
+              : isHidden
+                ? "Hidden from picker"
+                : "Shown in picker"}
+          </TooltipPopup>
+        </Tooltip>
       </div>
     );
   };
 
-  const groupLabel = (label: string) => (
-    <div className="px-2 pt-3 pb-1 text-[11px] text-muted-foreground first:pt-0">{label}</div>
+  const groupLabel = (label: string, isFirst: boolean) => (
+    <div className={cn("px-2 pb-1.5 text-[11px] text-muted-foreground", isFirst ? "pt-1" : "pt-5")}>
+      {label}
+    </div>
   );
 
   return (
     <div className="lg:flex lg:h-full lg:min-h-0 lg:flex-col">
-      <div className="text-xs text-muted-foreground">
-        {models.length} model{models.length === 1 ? "" : "s"} available
-        {favoriteCount > 0 ? ` · ${favoriteCount} favorite${favoriteCount === 1 ? "" : "s"}` : ""}
-        {hiddenCount > 0 ? ` · ${hiddenCount} hidden` : ""}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        {showFilter ? (
+          <Input
+            value={filter}
+            onChange={(event) => setFilter(event.target.value)}
+            placeholder="Filter models"
+            className="h-8 w-56 text-xs"
+            spellCheck={false}
+            aria-label="Filter models"
+          />
+        ) : null}
+        <span className="text-xs text-muted-foreground">
+          {models.length} model{models.length === 1 ? "" : "s"}
+          {favoriteCount > 0 ? ` · ${favoriteCount} favorite${favoriteCount === 1 ? "" : "s"}` : ""}
+          {hiddenCount > 0 ? ` · ${hiddenCount} hidden` : ""}
+        </span>
       </div>
       <div className="mt-2 -mx-2 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
-        {displayModels.map((model, index) => {
+        {visibleModels.length === 0 ? (
+          <p className="px-2 py-2 text-xs text-muted-foreground">No models match.</p>
+        ) : null}
+        {visibleModels.map((model, index) => {
           const group = groupOf(model);
-          const previous = displayModels[index - 1];
+          const previous = visibleModels[index - 1];
           const startsGroup = previous === undefined || groupOf(previous) !== group;
           return (
             <div key={`${instanceId}:${model.slug}:group`}>
               {startsGroup && favoriteCount > 0 && group === "favorite"
-                ? groupLabel("Favorites")
+                ? groupLabel("Favorites", index === 0)
                 : null}
-              {startsGroup && favoriteCount > 0 && group === "visible" ? groupLabel("All") : null}
-              {startsGroup && group === "hidden" ? groupLabel("Hidden from picker") : null}
-              {renderRow(model, index)}
+              {startsGroup && favoriteCount > 0 && group === "visible"
+                ? groupLabel("All", index === 0)
+                : null}
+              {startsGroup && group === "hidden"
+                ? groupLabel("Hidden from picker", index === 0)
+                : null}
+              {renderRow(model)}
             </div>
           );
         })}
       </div>
 
-      <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-        <Input
-          id={`provider-instance-${instanceId}-custom-model`}
-          value={input}
-          onChange={(event) => {
-            setInput(event.target.value);
-            if (error) setError(null);
-          }}
-          onKeyDown={(event) => {
-            if (event.key !== "Enter") return;
-            event.preventDefault();
-            handleAdd();
-          }}
-          placeholder={driverKind ? CUSTOM_MODEL_PLACEHOLDER_BY_KIND[driverKind] : "model-slug"}
-          spellCheck={false}
-        />
-        <Button className="shrink-0" variant="outline" onClick={handleAdd}>
-          <PlusIcon className="size-3.5" />
-          Add
+      {isAdding ? (
+        <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+          <Input
+            id={`provider-instance-${instanceId}-custom-model`}
+            autoFocus
+            value={input}
+            onChange={(event) => {
+              setInput(event.target.value);
+              if (error) setError(null);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                cancelAdd();
+                return;
+              }
+              if (event.key !== "Enter") return;
+              event.preventDefault();
+              handleAdd();
+            }}
+            placeholder={driverKind ? CUSTOM_MODEL_PLACEHOLDER_BY_KIND[driverKind] : "model-slug"}
+            spellCheck={false}
+          />
+          <div className="flex shrink-0 gap-2">
+            <Button variant="outline" onClick={handleAdd}>
+              Add
+            </Button>
+            <Button variant="ghost" onClick={cancelAdd}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <Button
+          type="button"
+          size="xs"
+          variant="ghost-muted"
+          className="mt-2 -ml-2"
+          onClick={() => setIsAdding(true)}
+        >
+          <PlusIcon className="size-3" />
+          Add custom model
         </Button>
-      </div>
+      )}
 
       {error ? <p className="mt-2 text-xs text-destructive">{error}</p> : null}
     </div>
