@@ -1013,8 +1013,8 @@ export function TerminalViewport({
     if (outputUpdate.type !== "none") terminal.clearSelection();
 
     if (
-      (current.replayCompleteVersion !== previous.replayCompleteVersion ||
-        (subscriptionChanged && current.replayCompleteVersion > 0)) &&
+      current.replayCompleteVersion > 0 &&
+      current.version !== previous.version &&
       pendingScrollbackReplayIdentityRef.current === terminalAttachIdentity
     ) {
       pendingScrollbackReplayIdentityRef.current = null;

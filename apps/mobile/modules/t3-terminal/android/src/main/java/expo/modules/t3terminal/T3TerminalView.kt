@@ -18,6 +18,10 @@ import expo.modules.kotlin.views.ExpoView
 import kotlin.math.max
 
 class T3TerminalView(context: Context, appContext: AppContext) : ExpoView(context, appContext) {
+  private companion object {
+    const val MAX_PENDING_REMOTE_DATA_BYTES = 8 * 1024 * 1024
+  }
+
   private val container = FrameLayout(context)
   private val terminalCanvas = TerminalCanvasView(context)
   private val inputView = EditText(context)
@@ -57,7 +61,7 @@ class T3TerminalView(context: Context, appContext: AppContext) : ExpoView(contex
   fun writeRemoteData(data: String) {
     if (data.isEmpty()) return
     if (terminalHandle == 0L) {
-      pendingRemoteData += data
+      appendPendingRemoteData(data)
       return
     }
     emitResponse(GhosttyBridge.nativeFeed(terminalHandle, data.toByteArray(Charsets.UTF_8)))
@@ -366,30 +370,45 @@ class T3TerminalView(context: Context, appContext: AppContext) : ExpoView(contex
   }
 
   private fun feedPendingBuffer() {
-    if (terminalHandle == 0L || initialBuffer == fedBuffer) return
-    if (!initialBuffer.startsWith(fedBuffer)) {
-      recreateTerminal()
-      if (terminalHandle == 0L) return
-    }
-    val suffix = initialBuffer.substring(fedBuffer.length)
-    if (suffix.isNotEmpty()) {
-      // Retained history is renderer input, not live PTY output. Discard any
-      // terminal query replies it generates instead of forwarding them to the shell.
-      GhosttyBridge.nativeFeed(terminalHandle, suffix.toByteArray(Charsets.UTF_8))
-      // New output invalidates an active selection (matches the web drawer);
-      // otherwise the copy toolbar drifts out of sync with the grid.
-      if (terminalCanvas.hasActiveSelection()) {
-        GhosttyBridge.nativeClearSelection(terminalHandle)
-        terminalCanvas.resetSelectionState()
+    if (terminalHandle == 0L) return
+    if (initialBuffer != fedBuffer) {
+      if (!initialBuffer.startsWith(fedBuffer)) {
+        recreateTerminal()
+        return
       }
+      val suffix = initialBuffer.substring(fedBuffer.length)
+      if (suffix.isNotEmpty()) {
+        // Retained history is renderer input, not live PTY output. Discard any
+        // terminal query replies it generates instead of forwarding them to the shell.
+        GhosttyBridge.nativeFeed(terminalHandle, suffix.toByteArray(Charsets.UTF_8))
+        // New output invalidates an active selection (matches the web drawer);
+        // otherwise the copy toolbar drifts out of sync with the grid.
+        if (terminalCanvas.hasActiveSelection()) {
+          GhosttyBridge.nativeClearSelection(terminalHandle)
+          terminalCanvas.resetSelectionState()
+        }
+      }
+      fedBuffer = initialBuffer
     }
-    fedBuffer = initialBuffer
     if (pendingRemoteData.isNotEmpty()) {
       val pending = pendingRemoteData
       pendingRemoteData = ""
       emitResponse(GhosttyBridge.nativeFeed(terminalHandle, pending.toByteArray(Charsets.UTF_8)))
     }
     renderSnapshot()
+  }
+
+  private fun appendPendingRemoteData(data: String) {
+    val appended = pendingRemoteData + data
+    val encoded = appended.toByteArray(Charsets.UTF_8)
+    if (encoded.size <= MAX_PENDING_REMOTE_DATA_BYTES) {
+      pendingRemoteData = appended
+      return
+    }
+
+    var start = encoded.size - MAX_PENDING_REMOTE_DATA_BYTES
+    while (start < encoded.size && (encoded[start].toInt() and 0xC0) == 0x80) start += 1
+    pendingRemoteData = encoded.copyOfRange(start, encoded.size).toString(Charsets.UTF_8)
   }
 
   private fun renderSnapshot() {

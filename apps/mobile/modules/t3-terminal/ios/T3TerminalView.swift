@@ -197,6 +197,7 @@ public final class T3TerminalView: ExpoView, UITextFieldDelegate {
   private static let minimumVerticalScrollStepPoints: CGFloat = 18
   private static let verticalScrollStepMultiplier: CGFloat = 1.15
   private static let maxScrollbackBytes = 64 * 1024 * 1024
+  private static let maxPendingRemoteDataBytes = 8 * 1024 * 1024
 
   private let terminalViewport = UIView()
   private let inputField = TerminalInputField()
@@ -242,7 +243,7 @@ public final class T3TerminalView: ExpoView, UITextFieldDelegate {
   func writeRemoteData(_ data: String) {
     guard !data.isEmpty else { return }
     if surface == nil {
-      pendingRemoteData += data
+      appendPendingRemoteData(data)
       createSurfaceIfPossible()
       return
     }
@@ -598,6 +599,19 @@ public final class T3TerminalView: ExpoView, UITextFieldDelegate {
     let pending = pendingRemoteData
     pendingRemoteData = ""
     feedData(Data(pending.utf8))
+  }
+
+  private func appendPendingRemoteData(_ data: String) {
+    pendingRemoteData += data
+    let bytes = pendingRemoteData.utf8
+    let overflow = bytes.count - Self.maxPendingRemoteDataBytes
+    guard overflow > 0 else { return }
+
+    var start = bytes.index(bytes.startIndex, offsetBy: overflow)
+    while start < bytes.endIndex, bytes[start] & 0xC0 == 0x80 {
+      bytes.formIndex(after: &start)
+    }
+    pendingRemoteData = String(decoding: bytes[start...], as: UTF8.self)
   }
 
   private func feedData(_ data: Data, redraw: Bool = true) {

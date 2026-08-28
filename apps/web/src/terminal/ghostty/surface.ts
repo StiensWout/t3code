@@ -800,10 +800,12 @@ export class GhosttyTerminalSurface {
     this.writeFrame = 0;
     if (this.disposed) return;
 
-    const pending = this.writeQueue[this.writeQueueIndex];
-    if (pending) {
+    let budget = TERMINAL_WRITE_CHUNK_CODE_UNITS;
+    while (budget > 0) {
+      const pending = this.writeQueue[this.writeQueueIndex];
+      if (!pending) break;
       if (this.replayActive && !pending.replay) this.finishReplay();
-      let end = Math.min(pending.data.length, pending.offset + TERMINAL_WRITE_CHUNK_CODE_UNITS);
+      let end = Math.min(pending.data.length, pending.offset + budget);
       const lastCodeUnit = pending.data.charCodeAt(end - 1);
       const nextCodeUnit = pending.data.charCodeAt(end);
       if (
@@ -816,8 +818,12 @@ export class GhosttyTerminalSurface {
         end -= 1;
       }
       const chunk = pending.data.slice(pending.offset, end);
+      // A one-code-unit remainder can land before a surrogate pair. Leave it
+      // for the next frame, whose full budget can consume the pair together.
+      if (chunk.length === 0) break;
       if (pending.replay) this.core.writeReplay(chunk);
       else this.core.write(chunk);
+      budget -= chunk.length;
       pending.offset = end;
       if (pending.offset >= pending.data.length) this.writeQueueIndex += 1;
     }
