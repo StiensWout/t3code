@@ -259,7 +259,9 @@ export function ProviderModelsSection({
   const renderRow = (model: (typeof displayModels)[number]) => {
     const capLabels = describeModelCapabilities(model);
     const group = groupOf(model);
-    const isHidden = group === "hidden";
+    // Hidden is read from the preference itself: a favorited model can still be
+    // hidden, and its switch must say so even though it sits in the favorites group.
+    const isHidden = !model.isCustom && hiddenModelSet.has(model.slug);
     const isFavorite = group === "favorite";
     const index = displayModels.indexOf(model);
     const previousModel = displayModels[index - 1];
@@ -285,6 +287,7 @@ export function ProviderModelsSection({
                 size="icon-micro"
                 variant="ghost"
                 className={cn(
+                  "[--control-icon-color:currentColor]",
                   isFavorite
                     ? "text-yellow-500 hover:text-yellow-600"
                     : "text-muted-foreground/40 hover:text-muted-foreground",
@@ -379,7 +382,7 @@ export function ProviderModelsSection({
           <TooltipTrigger
             render={
               <Switch
-                className="[--thumb-size:--spacing(3.5)] sm:[--thumb-size:--spacing(3.5)]"
+                className="sm:[--thumb-size:--spacing(3.5)]"
                 checked={!isHidden}
                 disabled={model.isCustom}
                 onCheckedChange={(checked) => setHidden(model.slug, !checked)}
@@ -413,7 +416,8 @@ export function ProviderModelsSection({
             value={filter}
             onChange={(event) => setFilter(event.target.value)}
             placeholder="Filter models"
-            className="h-8 w-56 text-xs"
+            size="compact"
+            className="w-56"
             spellCheck={false}
             aria-label="Filter models"
           />
@@ -426,7 +430,9 @@ export function ProviderModelsSection({
       </div>
       <div className="mt-2 -mx-2 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
         {visibleModels.length === 0 ? (
-          <p className="px-2 py-2 text-xs text-muted-foreground">No models match.</p>
+          <p className="px-2 py-2 text-xs text-muted-foreground">
+            {isFiltering ? "No models match." : "No models reported for this provider yet."}
+          </p>
         ) : null}
         {visibleModels.map((model, index) => {
           const group = groupOf(model);

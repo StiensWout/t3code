@@ -255,7 +255,8 @@ function ProviderEnvironmentSection(props: {
       {rows.map((variable, index) => (
         <div key={variable.id} className="flex min-w-0 items-center gap-1.5">
           <DraftInput
-            className="w-44 shrink-0 font-mono text-xs"
+            size="compact"
+            className="w-44 shrink-0 font-mono"
             value={variable.name}
             onCommit={(name) => updateVariable(variable.id, { name: name.trim() })}
             placeholder="VARIABLE_NAME"
@@ -266,7 +267,8 @@ function ProviderEnvironmentSection(props: {
             =
           </span>
           <DraftInput
-            className="min-w-0 flex-1 font-mono text-xs"
+            size="compact"
+            className="min-w-0 flex-1 font-mono"
             value={variable.valueRedacted ? "" : variable.value}
             onCommit={(value) => updateVariable(variable.id, { value })}
             type={variable.sensitive ? "password" : undefined}
@@ -284,7 +286,10 @@ function ProviderEnvironmentSection(props: {
                   type="button"
                   size="icon-micro"
                   variant="ghost-muted"
-                  className={cn(variable.sensitive && "text-foreground")}
+                  className={cn(
+                    "[--control-icon-color:currentColor]",
+                    variable.sensitive && "text-foreground",
+                  )}
                   onClick={() => {
                     const sensitive = !variable.sensitive;
                     updateVariable(variable.id, {
@@ -313,7 +318,7 @@ function ProviderEnvironmentSection(props: {
             type="button"
             size="icon-micro"
             variant="ghost-muted"
-            className="hover:text-destructive"
+            className="[--control-icon-color:currentColor] hover:text-destructive"
             onClick={() => removeVariable(variable.id)}
             aria-label={`Remove environment variable ${variable.name || index + 1}`}
           >
@@ -789,7 +794,7 @@ export function ProviderInstanceCard({
               type="button"
               size="xs"
               variant="ghost"
-              className="text-muted-foreground hover:text-destructive"
+              className="[--control-icon-color:currentColor] text-muted-foreground hover:text-destructive"
               onClick={onDelete}
               aria-label={`Delete provider instance ${instanceId}`}
             >
