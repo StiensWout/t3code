@@ -395,12 +395,26 @@ it.effect("combines thread safety across nested projects in the same repository"
 it.effect("fails inventory when a repository worktree listing fails", () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    const workspaceRoot = yield* fs.makeTempDirectoryScoped({
+    const path = yield* Path.Path;
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    const repositoryRoot = yield* fs.makeTempDirectoryScoped({
       prefix: "t3-worktree-v2-invalid-repo-",
     });
+    yield* driver.execute({
+      operation: "WorktreeServiceListingFailureTest.init",
+      cwd: repositoryRoot,
+      args: ["init", "-b", "main"],
+    });
+    const workspaceRoot = yield* fs.realPath(repositoryRoot);
+    // The repository resolves, but listing its worktrees blows up.
+    const failingDriver = GitVcsDriver.GitVcsDriver.of({
+      ...driver,
+      listWorkspaces: () => driver.listWorkspaces(path.join(repositoryRoot, "missing")),
+    });
     const layer = makeTestLayer(
-      () => [makeProject(projectA, workspaceRoot)],
+      () => [makeProject(projectA, repositoryRoot)],
       () => [],
+      failingDriver,
     );
 
     const error = yield* Effect.gen(function* () {
@@ -479,5 +493,48 @@ it.effect("treats a detached worktree as safe only once its commit is on the def
     );
     assert.isFalse(yield* fs.exists(mergedPath));
     assert.isTrue(yield* fs.exists(aheadPath));
+  }).pipe(Effect.provide(Layer.mergeAll(serverConfigLiveLayer, NodeServices.layer, gitLayer))),
+);
+
+it.effect("skips a project outside any Git repository instead of failing the inventory", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const config = yield* ServerConfig.ServerConfig;
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+
+    const repositoryRoot = yield* fs.makeTempDirectoryScoped({
+      prefix: "t3-worktree-v2-mixed-repo-",
+    });
+    const plainRoot = yield* fs.makeTempDirectoryScoped({ prefix: "t3-worktree-v2-plain-" });
+    const run = (operation: string, cwd: string, args: ReadonlyArray<string>) =>
+      driver.execute({ operation: `WorktreeServiceMixedTest.${operation}`, cwd, args });
+    yield* run("init", repositoryRoot, ["init", "-b", "main"]);
+    yield* run("userEmail", repositoryRoot, ["config", "user.email", "test@example.com"]);
+    yield* run("userName", repositoryRoot, ["config", "user.name", "T3 Test"]);
+    yield* fs.writeFileString(path.join(repositoryRoot, "README.md"), "hello\n");
+    yield* run("add", repositoryRoot, ["add", "README.md"]);
+    yield* run("commit", repositoryRoot, ["commit", "-m", "initial"]);
+    const worktreePath = path.join(config.worktreesDir, "mixed", "feature");
+    yield* driver.createWorktree({
+      cwd: repositoryRoot,
+      refName: "main",
+      newRefName: "feature/mixed",
+      path: worktreePath,
+    });
+
+    const layer = makeTestLayer(
+      () => [makeProject(projectA, repositoryRoot), makeProject(projectB, plainRoot)],
+      () => [],
+    );
+    const inventory = yield* Effect.gen(function* () {
+      const service = yield* WorktreeService;
+      return yield* service.listWorktrees({});
+    }).pipe(Effect.provide(layer));
+
+    assert.deepEqual(
+      inventory.worktrees.map((worktree) => worktree.branch),
+      ["feature/mixed"],
+    );
   }).pipe(Effect.provide(Layer.mergeAll(serverConfigLiveLayer, NodeServices.layer, gitLayer))),
 );

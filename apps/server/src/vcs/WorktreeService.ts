@@ -1,4 +1,5 @@
 import * as Context from "effect/Context";
+import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -305,11 +306,14 @@ export const make = Effect.gen(function* () {
       }
       return { dirty: count > 0, dirtyFileCount: count };
     },
+    // Interrupts propagate; anything else degrades this row to unknown status.
     Effect.catchCause((cause) =>
-      Effect.gen(function* () {
-        yield* Effect.logWarning("worktrees.inventory.status-failed", { cause });
-        return { dirty: null, dirtyFileCount: null };
-      }),
+      Cause.hasInterruptsOnly(cause)
+        ? Effect.interrupt
+        : Effect.gen(function* () {
+            yield* Effect.logWarning("worktrees.inventory.status-failed", { cause });
+            return { dirty: null, dirtyFileCount: null };
+          }),
     ),
   );
 
@@ -510,8 +514,11 @@ export const make = Effect.gen(function* () {
               }),
             ),
           );
+          // A project outside any Git repository has no worktrees to list;
+          // skip it rather than fail the inventory for every other project.
+          if (commonDir === null) return null;
           const repositoryKey =
-            commonDir === null || commonDir.trim().length === 0
+            commonDir.trim().length === 0
               ? canonicalWorkspaceRoot
               : yield* canonicalizePath(path.resolve(canonicalWorkspaceRoot, commonDir.trim()));
           return {
@@ -523,7 +530,7 @@ export const make = Effect.gen(function* () {
           };
         }),
       { concurrency: PROJECT_SCAN_CONCURRENCY },
-    );
+    ).pipe(Effect.map((projects) => projects.filter((project) => project !== null)));
     const selectedRepositoryKeys =
       input.projectId === undefined
         ? null
@@ -625,13 +632,15 @@ export const make = Effect.gen(function* () {
 
       const freshBlocker = yield* freshPruneBlocker(worktree).pipe(
         Effect.catchCause((cause) =>
-          Effect.gen(function* () {
-            yield* Effect.logWarning("worktrees.prune.status-failed", {
-              worktreePath: worktree.path,
-              cause,
-            });
-            return "status_unavailable" as const;
-          }),
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.interrupt
+            : Effect.gen(function* () {
+                yield* Effect.logWarning("worktrees.prune.status-failed", {
+                  worktreePath: worktree.path,
+                  cause,
+                });
+                return "status_unavailable" as const;
+              }),
         ),
       );
       if (freshBlocker !== null) {
