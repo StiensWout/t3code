@@ -999,7 +999,10 @@ export function TerminalViewport({
 
     const previous = previousSessionRef.current;
     synchronizeTerminalStatus(terminal, current.status);
-    if (!subscriptionChanged && current.version === previous.version) {
+    const replayBoundaryChanged =
+      current.replayStartVersion !== previous.replayStartVersion ||
+      current.replayCompleteVersion !== previous.replayCompleteVersion;
+    if (!subscriptionChanged && current.version === previous.version && !replayBoundaryChanged) {
       return;
     }
 

@@ -186,6 +186,37 @@ describe("terminal session reducers", () => {
     expect(reconnected).toMatchObject({ replayStartVersion: 2, replayCompleteVersion: 1 });
   });
 
+  it("does not make replay-start override metadata before its snapshot arrives", () => {
+    const summary = applyTerminalMetadataStreamEvent([], {
+      type: "snapshot",
+      terminals: [
+        {
+          threadId: BASE_SNAPSHOT.threadId,
+          terminalId: BASE_SNAPSHOT.terminalId,
+          cwd: BASE_SNAPSHOT.cwd,
+          worktreePath: BASE_SNAPSHOT.worktreePath,
+          status: "running",
+          pid: BASE_SNAPSHOT.pid,
+          exitCode: BASE_SNAPSHOT.exitCode,
+          exitSignal: BASE_SNAPSHOT.exitSignal,
+          updatedAt: BASE_SNAPSHOT.updatedAt,
+          hasRunningSubprocess: false,
+          label: BASE_SNAPSHOT.label,
+        },
+      ],
+    })[0]!;
+    const started = applyTerminalAttachStreamEvent(EMPTY_TERMINAL_BUFFER_STATE, {
+      type: "replay-start",
+      threadId: TARGET.threadId,
+      terminalId: TARGET.terminalId,
+      sequence: 1,
+    });
+
+    expect(started.version).toBe(0);
+    expect(started.replayStartVersion).toBe(1);
+    expect(combineTerminalSessionState(summary, started).status).toBe("running");
+  });
+
   it("reduces terminal metadata snapshots, upserts, and removals", () => {
     const initial = applyTerminalMetadataStreamEvent([], {
       type: "snapshot",

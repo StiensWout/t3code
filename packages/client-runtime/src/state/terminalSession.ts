@@ -333,7 +333,6 @@ export function applyTerminalAttachStreamEvent(
       return {
         ...current,
         replayStartVersion: current.replayStartVersion + 1,
-        version: current.version + 1,
       };
     case "snapshot":
     case "restarted":
