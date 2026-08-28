@@ -8,6 +8,7 @@
  */
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
+import * as Cause from "effect/Cause";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -73,8 +74,13 @@ export const make = (options?: WorktreeReaperOptions) =>
       });
     });
 
+    // Interrupts must propagate so scope close and shutdown stop the loop.
     const sweep = runSweep.pipe(
-      Effect.catchCause((cause) => Effect.logWarning("worktree.reaper.sweep-failed", { cause })),
+      Effect.catchCause((cause) =>
+        Cause.hasInterruptsOnly(cause)
+          ? Effect.interrupt
+          : Effect.logWarning("worktree.reaper.sweep-failed", { cause }),
+      ),
     );
 
     const run = Effect.sleep(Duration.millis(initialDelayMs)).pipe(
