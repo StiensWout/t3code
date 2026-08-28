@@ -323,7 +323,7 @@ export function ProviderModelsSection({
             <span className="text-[11px] text-muted-foreground/70">{capLabels.join(" · ")}</span>
           ) : null}
         </span>
-        <span className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
+        <span className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity pointer-coarse:opacity-100 group-focus-within:opacity-100 group-hover:opacity-100">
           {!isHidden && !isFiltering ? (
             <>
               <Tooltip>
