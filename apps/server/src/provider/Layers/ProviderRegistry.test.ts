@@ -506,6 +506,33 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
         }),
       );
 
+      it.effect("requires a current Codex CLI for current service tier settings", () =>
+        Effect.gen(function* () {
+          const status = yield* checkCodexProviderStatus(
+            defaultCodexSettings,
+            () =>
+              Effect.fail(
+                new CodexErrors.CodexAppServerRequestError({
+                  code: -32603,
+                  errorMessage:
+                    "failed to reload config: C:\\Users\\markb\\.codex\\config.toml:6:16: unknown variant `default`, expected `fast` or `flex`",
+                }),
+              ),
+            undefined,
+            () => Effect.succeed("0.129.0"),
+          );
+
+          assert.strictEqual(status.status, "error");
+          assert.strictEqual(status.installed, true);
+          assert.strictEqual(status.version, "0.129.0");
+          assert.strictEqual(status.auth.status, "unknown");
+          assert.strictEqual(
+            status.message,
+            "Codex app-server provider probe failed: failed to reload config: C:\\Users\\markb\\.codex\\config.toml:6:16: unknown variant `default`, expected `fast` or `flex`. Codex CLI 0.129.0 cannot read this service tier. Update Codex CLI to 0.130.0 or newer, then refresh provider status.",
+          );
+        }),
+      );
+
       it.effect("closes the app-server probe scope when provider status times out", () =>
         Effect.gen(function* () {
           const killCalls = yield* Ref.make(0);

@@ -29,7 +29,10 @@ import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import { codexAppServerArgs, resolveCodexLaunchArgs } from "./codexLaunchArgs.ts";
 import {
   AUTH_PROBE_TIMEOUT_MS,
+  DEFAULT_TIMEOUT_MS,
   buildServerProvider,
+  parseGenericCliVersion,
+  spawnAndCollect,
   type ServerProviderDraft,
 } from "../providerSnapshot.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
@@ -37,6 +40,9 @@ import packageJson from "../../../package.json" with { type: "json" };
 const isCodexAppServerSpawnError = Schema.is(CodexErrors.CodexAppServerSpawnError);
 
 const CODEX_APP_SERVER_PROBE_FORCE_KILL_AFTER = "2 seconds" as const;
+const MINIMUM_CODEX_STRING_SERVICE_TIER_VERSION = "0.130.0";
+const LEGACY_CODEX_SERVICE_TIER_ERROR =
+  /unknown variant [`'"](?:default|priority)[`'"], expected [`'"]fast[`'"] or [`'"]flex[`'"]/i;
 
 const CODEX_PRESENTATION = {
   displayName: "Codex",
@@ -48,6 +54,50 @@ export interface CodexAppServerProviderSnapshot {
   readonly version: string | undefined;
   readonly models: ReadonlyArray<ServerProviderModel>;
   readonly skills: ReadonlyArray<ServerProviderSkill>;
+}
+
+interface CodexCliVersionProbeInput {
+  readonly binaryPath: string;
+  readonly homePath?: string;
+  readonly cwd: string;
+  readonly environment?: NodeJS.ProcessEnv;
+}
+
+type CodexCliVersionProbe = (
+  input: CodexCliVersionProbeInput,
+) => Effect.Effect<string | null, never, ChildProcessSpawner.ChildProcessSpawner>;
+
+const probeCodexCliVersion = Effect.fn("probeCodexCliVersion")(
+  function* (input: CodexCliVersionProbeInput) {
+    const resolvedHomePath = input.homePath ? expandHomePath(input.homePath) : undefined;
+    const environment = {
+      ...input.environment,
+      ...(resolvedHomePath ? { CODEX_HOME: resolvedHomePath } : {}),
+    };
+    const spawnCommand = yield* resolveSpawnCommand(input.binaryPath, ["--version"], {
+      env: environment,
+      extendEnv: true,
+    });
+    const result = yield* spawnAndCollect(
+      input.binaryPath,
+      ChildProcess.make(spawnCommand.command, spawnCommand.args, {
+        cwd: input.cwd,
+        env: environment,
+        extendEnv: true,
+        forceKillAfter: CODEX_APP_SERVER_PROBE_FORCE_KILL_AFTER,
+        shell: spawnCommand.shell,
+      }),
+    );
+    return parseGenericCliVersion(`${result.stdout}\n${result.stderr}`);
+  },
+  Effect.orElseSucceed(() => null),
+);
+
+function isLegacyCodexServiceTierError(error: CodexErrors.CodexAppServerError): boolean {
+  return (
+    error._tag === "CodexAppServerRequestError" &&
+    LEGACY_CODEX_SERVICE_TIER_ERROR.test(error.errorMessage)
+  );
 }
 
 const REASONING_EFFORT_LABELS: Readonly<Record<string, string>> = {
@@ -514,6 +564,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
     ChildProcessSpawner.ChildProcessSpawner | Scope.Scope
   > = probeCodexAppServerProvider,
   environment?: NodeJS.ProcessEnv,
+  versionProbe: CodexCliVersionProbe = probeCodexCliVersion,
 ): Effect.fn.Return<
   ServerProviderDraft,
   ServerSettingsError,
@@ -556,6 +607,18 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
   if (Result.isFailure(probeResult)) {
     const error = probeResult.failure;
     const installed = !isCodexAppServerSpawnError(error);
+    const hasLegacyServiceTierConfig = isLegacyCodexServiceTierError(error);
+    const version = hasLegacyServiceTierConfig
+      ? yield* versionProbe({
+          binaryPath: codexSettings.binaryPath,
+          homePath: codexSettings.homePath,
+          cwd: process.cwd(),
+          environment: resolvedEnvironment,
+        }).pipe(Effect.timeoutOption(DEFAULT_TIMEOUT_MS), Effect.map(Option.getOrNull))
+      : null;
+    const legacyServiceTierMessage = version
+      ? `Codex CLI ${version} cannot read this service tier. Update Codex CLI to ${MINIMUM_CODEX_STRING_SERVICE_TIER_VERSION} or newer, then refresh provider status.`
+      : `This Codex CLI cannot read this service tier. Update Codex CLI to ${MINIMUM_CODEX_STRING_SERVICE_TIER_VERSION} or newer, then refresh provider status.`;
     return buildServerProvider({
       presentation: CODEX_PRESENTATION,
       enabled: codexSettings.enabled,
@@ -564,11 +627,11 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
       skills: [],
       probe: {
         installed,
-        version: null,
+        version,
         status: "error",
         auth: { status: "unknown" },
         message: installed
-          ? `Codex app-server provider probe failed: ${error.message}.`
+          ? `Codex app-server provider probe failed: ${error.message}.${hasLegacyServiceTierConfig ? ` ${legacyServiceTierMessage}` : ""}`
           : "Codex CLI (`codex`) was not found on PATH.",
       },
     });
