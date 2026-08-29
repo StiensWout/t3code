@@ -6,9 +6,10 @@ import {
   type ComponentProps,
   type ReactElement,
   type ReactNode,
+  useRef,
 } from "react";
-import { Platform, Pressable, useColorScheme, View } from "react-native";
-import { useThemeColor } from "../lib/useThemeColor";
+import { Platform, Pressable, View } from "react-native";
+import { useAppearancePreferences } from "../features/settings/appearance/AppearancePreferencesProvider";
 
 import { cn } from "../lib/cn";
 import { AndroidAnchoredMenu } from "./AndroidAnchoredMenu";
@@ -21,23 +22,40 @@ export function ControlPill(props: {
   readonly label?: string;
   readonly accessibilityLabel?: string;
   readonly onPress?: () => void;
+  readonly activateOnPressIn?: boolean;
   readonly variant?: "circle" | "pill" | "primary" | "danger";
   readonly disabled?: boolean;
+  readonly className?: string;
 }) {
   const variant = props.variant ?? "circle";
+  const activatedOnPressInRef = useRef(false);
 
-  const iconColor = useThemeColor("--color-icon");
-  const iconSubtle = useThemeColor("--color-icon-subtle");
-  const primaryFg = useThemeColor("--color-primary-foreground");
-  const dangerFg = useThemeColor("--color-danger-foreground");
-  const iconTintColor =
+  const handlePressIn = () => {
+    activatedOnPressInRef.current = true;
+    props.onPress?.();
+  };
+  const handlePressOut = () => {
+    // Pressability invokes onPressOut immediately before onPress on release.
+    // Defer the reset so onPress can identify the same physical gesture.
+    setTimeout(() => {
+      activatedOnPressInRef.current = false;
+    }, 0);
+  };
+  const handlePress = () => {
+    if (activatedOnPressInRef.current) {
+      return;
+    }
+    props.onPress?.();
+  };
+
+  const iconTintClassName =
     variant === "primary"
       ? props.disabled
-        ? iconSubtle
-        : primaryFg
+        ? "accent-icon-subtle"
+        : "accent-primary-foreground"
       : variant === "danger"
-        ? dangerFg
-        : iconColor;
+        ? "accent-danger-foreground"
+        : "accent-icon";
 
   const isCircle =
     variant === "circle" || variant === "danger" || (variant === "primary" && !props.label);
@@ -54,6 +72,7 @@ export function ControlPill(props: {
       : variant === "danger"
         ? "bg-danger"
         : "bg-subtle",
+    props.className,
   );
   const labelClassName = cn(
     "text-center text-xs font-t3-bold",
@@ -68,14 +87,21 @@ export function ControlPill(props: {
     <Pressable
       accessibilityLabel={props.accessibilityLabel ?? props.label}
       accessibilityRole="button"
-      onPress={props.onPress}
+      onPress={props.activateOnPressIn ? handlePress : props.onPress}
+      onPressIn={props.activateOnPressIn ? handlePressIn : undefined}
+      onPressOut={props.activateOnPressIn ? handlePressOut : undefined}
       disabled={props.disabled}
       className={containerClassName}
     >
       {props.iconNode ? (
         <View className="h-4 w-4 items-center justify-center">{props.iconNode}</View>
       ) : props.icon ? (
-        <SymbolView name={props.icon} size={16} tintColor={iconTintColor} type="monochrome" />
+        <SymbolView
+          name={props.icon}
+          size={16}
+          tintColorClassName={iconTintClassName}
+          type="monochrome"
+        />
       ) : null}
       {props.label ? <Text className={labelClassName}>{props.label}</Text> : null}
     </Pressable>
@@ -92,7 +118,8 @@ export function ControlPillMenu(
     readonly className?: string;
   },
 ) {
-  const isDarkMode = useColorScheme() === "dark";
+  const { themeAppearance } = useAppearancePreferences();
+  const isDarkMode = themeAppearance === "dark";
 
   if (Platform.OS === "android") {
     // Long-press menus keep their child interactive: the child element gets

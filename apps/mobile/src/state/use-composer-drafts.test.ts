@@ -1,16 +1,111 @@
 import { afterEach, describe, expect, it } from "@effect/vitest";
 import { EnvironmentId, ProviderInstanceId } from "@t3tools/contracts";
+import { vi } from "vite-plus/test";
+
+const composerDraftFileMocks = vi.hoisted(() => {
+  let document = "";
+  let writeError: Error | null = null;
+  let releaseRead: (() => void) | null = null;
+  let readBarrier = Promise.resolve();
+  let nextWriteBarrier: Promise<void> | null = null;
+  let onWrite: (() => void) | null = null;
+  const writes: string[] = [];
+
+  return {
+    blockRead() {
+      readBarrier = new Promise<void>((resolve) => {
+        releaseRead = resolve;
+      });
+    },
+    releaseRead() {
+      releaseRead?.();
+      releaseRead = null;
+    },
+    getDocument() {
+      return document;
+    },
+    setDocument(value: unknown) {
+      document = JSON.stringify(value);
+    },
+    setWriteError(error: Error | null) {
+      writeError = error;
+    },
+    setNextWriteBarrier(barrier: Promise<void> | null) {
+      nextWriteBarrier = barrier;
+    },
+    setOnWrite(callback: (() => void) | null) {
+      onWrite = callback;
+    },
+    getWrites(): ReadonlyArray<string> {
+      return writes;
+    },
+    resetWrites() {
+      writes.length = 0;
+    },
+    Directory: class {
+      create() {}
+    },
+    File: class {
+      exists = true;
+      parentDirectory = null;
+
+      create() {}
+
+      moveSync() {}
+
+      async text() {
+        await readBarrier;
+        return document;
+      }
+
+      write(value: string) {
+        if (writeError) {
+          throw writeError;
+        }
+        if (nextWriteBarrier) {
+          const barrier = nextWriteBarrier;
+          nextWriteBarrier = null;
+          return barrier.then(() => {
+            document = value;
+            writes.push(value);
+            onWrite?.();
+          });
+        }
+        document = value;
+        writes.push(value);
+        onWrite?.();
+      }
+    },
+  };
+});
+
+vi.mock("expo-file-system", () => ({
+  Directory: composerDraftFileMocks.Directory,
+  File: composerDraftFileMocks.File,
+  Paths: { document: "/documents" },
+}));
 
 import { appAtomRegistry } from "./atom-registry";
 import {
   clearComposerDraftContentState,
+  clearComposerDraftsEnvironment,
+  ComposerDraftPersistenceError,
   composerDraftsAtom,
+  copyComposerDraftContentIfEmpty,
+  copyComposerDraftContentState,
+  decodePersistedComposerState,
   decodePersistedComposerDrafts,
+  ensureComposerDraftsLoaded,
   type ComposerDraft,
+  flushComposerDrafts,
   getComposerDraftSnapshot,
   mergeComposerDraftContentState,
   removeComposerDraftsForEnvironment,
+  resetComposerDraftsLoadState,
   restoreComposerDraftSnapshotState,
+  setComposerDraftText,
+  setStickyComposerModelSelection,
+  stickyComposerModelSelectionAtom,
 } from "./use-composer-drafts";
 
 const DRAFT: ComposerDraft = {
@@ -19,7 +114,15 @@ const DRAFT: ComposerDraft = {
 };
 
 afterEach(() => {
+  vi.useRealTimers();
+  resetComposerDraftsLoadState();
+  composerDraftFileMocks.setDocument("");
+  composerDraftFileMocks.setWriteError(null);
+  composerDraftFileMocks.setNextWriteBarrier(null);
+  composerDraftFileMocks.setOnWrite(null);
+  composerDraftFileMocks.resetWrites();
   appAtomRegistry.set(composerDraftsAtom, {});
+  appAtomRegistry.set(stickyComposerModelSelectionAtom, null);
 });
 
 describe("mobile composer drafts", () => {
@@ -91,6 +194,195 @@ describe("mobile composer drafts", () => {
     ).toThrow();
   });
 
+  it("keeps share-import receipts on otherwise contentless new-task drafts", () => {
+    const receiptDraft: ComposerDraft = {
+      text: "",
+      attachments: [],
+      importedShareIds: ["share-1"],
+    };
+    // The stale-model strip must not touch receipt-bearing drafts, and the
+    // empty filter must keep them — or the same share would re-import after
+    // restart.
+    expect(
+      decodePersistedComposerState({
+        schemaVersion: 1,
+        drafts: {
+          "new-task:environment-1:project-1": {
+            ...receiptDraft,
+            modelSelection: {
+              instanceId: "codex",
+              model: "gpt-5.4",
+            },
+          },
+        },
+      }).drafts,
+    ).toEqual({
+      "new-task:environment-1:project-1": {
+        text: "",
+        attachments: [],
+        importedShareIds: ["share-1"],
+      },
+    });
+
+    expect(
+      decodePersistedComposerState({
+        schemaVersion: 1,
+        drafts: { "new-task:environment-1:project-1": receiptDraft },
+      }).drafts,
+    ).toEqual({ "new-task:environment-1:project-1": receiptDraft });
+  });
+
+  it("hydrates the global sticky model selection", () => {
+    expect(
+      decodePersistedComposerState({
+        schemaVersion: 1,
+        drafts: {},
+        stickyModelSelection: {
+          instanceId: "codex",
+          model: "gpt-5.6-sol",
+        },
+      }).stickyModelSelection,
+    ).toEqual({
+      instanceId: "codex",
+      model: "gpt-5.6-sol",
+    });
+  });
+
+  it("waits for hydration before persisting the latest composer state", async () => {
+    vi.useFakeTimers();
+    composerDraftFileMocks.setDocument({
+      schemaVersion: 1,
+      drafts: {
+        "environment-1:thread-1": DRAFT,
+      },
+      stickyModelSelection: {
+        instanceId: "codex",
+        model: "gpt-5.6-sol",
+      },
+    });
+    composerDraftFileMocks.blockRead();
+    composerDraftFileMocks.resetWrites();
+
+    ensureComposerDraftsLoaded();
+    await Promise.resolve();
+    // The read is blocked, hydration is pending.
+    setComposerDraftText("new-task:environment-1:project-1", "New prompt");
+    await vi.advanceTimersByTimeAsync(200);
+
+    // Write should still be deferred — hydration has not resolved.
+    expect(composerDraftFileMocks.getWrites()).toHaveLength(0);
+
+    composerDraftFileMocks.releaseRead();
+    // Let the loadPromise settle and chain into the deferred persist.
+    await vi.runAllTimersAsync();
+
+    expect(JSON.parse(composerDraftFileMocks.getWrites()[0]!)).toEqual({
+      schemaVersion: 1,
+      drafts: {
+        "environment-1:thread-1": DRAFT,
+        "new-task:environment-1:project-1": {
+          text: "New prompt",
+          attachments: [],
+        },
+      },
+      stickyModelSelection: {
+        instanceId: "codex",
+        model: "gpt-5.6-sol",
+      },
+    });
+  });
+
+  it("flush waits for pending hydration instead of clobbering disk", async () => {
+    vi.useFakeTimers();
+    composerDraftFileMocks.setDocument({
+      schemaVersion: 1,
+      drafts: {
+        "environment-1:thread-1": DRAFT,
+      },
+      stickyModelSelection: {
+        instanceId: "codex",
+        model: "gpt-5.6-sol",
+      },
+    });
+    composerDraftFileMocks.blockRead();
+    composerDraftFileMocks.resetWrites();
+
+    ensureComposerDraftsLoaded();
+    await Promise.resolve();
+    // An edit lands before hydration finishes; its debounced write is gated
+    // behind the blocked read.
+    setComposerDraftText("new-task:environment-1:project-1", "New prompt");
+
+    const flush = flushComposerDrafts();
+    await vi.advanceTimersByTimeAsync(200);
+    // The flush must not have written the pre-hydration snapshot over disk.
+    expect(composerDraftFileMocks.getWrites()).toHaveLength(0);
+
+    composerDraftFileMocks.releaseRead();
+    await flush;
+
+    const written = JSON.parse(composerDraftFileMocks.getDocument());
+    expect(written.drafts["environment-1:thread-1"]).toEqual(DRAFT);
+    expect(written.drafts["new-task:environment-1:project-1"]).toEqual({
+      text: "New prompt",
+      attachments: [],
+    });
+    expect(written.stickyModelSelection).toEqual({
+      instanceId: "codex",
+      model: "gpt-5.6-sol",
+    });
+  });
+
+  it("serializes environment cleanup after an older queued write", async () => {
+    vi.useFakeTimers();
+    composerDraftFileMocks.setDocument(JSON.stringify({ schemaVersion: 1, drafts: {} }));
+    composerDraftFileMocks.resetWrites();
+    let releaseFirstWrite!: () => void;
+    const firstWriteBarrier = new Promise<void>((resolve) => {
+      releaseFirstWrite = resolve;
+    });
+    composerDraftFileMocks.setNextWriteBarrier(firstWriteBarrier);
+    let writeCount = 0;
+    const bothWritesCommitted = new Promise<void>((resolve) => {
+      composerDraftFileMocks.setOnWrite(() => {
+        writeCount += 1;
+        if (writeCount === 2) {
+          resolve();
+        }
+      });
+    });
+
+    appAtomRegistry.set(composerDraftsAtom, {
+      "environment-1:thread-1": DRAFT,
+      "environment-2:thread-2": { text: "keep", attachments: [] },
+    });
+    setStickyComposerModelSelection({
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-5.6-sol",
+    });
+    await vi.advanceTimersByTimeAsync(200);
+
+    const clear = clearComposerDraftsEnvironment(EnvironmentId.make("environment-1"));
+    await Promise.resolve();
+    // Cleanup write is queued behind the still-blocked debounced write.
+    expect(composerDraftFileMocks.getWrites()).toHaveLength(0);
+
+    releaseFirstWrite();
+    await clear;
+    await bothWritesCommitted;
+
+    expect(JSON.parse(composerDraftFileMocks.getDocument())).toEqual({
+      schemaVersion: 1,
+      drafts: {
+        "environment-2:thread-2": { text: "keep", attachments: [] },
+      },
+      stickyModelSelection: {
+        instanceId: "codex",
+        model: "gpt-5.6-sol",
+      },
+    });
+  });
+
   it("clears sent content without clearing the selected model or workspace", () => {
     const draftKey = "environment-1:thread-1";
     const draft: ComposerDraft = {
@@ -119,7 +411,7 @@ describe("mobile composer drafts", () => {
     });
   });
 
-  it("drops the workspace selection when clearing a sent new-task draft", () => {
+  it("drops draft-local model and workspace selections after sending a new task", () => {
     const draftKey = "new-task:environment-1:project-1";
     const draft: ComposerDraft = {
       text: "send this",
@@ -138,15 +430,10 @@ describe("mobile composer drafts", () => {
 
     expect(
       clearComposerDraftContentState({ [draftKey]: draft }, draftKey, {
+        clearModelSelection: true,
         clearWorkspaceSelection: true,
       }),
-    ).toEqual({
-      [draftKey]: {
-        modelSelection: draft.modelSelection,
-        text: "",
-        attachments: [],
-      },
-    });
+    ).toEqual({});
   });
 
   it("reads the latest selector state synchronously for send", () => {
@@ -163,6 +450,53 @@ describe("mobile composer drafts", () => {
     appAtomRegistry.set(composerDraftsAtom, { [draftKey]: selectedDraft });
 
     expect(getComposerDraftSnapshot(draftKey)).toEqual(selectedDraft);
+  });
+
+  it("carries unfinished content to a newly selected project without overwriting its settings", () => {
+    const sourceKey = "new-task:environment-1:project-1";
+    const targetKey = "new-task:environment-1:project-2";
+    const source: ComposerDraft = {
+      text: "Keep this task",
+      attachments: [],
+      importedShareIds: ["share-1"],
+      workspaceSelection: {
+        mode: "worktree",
+        branch: "feature/source",
+        worktreePath: null,
+      },
+    };
+    const target: ComposerDraft = {
+      text: "",
+      attachments: [],
+      runtimeMode: "approval-required",
+    };
+
+    expect(
+      copyComposerDraftContentState(
+        { [sourceKey]: source, [targetKey]: target },
+        sourceKey,
+        targetKey,
+      ),
+    ).toEqual({
+      [sourceKey]: source,
+      [targetKey]: {
+        ...target,
+        text: source.text,
+        attachments: source.attachments,
+        importedShareIds: source.importedShareIds,
+      },
+    });
+  });
+
+  it("does not overwrite unfinished content already stored for the selected project", () => {
+    const sourceKey = "new-task:environment-1:project-1";
+    const targetKey = "new-task:environment-1:project-2";
+    const drafts: Record<string, ComposerDraft> = {
+      [sourceKey]: { text: "Source task", attachments: [] },
+      [targetKey]: { text: "Target task", attachments: [] },
+    };
+
+    expect(copyComposerDraftContentState(drafts, sourceKey, targetKey)).toBe(drafts);
   });
 
   it("merges shared content into a project draft without duplicating retries", () => {
@@ -267,5 +601,59 @@ describe("mobile composer drafts", () => {
       [`${retainedEnvironmentId}:thread-local`]: DRAFT,
       [`new-task:${retainedEnvironmentId}:project-local`]: DRAFT,
     });
+  });
+
+  it("waits for persisted drafts before copying content between projects", async () => {
+    const sourceKey = "new-task:environment-1:project-1";
+    const targetKey = "new-task:environment-1:project-2";
+    const unrelatedKey = "environment-1:thread-1";
+    const source = { text: "Current task", attachments: [] } satisfies ComposerDraft;
+    const target = { text: "Persisted target", attachments: [] } satisfies ComposerDraft;
+    const unrelated = { text: "Keep me", attachments: [] } satisfies ComposerDraft;
+
+    composerDraftFileMocks.setDocument({
+      schemaVersion: 1,
+      drafts: {
+        [targetKey]: target,
+        [unrelatedKey]: unrelated,
+      },
+    });
+    composerDraftFileMocks.blockRead();
+    appAtomRegistry.set(composerDraftsAtom, { [sourceKey]: source });
+
+    const copy = copyComposerDraftContentIfEmpty(sourceKey, targetKey);
+    expect(appAtomRegistry.get(composerDraftsAtom)).toEqual({ [sourceKey]: source });
+
+    composerDraftFileMocks.releaseRead();
+    await copy;
+
+    expect(appAtomRegistry.get(composerDraftsAtom)).toEqual({
+      [sourceKey]: source,
+      [targetKey]: target,
+      [unrelatedKey]: unrelated,
+    });
+  });
+
+  it("lands a still-debounced draft write when flushed", async () => {
+    const draftKey = "environment-1:thread-1";
+    setComposerDraftText(draftKey, "typed right before the restart");
+
+    await flushComposerDrafts();
+
+    expect(JSON.parse(composerDraftFileMocks.getDocument())).toMatchObject({
+      drafts: { [draftKey]: { text: "typed right before the restart" } },
+    });
+  });
+
+  it("propagates a flush write failure instead of resolving as saved", async () => {
+    const draftKey = "environment-1:thread-1";
+    setComposerDraftText(draftKey, "unsaved");
+    composerDraftFileMocks.setWriteError(new Error("storage unavailable"));
+
+    try {
+      await expect(flushComposerDrafts()).rejects.toBeInstanceOf(ComposerDraftPersistenceError);
+    } finally {
+      composerDraftFileMocks.setWriteError(null);
+    }
   });
 });

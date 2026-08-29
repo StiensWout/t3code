@@ -80,6 +80,7 @@ describe("getComposerProviderState", () => {
         ]),
       ]),
       modelOptions: undefined,
+      planModeEnabled: true,
     });
 
     expect(state).toEqual({
@@ -101,6 +102,7 @@ describe("getComposerProviderState", () => {
         booleanDescriptor("fastMode"),
       ]),
       modelOptions: selections(["effort", "low"], ["fastMode", true]),
+      planModeEnabled: true,
     });
 
     expect(state).toEqual({
@@ -119,6 +121,7 @@ describe("getComposerProviderState", () => {
         booleanDescriptor("fastMode"),
       ]),
       modelOptions: selections(["effort", "high"], ["fastMode", false]),
+      planModeEnabled: true,
     });
 
     expect(state.modelOptionsForDispatch).toEqual(
@@ -132,6 +135,7 @@ describe("getComposerProviderState", () => {
       model: MODEL,
       models: modelWith([booleanDescriptor("thinking")]),
       modelOptions: selections(["effort", "max"], ["thinking", false]),
+      planModeEnabled: true,
     });
 
     expect(state).toEqual({
@@ -157,6 +161,7 @@ describe("getComposerProviderState", () => {
         ]),
       ]),
       modelOptions: selections(["agent", "plan"]),
+      planModeEnabled: true,
     });
 
     expect(state.promptEffort).toBe("high");
@@ -165,12 +170,32 @@ describe("getComposerProviderState", () => {
     );
   });
 
-  it("returns undefined dispatch options when the model declares no descriptors", () => {
+  it("drops the plan agent from dispatch when legacy plan mode is disabled", () => {
     const state = getComposerProviderState({
       provider: PROVIDER,
       model: MODEL,
-      models: modelWith([]),
-      modelOptions: selections(["anything", "value"]),
+      models: modelWith([
+        selectDescriptor("agent", [
+          { id: "build", label: "Build", isDefault: true },
+          { id: "plan", label: "Plan" },
+        ]),
+      ]),
+      modelOptions: selections(["agent", "plan"]),
+      planModeEnabled: false,
+    });
+
+    expect(state.modelOptionsForDispatch).toEqual(selections(["agent", "build"]));
+  });
+
+  it("drops the agent descriptor entirely when plan is the only option and plan mode is disabled", () => {
+    const state = getComposerProviderState({
+      provider: PROVIDER,
+      model: MODEL,
+      models: modelWith([
+        selectDescriptor("agent", [{ id: "plan", label: "Plan", isDefault: true }]),
+      ]),
+      modelOptions: selections(["agent", "plan"]),
+      planModeEnabled: false,
     });
 
     expect(state).toEqual({
@@ -178,6 +203,127 @@ describe("getComposerProviderState", () => {
       promptEffort: null,
       modelOptionsForDispatch: undefined,
     });
+  });
+
+  it("falls back to a surviving agent when plan was the descriptor default and plan mode is disabled", () => {
+    const state = getComposerProviderState({
+      provider: PROVIDER,
+      model: MODEL,
+      models: modelWith([
+        selectDescriptor("agent", [
+          { id: "plan", label: "Plan", isDefault: true },
+          { id: "research", label: "Research" },
+        ]),
+      ]),
+      modelOptions: undefined,
+      planModeEnabled: false,
+    });
+
+    expect(state.modelOptionsForDispatch).toEqual(selections(["agent", "research"]));
+  });
+
+  it("returns undefined dispatch options when the model declares no descriptors", () => {
+    const state = getComposerProviderState({
+      provider: PROVIDER,
+      model: MODEL,
+      models: modelWith([]),
+      modelOptions: selections(["anything", "value"]),
+      planModeEnabled: true,
+    });
+
+    expect(state).toEqual({
+      provider: PROVIDER,
+      promptEffort: null,
+      modelOptionsForDispatch: undefined,
+    });
+  });
+
+  it("preserves explicit options when the selected model is absent from the catalog", () => {
+    const state = getComposerProviderState({
+      provider: ProviderDriverKind.make("opencode"),
+      model: "opencode/kimi-k3",
+      models: [
+        {
+          slug: "opencode/big-pickle",
+          name: "Big Pickle",
+          isCustom: false,
+          capabilities: {},
+        },
+      ],
+      modelOptions: selections(["variant", "max"], ["agent", "build"]),
+      planModeEnabled: false,
+    });
+
+    expect(state.modelOptionsForDispatch).toEqual(
+      selections(["variant", "max"], ["agent", "build"]),
+    );
+  });
+
+  it.each(["codex", "claudeAgent", "cursor", "grok"])(
+    "does not preserve unknown options for a missing %s model",
+    (provider) => {
+      const state = getComposerProviderState({
+        provider: ProviderDriverKind.make(provider),
+        model: "missing-model",
+        models: modelWith([]),
+        modelOptions: selections(["unknown", "value"]),
+        planModeEnabled: true,
+      });
+
+      expect(state.modelOptionsForDispatch).toBeUndefined();
+    },
+  );
+
+  it("preserves explicit options while the catalog is empty", () => {
+    const state = getComposerProviderState({
+      provider: ProviderDriverKind.make("opencode"),
+      model: "opencode/kimi-k3",
+      models: [],
+      modelOptions: selections(["variant", "max"], ["agent", "build"]),
+      planModeEnabled: false,
+    });
+
+    expect(state.modelOptionsForDispatch).toEqual(
+      selections(["variant", "max"], ["agent", "build"]),
+    );
+  });
+
+  it("validates options for a known model selected through a legacy alias", () => {
+    const state = getComposerProviderState({
+      provider: ProviderDriverKind.make("claudeAgent"),
+      model: "opus",
+      models: [
+        {
+          slug: "claude-opus-5",
+          name: "Claude Opus 5",
+          isCustom: false,
+          capabilities: {
+            optionDescriptors: [
+              selectDescriptor("effort", [
+                { id: "low", label: "Low" },
+                { id: "high", label: "High", isDefault: true },
+              ]),
+            ],
+          },
+        },
+      ],
+      modelOptions: selections(["effort", "low"], ["unknown", "value"]),
+      planModeEnabled: false,
+    });
+
+    expect(state.modelOptionsForDispatch).toEqual(selections(["effort", "low"]));
+  });
+
+  it("still drops the plan agent when an absent model has a saved plan selection", () => {
+    const state = getComposerProviderState({
+      provider: ProviderDriverKind.make("opencode"),
+      model: "opencode/kimi-k3",
+      models: [],
+      modelOptions: selections(["variant", "max"], ["agent", "plan"]),
+      planModeEnabled: false,
+    });
+
+    expect(state.modelOptionsForDispatch).toEqual(selections(["variant", "max"]));
   });
 
   it("adds ultrathink class names when the prompt triggers a promptInjectedValues descriptor", () => {
@@ -199,6 +345,7 @@ describe("getComposerProviderState", () => {
         "Ultrathink:\nInvestigate this failure",
       ),
       modelOptions: selections(["effort", "medium"]),
+      planModeEnabled: true,
     });
 
     expect(state).toEqual({
@@ -220,6 +367,7 @@ describe("getComposerProviderState", () => {
         "Ultrathink:\nInvestigate this failure",
       ),
       modelOptions: undefined,
+      planModeEnabled: true,
     });
 
     expect(state).not.toHaveProperty("composerFrameClassName");
@@ -240,6 +388,7 @@ describe("provider traits render guards", () => {
       modelOptions: undefined,
       prompt: "",
       onPromptChange: () => {},
+      planModeEnabled: true,
     };
 
     expect(renderProviderTraitsPicker(args)).toBeNull();
