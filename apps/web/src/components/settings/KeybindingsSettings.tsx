@@ -74,11 +74,17 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { useAtomCommand } from "../../state/use-atom-command";
 
 function KeybindingPill({ value }: { value: string }) {
-  const parts = value.split("+");
+  // Keys dedupe repeated parts; a literal "+" in a shortcut splits into empty strings.
+  const seenParts = new Map<string, number>();
+  const parts = value.split("+").map((part) => {
+    const seen = seenParts.get(part) ?? 0;
+    seenParts.set(part, seen + 1);
+    return { part, key: seen === 0 ? part : `${part}-${seen}` };
+  });
   return (
     <KbdGroup className="bg-transparent p-0 shadow-none">
-      {parts.map((part) => (
-        <Kbd key={part} className="min-w-6 justify-center px-1.5">
+      {parts.map(({ part, key }) => (
+        <Kbd key={key} className="min-w-6 justify-center px-1.5">
           {part === "mod"
             ? navigator.platform.toLowerCase().includes("mac")
               ? "⌘"
@@ -813,10 +819,12 @@ function KeybindingKeyControl({
   row,
   editor,
   isSaving,
+  pillClassName,
 }: {
   row: KeybindingRow;
   editor: KeybindingRowEditor;
   isSaving: boolean;
+  pillClassName?: string | undefined;
 }) {
   const { keyDraft, isRecording, isDirty, isWhenDraftValid, setDraft, save, captureKeybinding } =
     editor;
@@ -838,12 +846,12 @@ function KeybindingKeyControl({
           type="button"
           onClick={() => setDraft({ isRecording: true })}
           aria-label={`Edit shortcut for ${commandLabel(row.command)}: ${formatShortcutLabel(row.binding.shortcut)}`}
-          className="group inline-flex h-7 items-center gap-1.5 rounded-md border border-transparent px-1.5 outline-none transition-colors hover:border-border/70 hover:bg-background focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/24"
+          className={cn(
+            "inline-flex h-7 items-center rounded-md border border-transparent px-1.5 outline-none transition-colors hover:border-border/70 hover:bg-background focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/24",
+            pillClassName,
+          )}
         >
           <KeybindingPill value={row.key} />
-          <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground/0 transition-opacity group-hover:text-muted-foreground/70 group-focus-visible:text-muted-foreground/70">
-            Edit
-          </span>
         </button>
       ) : (
         <Input
@@ -920,8 +928,7 @@ function KeybindingRowMenu({
 }) {
   const canReset = row.source === "Custom" && row.defaultKey !== null;
   const canRemove = row.source !== "Default";
-  // Keep the slot occupied so shortcut pills share a right edge across rows.
-  if (!canReset && !canRemove) return <span className="size-7 shrink-0" aria-hidden />;
+  if (!canReset && !canRemove) return null;
 
   return (
     <Menu>
@@ -964,41 +971,81 @@ function KeybindingSourceBadge({ source }: { source: KeybindingRow["source"] }) 
   );
 }
 
-/** One binding as a standard settings row; the When clause opens the expression builder. */
+function KeybindingRowTitle({ row }: { row: KeybindingRow }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger render={<span className="flex items-center gap-2" />}>
+        {commandLabel(row.command)}
+        <KeybindingSourceBadge source={row.source} />
+      </TooltipTrigger>
+      <TooltipPopup side="top">{row.command}</TooltipPopup>
+    </Tooltip>
+  );
+}
+
+function KeybindingRowWhen({
+  row,
+  editor,
+  variables,
+}: {
+  row: KeybindingRow;
+  editor: KeybindingRowEditor;
+  variables: ReadonlyArray<WhenVariableOption>;
+}) {
+  return (
+    <span className="flex h-6 items-center gap-1.5">
+      <span className="text-[12px] leading-none text-muted-foreground/70">When</span>
+      <WhenClauseControl
+        label={commandLabel(row.command)}
+        expression={editor.whenDraftExpression}
+        value={editor.whenDraft}
+        variables={variables}
+        onChange={(whenDraft) => editor.setDraft({ whenDraft })}
+        onValidityChange={(isWhenDraftValid) => editor.setDraft({ isWhenDraftValid })}
+      />
+    </span>
+  );
+}
+
+/** Row actions that stay hidden until the row is hovered or holds focus. */
+function KeybindingHoverRowMenu(props: {
+  row: KeybindingRow;
+  isSaving: boolean;
+  onReset: (row: KeybindingRow) => void;
+  onRemove: (row: KeybindingRow) => void;
+}) {
+  return (
+    <span className="flex items-center opacity-0 transition-opacity group-focus-within/row:opacity-100 group-hover/row:opacity-100 has-data-popup-open:opacity-100">
+      <KeybindingRowMenu {...props} />
+    </span>
+  );
+}
+
+/** One binding as a settings row: pills flush right, actions fading in beside them on hover. */
 function KeybindingSettingsRow(props: KeybindingRowProps) {
   const { row, isSaving, allRows, variables, onSave, onReset, onRemove } = props;
   const editor = useKeybindingRowEditor({ row, allRows, onSave });
 
   return (
     <SettingsRow
-      className="rounded-none hover:bg-accent/30"
-      title={
-        <Tooltip>
-          <TooltipTrigger render={<span className="flex items-center gap-2" />}>
-            {commandLabel(row.command)}
-            <KeybindingSourceBadge source={row.source} />
-          </TooltipTrigger>
-          <TooltipPopup side="top">{row.command}</TooltipPopup>
-        </Tooltip>
-      }
-      description={
-        <span className="flex h-6 items-center gap-1.5">
-          <span className="text-[12px] leading-none text-muted-foreground/70">When</span>
-          <WhenClauseControl
-            label={commandLabel(row.command)}
-            expression={editor.whenDraftExpression}
-            value={editor.whenDraft}
-            variables={variables}
-            onChange={(whenDraft) => editor.setDraft({ whenDraft })}
-            onValidityChange={(isWhenDraftValid) => editor.setDraft({ isWhenDraftValid })}
-          />
-        </span>
-      }
+      className="group/row rounded-none"
+      title={<KeybindingRowTitle row={row} />}
+      description={<KeybindingRowWhen row={row} editor={editor} variables={variables} />}
       control={
-        <div className="flex flex-wrap items-center justify-end gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-1.5">
           <KeybindingConflictWarning labels={editor.conflictLabels} />
-          <KeybindingKeyControl row={row} editor={editor} isSaving={isSaving} />
-          <KeybindingRowMenu row={row} isSaving={isSaving} onReset={onReset} onRemove={onRemove} />
+          <KeybindingHoverRowMenu
+            row={row}
+            isSaving={isSaving}
+            onReset={onReset}
+            onRemove={onRemove}
+          />
+          <KeybindingKeyControl
+            row={row}
+            editor={editor}
+            isSaving={isSaving}
+            pillClassName="-mr-1.5"
+          />
         </div>
       }
     />
@@ -1239,7 +1286,7 @@ function KeybindingsList(props: KeybindingsListProps) {
     onCancel: onCancelAdd,
   };
   return (
-    <div className="divide-y divide-border/50">
+    <div>
       {isAddingBinding ? <NewKeybindingSettingsRow {...newProps} /> : null}
       {rows.map((row) => (
         <KeybindingSettingsRow
@@ -1433,7 +1480,7 @@ export function KeybindingsSettingsPanel() {
   };
 
   return (
-    <SettingsPageContainer width="wide">
+    <SettingsPageContainer>
       <SettingsSection
         {...searchableSetting("keybindings")}
         headerAction={
