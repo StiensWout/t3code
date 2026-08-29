@@ -1309,11 +1309,11 @@ function KeybindingsList(props: KeybindingsListProps) {
 function BrowserKeybindingNotice() {
   return (
     <div className="flex items-center gap-1.5 px-3 pb-2 text-[12px] text-muted-foreground sm:px-4">
-      <WarningTooltipIcon label="Browser keybinding limitations" className="size-4.5">
-        Some shortcuts are claimed by the browser before T3 Code sees them. Use the desktop app for
-        better keybinding support.
-      </WarningTooltipIcon>
-      <span>Browser shortcuts may take precedence.</span>
+      <TriangleAlertIcon className="size-3.5 shrink-0 text-warning" aria-hidden />
+      <span>
+        Some shortcuts may be claimed by the browser before T3 Code sees them. Use the desktop app
+        for better keybinding support.
+      </span>
     </div>
   );
 }
