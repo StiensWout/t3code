@@ -20,7 +20,9 @@ import ThreadSidebar from "./Sidebar";
 import { SettingsSidebarNav } from "./settings/SettingsSidebarNav";
 import { SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import {
+  resolveEnvironmentIdentificationPillLabel,
   resolveSidebarStageFocusRingOffsetClass,
+  useEnvironmentStageLabel,
   useSidebarStageBackdropVariant,
 } from "./SidebarStageBackdrop";
 import { useProjects } from "../state/entities";
@@ -29,6 +31,7 @@ import {
   resolveThreadSidebarMaximumWidth,
   THREAD_MAIN_CONTENT_MIN_WIDTH,
   THREAD_SIDEBAR_MIN_WIDTH,
+  THREAD_SIDEBAR_STAGE_PILL_MIN_WIDTH,
   THREAD_SIDEBAR_WIDTH_STORAGE_KEY,
 } from "./threadSidebarWidth";
 import {
@@ -164,9 +167,21 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
       ? getWindowFullscreenState()
       : false;
   });
+  const hasMacosTrafficLights = isMacosDesktop && !isWindowFullscreen;
+  const environmentIdentificationMode = useEnvironmentIdentificationMode();
+  const stageLabel = useEnvironmentStageLabel();
+  const showsStagePill =
+    environmentIdentificationMode === "pill" &&
+    resolveEnvironmentIdentificationPillLabel(stageLabel) !== null;
+  const sidebarMinimumWidth =
+    hasMacosTrafficLights && showsStagePill
+      ? THREAD_SIDEBAR_STAGE_PILL_MIN_WIDTH
+      : THREAD_SIDEBAR_MIN_WIDTH;
+  // The persisted width stays untouched when the floor rises; leaving pill
+  // mode or entering fullscreen returns the sidebar to the user's width.
   const sidebarProviderStyle = {
-    "--sidebar-width": `${sidebarWidth}px`,
-    ...(isMacosDesktop && !isWindowFullscreen
+    "--sidebar-width": `${Math.max(sidebarWidth, sidebarMinimumWidth)}px`,
+    ...(hasMacosTrafficLights
       ? { "--workspace-controls-left": MACOS_TRAFFIC_LIGHTS_LEFT_INSET }
       : {}),
   } as CSSProperties;
@@ -218,7 +233,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
         className="border-r border-sidebar-border bg-sidebar text-sidebar-foreground"
         resizable={{
           maxWidth: sidebarMaximumWidth,
-          minWidth: THREAD_SIDEBAR_MIN_WIDTH,
+          minWidth: sidebarMinimumWidth,
           shouldAcceptWidth: ({ currentWidth, nextWidth, wrapper }) =>
             nextWidth <= currentWidth ||
             wrapper.clientWidth - nextWidth >= THREAD_MAIN_CONTENT_MIN_WIDTH,
