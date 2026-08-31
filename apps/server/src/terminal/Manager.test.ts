@@ -47,6 +47,10 @@ class FakePtyProcess implements PtyAdapter.PtyProcess {
   killObserver: ((signal: string | undefined) => void) | undefined;
   private readonly dataListeners = new Set<(data: string) => void>();
   private readonly exitListeners = new Set<(event: PtyAdapter.PtyExitEvent) => void>();
+  private readonly pausedData: string[] = [];
+  pauseCalls = 0;
+  resumeCalls = 0;
+  outputPaused = false;
   killed = false;
 
   constructor(pid: number) {
@@ -73,6 +77,23 @@ class FakePtyProcess implements PtyAdapter.PtyProcess {
     this.killObserver?.(signal);
   }
 
+  pauseOutput(): void {
+    if (this.outputPaused) return;
+    this.outputPaused = true;
+    this.pauseCalls += 1;
+  }
+
+  resumeOutput(): void {
+    if (!this.outputPaused) return;
+    this.outputPaused = false;
+    this.resumeCalls += 1;
+    while (!this.outputPaused) {
+      const data = this.pausedData.shift();
+      if (data === undefined) break;
+      this.notifyData(data);
+    }
+  }
+
   onData(callback: (data: string) => void): () => void {
     this.dataListeners.add(callback);
     return () => {
@@ -88,6 +109,14 @@ class FakePtyProcess implements PtyAdapter.PtyProcess {
   }
 
   emitData(data: string): void {
+    if (this.outputPaused) {
+      this.pausedData.push(data);
+      return;
+    }
+    this.notifyData(data);
+  }
+
+  private notifyData(data: string): void {
     for (const listener of this.dataListeners) {
       listener(data);
     }
@@ -213,6 +242,7 @@ interface CreateManagerOptions {
   replayHistoryMaxBytes?: number;
   outputBatchWindowMs?: number;
   outputBatchMaxBytes?: number;
+  pendingProcessEventMaxBytes?: number;
   shellResolver?: () => string;
   env?: NodeJS.ProcessEnv;
   subprocessInspector?: (terminalPid: number) => Effect.Effect<{
@@ -268,6 +298,9 @@ const createManager = (
           : {}),
         ...(options.outputBatchMaxBytes !== undefined
           ? { outputBatchMaxBytes: options.outputBatchMaxBytes }
+          : {}),
+        ...(options.pendingProcessEventMaxBytes !== undefined
+          ? { pendingProcessEventMaxBytes: options.pendingProcessEventMaxBytes }
           : {}),
         ptyAdapter,
         ...(options.shellResolver !== undefined ? { shellResolver: options.shellResolver } : {}),
@@ -2268,6 +2301,45 @@ it.layer(
       expect(outputEvents.every((event) => Buffer.byteLength(event.data) <= 64 * 1024)).toBe(true);
       expect(outputEvents.map((event) => event.data).join("")).toBe(
         `${chunk.repeat(64)}${oversizedChunk}`,
+      );
+    }),
+  );
+
+  it.effect("pauses PTY output while the bounded event backlog drains", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter, getEvents } = yield* createManager({
+        ptyAdapter: new FakePtyAdapter("async"),
+        outputBatchMaxBytes: 4,
+        pendingProcessEventMaxBytes: 8,
+      });
+      yield* manager.open(openInput());
+      const process = ptyAdapter.processes[0];
+      expect(process).toBeDefined();
+      if (!process) return;
+
+      process.emitData("aaaa");
+      process.emitData("bbbb");
+
+      yield* waitFor(
+        Effect.map(
+          getEvents,
+          (events) =>
+            events
+              .filter((event) => event.type === "output")
+              .map((event) => event.data)
+              .join("") === "aaaabbbb",
+        ),
+        "1200 millis",
+      );
+
+      expect(process.pauseCalls).toBeGreaterThanOrEqual(1);
+      expect(process.resumeCalls).toBe(process.pauseCalls);
+      expect(process.outputPaused).toBe(false);
+
+      process.emitExit({ exitCode: 0, signal: 0 });
+      yield* waitFor(
+        Effect.map(getEvents, (events) => events.some((event) => event.type === "exited")),
+        "1200 millis",
       );
     }),
   );

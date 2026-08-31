@@ -261,6 +261,8 @@ export const ThreadTerminalPanel = memo(function ThreadTerminalPanel(
         onInput={handleInput}
         onResize={handleResize}
         output={terminal.output}
+        replayCompleteVersion={terminal.replayCompleteVersion}
+        replayStartVersion={terminal.replayStartVersion}
         style={{ flex: 1 }}
       />
     </View>

@@ -8,7 +8,7 @@ public class T3TerminalModule: Module {
     // logs so a stale native binary is distinguishable from a broken key pipeline.
     Constants([
       "hardwareKeyRevision": 3,
-      "streamingRevision": 1,
+      "streamingRevision": 2,
     ])
 
     View(T3TerminalView.self) {
@@ -56,6 +56,10 @@ public class T3TerminalModule: Module {
 
       AsyncFunction("write") { (view: T3TerminalView, data: String) in
         view.writeRemoteData(data)
+      }
+
+      AsyncFunction("writeReplay") { (view: T3TerminalView, data: String) in
+        view.writeReplayRemoteData(data)
       }
 
       AsyncFunction("reset") { (view: T3TerminalView, data: String) in

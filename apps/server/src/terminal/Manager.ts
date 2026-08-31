@@ -83,6 +83,10 @@ const DEFAULT_OUTPUT_BATCH_WINDOW_MS = 8;
 // Full-screen terminal apps commonly emit 20-40 KB synchronized updates. Keep
 // typical frames in one event while retaining a bounded live-subscriber queue.
 const DEFAULT_OUTPUT_BATCH_MAX_BYTES = 64 * 1024;
+// Bound output accepted ahead of the event drain. Node PTYs are paused before
+// this fills; adapters without producer flow control drop only overflow bytes
+// rather than allowing an unbounded server heap queue.
+const DEFAULT_PENDING_PROCESS_EVENT_MAX_BYTES = 4 * 1024 * 1024;
 const DEFAULT_HISTORY_STREAM_CHUNK_BYTES = 64 * 1024;
 const DEFAULT_ATTACH_BUFFERED_EVENT_LIMIT = 32;
 const DEFAULT_PERSIST_DEBOUNCE_MS = 40;
@@ -272,6 +276,8 @@ export interface TerminalSessionState {
   pendingOutputHighSurrogate: string;
   pendingProcessEvents: Array<PendingProcessEvent>;
   pendingProcessEventIndex: number;
+  pendingProcessEventBytes: number;
+  processOutputPaused: boolean;
   processEventDrainPid: number | null;
   processEventDrainSemaphore: Semaphore.Semaphore;
   exitCode: number | null;
@@ -458,11 +464,13 @@ function cleanupProcessHandles(session: TerminalSessionState): void {
   session.unsubscribeExit = null;
 }
 
-function splitOutputByBytes(data: string, maxBytes: number): ReadonlyArray<string> {
+function* splitOutputByBytes(data: string, maxBytes: number): Iterable<string> {
   const encoded = Buffer.from(data);
-  if (encoded.byteLength <= maxBytes) return [data];
+  if (encoded.byteLength <= maxBytes) {
+    yield data;
+    return;
+  }
 
-  const chunks: string[] = [];
   let offset = 0;
   while (offset < encoded.byteLength) {
     let end = Math.min(offset + maxBytes, encoded.byteLength);
@@ -475,10 +483,9 @@ function splitOutputByBytes(data: string, maxBytes: number): ReadonlyArray<strin
         end += 1;
       }
     }
-    chunks.push(encoded.subarray(offset, end).toString());
+    yield encoded.subarray(offset, end).toString();
     offset = end;
   }
-  return chunks;
 }
 
 function splitCompleteOutput(
@@ -505,8 +512,24 @@ function enqueueProcessEvent(
   expectedPid: number,
   event: PendingProcessEvent,
   outputBatchMaxBytes: number,
+  pendingProcessEventMaxBytes: number,
 ): boolean {
   if (!session.process || session.status !== "running" || session.pid !== expectedPid) {
+    return false;
+  }
+
+  if (
+    event.type === "output" &&
+    session.pendingProcessEventBytes + event.dataBytes > pendingProcessEventMaxBytes
+  ) {
+    if (!session.processOutputPaused) {
+      session.processOutputPaused = true;
+      try {
+        session.process.pauseOutput?.();
+      } catch {
+        // The byte ceiling remains authoritative if adapter flow control fails.
+      }
+    }
     return false;
   }
 
@@ -524,12 +547,52 @@ function enqueueProcessEvent(
   } else {
     session.pendingProcessEvents.push(event);
   }
+  if (event.type === "output") {
+    session.pendingProcessEventBytes += event.dataBytes;
+    const pauseAtBytes = Math.max(
+      outputBatchMaxBytes,
+      pendingProcessEventMaxBytes - outputBatchMaxBytes,
+    );
+    if (!session.processOutputPaused && session.pendingProcessEventBytes >= pauseAtBytes) {
+      session.processOutputPaused = true;
+      try {
+        session.process.pauseOutput?.();
+      } catch {
+        // The hard byte ceiling above still protects adapters whose optional
+        // producer-level flow control fails at runtime.
+      }
+    }
+  }
   if (session.processEventDrainPid === expectedPid) {
     return false;
   }
 
   session.processEventDrainPid = expectedPid;
   return true;
+}
+
+function resumeProcessOutput(
+  session: TerminalSessionState,
+  expectedPid: number,
+  pendingProcessEventResumeBytes: number,
+  force = false,
+): void {
+  if (
+    !session.processOutputPaused ||
+    session.pid !== expectedPid ||
+    !session.process ||
+    session.status !== "running" ||
+    (!force && session.pendingProcessEventBytes > pendingProcessEventResumeBytes)
+  ) {
+    return;
+  }
+
+  session.processOutputPaused = false;
+  try {
+    session.process.resumeOutput?.();
+  } catch {
+    // A failed optional resume cannot leave the manager queue marked paused.
+  }
 }
 
 function defaultShellResolver(platform: NodeJS.Platform, env: NodeJS.ProcessEnv): string {
@@ -1281,6 +1344,7 @@ interface TerminalManagerOptions {
   replayHistoryMaxBytes?: number;
   outputBatchWindowMs?: number;
   outputBatchMaxBytes?: number;
+  pendingProcessEventMaxBytes?: number;
   ptyAdapter: PtyAdapter.PtyAdapter["Service"];
   shellResolver?: () => string;
   env?: NodeJS.ProcessEnv;
@@ -1329,6 +1393,11 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     1,
     options.outputBatchMaxBytes ?? DEFAULT_OUTPUT_BATCH_MAX_BYTES,
   );
+  const pendingProcessEventMaxBytes = Math.max(
+    outputBatchMaxBytes,
+    options.pendingProcessEventMaxBytes ?? DEFAULT_PENDING_PROCESS_EVENT_MAX_BYTES,
+  );
+  const pendingProcessEventResumeBytes = Math.floor(pendingProcessEventMaxBytes / 2);
   const platform = yield* HostProcessPlatform;
   // Terminals must inherit the user's full environment (minus the blocklist
   // applied in createTerminalSpawnEnv) — an allowlist here silently strips
@@ -1439,6 +1508,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             dataBytes: Buffer.byteLength(outputData),
           },
           outputBatchMaxBytes,
+          pendingProcessEventMaxBytes,
         )
       ) {
         shouldStartDrain = true;
@@ -1921,6 +1991,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         if (session.pid !== expectedPid || !session.process || session.status !== "running") {
           session.pendingProcessEvents = [];
           session.pendingProcessEventIndex = 0;
+          session.pendingProcessEventBytes = 0;
+          session.processOutputPaused = false;
           session.processEventDrainPid = null;
           return { type: "idle" } as const;
         }
@@ -1929,13 +2001,28 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         if (!nextEvent) {
           session.pendingProcessEvents = [];
           session.pendingProcessEventIndex = 0;
+          session.pendingProcessEventBytes = 0;
           session.processEventDrainPid = null;
           return { type: "idle" } as const;
         }
 
         session.pendingProcessEventIndex += 1;
+        if (nextEvent.type === "output") {
+          session.pendingProcessEventBytes = Math.max(
+            0,
+            session.pendingProcessEventBytes - nextEvent.dataBytes,
+          );
+        }
         if (session.pendingProcessEventIndex >= session.pendingProcessEvents.length) {
           session.pendingProcessEvents = [];
+          session.pendingProcessEventIndex = 0;
+        } else if (
+          session.pendingProcessEventIndex >= 64 &&
+          session.pendingProcessEventIndex * 2 >= session.pendingProcessEvents.length
+        ) {
+          session.pendingProcessEvents = session.pendingProcessEvents.slice(
+            session.pendingProcessEventIndex,
+          );
           session.pendingProcessEventIndex = 0;
         }
 
@@ -1976,6 +2063,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         session.pendingOutputHighSurrogate = "";
         session.pendingProcessEvents = [];
         session.pendingProcessEventIndex = 0;
+        session.pendingProcessEventBytes = 0;
+        session.processOutputPaused = false;
         session.processEventDrainPid = null;
         session.exitCode = Number.isInteger(nextEvent.event.exitCode)
           ? nextEvent.event.exitCode
@@ -1997,6 +2086,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       });
 
       if (action.type === "idle") {
+        resumeProcessOutput(session, expectedPid, pendingProcessEventResumeBytes);
         return;
       }
 
@@ -2016,6 +2106,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
           sequence: action.sequence,
           data: action.data,
         });
+        resumeProcessOutput(session, expectedPid, pendingProcessEventResumeBytes);
         continue;
       }
 
@@ -2073,6 +2164,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       session.pendingOutputHighSurrogate = "";
       session.pendingProcessEvents = [];
       session.pendingProcessEventIndex = 0;
+      session.pendingProcessEventBytes = 0;
+      session.processOutputPaused = false;
       session.processEventDrainPid = null;
       session.updatedAt = updatedAt;
       return [undefined, state] as const;
@@ -2168,6 +2261,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       session.childCommandLabel = null;
       session.pendingProcessEvents = [];
       session.pendingProcessEventIndex = 0;
+      session.pendingProcessEventBytes = 0;
+      session.processOutputPaused = false;
       session.processEventDrainPid = null;
       session.pendingOutputHighSurrogate = "";
       session.updatedAt = startingAt;
@@ -2211,6 +2306,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
                   processPid,
                   { type: "exit", event },
                   outputBatchMaxBytes,
+                  pendingProcessEventMaxBytes,
                 )
               ) {
                 runFork(drainProcessEvents(session, processPid));
@@ -2264,6 +2360,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         session.childCommandLabel = null;
         session.pendingProcessEvents = [];
         session.pendingProcessEventIndex = 0;
+        session.pendingProcessEventBytes = 0;
+        session.processOutputPaused = false;
         session.processEventDrainPid = null;
         advanceEventSequence(session);
         return [undefined, state] as const;
@@ -2514,6 +2612,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         pendingOutputHighSurrogate: "",
         pendingProcessEvents: [],
         pendingProcessEventIndex: 0,
+        pendingProcessEventBytes: 0,
+        processOutputPaused: false,
         processEventDrainPid: null,
         processEventDrainSemaphore: yield* Semaphore.make(1),
         exitCode: null,
@@ -2580,6 +2680,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       liveSession.pendingOutputHighSurrogate = "";
       liveSession.pendingProcessEvents = [];
       liveSession.pendingProcessEventIndex = 0;
+      liveSession.pendingProcessEventBytes = 0;
+      liveSession.processOutputPaused = false;
       liveSession.processEventDrainPid = null;
       yield* persistHistory(liveSession.threadId, liveSession.terminalId, liveSession.history);
     } else if (liveSession.status === "exited" || liveSession.status === "error") {
@@ -2593,6 +2695,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       liveSession.pendingOutputHighSurrogate = "";
       liveSession.pendingProcessEvents = [];
       liveSession.pendingProcessEventIndex = 0;
+      liveSession.pendingProcessEventBytes = 0;
+      liveSession.processOutputPaused = false;
       liveSession.processEventDrainPid = null;
       yield* persistHistory(liveSession.threadId, liveSession.terminalId, liveSession.history);
     }
@@ -3002,6 +3106,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         session.pendingOutputHighSurrogate = "";
         session.pendingProcessEvents = [];
         session.pendingProcessEventIndex = 0;
+        session.pendingProcessEventBytes = 0;
+        session.processOutputPaused = false;
         const eventStamp = advanceEventSequence(session);
         yield* persistHistory(input.threadId, terminalId, session.history);
         yield* publishEvent({
@@ -3042,6 +3148,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             pendingOutputHighSurrogate: "",
             pendingProcessEvents: [],
             pendingProcessEventIndex: 0,
+            pendingProcessEventBytes: 0,
+            processOutputPaused: false,
             processEventDrainPid: null,
             processEventDrainSemaphore: yield* Semaphore.make(1),
             exitCode: null,
@@ -3083,6 +3191,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         session.pendingOutputHighSurrogate = "";
         session.pendingProcessEvents = [];
         session.pendingProcessEventIndex = 0;
+        session.pendingProcessEventBytes = 0;
+        session.processOutputPaused = false;
         session.processEventDrainPid = null;
         yield* persistHistory(input.threadId, terminalId, session.history);
         yield* startSession(

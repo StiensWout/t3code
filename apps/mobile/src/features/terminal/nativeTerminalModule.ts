@@ -39,6 +39,7 @@ export interface NativeTerminalSurfaceProps extends ViewProps {
 
 export interface NativeTerminalSurfaceHandle {
   readonly write?: (data: string) => Promise<void>;
+  readonly writeReplay?: (data: string) => Promise<void>;
   readonly reset?: (data: string) => Promise<void>;
 }
 
@@ -101,7 +102,7 @@ export function getNativeTerminalHardwareKeyRevision(): number | null {
   }
 }
 
-/** Revision 1 accepts append/reset commands instead of a growing buffer prop. */
+/** Revision 2 adds replay-safe append commands to the streaming API. */
 export function getNativeTerminalStreamingRevision(): number | null {
   try {
     if (typeof requireOptionalNativeModule !== "function") {

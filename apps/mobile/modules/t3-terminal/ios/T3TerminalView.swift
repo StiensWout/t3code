@@ -199,6 +199,11 @@ public final class T3TerminalView: ExpoView, UITextFieldDelegate {
   private static let maxScrollbackBytes = 64 * 1024 * 1024
   private static let maxPendingRemoteDataBytes = 8 * 1024 * 1024
 
+  private struct PendingRemoteData {
+    let data: Data
+    let replay: Bool
+  }
+
   private let terminalViewport = UIView()
   private let inputField = TerminalInputField()
   private let focusTapGesture = UITapGestureRecognizer()
@@ -207,7 +212,7 @@ public final class T3TerminalView: ExpoView, UITextFieldDelegate {
   private var lastContentScale: CGFloat = 0
   private var lastReportedGrid: (cols: Int, rows: Int)?
   private var bufferedOutput = ""
-  private var pendingRemoteData: [Data?] = []
+  private var pendingRemoteData: [PendingRemoteData?] = []
   private var pendingRemoteDataHead = 0
   private var pendingRemoteDataBytes = 0
   private var lastAppliedBuffer = ""
@@ -243,13 +248,25 @@ public final class T3TerminalView: ExpoView, UITextFieldDelegate {
   }
 
   func writeRemoteData(_ data: String) {
+    writeRemoteData(data, replay: false)
+  }
+
+  func writeReplayRemoteData(_ data: String) {
+    writeRemoteData(data, replay: true)
+  }
+
+  private func writeRemoteData(_ data: String, replay: Bool) {
     guard !data.isEmpty else { return }
     if surface == nil {
-      appendPendingRemoteData(data)
+      appendPendingRemoteData(data, replay: replay)
       createSurfaceIfPossible()
       return
     }
-    feedData(Data(data.utf8), redraw: false)
+    if replay {
+      feedReplayData(Data(data.utf8), redraw: false)
+    } else {
+      feedData(Data(data.utf8), redraw: false)
+    }
     scheduleRedraw()
   }
 
@@ -593,24 +610,31 @@ public final class T3TerminalView: ExpoView, UITextFieldDelegate {
   }
 
   private func feedReplayData(_ data: Data) {
+    feedReplayData(data, redraw: true)
+  }
+
+  private func feedReplayData(_ data: Data, redraw: Bool) {
     suppressInput = true
     defer { suppressInput = false }
-    feedData(data)
+    feedData(data, redraw: redraw)
   }
 
   private func feedPendingRemoteData() {
     guard pendingRemoteDataHead < pendingRemoteData.count else { return }
-    var pending = Data(capacity: pendingRemoteDataBytes)
     for case let chunk? in pendingRemoteData[pendingRemoteDataHead...] {
-      pending.append(chunk)
+      if chunk.replay {
+        feedReplayData(chunk.data, redraw: false)
+      } else {
+        feedData(chunk.data, redraw: false)
+      }
     }
     pendingRemoteData = []
     pendingRemoteDataHead = 0
     pendingRemoteDataBytes = 0
-    feedData(pending)
+    redrawSurface()
   }
 
-  private func appendPendingRemoteData(_ data: String) {
+  private func appendPendingRemoteData(_ data: String, replay: Bool) {
     let encoded = Data(data.utf8)
     if encoded.count > Self.maxPendingRemoteDataBytes {
       var start = encoded.count - Self.maxPendingRemoteDataBytes
@@ -618,20 +642,20 @@ public final class T3TerminalView: ExpoView, UITextFieldDelegate {
         start += 1
       }
       let suffix = Data(encoded[start...])
-      pendingRemoteData = [suffix]
+      pendingRemoteData = [PendingRemoteData(data: suffix, replay: replay)]
       pendingRemoteDataHead = 0
       pendingRemoteDataBytes = suffix.count
       return
     }
 
-    pendingRemoteData.append(encoded)
+    pendingRemoteData.append(PendingRemoteData(data: encoded, replay: replay))
     pendingRemoteDataBytes += encoded.count
     while pendingRemoteDataBytes > Self.maxPendingRemoteDataBytes,
           pendingRemoteDataHead < pendingRemoteData.count,
           let oldest = pendingRemoteData[pendingRemoteDataHead] {
       pendingRemoteData[pendingRemoteDataHead] = nil
       pendingRemoteDataHead += 1
-      pendingRemoteDataBytes -= oldest.count
+      pendingRemoteDataBytes -= oldest.data.count
     }
     if pendingRemoteDataHead >= 1_024,
        pendingRemoteDataHead * 2 >= pendingRemoteData.count {

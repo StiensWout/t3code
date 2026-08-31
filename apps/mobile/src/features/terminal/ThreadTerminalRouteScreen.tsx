@@ -1239,7 +1239,9 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
                 onInput={handleInput}
                 onResize={handleResize}
                 output={terminal.output}
+                replayCompleteVersion={terminal.replayCompleteVersion}
                 replayPaused={terminalReplayPaused}
+                replayStartVersion={terminal.replayStartVersion}
                 style={{ flex: 1 }}
                 terminalKey={terminalKey}
                 theme={terminalTheme}

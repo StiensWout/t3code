@@ -23,6 +23,8 @@ class T3TerminalView(context: Context, appContext: AppContext) : ExpoView(contex
     const val MAX_PENDING_REMOTE_DATA_BYTES = 8 * 1024 * 1024
   }
 
+  private data class PendingRemoteData(val data: ByteArray, val replay: Boolean)
+
   private val container = FrameLayout(context)
   private val terminalCanvas = TerminalCanvasView(context)
   private val inputView = EditText(context)
@@ -31,7 +33,7 @@ class T3TerminalView(context: Context, appContext: AppContext) : ExpoView(contex
   private var terminalHandle = 0L
   private var fedBuffer = ""
   private var bufferedOutput = ""
-  private val pendingRemoteData = ArrayDeque<ByteArray>()
+  private val pendingRemoteData = ArrayDeque<PendingRemoteData>()
   private var pendingRemoteDataBytes = 0
   private var cols = 0
   private var rows = 0
@@ -61,12 +63,21 @@ class T3TerminalView(context: Context, appContext: AppContext) : ExpoView(contex
     }
 
   fun writeRemoteData(data: String) {
+    writeRemoteData(data, replay = false)
+  }
+
+  fun writeReplayRemoteData(data: String) {
+    writeRemoteData(data, replay = true)
+  }
+
+  private fun writeRemoteData(data: String, replay: Boolean) {
     if (data.isEmpty()) return
     if (terminalHandle == 0L) {
-      appendPendingRemoteData(data)
+      appendPendingRemoteData(data, replay)
       return
     }
-    emitResponse(GhosttyBridge.nativeFeed(terminalHandle, data.toByteArray(Charsets.UTF_8)))
+    val response = GhosttyBridge.nativeFeed(terminalHandle, data.toByteArray(Charsets.UTF_8))
+    if (!replay) emitResponse(response)
     if (terminalCanvas.hasActiveSelection()) {
       GhosttyBridge.nativeClearSelection(terminalHandle)
       terminalCanvas.resetSelectionState()
@@ -394,35 +405,32 @@ class T3TerminalView(context: Context, appContext: AppContext) : ExpoView(contex
       fedBuffer = initialBuffer
     }
     if (pendingRemoteData.isNotEmpty()) {
-      val pending = ByteArray(pendingRemoteDataBytes)
-      var offset = 0
       while (pendingRemoteData.isNotEmpty()) {
         val chunk = pendingRemoteData.removeFirst()
-        chunk.copyInto(pending, destinationOffset = offset)
-        offset += chunk.size
+        val response = GhosttyBridge.nativeFeed(terminalHandle, chunk.data)
+        if (!chunk.replay) emitResponse(response)
       }
-      emitResponse(GhosttyBridge.nativeFeed(terminalHandle, pending))
     }
     pendingRemoteDataBytes = 0
     renderSnapshot()
   }
 
-  private fun appendPendingRemoteData(data: String) {
+  private fun appendPendingRemoteData(data: String, replay: Boolean) {
     val encoded = data.toByteArray(Charsets.UTF_8)
     if (encoded.size > MAX_PENDING_REMOTE_DATA_BYTES) {
       var start = encoded.size - MAX_PENDING_REMOTE_DATA_BYTES
       while (start < encoded.size && (encoded[start].toInt() and 0xC0) == 0x80) start += 1
       val suffix = encoded.copyOfRange(start, encoded.size)
       pendingRemoteData.clear()
-      pendingRemoteData.addLast(suffix)
+      pendingRemoteData.addLast(PendingRemoteData(suffix, replay))
       pendingRemoteDataBytes = suffix.size
       return
     }
 
-    pendingRemoteData.addLast(encoded)
+    pendingRemoteData.addLast(PendingRemoteData(encoded, replay))
     pendingRemoteDataBytes += encoded.size
     while (pendingRemoteDataBytes > MAX_PENDING_REMOTE_DATA_BYTES) {
-      pendingRemoteDataBytes -= pendingRemoteData.removeFirst().size
+      pendingRemoteDataBytes -= pendingRemoteData.removeFirst().data.size
     }
   }
 

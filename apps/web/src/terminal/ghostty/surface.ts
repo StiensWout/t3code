@@ -45,6 +45,10 @@ const SYNCHRONIZED_OUTPUT_RENDER_TIMEOUT_MS = 500;
 const TERMINAL_WRITE_DRAIN_TIMEOUT_MS = 100;
 const TERMINAL_WRITE_CHUNK_CODE_UNITS = 64 * 1024;
 const TERMINAL_IMMEDIATE_WRITE_CODE_UNITS = 16 * 1024;
+// Normal visible writes yield between chunks to protect paints. If a producer
+// outruns the display for long enough, finish the bounded backlog in one pass
+// instead of letting it grow without limit behind one 64 KB animation frame.
+const TERMINAL_WRITE_QUEUE_MAX_CODE_UNITS = 1024 * 1024;
 const ALTERNATE_SCREEN_DARK_THEME = {
   background: { r: 0, g: 0, b: 0 },
   foreground: { r: 245, g: 245, b: 245 },
@@ -613,6 +617,7 @@ export class GhosttyTerminalSurface {
   private writeDrainTimer: number | null = null;
   private writeQueue: Array<{ data: string; offset: number; replay: boolean }> = [];
   private writeQueueIndex = 0;
+  private writeQueueCodeUnits = 0;
   private replayActive = false;
   private replayStreamOpen = false;
   private scrollToTopWhenWritesDrain = false;
@@ -799,8 +804,7 @@ export class GhosttyTerminalSurface {
     // Anything written while a streamed replay is open is renderer-local
     // status text, so keep it ordered inside the replay instead of ending the
     // stream before later history chunks arrive.
-    this.writeQueue.push({ data, offset: 0, replay: this.replayStreamOpen });
-    this.requestWriteDrain();
+    this.enqueueWrite(data, this.replayStreamOpen);
   }
 
   private didWriteOutput(): void {
@@ -820,8 +824,7 @@ export class GhosttyTerminalSurface {
     this.core.beginReplay();
     this.replayActive = true;
     if (data.length > 0) {
-      this.writeQueue.push({ data, offset: 0, replay: true });
-      this.requestWriteDrain();
+      this.enqueueWrite(data, true);
     } else {
       this.finishReplay();
     }
@@ -843,8 +846,7 @@ export class GhosttyTerminalSurface {
     this.replayActive = true;
     this.replayStreamOpen = true;
     if (data.length > 0) {
-      this.writeQueue.push({ data, offset: 0, replay: true });
-      this.requestWriteDrain();
+      this.enqueueWrite(data, true);
     }
     this.synchronizeMouseTrackingState();
     this.cursorOn = true;
@@ -859,8 +861,7 @@ export class GhosttyTerminalSurface {
       this.beginStreamingReplay(data);
       return;
     }
-    this.writeQueue.push({ data, offset: 0, replay: true });
-    this.requestWriteDrain();
+    this.enqueueWrite(data, true);
   }
 
   completeStreamingReplay(): void {
@@ -881,6 +882,25 @@ export class GhosttyTerminalSurface {
       return;
     }
     this.scrollToTop();
+  }
+
+  private enqueueWrite(data: string, replay: boolean): void {
+    this.writeQueue.push({ data, offset: 0, replay });
+    this.writeQueueCodeUnits += data.length;
+    if (this.writeQueueCodeUnits < TERMINAL_WRITE_QUEUE_MAX_CODE_UNITS) {
+      this.requestWriteDrain();
+      return;
+    }
+
+    if (this.writeFrame !== 0) {
+      window.cancelAnimationFrame(this.writeFrame);
+      this.writeFrame = 0;
+    }
+    if (this.writeDrainTimer !== null) {
+      window.clearTimeout(this.writeDrainTimer);
+      this.writeDrainTimer = null;
+    }
+    this.drainWrites(Number.POSITIVE_INFINITY);
   }
 
   private requestWriteDrain(): void {
@@ -936,6 +956,7 @@ export class GhosttyTerminalSurface {
       if (pending.replay && this.replayActive) this.core.writeReplay(chunk);
       else this.core.write(chunk);
       budget -= chunk.length;
+      this.writeQueueCodeUnits -= chunk.length;
       pending.offset = end;
       if (pending.offset >= pending.data.length) this.writeQueueIndex += 1;
     }
@@ -943,6 +964,7 @@ export class GhosttyTerminalSurface {
     if (this.writeQueueIndex >= this.writeQueue.length) {
       this.writeQueue = [];
       this.writeQueueIndex = 0;
+      this.writeQueueCodeUnits = 0;
       if (!this.replayStreamOpen) {
         this.finishReplay();
         if (this.scrollToTopWhenWritesDrain) {
@@ -975,6 +997,7 @@ export class GhosttyTerminalSurface {
     }
     this.writeQueue = [];
     this.writeQueueIndex = 0;
+    this.writeQueueCodeUnits = 0;
     this.replayStreamOpen = false;
     this.scrollToTopWhenWritesDrain = false;
     this.finishReplay();
