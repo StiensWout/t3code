@@ -209,14 +209,41 @@ interface TestCapturedPreviewImage {
   readonly getSize: () => { readonly width: number; readonly height: number };
 }
 
+type TestDisplayMediaHandler = (
+  request: unknown,
+  callback: (streams: { video?: unknown }) => void,
+) => void;
+
+interface TestHostWebContents {
+  readonly id: number;
+  readonly session: {
+    readonly setDisplayMediaRequestHandler: ReturnType<typeof vi.fn>;
+  };
+  readonly displayMediaHandler: () => TestDisplayMediaHandler | undefined;
+}
+
+const makeTestHostWebContents = (): TestHostWebContents => {
+  let handler: TestDisplayMediaHandler | undefined;
+  return {
+    id: 7,
+    session: {
+      setDisplayMediaRequestHandler: vi.fn((next: TestDisplayMediaHandler) => {
+        handler = next;
+      }),
+    },
+    displayMediaHandler: () => handler,
+  };
+};
+
 const makeTestPreviewWebContents = (
   capturePage: () => Promise<TestCapturedPreviewImage>,
   id = 42,
+  hostWebContents: TestHostWebContents = makeTestHostWebContents(),
 ) =>
   ({
     id,
-    hostWebContents: { id: 7 },
-    getMediaSourceId: vi.fn(() => `tab:${id}`),
+    mainFrame: { routingId: id },
+    hostWebContents,
     executeJavaScript: vi.fn(async () => ({ width: 1280, height: 720 })),
     isDestroyed: () => false,
     getType: () => "webview",
@@ -2097,8 +2124,8 @@ describe("PreviewManager", () => {
         ) =>
           ({
             id,
-            hostWebContents: { id: 7 },
-            getMediaSourceId: vi.fn(() => `tab:${id}`),
+            mainFrame: { routingId: id },
+            hostWebContents: makeTestHostWebContents(),
             executeJavaScript: vi.fn(async () =>
               id === 41 ? { width: 800, height: 600 } : { width: 390, height: 844 },
             ),
@@ -2137,15 +2164,11 @@ describe("PreviewManager", () => {
         yield* manager.createTab("tab_2");
         yield* manager.registerWebview("tab_1", 41);
         yield* manager.registerWebview("tab_2", 42);
-        const sources = yield* Effect.all(
-          [manager.startRecording("tab_1"), manager.startRecording("tab_2")],
-          { concurrency: 2 },
-        );
+        yield* Effect.all([manager.startRecording("tab_1"), manager.startRecording("tab_2")], {
+          concurrency: 2,
+          discard: true,
+        });
 
-        expect(sources).toEqual([
-          { sourceId: "tab:41", width: 800, height: 600 },
-          { sourceId: "tab:42", width: 390, height: 844 },
-        ]);
         expect(firstCapturePage).toHaveBeenCalledOnce();
         expect(secondCapturePage).toHaveBeenCalledOnce();
         expect(firstSendCommand).not.toHaveBeenCalledWith(
@@ -2171,23 +2194,24 @@ describe("PreviewManager", () => {
         const capturePage = vi.fn(async () => {
           throw new Error("source is not ready");
         });
-        const getMediaSourceId = vi.fn(() => "tab:42");
-        const webContents = Object.assign(makeTestPreviewWebContents(capturePage), {
+        const host = makeTestHostWebContents();
+        const webContents = Object.assign(makeTestPreviewWebContents(capturePage, 42, host), {
           executeJavaScript: vi.fn(async () => ({ width: 1280, height: 720 })),
-          getMediaSourceId,
         });
         fromId.mockReturnValue(webContents);
 
         yield* manager.createTab("tab_recording_warmup_failure");
         yield* manager.registerWebview("tab_recording_warmup_failure", 42);
 
-        expect(yield* manager.startRecording("tab_recording_warmup_failure")).toEqual({
-          sourceId: "tab:42",
-          width: 1280,
-          height: 720,
-        });
+        yield* manager.startRecording("tab_recording_warmup_failure");
         expect(capturePage).toHaveBeenCalledTimes(2);
-        expect(getMediaSourceId).toHaveBeenCalledOnce();
+
+        // The armed tab answers exactly one display-media request, then further requests are denied.
+        const handler = host.displayMediaHandler();
+        const streams: Array<{ video?: unknown }> = [];
+        handler?.({}, (value) => streams.push(value));
+        handler?.({}, (value) => streams.push(value));
+        expect(streams).toEqual([{ video: { routingId: 42 } }, {}]);
 
         yield* manager.stopRecording("tab_recording_warmup_failure");
       }),
@@ -2201,10 +2225,9 @@ describe("PreviewManager", () => {
           toJPEG: () => Buffer.from("unused-recording-frame"),
           getSize: () => ({ width: 1280, height: 720 }),
         }));
-        const getMediaSourceId = vi.fn(() => "tab:42");
-        const webContents = Object.assign(makeTestPreviewWebContents(capturePage), {
+        const host = makeTestHostWebContents();
+        const webContents = Object.assign(makeTestPreviewWebContents(capturePage, 42, host), {
           executeJavaScript: vi.fn(async () => ({ width: 0, height: 720 })),
-          getMediaSourceId,
         });
         fromId.mockReturnValue(webContents);
 
@@ -2219,7 +2242,7 @@ describe("PreviewManager", () => {
           tabId: "tab_invalid_recording_size",
           webContentsId: 42,
         });
-        expect(getMediaSourceId).not.toHaveBeenCalled();
+        expect(host.session.setDisplayMediaRequestHandler).not.toHaveBeenCalled();
       }),
     ),
   );
@@ -2272,11 +2295,7 @@ describe("PreviewManager", () => {
         rejectFirstMeasurement(new Error("first measurement failed"));
         const firstExit = yield* Fiber.await(firstStart);
         expect(Exit.isFailure(firstExit)).toBe(true);
-        expect(yield* Fiber.join(secondStart)).toEqual({
-          sourceId: "tab:42",
-          width: 1280,
-          height: 720,
-        });
+        yield* Fiber.join(secondStart);
 
         yield* manager.stopRecording("tab_recording_start_race");
         expect(setBackgroundThrottling.mock.calls).toEqual([[false], [true], [false], [true]]);
@@ -2329,11 +2348,7 @@ describe("PreviewManager", () => {
         expect(replacementOn).not.toHaveBeenCalled();
 
         finishMeasurement({ width: 1280, height: 720 });
-        expect(yield* Fiber.join(start)).toEqual({
-          sourceId: "tab:42",
-          width: 1280,
-          height: 720,
-        });
+        yield* Fiber.join(start);
         yield* Fiber.join(replacement);
         expect(replacementOn).toHaveBeenCalled();
         yield* manager.stopRecording("tab_recording_replacement_race");
@@ -2345,7 +2360,9 @@ describe("PreviewManager", () => {
     withManager((manager) =>
       Effect.gen(function* () {
         const setBackgroundThrottling = vi.fn();
-        const mainWindowWebContents = { setBackgroundThrottling };
+        const mainWindowWebContents = Object.assign(makeTestHostWebContents(), {
+          setBackgroundThrottling,
+        });
         const jpeg = Buffer.from("shared-preview-frame");
         const capturePage = vi.fn(async () => ({
           toJPEG: () => jpeg,
@@ -2353,8 +2370,8 @@ describe("PreviewManager", () => {
         }));
         fromId.mockReturnValue({
           id: 42,
+          mainFrame: { routingId: 42 },
           hostWebContents: mainWindowWebContents,
-          getMediaSourceId: vi.fn(() => "tab:42"),
           executeJavaScript: vi.fn(async () => ({ width: 1280, height: 720 })),
           isDestroyed: () => false,
           getType: () => "webview",

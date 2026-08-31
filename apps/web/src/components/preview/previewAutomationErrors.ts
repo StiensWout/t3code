@@ -218,15 +218,31 @@ export type PreviewAutomationHostError = typeof PreviewAutomationHostError.Type;
 
 export const isPreviewAutomationHostError = Schema.is(PreviewAutomationHostError);
 
+/** Compact, stack-free rendering of a failure cause so the server log keeps the real reason. */
+const summarizeCause = (cause: unknown): string | null => {
+  if (cause === undefined || cause === null) return null;
+  if (typeof cause === "object" && "message" in cause && typeof cause.message === "string") {
+    const name =
+      "name" in cause && typeof cause.name === "string" && cause.name.length > 0
+        ? cause.name
+        : null;
+    return name ? `${name}: ${cause.message}` : cause.message;
+  }
+  const rendered = String(cause);
+  return rendered.length === 0 ? null : rendered;
+};
+
 export function serializePreviewAutomationHostError(
   error: PreviewAutomationHostError,
 ): NonNullable<PreviewAutomationResponse["error"]> {
-  const detail = Object.fromEntries(
+  const detail: Record<string, unknown> = Object.fromEntries(
     Object.entries(error).filter(
       ([key]) =>
         key !== "_tag" && key !== "cause" && key !== "name" && key !== "message" && key !== "stack",
     ),
   );
+  const causeSummary = "cause" in error ? summarizeCause(error.cause) : null;
+  if (causeSummary !== null) detail.cause = causeSummary;
   return {
     _tag: error.responseTag,
     message: error.message,

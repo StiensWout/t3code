@@ -16,7 +16,6 @@ import type {
   PreviewAnnotationSubmissionResult,
   DesktopPreviewRecordingArtifact,
   DesktopPreviewRecordingFrame,
-  DesktopPreviewRecordingSource,
   DesktopPreviewScreenshotArtifact,
   DesktopPreviewTabDefaults,
   PreviewAutomationClickInput,
@@ -109,6 +108,7 @@ const MAX_EVALUATION_BYTES = 64_000;
 const MAX_VISIBLE_TEXT_LENGTH = 20_000;
 const MAX_INTERACTIVE_ELEMENTS = 200;
 const MAX_SCREENSHOT_WIDTH = 1280;
+/** Readiness probe: a tab that reports a positive viewport is scriptable and ready to capture. */
 const RECORDING_SOURCE_SIZE_EXPRESSION =
   "({ width: Math.round(globalThis.innerWidth), height: Math.round(globalThis.innerHeight) })";
 const PICTURE_IN_PICTURE_FRAME_INTERVAL_MS = Math.ceil(1_000 / 12);
@@ -591,6 +591,14 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   const pictureInPictureAspectRatiosRef = yield* Ref.make<ReadonlyMap<string, number>>(new Map());
   const pictureInPictureMutationSemaphore = yield* Semaphore.make(1);
   const closingTabIdsRef = yield* Ref.make<ReadonlySet<string>>(new Set());
+  // Tab recording uses `setDisplayMediaRequestHandler` because Electron's legacy
+  // `getMediaSourceId` + `chromeMediaSource: "tab"` capture path was removed upstream
+  // (electron#44618) and now always rejects with NotAllowedError.
+  let pendingRecording: {
+    readonly tabId: string;
+    readonly webContents: Electron.WebContents;
+  } | null = null;
+  const displayMediaHandlerSessions = new WeakSet<Session>();
   let frameCaptureWindowOpen = true;
   let currentMainWindow: BrowserWindow | undefined;
   let mainWindowCleanupFiber: Fiber.Fiber<void, never> | undefined;
@@ -3099,6 +3107,27 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     return yield* Effect.failCause(initializationExit.cause);
   });
 
+  /** Only drops the armed target when it still belongs to `tabId`, so tabs cannot clobber each other. */
+  const clearPendingRecording = (tabId: string) => {
+    if (pendingRecording?.tabId === tabId) pendingRecording = null;
+  };
+
+  // Installed once per session: answers the renderer's `getDisplayMedia()` with the tab that
+  // `startRecording` armed, and denies anything else so pages cannot capture on their own.
+  const installDisplayMediaRequestHandler = (session: Session) => {
+    if (displayMediaHandlerSessions.has(session)) return;
+    displayMediaHandlerSessions.add(session);
+    session.setDisplayMediaRequestHandler((_request, callback) => {
+      const target = pendingRecording?.webContents;
+      pendingRecording = null;
+      if (!target || target.isDestroyed()) {
+        callback({});
+        return;
+      }
+      callback({ video: target.mainFrame });
+    });
+  };
+
   const startRecording = Effect.fn("PreviewManager.startRecording")(function* (tabId: string) {
     if ((yield* Ref.get(closingTabIdsRef)).has(tabId)) {
       return yield* new PreviewTabNotFoundError({ tabId });
@@ -3152,24 +3181,19 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
             webContentsId: wc.id,
           });
         }
-        const sourceId = yield* attempt(
-          {
-            operation: "recording.getMediaSourceId",
-            tabId,
-            webContentsId: wc.id,
-          },
-          () => wc.getMediaSourceId(requestWebContents),
-        );
-        return {
-          sourceId,
-          width: measuredSize.width,
-          height: measuredSize.height,
-        } satisfies DesktopPreviewRecordingSource;
-      }).pipe(Effect.onError(() => stopFrameCapture(tabId, "recording").pipe(Effect.ignore))),
+        installDisplayMediaRequestHandler(requestWebContents.session);
+        pendingRecording = { tabId, webContents: wc };
+      }).pipe(
+        Effect.onError(() => {
+          clearPendingRecording(tabId);
+          return stopFrameCapture(tabId, "recording").pipe(Effect.ignore);
+        }),
+      ),
     );
   });
 
   const stopRecording = Effect.fn("PreviewManager.stopRecording")(function* (tabId: string) {
+    clearPendingRecording(tabId);
     yield* withTabLifecycleLock(tabId, stopFrameCapture(tabId, "recording"));
   });
 
@@ -4274,9 +4298,7 @@ export class PreviewManager extends Context.Service<
     readonly copyArtifactToClipboard: (path: string) => Effect.Effect<void, PreviewManagerError>;
     readonly openPictureInPicture: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
     readonly closePictureInPicture: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
-    readonly startRecording: (
-      tabId: string,
-    ) => Effect.Effect<DesktopPreviewRecordingSource, PreviewManagerError>;
+    readonly startRecording: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
     readonly stopRecording: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
     readonly saveRecording: (
       tabId: string,
