@@ -3135,6 +3135,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     if (
       previous !== null &&
       previous.tabId !== tabId &&
+      !previous.webContents.isDestroyed() &&
       now - previous.armedAtMillis < RECORDING_ARM_GRACE_MS
     ) {
       return yield* new PreviewRecordingArmConflictError({
@@ -3143,7 +3144,20 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         armedTabId: previous.tabId,
       });
     }
-    pendingRecording = { tabId, webContents: wc, armedAtMillis: now };
+    const armed: PendingRecording = { tabId, webContents: wc, armedAtMillis: now };
+    pendingRecording = armed;
+    // The handler callback is sync and cannot read a clock, so expiry is driven from here.
+    // Identity compare: a re-arm replaces the object, and this fiber must not clobber it.
+    yield* Effect.forkIn(
+      Effect.sleep(RECORDING_ARM_GRACE_MS).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            if (pendingRecording === armed) pendingRecording = null;
+          }),
+        ),
+      ),
+      parentScope,
+    );
   });
 
   // Installed once per session: answers the renderer's `getDisplayMedia()` with the tab that

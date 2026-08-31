@@ -18,38 +18,15 @@ const operationError = (cause: unknown) =>
   });
 
 describe("serializePreviewAutomationHostError", () => {
-  it("keeps the underlying failure reason as a flat cause summary", () => {
+  it("keeps operation context without leaking the cause", () => {
     const serialized = serializePreviewAutomationHostError(
       operationError(
         Object.assign(new Error("Cannot satisfy constraints"), { name: "OverconstrainedError" }),
       ),
     );
 
-    expect(serialized.detail).toMatchObject({
-      cause: "OverconstrainedError: Cannot satisfy constraints",
-      operation: "recordingStart",
-    });
-  });
-
-  it("renders non-error causes without losing them", () => {
-    expect(serializePreviewAutomationHostError(operationError("boom")).detail).toMatchObject({
-      cause: "boom",
-    });
-  });
-
-  it("omits causes that render to nothing", () => {
-    expect(
-      serializePreviewAutomationHostError(operationError({ message: "" })).detail,
-    ).not.toHaveProperty("cause");
-    expect(serializePreviewAutomationHostError(operationError("")).detail).not.toHaveProperty(
-      "cause",
-    );
-  });
-
-  it("survives causes that cannot be stringified", () => {
-    expect(
-      serializePreviewAutomationHostError(operationError(Object.create(null))).detail,
-    ).toMatchObject({ cause: "[unserializable cause]" });
+    expect(serialized.detail).toMatchObject({ operation: "recordingStart" });
+    expect(serialized.detail).not.toHaveProperty("cause");
   });
 
   it("omits cause for errors that carry none", () => {

@@ -218,34 +218,6 @@ export type PreviewAutomationHostError = typeof PreviewAutomationHostError.Type;
 
 export const isPreviewAutomationHostError = Schema.is(PreviewAutomationHostError);
 
-const renderCause = (cause: unknown): string => {
-  if (
-    typeof cause === "object" &&
-    cause !== null &&
-    "message" in cause &&
-    typeof cause.message === "string"
-  ) {
-    const name =
-      "name" in cause && typeof cause.name === "string" && cause.name.length > 0
-        ? cause.name
-        : null;
-    return name ? `${name}: ${cause.message}` : cause.message;
-  }
-  try {
-    // Null-prototype objects and hostile `toString` implementations both throw here.
-    return String(cause);
-  } catch {
-    return "[unserializable cause]";
-  }
-};
-
-/** Compact, stack-free rendering of a failure cause so the server log keeps the real reason. */
-const summarizeCause = (cause: unknown): string | null => {
-  if (cause === undefined || cause === null) return null;
-  const rendered = renderCause(cause);
-  return rendered.length === 0 ? null : rendered;
-};
-
 export function serializePreviewAutomationHostError(
   error: PreviewAutomationHostError,
 ): NonNullable<PreviewAutomationResponse["error"]> {
@@ -255,8 +227,6 @@ export function serializePreviewAutomationHostError(
         key !== "_tag" && key !== "cause" && key !== "name" && key !== "message" && key !== "stack",
     ),
   );
-  const causeSummary = "cause" in error ? summarizeCause(error.cause) : null;
-  if (causeSummary !== null) detail.cause = causeSummary;
   return {
     _tag: error.responseTag,
     message: error.message,

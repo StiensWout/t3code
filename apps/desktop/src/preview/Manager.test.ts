@@ -278,9 +278,11 @@ const setupRecordingRaceTabs = (manager: PreviewManager.PreviewManager["Service"
       getSize: () => ({ width: 1280, height: 720 }),
     }));
     const host = makeTestHostWebContents();
+    const destroyedIds = new Set<number>();
     const makeWebContents = (id: number) =>
       Object.assign(makeTestPreviewWebContents(capturePage, id, host), {
         executeJavaScript: vi.fn(async () => ({ width: 1280, height: 720 })),
+        isDestroyed: () => destroyedIds.has(id),
       });
     const webContentsById = new Map([
       [41, makeWebContents(41)],
@@ -297,6 +299,7 @@ const setupRecordingRaceTabs = (manager: PreviewManager.PreviewManager["Service"
     return {
       host,
       grants,
+      destroy: (id: number) => destroyedIds.add(id),
       takeGrant: () =>
         host.displayMediaHandler()?.({}, (value) => {
           grants.push(value);
@@ -2288,6 +2291,38 @@ describe("PreviewManager", () => {
         expect(grants).toEqual([{ video: { routingId: 42 } }]);
 
         yield* manager.stopRecording("tab_race_a");
+        yield* manager.stopRecording("tab_race_b");
+      }),
+    ),
+  );
+
+  effectIt.effect("denies a display-media request that arrives after the arm went stale", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const { grants, takeGrant } = yield* setupRecordingRaceTabs(manager);
+
+        yield* manager.startRecording("tab_race_a");
+        yield* TestClock.adjust(10_000);
+        // The handler cannot read a clock, so the expiry fiber must have dropped the frame.
+        takeGrant();
+        expect(grants).toEqual([{}]);
+
+        yield* manager.stopRecording("tab_race_a");
+      }),
+    ),
+  );
+
+  effectIt.effect("reclaims the arm slot from a destroyed webContents", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const { grants, takeGrant, destroy } = yield* setupRecordingRaceTabs(manager);
+
+        yield* manager.startRecording("tab_race_a");
+        destroy(41);
+        yield* manager.startRecording("tab_race_b");
+        takeGrant();
+        expect(grants).toEqual([{ video: { routingId: 42 } }]);
+
         yield* manager.stopRecording("tab_race_b");
       }),
     ),
