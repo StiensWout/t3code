@@ -430,6 +430,17 @@ export function isTerminalPasteShortcut(
   return isMacPlatform(platform) ? event.metaKey : event.ctrlKey && event.shiftKey;
 }
 
+export function resolveTerminalAsyncPasteClaim(
+  pendingToken: number,
+  currentToken: number,
+  shortcutActive: boolean,
+): { readonly nextToken: number; readonly deliveredToken: number | null } | null {
+  if (pendingToken !== currentToken) return null;
+  return shortcutActive
+    ? { nextToken: currentToken, deliveredToken: pendingToken }
+    : { nextToken: currentToken + 1, deliveredToken: null };
+}
+
 export function isTerminalCompositionCommitInput(event: Pick<InputEvent, "inputType">): boolean {
   return (
     event.inputType === "" ||
@@ -818,6 +829,7 @@ export class GhosttyTerminalSurface {
     this.lastMouseMotionData = "";
     this.core.beginReplay();
     this.replayActive = true;
+    this.synchronizeScreenTheme();
     if (data.length > 0) {
       this.enqueueWrite(data, true);
     } else {
@@ -840,6 +852,7 @@ export class GhosttyTerminalSurface {
     this.core.beginReplay();
     this.replayActive = true;
     this.replayStreamOpen = true;
+    this.synchronizeScreenTheme();
     if (data.length > 0) {
       this.enqueueWrite(data, true);
     }
@@ -1343,7 +1356,14 @@ export class GhosttyTerminalSurface {
           (text) => {
             if (this.disposed || this.pasteShortcutToken !== token) return;
             if (text.length === 0) return;
-            this.pasteShortcutDeliveredToken = token;
+            const claim = resolveTerminalAsyncPasteClaim(
+              token,
+              this.pasteShortcutToken,
+              this.suppressedKeyCodes.has(event.code),
+            );
+            if (claim === null) return;
+            this.pasteShortcutDeliveredToken = claim.deliveredToken;
+            this.pasteShortcutToken = claim.nextToken;
             this.options.onData(this.core.encodePaste(text));
           },
           () => {

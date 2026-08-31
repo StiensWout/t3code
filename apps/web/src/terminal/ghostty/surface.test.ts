@@ -18,6 +18,7 @@ import {
   primeTerminalCopyInput,
   resolveTerminalMouseData,
   resolveTerminalMouseTrackingState,
+  resolveTerminalAsyncPasteClaim,
   shouldBlinkTerminalCursor,
   shouldReportTerminalMouse,
   terminalGridCellAt,
@@ -382,6 +383,23 @@ describe("isTerminalPasteShortcut", () => {
     expect(isTerminalPasteShortcut(event({ key: "Insert", shiftKey: true }), "MacIntel")).toBe(
       false,
     );
+  });
+});
+
+describe("resolveTerminalAsyncPasteClaim", () => {
+  it("leaves a duplicate marker while the native shortcut event can still arrive", () => {
+    expect(resolveTerminalAsyncPasteClaim(4, 4, true)).toEqual({
+      nextToken: 4,
+      deliveredToken: 4,
+    });
+  });
+
+  it("invalidates a late async marker after keyup ends the shortcut", () => {
+    expect(resolveTerminalAsyncPasteClaim(4, 4, false)).toEqual({
+      nextToken: 5,
+      deliveredToken: null,
+    });
+    expect(resolveTerminalAsyncPasteClaim(4, 5, false)).toBeNull();
   });
 });
 

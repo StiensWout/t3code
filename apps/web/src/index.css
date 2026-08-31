@@ -988,7 +988,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --terminal-alt-screen-cursor: color-mix(in srgb, var(--terminal-cursor) 75%, rgb(255 255 255));
   --terminal-alt-screen-selection-background: color-mix(
     in srgb,
-    var(--terminal-selection-background) 80%,
+    var(--terminal-alt-screen-foreground) 25%,
     transparent
   );
 
