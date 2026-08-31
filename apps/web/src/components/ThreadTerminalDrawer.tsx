@@ -7,6 +7,7 @@ import {
   readTerminalOutputUpdate,
   terminalOutputText,
   type TerminalOutputCursor,
+  type TerminalOutputUpdate,
   type TerminalSessionState,
 } from "@t3tools/client-runtime/state/terminal";
 import {
@@ -104,6 +105,44 @@ function writeSystemMessage(terminal: GhosttyTerminalSurface, message: string): 
 
 function writeTerminalBuffer(terminal: GhosttyTerminalSurface, buffer: string): void {
   terminal.resetAndWrite(buffer);
+}
+
+type TerminalReplayRendererState = "idle" | "waiting" | "replaying";
+
+/** Preserve replay/live ordering when React reduces both deliveries before a render. */
+export function writeTerminalOutputSegments(options: {
+  terminal: Pick<
+    GhosttyTerminalSurface,
+    "appendStreamingReplay" | "beginStreamingReplay" | "completeStreamingReplay" | "write"
+  >;
+  segments: Extract<TerminalOutputUpdate, { type: "append" }>["segments"];
+  replayState: TerminalReplayRendererState;
+  onReplayComplete: () => void;
+}): { replayState: TerminalReplayRendererState; didWrite: boolean } {
+  let replayState = options.replayState;
+  let didWrite = false;
+
+  for (const segment of options.segments) {
+    if (segment.data.length === 0) continue;
+    didWrite = true;
+    if (segment.delivery === "replay" && replayState !== "idle") {
+      if (replayState === "waiting") {
+        options.terminal.beginStreamingReplay(segment.data);
+        replayState = "replaying";
+      } else {
+        options.terminal.appendStreamingReplay(segment.data);
+      }
+      continue;
+    }
+    if (segment.delivery === "live" && replayState !== "idle") {
+      if (replayState === "replaying") options.terminal.completeStreamingReplay();
+      replayState = "idle";
+      options.onReplayComplete();
+    }
+    options.terminal.write(segment.data);
+  }
+
+  return { replayState, didWrite };
 }
 
 function parseTerminalColor(value: string, fallback: GhosttyColor): GhosttyColor {
@@ -442,7 +481,7 @@ export function TerminalViewport({
   );
   const terminalFontRef = useRef({ family: terminalFontFamily, size: terminalFontSize });
   const pendingScrollbackReplayIdentityRef = useRef<string | null>(null);
-  const scrollbackReplayRendererStateRef = useRef<"idle" | "waiting" | "replaying">("idle");
+  const scrollbackReplayRendererStateRef = useRef<TerminalReplayRendererState>("idle");
   const terminalAttachIdentity = useMemo(
     () =>
       JSON.stringify([
@@ -1048,19 +1087,21 @@ export function TerminalViewport({
     const scrollbackReplayPending =
       pendingScrollbackReplayIdentityRef.current === terminalAttachIdentity;
     const streamingReplay = scrollbackReplayRendererStateRef.current !== "idle";
+    const completePendingScrollbackReplay = () => {
+      if (pendingScrollbackReplayIdentityRef.current !== terminalAttachIdentity) return;
+      pendingScrollbackReplayIdentityRef.current = null;
+      terminal.scrollToTopAfterWrites();
+    };
     let didWriteOutput = false;
     if (outputUpdate.type === "append") {
-      if (streamingReplay) {
-        if (scrollbackReplayRendererStateRef.current === "waiting") {
-          terminal.beginStreamingReplay(outputUpdate.data);
-          scrollbackReplayRendererStateRef.current = "replaying";
-        } else {
-          terminal.appendStreamingReplay(outputUpdate.data);
-        }
-      } else {
-        terminal.write(outputUpdate.data);
-      }
-      didWriteOutput = outputUpdate.data.length > 0;
+      const result = writeTerminalOutputSegments({
+        terminal,
+        segments: outputUpdate.segments,
+        replayState: scrollbackReplayRendererStateRef.current,
+        onReplayComplete: completePendingScrollbackReplay,
+      });
+      scrollbackReplayRendererStateRef.current = result.replayState;
+      didWriteOutput = result.didWrite;
     } else if (outputUpdate.type === "reset") {
       if (streamingReplay && outputUpdate.data.length === 0) {
         // The extended attach begins with an empty snapshot. Keep the current
@@ -1081,7 +1122,7 @@ export function TerminalViewport({
       current.replayCompleteVersion > 0 &&
       current.replayCompleteVersion >= current.replayStartVersion &&
       current.version !== previous.version &&
-      streamingReplay
+      scrollbackReplayRendererStateRef.current !== "idle"
     ) {
       if (scrollbackReplayRendererStateRef.current === "waiting") {
         terminal.beginStreamingReplay(terminalOutputText(current.output));
@@ -1089,10 +1130,7 @@ export function TerminalViewport({
       }
       terminal.completeStreamingReplay();
       scrollbackReplayRendererStateRef.current = "idle";
-      if (scrollbackReplayPending) {
-        pendingScrollbackReplayIdentityRef.current = null;
-        terminal.scrollToTopAfterWrites();
-      }
+      if (scrollbackReplayPending) completePendingScrollbackReplay();
     }
 
     if (current.error !== null && current.error !== previous.error) {
