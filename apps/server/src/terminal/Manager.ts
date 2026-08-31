@@ -2086,7 +2086,6 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       });
 
       if (action.type === "idle") {
-        resumeProcessOutput(session, expectedPid, pendingProcessEventResumeBytes);
         return;
       }
 
