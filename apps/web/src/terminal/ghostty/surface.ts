@@ -1128,10 +1128,10 @@ export class GhosttyTerminalSurface {
       this.scrollbarDirty = true;
       shouldRender = true;
     }
-    // Rendering synchronously keeps the repaint inside the same frame as the
-    // layout change: ResizeObserver fires before paint, so the browser never
-    // composites the old backing store stretched into the new element box.
-    if (shouldRender) this.renderFrame();
+    // ResizeObserver fires before paint, so the queued frame still updates the
+    // backing store before composition. Going through requestRender also keeps
+    // resize and DPR repaints behind DEC synchronized-output mode 2026.
+    if (shouldRender) this.requestRender();
     return true;
   }
 
