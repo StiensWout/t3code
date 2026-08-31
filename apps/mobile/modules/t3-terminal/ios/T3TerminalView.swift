@@ -628,15 +628,13 @@ public final class T3TerminalView: ExpoView, UITextFieldDelegate {
     pendingRemoteDataBytes += encoded.count
     while pendingRemoteDataBytes > Self.maxPendingRemoteDataBytes,
           pendingRemoteDataHead < pendingRemoteData.count,
-          let oldest = pendingRemoteData[pendingRemoteDataHead]
-    {
+          let oldest = pendingRemoteData[pendingRemoteDataHead] {
       pendingRemoteData[pendingRemoteDataHead] = nil
       pendingRemoteDataHead += 1
       pendingRemoteDataBytes -= oldest.count
     }
     if pendingRemoteDataHead >= 1_024,
-       pendingRemoteDataHead * 2 >= pendingRemoteData.count
-    {
+       pendingRemoteDataHead * 2 >= pendingRemoteData.count {
       pendingRemoteData = Array(pendingRemoteData[pendingRemoteDataHead...])
       pendingRemoteDataHead = 0
     }
