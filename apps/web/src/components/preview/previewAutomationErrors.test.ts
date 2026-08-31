@@ -37,6 +37,21 @@ describe("serializePreviewAutomationHostError", () => {
     });
   });
 
+  it("omits causes that render to nothing", () => {
+    expect(
+      serializePreviewAutomationHostError(operationError({ message: "" })).detail,
+    ).not.toHaveProperty("cause");
+    expect(serializePreviewAutomationHostError(operationError("")).detail).not.toHaveProperty(
+      "cause",
+    );
+  });
+
+  it("survives causes that cannot be stringified", () => {
+    expect(
+      serializePreviewAutomationHostError(operationError(Object.create(null))).detail,
+    ).toMatchObject({ cause: "[unserializable cause]" });
+  });
+
   it("omits cause for errors that carry none", () => {
     const serialized = serializePreviewAutomationHostError(
       new PreviewAutomationRecordingNotActiveError({

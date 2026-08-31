@@ -270,6 +270,40 @@ const makeTestPreviewWebContents = (
     capturePage,
   }) as never;
 
+/** Two ready tabs (41, 42) sharing one window, so they contend for the single display-media slot. */
+const setupRecordingRaceTabs = (manager: PreviewManager.PreviewManager["Service"]) =>
+  Effect.gen(function* () {
+    const capturePage = vi.fn(async () => ({
+      toJPEG: () => Buffer.from("unused-recording-frame"),
+      getSize: () => ({ width: 1280, height: 720 }),
+    }));
+    const host = makeTestHostWebContents();
+    const makeWebContents = (id: number) =>
+      Object.assign(makeTestPreviewWebContents(capturePage, id, host), {
+        executeJavaScript: vi.fn(async () => ({ width: 1280, height: 720 })),
+      });
+    const webContentsById = new Map([
+      [41, makeWebContents(41)],
+      [42, makeWebContents(42)],
+    ]);
+    fromId.mockImplementation((id) =>
+      id === undefined ? null : (webContentsById.get(id) ?? null),
+    );
+    yield* manager.createTab("tab_race_a");
+    yield* manager.createTab("tab_race_b");
+    yield* manager.registerWebview("tab_race_a", 41);
+    yield* manager.registerWebview("tab_race_b", 42);
+    const grants: Array<{ video?: unknown }> = [];
+    return {
+      host,
+      grants,
+      takeGrant: () =>
+        host.displayMediaHandler()?.({}, (value) => {
+          grants.push(value);
+        }),
+    };
+  });
+
 const TEST_FAVICON = "data:image/png;base64,cG5n";
 
 const makeSourcePng = (width = 1, height = 1): Buffer => {
@@ -1900,9 +1934,10 @@ describe("PreviewManager", () => {
           toJPEG: () => Buffer.from("recording-frame"),
           getSize: () => ({ width: 1280, height: 720 }),
         }));
+        const host = makeTestHostWebContents();
         const webContentsById = new Map([
-          [41, makeTestPreviewWebContents(capturePage, 41)],
-          [42, makeTestPreviewWebContents(capturePage, 42)],
+          [41, makeTestPreviewWebContents(capturePage, 41, host)],
+          [42, makeTestPreviewWebContents(capturePage, 42, host)],
         ]);
         fromId.mockImplementation((id) =>
           id === undefined ? null : (webContentsById.get(id) ?? null),
@@ -1919,6 +1954,8 @@ describe("PreviewManager", () => {
         } as never);
 
         yield* manager.startRecording("tab_capture_throttling_1");
+        // The first renderer takes its grant, freeing the arm slot for the second tab.
+        host.displayMediaHandler()?.({}, () => {});
         yield* manager.startRecording("tab_capture_throttling_2");
         expect(setBackgroundThrottling.mock.calls).toEqual([[false]]);
 
@@ -2102,7 +2139,7 @@ describe("PreviewManager", () => {
     ),
   );
 
-  effectIt.effect("returns native media sources for concurrent preview recordings", () =>
+  effectIt.effect("grants each concurrent preview recording its own tab frame", () =>
     withManager((manager) =>
       Effect.gen(function* () {
         const firstJpeg = Buffer.from("first-recording-frame");
@@ -2117,6 +2154,8 @@ describe("PreviewManager", () => {
         }));
         const firstSendCommand = vi.fn(async () => undefined);
         const secondSendCommand = vi.fn(async () => undefined);
+        // Both webviews live in the same window, so they share one display-media handler.
+        const host = makeTestHostWebContents();
         const makeWebContents = (
           id: number,
           capturePage: typeof firstCapturePage,
@@ -2125,7 +2164,7 @@ describe("PreviewManager", () => {
           ({
             id,
             mainFrame: { routingId: id },
-            hostWebContents: makeTestHostWebContents(),
+            hostWebContents: host,
             executeJavaScript: vi.fn(async () =>
               id === 41 ? { width: 800, height: 600 } : { width: 390, height: 844 },
             ),
@@ -2164,10 +2203,18 @@ describe("PreviewManager", () => {
         yield* manager.createTab("tab_2");
         yield* manager.registerWebview("tab_1", 41);
         yield* manager.registerWebview("tab_2", 42);
-        yield* Effect.all([manager.startRecording("tab_1"), manager.startRecording("tab_2")], {
-          concurrency: 2,
-          discard: true,
-        });
+
+        const grants: Array<{ video?: unknown }> = [];
+        const takeGrant = () =>
+          host.displayMediaHandler()?.({}, (value) => {
+            grants.push(value);
+          });
+
+        yield* manager.startRecording("tab_1");
+        takeGrant();
+        yield* manager.startRecording("tab_2");
+        takeGrant();
+        expect(grants).toEqual([{ video: { routingId: 41 } }, { video: { routingId: 42 } }]);
 
         expect(firstCapturePage).toHaveBeenCalledOnce();
         expect(secondCapturePage).toHaveBeenCalledOnce();
@@ -2184,6 +2231,64 @@ describe("PreviewManager", () => {
           concurrency: 2,
           discard: true,
         });
+      }),
+    ),
+  );
+
+  // Runs on the real clock: an earlier queueing design only settled under TestClock and stalled the
+  // losing start forever in the desktop app.
+  effectIt.live("settles both starts when two tabs race for the capture stream", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const { host, grants, takeGrant } = yield* setupRecordingRaceTabs(manager);
+
+        const exits = yield* Effect.all(
+          [
+            Effect.exit(manager.startRecording("tab_race_a")),
+            Effect.exit(manager.startRecording("tab_race_b")),
+          ],
+          { concurrency: 2 },
+        );
+
+        const [exitA, exitB] = exits;
+        // Exactly one start owns the stream; the other fails fast instead of hanging.
+        expect(exits.filter(Exit.isSuccess)).toHaveLength(1);
+        const loserExit = Exit.isSuccess(exitA) ? exitB : exitA;
+        if (Exit.isSuccess(loserExit)) return;
+        expect(Option.getOrThrow(Cause.findErrorOption(loserExit.cause))).toMatchObject({
+          _tag: "PreviewRecordingArmConflictError",
+        });
+
+        // The single grant goes to the tab that actually won the slot, never the other one.
+        takeGrant();
+        expect(grants).toEqual([{ video: { routingId: Exit.isSuccess(exitA) ? 41 : 42 } }]);
+        expect(host.session.setDisplayMediaRequestHandler).toHaveBeenCalledOnce();
+      }),
+    ),
+  );
+
+  effectIt.effect("releases an armed slot that the renderer never redeemed", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const { grants, takeGrant } = yield* setupRecordingRaceTabs(manager);
+
+        yield* manager.startRecording("tab_race_a");
+        const blocked = yield* Effect.exit(manager.startRecording("tab_race_b"));
+        if (Exit.isSuccess(blocked)) throw new Error("expected the second tab to be refused");
+        expect(Option.getOrThrow(Cause.findErrorOption(blocked.cause))).toMatchObject({
+          _tag: "PreviewRecordingArmConflictError",
+          tabId: "tab_race_b",
+          armedTabId: "tab_race_a",
+        });
+
+        // Nothing ever captured the armed tab, so the slot goes stale and stops blocking starts.
+        yield* TestClock.adjust(10_000);
+        yield* manager.startRecording("tab_race_b");
+        takeGrant();
+        expect(grants).toEqual([{ video: { routingId: 42 } }]);
+
+        yield* manager.stopRecording("tab_race_a");
+        yield* manager.stopRecording("tab_race_b");
       }),
     ),
   );

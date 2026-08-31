@@ -111,6 +111,8 @@ const MAX_SCREENSHOT_WIDTH = 1280;
 /** Readiness probe: a tab that reports a positive viewport is scriptable and ready to capture. */
 const RECORDING_SOURCE_SIZE_EXPRESSION =
   "({ width: Math.round(globalThis.innerWidth), height: Math.round(globalThis.innerHeight) })";
+/** How long an armed tab keeps the exclusive display-media slot before another tab may take it. */
+const RECORDING_ARM_GRACE_MS = 10_000;
 const PICTURE_IN_PICTURE_FRAME_INTERVAL_MS = Math.ceil(1_000 / 12);
 const PICTURE_IN_PICTURE_JPEG_QUALITY = 80;
 const PICTURE_IN_PICTURE_INITIAL_WIDTH = 480;
@@ -400,6 +402,13 @@ interface PictureInPictureSession {
   readonly initializationScope: Scope.Closeable;
 }
 
+/** The tab whose frame the next `getDisplayMedia()` request is allowed to capture. */
+interface PendingRecording {
+  readonly tabId: string;
+  readonly webContents: Electron.WebContents;
+  readonly armedAtMillis: number;
+}
+
 interface PickSession {
   readonly cancel: Effect.Effect<void>;
 }
@@ -594,10 +603,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   // Tab recording uses `setDisplayMediaRequestHandler` because Electron's legacy
   // `getMediaSourceId` + `chromeMediaSource: "tab"` capture path was removed upstream
   // (electron#44618) and now always rejects with NotAllowedError.
-  let pendingRecording: {
-    readonly tabId: string;
-    readonly webContents: Electron.WebContents;
-  } | null = null;
+  let pendingRecording: PendingRecording | null = null;
   const displayMediaHandlerSessions = new WeakSet<Session>();
   let frameCaptureWindowOpen = true;
   let currentMainWindow: BrowserWindow | undefined;
@@ -1897,6 +1903,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
 
   const closeTabUnlocked = Effect.fn("PreviewManager.closeTabUnlocked")(function* (tabId: string) {
     if (!(yield* SynchronizedRef.get(tabsRef)).has(tabId)) return;
+    clearPendingRecording(tabId);
     yield* Effect.all(
       [
         cancelPickElement(tabId),
@@ -3112,6 +3119,33 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     if (pendingRecording?.tabId === tabId) pendingRecording = null;
   };
 
+  /**
+   * Claims the single arm slot for `tabId`. A display-media request carries no tab identity, so the
+   * slot is exclusive: a second tab arming before the first request lands would redirect the first
+   * renderer's stream. Rather than queue (which can only ever stall a start), a colliding start
+   * fails fast and the renderer can retry. An arm the renderer never redeemed goes stale after
+   * `RECORDING_ARM_GRACE_MS` so it cannot hold the slot forever.
+   */
+  const armPendingRecording = Effect.fn("PreviewManager.armPendingRecording")(function* (
+    tabId: string,
+    wc: Electron.WebContents,
+  ) {
+    const now = yield* Clock.currentTimeMillis;
+    const previous = pendingRecording;
+    if (
+      previous !== null &&
+      previous.tabId !== tabId &&
+      now - previous.armedAtMillis < RECORDING_ARM_GRACE_MS
+    ) {
+      return yield* new PreviewRecordingArmConflictError({
+        tabId,
+        webContentsId: wc.id,
+        armedTabId: previous.tabId,
+      });
+    }
+    pendingRecording = { tabId, webContents: wc, armedAtMillis: now };
+  });
+
   // Installed once per session: answers the renderer's `getDisplayMedia()` with the tab that
   // `startRecording` armed, and denies anything else so pages cannot capture on their own.
   const installDisplayMediaRequestHandler = (session: Session) => {
@@ -3182,7 +3216,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
           });
         }
         installDisplayMediaRequestHandler(requestWebContents.session);
-        pendingRecording = { tabId, webContents: wc };
+        yield* armPendingRecording(tabId, wc);
       }).pipe(
         Effect.onError(() => {
           clearPendingRecording(tabId);
@@ -3193,8 +3227,14 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   });
 
   const stopRecording = Effect.fn("PreviewManager.stopRecording")(function* (tabId: string) {
-    clearPendingRecording(tabId);
-    yield* withTabLifecycleLock(tabId, stopFrameCapture(tabId, "recording"));
+    // Clearing runs under the tab lock so it cannot land before an in-flight start arms.
+    yield* withTabLifecycleLock(
+      tabId,
+      Effect.suspend(() => {
+        clearPendingRecording(tabId);
+        return stopFrameCapture(tabId, "recording");
+      }),
+    );
   });
 
   const saveRecording = Effect.fn("PreviewManager.saveRecording")(function* (
@@ -4013,6 +4053,19 @@ export class PreviewRecordingSourceSizeUnavailableError extends Schema.TaggedErr
   }
 }
 
+export class PreviewRecordingArmConflictError extends Schema.TaggedErrorClass<PreviewRecordingArmConflictError>()(
+  "PreviewRecordingArmConflictError",
+  {
+    tabId: Schema.String,
+    webContentsId: Schema.Number,
+    armedTabId: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Preview tab ${this.armedTabId} is still claiming the capture stream, so recording could not start for tab ${this.tabId}`;
+  }
+}
+
 export class PreviewOperationError extends Schema.TaggedErrorClass<PreviewOperationError>()(
   "PreviewOperationError",
   {
@@ -4221,6 +4274,7 @@ export const PreviewManagerError = Schema.Union([
   PreviewWebviewNotInitializedError,
   PreviewMainWindowClosedError,
   PreviewRecordingSourceSizeUnavailableError,
+  PreviewRecordingArmConflictError,
   PreviewOperationError,
   PreviewArtifactPathOutsideDirectoryError,
   PreviewArtifactImageLoadError,
