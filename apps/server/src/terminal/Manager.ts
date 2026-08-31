@@ -488,11 +488,14 @@ function splitCompleteOutput(
 ): { readonly data: string; readonly pendingHighSurrogate: string } {
   const combined = `${pendingHighSurrogate}${data}`;
   const finalCodeUnit = combined.charCodeAt(combined.length - 1);
-  if (!flushTrailingHighSurrogate && finalCodeUnit >= 0xd800 && finalCodeUnit <= 0xdbff) {
-    return {
-      data: combined.slice(0, -1),
-      pendingHighSurrogate: combined.slice(-1),
-    };
+  if (finalCodeUnit >= 0xd800 && finalCodeUnit <= 0xdbff) {
+    if (!flushTrailingHighSurrogate) {
+      return {
+        data: combined.slice(0, -1),
+        pendingHighSurrogate: combined.slice(-1),
+      };
+    }
+    return { data: `${combined.slice(0, -1)}\ufffd`, pendingHighSurrogate: "" };
   }
   return { data: combined, pendingHighSurrogate: "" };
 }
@@ -2457,6 +2460,13 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       const cleanupSession = Effect.fn("terminal.cleanupSession")(function* (
         session: TerminalSessionState,
       ) {
+        if (
+          session.process &&
+          session.pid !== null &&
+          session.pendingOutputHighSurrogate.length > 0
+        ) {
+          enqueueOutputData(session, session.pid, "", true);
+        }
         if (session.processEventDrainPid !== null) {
           yield* drainProcessEvents(session, session.processEventDrainPid);
         }

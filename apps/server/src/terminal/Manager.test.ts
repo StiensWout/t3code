@@ -2318,7 +2318,7 @@ it.layer(
           }
         };
       }).pipe(Effect.forkScoped);
-      const output = "x".repeat(64 * 1024);
+      const output = `${"x".repeat(64 * 1024)}\ud83d`;
       process.emitData(output);
 
       const closeScope = yield* Scope.close(scope, Exit.void).pipe(Effect.forkScoped);
@@ -2326,7 +2326,16 @@ it.layer(
       yield* TestClock.adjust("10 millis");
       yield* Fiber.join(closeScope);
 
-      expect(yield* historyLogPath(logsDir).pipe(Effect.flatMap(readFileString))).toBe(output);
+      const persisted = yield* historyLogPath(logsDir).pipe(Effect.flatMap(readFileString));
+      expect({
+        byteLength: Buffer.byteLength(persisted),
+        codePoints: [...persisted.slice(-4)].map((character) => character.codePointAt(0)),
+        length: persisted.length,
+      }).toEqual({
+        byteLength: 64 * 1024 + 3,
+        codePoints: [120, 120, 120, 65_533],
+        length: 64 * 1024 + 1,
+      });
       assert.equal(process.killSignals[0], "SIGTERM");
       expect(process.killSignals).toContain("SIGKILL");
     }).pipe(Effect.provide(TestClock.layer())),

@@ -207,7 +207,9 @@ public final class T3TerminalView: ExpoView, UITextFieldDelegate {
   private var lastContentScale: CGFloat = 0
   private var lastReportedGrid: (cols: Int, rows: Int)?
   private var bufferedOutput = ""
-  private var pendingRemoteData = ""
+  private var pendingRemoteData: [Data?] = []
+  private var pendingRemoteDataHead = 0
+  private var pendingRemoteDataBytes = 0
   private var lastAppliedBuffer = ""
   private var redrawDisplayLink: CADisplayLink?
   private var pendingVerticalScrollPoints: CGFloat = 0
@@ -254,7 +256,9 @@ public final class T3TerminalView: ExpoView, UITextFieldDelegate {
   func resetRemoteData(_ data: String) {
     resetSurface()
     bufferedOutput = data
-    pendingRemoteData = ""
+    pendingRemoteData = []
+    pendingRemoteDataHead = 0
+    pendingRemoteDataBytes = 0
     createSurfaceIfPossible()
   }
 
@@ -595,23 +599,47 @@ public final class T3TerminalView: ExpoView, UITextFieldDelegate {
   }
 
   private func feedPendingRemoteData() {
-    guard !pendingRemoteData.isEmpty else { return }
-    let pending = pendingRemoteData
-    pendingRemoteData = ""
-    feedData(Data(pending.utf8))
+    guard pendingRemoteDataHead < pendingRemoteData.count else { return }
+    var pending = Data(capacity: pendingRemoteDataBytes)
+    for case let chunk? in pendingRemoteData[pendingRemoteDataHead...] {
+      pending.append(chunk)
+    }
+    pendingRemoteData = []
+    pendingRemoteDataHead = 0
+    pendingRemoteDataBytes = 0
+    feedData(pending)
   }
 
   private func appendPendingRemoteData(_ data: String) {
-    pendingRemoteData += data
-    let bytes = pendingRemoteData.utf8
-    let overflow = bytes.count - Self.maxPendingRemoteDataBytes
-    guard overflow > 0 else { return }
-
-    var start = bytes.index(bytes.startIndex, offsetBy: overflow)
-    while start < bytes.endIndex, bytes[start] & 0xC0 == 0x80 {
-      bytes.formIndex(after: &start)
+    let encoded = Data(data.utf8)
+    if encoded.count > Self.maxPendingRemoteDataBytes {
+      var start = encoded.count - Self.maxPendingRemoteDataBytes
+      while start < encoded.count, encoded[start] & 0xC0 == 0x80 {
+        start += 1
+      }
+      let suffix = Data(encoded[start...])
+      pendingRemoteData = [suffix]
+      pendingRemoteDataHead = 0
+      pendingRemoteDataBytes = suffix.count
+      return
     }
-    pendingRemoteData = String(bytes: bytes[start...], encoding: .utf8) ?? ""
+
+    pendingRemoteData.append(encoded)
+    pendingRemoteDataBytes += encoded.count
+    while pendingRemoteDataBytes > Self.maxPendingRemoteDataBytes,
+          pendingRemoteDataHead < pendingRemoteData.count,
+          let oldest = pendingRemoteData[pendingRemoteDataHead]
+    {
+      pendingRemoteData[pendingRemoteDataHead] = nil
+      pendingRemoteDataHead += 1
+      pendingRemoteDataBytes -= oldest.count
+    }
+    if pendingRemoteDataHead >= 1_024,
+       pendingRemoteDataHead * 2 >= pendingRemoteData.count
+    {
+      pendingRemoteData = Array(pendingRemoteData[pendingRemoteDataHead...])
+      pendingRemoteDataHead = 0
+    }
   }
 
   private func feedData(_ data: Data, redraw: Bool = true) {

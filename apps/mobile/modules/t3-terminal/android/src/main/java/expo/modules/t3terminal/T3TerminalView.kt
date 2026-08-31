@@ -15,6 +15,7 @@ import android.widget.FrameLayout
 import expo.modules.kotlin.AppContext
 import expo.modules.kotlin.viewevent.EventDispatcher
 import expo.modules.kotlin.views.ExpoView
+import java.util.ArrayDeque
 import kotlin.math.max
 
 class T3TerminalView(context: Context, appContext: AppContext) : ExpoView(context, appContext) {
@@ -30,7 +31,8 @@ class T3TerminalView(context: Context, appContext: AppContext) : ExpoView(contex
   private var terminalHandle = 0L
   private var fedBuffer = ""
   private var bufferedOutput = ""
-  private var pendingRemoteData = ""
+  private val pendingRemoteData = ArrayDeque<ByteArray>()
+  private var pendingRemoteDataBytes = 0
   private var cols = 0
   private var rows = 0
   private var clearingInput = false
@@ -75,7 +77,8 @@ class T3TerminalView(context: Context, appContext: AppContext) : ExpoView(contex
   fun resetRemoteData(data: String) {
     destroyTerminal()
     bufferedOutput = data
-    pendingRemoteData = ""
+    pendingRemoteData.clear()
+    pendingRemoteDataBytes = 0
     if (data.isEmpty()) terminalCanvas.clearFrame()
     createTerminal()
     feedPendingBuffer()
@@ -391,24 +394,36 @@ class T3TerminalView(context: Context, appContext: AppContext) : ExpoView(contex
       fedBuffer = initialBuffer
     }
     if (pendingRemoteData.isNotEmpty()) {
-      val pending = pendingRemoteData
-      pendingRemoteData = ""
-      emitResponse(GhosttyBridge.nativeFeed(terminalHandle, pending.toByteArray(Charsets.UTF_8)))
+      val pending = ByteArray(pendingRemoteDataBytes)
+      var offset = 0
+      while (pendingRemoteData.isNotEmpty()) {
+        val chunk = pendingRemoteData.removeFirst()
+        chunk.copyInto(pending, destinationOffset = offset)
+        offset += chunk.size
+      }
+      emitResponse(GhosttyBridge.nativeFeed(terminalHandle, pending))
     }
+    pendingRemoteDataBytes = 0
     renderSnapshot()
   }
 
   private fun appendPendingRemoteData(data: String) {
-    val appended = pendingRemoteData + data
-    val encoded = appended.toByteArray(Charsets.UTF_8)
-    if (encoded.size <= MAX_PENDING_REMOTE_DATA_BYTES) {
-      pendingRemoteData = appended
+    val encoded = data.toByteArray(Charsets.UTF_8)
+    if (encoded.size > MAX_PENDING_REMOTE_DATA_BYTES) {
+      var start = encoded.size - MAX_PENDING_REMOTE_DATA_BYTES
+      while (start < encoded.size && (encoded[start].toInt() and 0xC0) == 0x80) start += 1
+      val suffix = encoded.copyOfRange(start, encoded.size)
+      pendingRemoteData.clear()
+      pendingRemoteData.addLast(suffix)
+      pendingRemoteDataBytes = suffix.size
       return
     }
 
-    var start = encoded.size - MAX_PENDING_REMOTE_DATA_BYTES
-    while (start < encoded.size && (encoded[start].toInt() and 0xC0) == 0x80) start += 1
-    pendingRemoteData = encoded.copyOfRange(start, encoded.size).toString(Charsets.UTF_8)
+    pendingRemoteData.addLast(encoded)
+    pendingRemoteDataBytes += encoded.size
+    while (pendingRemoteDataBytes > MAX_PENDING_REMOTE_DATA_BYTES) {
+      pendingRemoteDataBytes -= pendingRemoteData.removeFirst().size
+    }
   }
 
   private fun renderSnapshot() {
