@@ -3,6 +3,7 @@ import { collectWrappedTerminalLinkLine, extractTerminalLinks } from "../../term
 import {
   GhosttyTerminalCore,
   type GhosttyScrollbar,
+  type GhosttyScreenTheme,
   type GhosttySnapshot,
   type GhosttyTheme,
 } from "./core";
@@ -49,12 +50,6 @@ const TERMINAL_IMMEDIATE_WRITE_CODE_UNITS = 16 * 1024;
 // outruns the display for long enough, finish the bounded backlog in one pass
 // instead of letting it grow without limit behind one 64 KB animation frame.
 const TERMINAL_WRITE_QUEUE_MAX_CODE_UNITS = 1024 * 1024;
-const ALTERNATE_SCREEN_DARK_THEME = {
-  background: { r: 0, g: 0, b: 0 },
-  foreground: { r: 245, g: 245, b: 245 },
-  cursor: { r: 180, g: 203, b: 255 },
-  selectionBackground: "rgb(180 203 255 / 25%)",
-} satisfies GhosttyTheme;
 const TERMINAL_FONT_LOAD_TEXT = "iMW0@# .";
 const TERMINAL_FONT_LOAD_VARIANTS = [
   "normal 400",
@@ -91,9 +86,9 @@ function terminalColorLuminance(color: GhosttyTheme["background"]): number {
 export function terminalThemeForScreen(
   theme: GhosttyTheme,
   alternateScreen: boolean,
-): GhosttyTheme {
+): GhosttyScreenTheme {
   if (!alternateScreen || terminalColorLuminance(theme.background) < 0.5) return theme;
-  return ALTERNATE_SCREEN_DARK_THEME;
+  return theme.alternateScreen ?? theme;
 }
 
 let symbolsFontLoad: Promise<void> | null = null;
@@ -661,7 +656,7 @@ export class GhosttyTerminalSurface {
   private resizeNotified = false;
   private canvasConfigured = false;
   private appTheme: GhosttyTheme;
-  private theme: GhosttyTheme;
+  private theme: GhosttyScreenTheme;
   private alternateScreenActive = false;
   private readonly suppressedKeyCodes = new Set<string>();
   private pasteShortcutToken = 0;
@@ -1006,6 +1001,7 @@ export class GhosttyTerminalSurface {
   setTheme(theme: GhosttyTheme): void {
     if (this.disposed) return;
     this.appTheme = theme;
+    this.core.setTheme(theme);
     this.synchronizeScreenTheme(true);
     this.requestRender();
   }
@@ -1015,7 +1011,7 @@ export class GhosttyTerminalSurface {
     if (!force && alternateScreen === this.alternateScreenActive) return;
     this.alternateScreenActive = alternateScreen;
     this.theme = terminalThemeForScreen(this.appTheme, alternateScreen);
-    this.core.setTheme(this.theme);
+    this.mount.style.backgroundColor = `rgb(${this.theme.background.r} ${this.theme.background.g} ${this.theme.background.b})`;
     this.forceFullRender = true;
   }
 
@@ -2046,6 +2042,7 @@ export class GhosttyTerminalSurface {
       previousCursorY: this.renderedCursorY,
       focused: this.focused,
       hoveredLinkRange: this.hoveredLink?.range ?? null,
+      ...(this.alternateScreenActive ? { defaultThemeOverride: this.theme } : {}),
       ...(this.theme.selectionBackground !== undefined
         ? { selectionBackground: this.theme.selectionBackground }
         : {}),

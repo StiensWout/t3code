@@ -191,20 +191,51 @@ export function terminalThemeFromApp(mountElement?: HTMLElement | null): Ghostty
     "--terminal-selection-background",
     isDark ? "rgba(180, 203, 255, 0.25)" : "rgba(37, 63, 99, 0.2)",
   );
+  const colorProbe = document.createElement("span");
+  colorProbe.ariaHidden = "true";
+  colorProbe.style.cssText = "position:fixed;width:0;height:0;overflow:hidden;pointer-events:none";
+  drawerSurface.append(colorProbe);
+  const readResolvedThemeColor = (variable: string, fallback: string) => {
+    colorProbe.style.color = `var(${variable}, ${fallback})`;
+    return normalizeComputedColor(getComputedStyle(colorProbe).color, fallback);
+  };
+  const alternateBackground = readResolvedThemeColor(
+    "--terminal-alt-screen-background",
+    terminalBackground,
+  );
+  const alternateForeground = readResolvedThemeColor(
+    "--terminal-alt-screen-foreground",
+    terminalForeground,
+  );
+  const alternateCursor = readResolvedThemeColor("--terminal-alt-screen-cursor", terminalCursor);
+  const alternateSelection = readResolvedThemeColor(
+    "--terminal-alt-screen-selection-background",
+    terminalSelection,
+  );
+  colorProbe.remove();
+  const backgroundColor = parseTerminalColor(
+    terminalBackground,
+    isDark ? { r: 14, g: 18, b: 24 } : { r: 255, g: 255, b: 255 },
+  );
+  const foregroundColor = parseTerminalColor(
+    terminalForeground,
+    isDark ? { r: 237, g: 241, b: 247 } : { r: 28, g: 33, b: 41 },
+  );
+  const cursorColor = parseTerminalColor(
+    terminalCursor,
+    isDark ? { r: 180, g: 203, b: 255 } : { r: 38, g: 56, b: 78 },
+  );
   return {
-    background: parseTerminalColor(
-      terminalBackground,
-      isDark ? { r: 14, g: 18, b: 24 } : { r: 255, g: 255, b: 255 },
-    ),
-    foreground: parseTerminalColor(
-      terminalForeground,
-      isDark ? { r: 237, g: 241, b: 247 } : { r: 28, g: 33, b: 41 },
-    ),
-    cursor: parseTerminalColor(
-      terminalCursor,
-      isDark ? { r: 180, g: 203, b: 255 } : { r: 38, g: 56, b: 78 },
-    ),
+    background: backgroundColor,
+    foreground: foregroundColor,
+    cursor: cursorColor,
     selectionBackground: terminalSelection,
+    alternateScreen: {
+      background: parseTerminalColor(alternateBackground, backgroundColor),
+      foreground: parseTerminalColor(alternateForeground, foregroundColor),
+      cursor: parseTerminalColor(alternateCursor, cursorColor),
+      selectionBackground: alternateSelection,
+    },
   };
 }
 

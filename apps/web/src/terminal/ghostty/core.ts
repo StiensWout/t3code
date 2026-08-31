@@ -67,12 +67,17 @@ export interface GhosttyColor {
   readonly b: number;
 }
 
-export interface GhosttyTheme {
+export interface GhosttyScreenTheme {
   readonly foreground: GhosttyColor;
   readonly background: GhosttyColor;
   readonly cursor: GhosttyColor;
   /** CSS color the renderer overlays on selected cells; not sent to Ghostty. */
   readonly selectionBackground?: string;
+}
+
+export interface GhosttyTheme extends GhosttyScreenTheme {
+  /** Theme-owned defaults used while the standard alternate screen is active. */
+  readonly alternateScreen?: GhosttyScreenTheme;
 }
 
 export interface GhosttyCell {
@@ -413,6 +418,14 @@ export class GhosttyTerminalCore {
       this.runtime.call("ghostty_terminal_set", this.terminal, option, color);
     }
     this.runtime.free(color, 3);
+    // Theme changes can coincide with a primary/alternate screen swap. Force
+    // the next snapshot to refresh every cached row so colors from the screen
+    // we just left cannot survive under the new defaults.
+    this.runtime.view(this.scratch, 4).setUint32(0, 2, true);
+    this.assertSuccess(
+      "ghostty_render_state_set(theme dirty)",
+      this.runtime.call("ghostty_render_state_set", this.renderState, 0, this.scratch),
+    );
   }
 
   scroll(deltaRows: number): void {

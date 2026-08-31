@@ -39,6 +39,12 @@ const lightTerminalTheme = {
   foreground: { r: 20, g: 20, b: 20 },
   cursor: { r: 38, g: 56, b: 78 },
   selectionBackground: "rgb(37 63 99 / 20%)",
+  alternateScreen: {
+    background: { r: 12, g: 12, b: 12 },
+    foreground: { r: 244, g: 244, b: 244 },
+    cursor: { r: 199, g: 218, b: 255 },
+    selectionBackground: "rgb(37 63 99 / 16%)",
+  },
 } satisfies GhosttyTheme;
 
 describe("terminalThemeForScreen", () => {
@@ -47,12 +53,9 @@ describe("terminalThemeForScreen", () => {
   });
 
   it("uses coherent dark defaults for a full-screen app under a light host theme", () => {
-    expect(terminalThemeForScreen(lightTerminalTheme, true)).toEqual({
-      background: { r: 0, g: 0, b: 0 },
-      foreground: { r: 245, g: 245, b: 245 },
-      cursor: { r: 180, g: 203, b: 255 },
-      selectionBackground: "rgb(180 203 255 / 25%)",
-    });
+    expect(terminalThemeForScreen(lightTerminalTheme, true)).toBe(
+      lightTerminalTheme.alternateScreen,
+    );
   });
 
   it("leaves an existing dark app theme untouched in the alternate screen", () => {

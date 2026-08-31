@@ -3,6 +3,7 @@ import {
   ghosttyColorsEqual,
   type GhosttyCell,
   type GhosttyColor,
+  type GhosttyScreenTheme,
   type GhosttySnapshot,
 } from "./core";
 
@@ -103,6 +104,8 @@ export function renderGhosttySnapshot(options: {
   readonly previousCursorY?: number | null;
   readonly focused?: boolean;
   readonly selectionBackground?: string;
+  /** Remap only terminal-default colors; explicit ANSI application colors win. */
+  readonly defaultThemeOverride?: GhosttyScreenTheme;
   readonly hoveredLinkRange?: GhosttyCellRange | null;
   /** Vertical origin of row 0; defaults to the horizontal padding. */
   readonly originY?: number;
@@ -120,6 +123,13 @@ export function renderGhosttySnapshot(options: {
   } = options;
   const focused = options.focused ?? true;
   const selectionBackground = options.selectionBackground ?? DEFAULT_SELECTION_BACKGROUND;
+  const defaultTheme = options.defaultThemeOverride;
+  const defaultBackground = defaultTheme?.background ?? snapshot.background;
+  const defaultForeground = defaultTheme?.foreground ?? snapshot.foreground;
+  const resolveBackground = (color: GhosttyColor) =>
+    defaultTheme && ghosttyColorsEqual(color, snapshot.background) ? defaultBackground : color;
+  const resolveForeground = (color: GhosttyColor) =>
+    defaultTheme && ghosttyColorsEqual(color, snapshot.foreground) ? defaultForeground : color;
   const hoveredLinkRange = options.hoveredLinkRange ?? null;
   const originY = options.originY ?? padding;
   const rowsToDraw = forceFull
@@ -140,7 +150,7 @@ export function renderGhosttySnapshot(options: {
   if (forceFull) {
     context.save();
     context.resetTransform();
-    context.fillStyle = cssColor(snapshot.background);
+    context.fillStyle = cssColor(defaultBackground);
     context.fillRect(0, 0, context.canvas.width, context.canvas.height);
     context.restore();
   }
@@ -151,30 +161,31 @@ export function renderGhosttySnapshot(options: {
     if (!row) continue;
     const top = originY + rowIndex * metrics.height;
 
-    context.fillStyle = cssColor(snapshot.background);
+    context.fillStyle = cssColor(defaultBackground);
     context.fillRect(padding, top, snapshot.cols * metrics.width, metrics.height);
 
     let backgroundStart = 0;
     while (backgroundStart < row.cells.length) {
       const first = row.cells[backgroundStart];
       if (!first) break;
+      const firstBackground = resolveBackground(first.background);
       let backgroundEnd = backgroundStart + 1;
       while (backgroundEnd < row.cells.length) {
         const next = row.cells[backgroundEnd];
         if (
           !next ||
           next.selected !== first.selected ||
-          !ghosttyColorsEqual(next.background, first.background)
+          !ghosttyColorsEqual(resolveBackground(next.background), firstBackground)
         ) {
           break;
         }
         backgroundEnd += 1;
       }
-      if (first.selected || !ghosttyColorsEqual(first.background, snapshot.background)) {
+      if (first.selected || !ghosttyColorsEqual(firstBackground, defaultBackground)) {
         const left = padding + backgroundStart * metrics.width;
         const width = (backgroundEnd - backgroundStart) * metrics.width;
-        if (!ghosttyColorsEqual(first.background, snapshot.background)) {
-          context.fillStyle = cssColor(first.background);
+        if (!ghosttyColorsEqual(firstBackground, defaultBackground)) {
+          context.fillStyle = cssColor(firstBackground);
           context.fillRect(left, top, width, metrics.height);
         }
         if (first.selected) {
@@ -209,7 +220,7 @@ export function renderGhosttySnapshot(options: {
         );
         context.clip();
         context.font = fontForCell(first, fontSize, fontFamily);
-        context.fillStyle = cssColor(first.foreground);
+        context.fillStyle = cssColor(resolveForeground(first.foreground));
         context.fillText(
           text,
           padding + runStart * metrics.width,
@@ -232,7 +243,7 @@ export function renderGhosttySnapshot(options: {
       if (!cell || (!cell.underline && !cell.strikethrough && !cell.overline && !hoveredLink)) {
         continue;
       }
-      context.fillStyle = cssColor(cell.foreground);
+      context.fillStyle = cssColor(resolveForeground(cell.foreground));
       const left = padding + column * metrics.width;
       if (cell.underline || hoveredLink) {
         context.fillRect(left, top + metrics.height - 2, metrics.width, 1);
@@ -247,24 +258,25 @@ export function renderGhosttySnapshot(options: {
   if (cursorOn && snapshot.cursorVisible && snapshot.cursorX >= 0 && snapshot.cursorY >= 0) {
     const left = padding + snapshot.cursorX * metrics.width;
     const top = originY + snapshot.cursorY * metrics.height;
-    context.fillStyle = cssColor(snapshot.cursor);
+    const cursor = defaultTheme?.cursor ?? snapshot.cursor;
+    context.fillStyle = cssColor(cursor);
     if (!focused) {
       // An unfocused terminal draws a hollow cursor so the active pane is obvious.
-      context.strokeStyle = cssColor(snapshot.cursor);
+      context.strokeStyle = cssColor(cursor);
       context.strokeRect(left + 0.5, top + 0.5, metrics.width - 1, metrics.height - 1);
     } else if (snapshot.cursorStyle === 0) {
       context.fillRect(left, top, 2, metrics.height);
     } else if (snapshot.cursorStyle === 2) {
       context.fillRect(left, top + metrics.height - 2, metrics.width, 2);
     } else if (snapshot.cursorStyle === 3) {
-      context.strokeStyle = cssColor(snapshot.cursor);
+      context.strokeStyle = cssColor(cursor);
       context.strokeRect(left + 0.5, top + 0.5, metrics.width - 1, metrics.height - 1);
     } else {
       context.fillRect(left, top, metrics.width, metrics.height);
       const cell = snapshot.rowData[snapshot.cursorY]?.cells[snapshot.cursorX];
       if (cell?.text) {
         context.font = fontForCell(cell, fontSize, fontFamily);
-        context.fillStyle = cssColor(snapshot.background);
+        context.fillStyle = cssColor(defaultBackground);
         context.fillText(cell.text, left, top + metrics.baseline, metrics.width);
       }
     }
