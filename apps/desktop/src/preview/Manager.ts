@@ -2011,6 +2011,8 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         ? tab.webContentsId
         : null;
     if (replacedWebContentsId !== null) {
+      // The replaced guest can no longer redeem a display-media grant.
+      clearPendingRecording(tabId);
       yield* Effect.all(
         [
           detachControlSession(replacedWebContentsId),
