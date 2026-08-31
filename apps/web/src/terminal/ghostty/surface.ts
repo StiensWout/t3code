@@ -39,6 +39,10 @@ const CURSOR_BLINK_INTERVAL_MS = 500;
 // A missing synchronized-output reset must not leave the visible terminal
 // frozen forever. A short fallback is no worse than rendering unsynchronized.
 const SYNCHRONIZED_OUTPUT_RENDER_TIMEOUT_MS = 500;
+// Hidden and occluded documents can suspend animation frames indefinitely.
+// The timeout drains the accumulated queue without a per-frame budget when
+// there is no paint cadence to protect.
+const TERMINAL_WRITE_DRAIN_TIMEOUT_MS = 100;
 const TERMINAL_WRITE_CHUNK_CODE_UNITS = 64 * 1024;
 const TERMINAL_IMMEDIATE_WRITE_CODE_UNITS = 16 * 1024;
 const ALTERNATE_SCREEN_DARK_THEME = {
@@ -606,6 +610,7 @@ export class GhosttyTerminalSurface {
   private frame = 0;
   private synchronizedRenderTimer: number | null = null;
   private writeFrame = 0;
+  private writeDrainTimer: number | null = null;
   private writeQueue: Array<{ data: string; offset: number; replay: boolean }> = [];
   private writeQueueIndex = 0;
   private replayActive = false;
@@ -879,15 +884,35 @@ export class GhosttyTerminalSurface {
   }
 
   private requestWriteDrain(): void {
-    if (this.disposed || this.writeFrame !== 0) return;
-    this.writeFrame = window.requestAnimationFrame(this.drainWrites);
+    if (this.disposed || this.writeFrame !== 0 || this.writeDrainTimer !== null) return;
+    this.writeFrame = window.requestAnimationFrame(this.drainWritesOnFrame);
+    this.writeDrainTimer = window.setTimeout(
+      this.drainWritesAfterFrameTimeout,
+      TERMINAL_WRITE_DRAIN_TIMEOUT_MS,
+    );
   }
 
-  private readonly drainWrites = () => {
+  private readonly drainWritesOnFrame = () => {
     this.writeFrame = 0;
+    if (this.writeDrainTimer !== null) {
+      window.clearTimeout(this.writeDrainTimer);
+      this.writeDrainTimer = null;
+    }
+    this.drainWrites(TERMINAL_WRITE_CHUNK_CODE_UNITS);
+  };
+
+  private readonly drainWritesAfterFrameTimeout = () => {
+    this.writeDrainTimer = null;
+    if (this.writeFrame !== 0) {
+      window.cancelAnimationFrame(this.writeFrame);
+      this.writeFrame = 0;
+    }
+    this.drainWrites(Number.POSITIVE_INFINITY);
+  };
+
+  private drainWrites(budget: number): void {
     if (this.disposed) return;
 
-    let budget = TERMINAL_WRITE_CHUNK_CODE_UNITS;
     while (budget > 0) {
       const pending = this.writeQueue[this.writeQueueIndex];
       if (!pending) break;
@@ -929,7 +954,7 @@ export class GhosttyTerminalSurface {
       this.requestWriteDrain();
     }
     this.didWriteOutput();
-  };
+  }
 
   private finishReplay(): void {
     if (!this.replayActive) return;
@@ -943,6 +968,10 @@ export class GhosttyTerminalSurface {
     if (this.writeFrame !== 0) {
       window.cancelAnimationFrame(this.writeFrame);
       this.writeFrame = 0;
+    }
+    if (this.writeDrainTimer !== null) {
+      window.clearTimeout(this.writeDrainTimer);
+      this.writeDrainTimer = null;
     }
     this.writeQueue = [];
     this.writeQueueIndex = 0;
@@ -1198,6 +1227,7 @@ export class GhosttyTerminalSurface {
     if (this.frame !== 0) window.cancelAnimationFrame(this.frame);
     this.cancelSynchronizedRenderTimer();
     if (this.writeFrame !== 0) window.cancelAnimationFrame(this.writeFrame);
+    if (this.writeDrainTimer !== null) window.clearTimeout(this.writeDrainTimer);
     if (this.cursorTimer !== null) window.clearTimeout(this.cursorTimer);
     if (this.compositionSuppressionTimer !== null) {
       window.clearTimeout(this.compositionSuppressionTimer);

@@ -10,6 +10,7 @@ import {
   readTerminalOutputUpdate,
   selectRunningSubprocessTerminalIds,
   terminalOutputText,
+  terminalOutputRetentionBytes,
 } from "./terminalSession.ts";
 
 const TARGET = {
@@ -33,6 +34,46 @@ const BASE_SNAPSHOT: TerminalSessionSnapshot = {
 };
 
 describe("terminal session reducers", () => {
+  it("retains adjacent maximum-size events after the smaller initial replay", () => {
+    const retentionBytes = terminalOutputRetentionBytes(64 * 1024);
+    expect(retentionBytes).toBe(512 * 1024);
+    expect(terminalOutputRetentionBytes(4 * 1024 * 1024)).toBe(4 * 1024 * 1024);
+
+    const snapshot = applyTerminalAttachStreamEvent(
+      EMPTY_TERMINAL_BUFFER_STATE,
+      { type: "snapshot", snapshot: { ...BASE_SNAPSHOT, history: "" } },
+      retentionBytes,
+    );
+    const cursor = {
+      resetVersion: snapshot.output.resetVersion,
+      lastChunkId: snapshot.output.latestChunkId,
+    };
+    const first = applyTerminalAttachStreamEvent(
+      snapshot,
+      {
+        type: "output",
+        threadId: TARGET.threadId,
+        terminalId: TARGET.terminalId,
+        data: "a".repeat(64 * 1024),
+      },
+      retentionBytes,
+    );
+    const second = applyTerminalAttachStreamEvent(
+      first,
+      {
+        type: "output",
+        threadId: TARGET.threadId,
+        terminalId: TARGET.terminalId,
+        data: "b".repeat(64 * 1024),
+      },
+      retentionBytes,
+    );
+
+    const update = readTerminalOutputUpdate(second.output, cursor);
+    if (update.type !== "append") throw new Error(`Expected append, received ${update.type}`);
+    expect(update.data).toHaveLength(128 * 1024);
+  });
+
   it("prefers live attach status over stale metadata after the attach stream starts", () => {
     const summary = applyTerminalMetadataStreamEvent([], {
       type: "snapshot",

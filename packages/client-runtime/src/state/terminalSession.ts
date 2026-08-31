@@ -1,5 +1,4 @@
 import {
-  DEFAULT_TERMINAL_REPLAY_BYTES,
   type EnvironmentId,
   type TerminalAttachStreamEvent,
   type TerminalMetadataStreamEvent,
@@ -105,11 +104,18 @@ export const EMPTY_TERMINAL_SESSION_STATE = Object.freeze<TerminalSessionState>(
   version: 0,
 });
 
-export const DEFAULT_MAX_TERMINAL_BUFFER_BYTES = DEFAULT_TERMINAL_REPLAY_BYTES;
+// Retention needs enough headroom for the renderer to consume several adjacent
+// 64 KB server batches without falling behind and resetting its scrollback.
+export const DEFAULT_MAX_TERMINAL_BUFFER_BYTES = 512 * 1024;
 const DEFAULT_TERMINAL_CHUNK_BYTES = 16 * 1024;
 const MAX_TERMINAL_OUTPUT_CHUNKS = 1_024;
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
+
+/** Keep attach replay size and live client retention as separate budgets. */
+export function terminalOutputRetentionBytes(replayBytes?: number): number {
+  return Math.max(DEFAULT_MAX_TERMINAL_BUFFER_BYTES, replayBytes ?? 0);
+}
 
 function trimBufferToBytes(buffer: string, maxBufferBytes: number): string {
   if (maxBufferBytes <= 0) {
