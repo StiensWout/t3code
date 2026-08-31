@@ -912,7 +912,7 @@ describe("PiAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
-  it.effect("keeps a command-only compaction open until compaction ends", () =>
+  it.effect("sends RPC compact for /compact instead of a prompt", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakePi;
       const { runtime, takeEvent } = yield* openRuntime(fake);
@@ -921,16 +921,14 @@ describe("PiAdapterV2", () => {
         modelSelection: modelSelection("default"),
         runtimePolicy,
       });
-      yield* startTurn(runtime, providerThread, "default", [], "/compact");
-      yield* fake.takeRequest("prompt");
+      yield* startTurn(runtime, providerThread, "default", [], "/compact keep the auth rewrite");
+      const compact = yield* fake.takeRequest("compact");
+      assert.equal(compact["customInstructions"], "keep the auth rewrite");
+      assert.isFalse(fake.allRequests().some((request) => request["type"] === "prompt"));
       yield* fake.emit({ type: "compaction_start", reason: "manual" });
       yield* takeEvent(
         (event) => event.type === "turn_item.updated" && event.turnItem.type === "compaction",
       );
-
-      fake.queueState({ isStreaming: false, isCompacting: true, pendingMessageCount: 0 });
-      yield* fake.emit({ type: "response", command: "prompt", success: true });
-      yield* fake.takeRequest("get_state");
 
       fake.queueState({ isStreaming: false, isCompacting: false, pendingMessageCount: 0 });
       yield* fake.emit({
@@ -951,6 +949,185 @@ describe("PiAdapterV2", () => {
           completed.turnItem.type === "compaction" &&
           completed.turnItem.title === "Context compacted",
       );
+      yield* fake.emit({ type: "response", command: "compact", success: true });
+      yield* fake.takeRequest("get_state");
+      const terminal = yield* takeEvent((event) => event.type === "turn.terminal");
+      assert.isTrue(terminal.type === "turn.terminal" && terminal.status === "completed");
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("leaves /compacted as an ordinary prompt", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, providerThread, "default", [], "/compacted please");
+      const prompt = yield* fake.takeRequest("prompt");
+      assert.equal(prompt["message"], "/compacted please");
+      assert.isFalse(fake.allRequests().some((request) => request["type"] === "compact"));
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("keeps a too-small compact as a failed compaction item", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, providerThread, "default", [], "/compact");
+      yield* fake.takeRequest("compact");
+      yield* fake.emit({ type: "compaction_start", reason: "manual" });
+      yield* takeEvent(
+        (event) => event.type === "turn_item.updated" && event.turnItem.type === "compaction",
+      );
+      fake.queueState({ isStreaming: false, isCompacting: false, pendingMessageCount: 0 });
+      yield* fake.emit({
+        type: "compaction_end",
+        reason: "manual",
+        result: null,
+        aborted: false,
+        errorMessage: "Compaction failed: Nothing to compact (session too small)",
+      });
+      const failed = yield* takeEvent(
+        (event) =>
+          event.type === "turn_item.updated" &&
+          event.turnItem.type === "compaction" &&
+          event.turnItem.status === "failed",
+      );
+      assert.isTrue(
+        failed.type === "turn_item.updated" &&
+          failed.turnItem.type === "compaction" &&
+          failed.turnItem.title === "Context compaction failed",
+      );
+      yield* fake.emit({
+        type: "response",
+        command: "compact",
+        success: false,
+        error: "Nothing to compact (session too small)",
+      });
+      yield* fake.takeRequest("get_state");
+      const terminal = yield* takeEvent((event) => event.type === "turn.terminal");
+      assert.isTrue(terminal.type === "turn.terminal" && terminal.status === "completed");
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("fails a compact that never started", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, providerThread, "default", [], "/compact");
+      yield* fake.takeRequest("compact");
+      yield* fake.emit({
+        type: "response",
+        command: "compact",
+        success: false,
+        error: "Nothing to compact (session too small)",
+      });
+      const terminal = yield* takeEvent((event) => event.type === "turn.terminal");
+      assert.isTrue(
+        terminal.type === "turn.terminal" &&
+          terminal.status === "failed" &&
+          terminal.failure.message === "Nothing to compact (session too small)",
+      );
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("restarts Pi when Stop interrupts a user compact", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, providerThread, "default", [], "/compact");
+      yield* fake.takeRequest("compact");
+      const running = yield* takeEvent(
+        (event) =>
+          event.type === "provider_turn.updated" && event.providerTurn.status === "running",
+      );
+      const providerTurnId =
+        running.type === "provider_turn.updated" ? running.providerTurn.id : undefined;
+      assert.isDefined(providerTurnId);
+      yield* fake.emit({ type: "compaction_start", reason: "manual" });
+      yield* takeEvent(
+        (event) => event.type === "turn_item.updated" && event.turnItem.type === "compaction",
+      );
+      yield* runtime.interruptTurn({ providerThread, providerTurnId: providerTurnId! });
+      assert.isFalse(fake.allRequests().some((request) => request["type"] === "abort"));
+      yield* fake.closeStdout;
+      const terminal = yield* takeEvent((event) => event.type === "turn.terminal");
+      assert.isTrue(terminal.type === "turn.terminal" && terminal.status === "interrupted");
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("steers /compact as RPC compact instead of a prompt", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, providerThread);
+      yield* fake.takeRequest("prompt");
+      const running = yield* takeEvent(
+        (event) =>
+          event.type === "provider_turn.updated" && event.providerTurn.status === "running",
+      );
+      const providerTurnId =
+        running.type === "provider_turn.updated" ? running.providerTurn.id : undefined;
+      yield* fake.emit({ type: "agent_start" });
+      yield* runtime.steerTurn({
+        threadId: THREAD_ID,
+        runId: RunId.make("run:thread-pi-test:1"),
+        providerThread,
+        providerTurnId: providerTurnId!,
+        message: {
+          messageId: "message:thread-pi-test:steer-compact" as never,
+          text: "/compact keep the tests",
+          attachments: [],
+          createdBy: "user",
+          creationSource: "web",
+        },
+      });
+      const compact = yield* fake.takeRequest("compact");
+      assert.equal(compact["customInstructions"], "keep the tests");
+      assert.isUndefined(compact["streamingBehavior"]);
+      yield* fake.emit({ type: "compaction_start", reason: "manual" });
+      yield* takeEvent(
+        (event) => event.type === "turn_item.updated" && event.turnItem.type === "compaction",
+      );
+      fake.queueState({ isStreaming: false, isCompacting: false, pendingMessageCount: 0 });
+      yield* fake.emit({
+        type: "compaction_end",
+        reason: "manual",
+        result: { summary: "smaller", tokensBefore: 10_000, estimatedTokensAfter: 2_000 },
+        aborted: false,
+        willRetry: false,
+      });
+      yield* takeEvent(
+        (event) =>
+          event.type === "turn_item.updated" &&
+          event.turnItem.type === "compaction" &&
+          event.turnItem.status === "completed",
+      );
+      yield* fake.emit({ type: "response", command: "compact", success: true });
+      yield* fake.emit({ type: "agent_settled" });
       yield* fake.takeRequest("get_state");
       const terminal = yield* takeEvent((event) => event.type === "turn.terminal");
       assert.isTrue(terminal.type === "turn.terminal" && terminal.status === "completed");

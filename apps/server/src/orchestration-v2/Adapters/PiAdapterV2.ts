@@ -62,7 +62,12 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
-import { expandPiSkillReference, parsePiDiscoveredCommands } from "../../provider/PiCommands.ts";
+import {
+  expandPiSkillReference,
+  parsePiCompactCommand,
+  parsePiDiscoveredCommands,
+  type PiCompactCommand,
+} from "../../provider/PiCommands.ts";
 import { mergeProviderInstanceEnvironment } from "../../provider/ProviderInstanceEnvironment.ts";
 import { IdAllocatorV2 } from "../IdAllocator.ts";
 import {
@@ -334,6 +339,9 @@ interface ActivePiTurn {
   settleProbeGeneration: number;
   /** An extension may start compaction immediately after Pi emits agent_settled. */
   settleWhenIdle: boolean;
+  sawCompaction: boolean;
+  /** RPC compact is in flight; Pi abort does not cancel it. */
+  manualCompactInFlight: boolean;
   activeCompaction: PiCompactionState | null;
   activeProviderRetry: PiProviderRetryState | null;
   failure: ReturnType<typeof makeProviderFailure> | null;
@@ -488,6 +496,15 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
         readonly providerTurnId: OrchestrationV2ProviderTurn["id"];
         readonly kind: "turn_start" | "steer";
       }> = [];
+      const pendingCompactResponses: Array<{
+        readonly providerTurnId: OrchestrationV2ProviderTurn["id"];
+        readonly kind: "turn_start" | "steer";
+      }> = [];
+
+      const compactRpcRecord = (command: PiCompactCommand): PiRpcRecord =>
+        command.customInstructions === undefined
+          ? { type: "compact" }
+          : { type: "compact", customInstructions: command.customInstructions };
 
       const emit = (event: ProviderAdapterV2Event) =>
         Queue.offer(events, event).pipe(Effect.asVoid);
@@ -1501,6 +1518,7 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
           case "compaction_start": {
             if (turn === null) return;
             turn.settleProbeGeneration += 1;
+            turn.sawCompaction = true;
             if (turn.activeCompaction !== null) {
               yield* emitCompaction(turn, turn.activeCompaction, "cancelled");
             }
@@ -1657,8 +1675,46 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
           }
           case "response": {
             // Correlated responses never reach the pump; an id-less response
-            // is the deferred ack of a fire-and-forget prompt/steer.
+            // is the deferred ack of a fire-and-forget prompt/steer/compact.
             const command = recordString(event, "command");
+            if (command === "compact") {
+              const pendingCompact = pendingCompactResponses.shift();
+              const compactTurn =
+                pendingCompact?.providerTurnId === turn?.providerTurn.id ? turn : null;
+              if (compactTurn !== null) compactTurn.manualCompactInFlight = false;
+              if (event["success"] === true) {
+                if (
+                  pendingCompact?.kind === "turn_start" &&
+                  compactTurn !== null &&
+                  compactTurn.promptMayBeCommandOnly &&
+                  !compactTurn.sawAgentActivity
+                ) {
+                  yield* scheduleSettleProbe(compactTurn);
+                }
+                return;
+              }
+              if (event["success"] !== false) return;
+              if (compactTurn === null) return;
+              if (compactTurn.activeCompaction !== null) return;
+              if (pendingCompact?.kind === "steer") {
+                yield* Effect.logWarning("Pi rejected a compact steer.", {
+                  errorLength: recordString(event, "error")?.length,
+                });
+                return;
+              }
+              if (!compactTurn.sawCompaction) {
+                compactTurn.failure = makeProviderFailure({
+                  message: recordString(event, "error") ?? "Pi compact failed.",
+                  class: "provider_error",
+                });
+                if (state !== null) yield* finalizeTurn(state);
+                return;
+              }
+              if (!compactTurn.sawAgentActivity) {
+                yield* scheduleSettleProbe(compactTurn);
+              }
+              return;
+            }
             const pendingPrompt = command === "prompt" ? pendingPromptResponses.shift() : undefined;
             const responseTurn =
               pendingPrompt?.providerTurnId === turn?.providerTurn.id ? turn : null;
@@ -2092,10 +2148,11 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
             // extension's before_agent_start system-prompt hook, never by
             // wrapping the user text: a wrapped first message would no
             // longer start with "/" and slash commands would stop expanding.
-            const payload = yield* resolvePromptPayload(
-              turnInput.message.text,
-              turnInput.message.attachments,
-            );
+            const compactCommand = parsePiCompactCommand(turnInput.message.text);
+            const payload =
+              compactCommand === null
+                ? yield* resolvePromptPayload(turnInput.message.text, turnInput.message.attachments)
+                : null;
             const startedAt = yield* DateTime.now;
             const syntheticNativeTurnId = `${state.providerThread.id}:attempt:${turnInput.attemptId}`;
             const providerTurn: OrchestrationV2ProviderTurn = {
@@ -2124,10 +2181,13 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
               toolStartedAt: new Map(),
               interrupted: false,
               sawAgentActivity: false,
-              promptMayBeCommandOnly: payload.message.trimStart().startsWith("/"),
+              promptMayBeCommandOnly:
+                compactCommand !== null || (payload?.message.trimStart().startsWith("/") ?? false),
               latestCompactionAfterTokens: null,
               settleProbeGeneration: 0,
               settleWhenIdle: false,
+              sawCompaction: false,
+              manualCompactInFlight: compactCommand !== null,
               activeCompaction: null,
               activeProviderRetry: null,
               failure: null,
@@ -2138,12 +2198,23 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
             // and answered instead of deadlocking the caller.
             yield* Effect.gen(function* () {
               state.activeTurn = activeTurn;
-              yield* connection.send({
-                type: "prompt",
-                message: payload.message,
-                ...(payload.images.length === 0 ? {} : { images: payload.images }),
-              });
-              pendingPromptResponses.push({ providerTurnId: providerTurn.id, kind: "turn_start" });
+              if (compactCommand !== null) {
+                yield* connection.send(compactRpcRecord(compactCommand));
+                pendingCompactResponses.push({
+                  providerTurnId: providerTurn.id,
+                  kind: "turn_start",
+                });
+              } else if (payload !== null) {
+                yield* connection.send({
+                  type: "prompt",
+                  message: payload.message,
+                  ...(payload.images.length === 0 ? {} : { images: payload.images }),
+                });
+                pendingPromptResponses.push({
+                  providerTurnId: providerTurn.id,
+                  kind: "turn_start",
+                });
+              }
               yield* emit({
                 type: "provider_turn.updated",
                 driver: PI_PROVIDER,
@@ -2189,31 +2260,45 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
             if (turn === null || turn.providerTurn.id !== steerInput.providerTurnId) {
               return yield* protocolError(`Pi turn ${steerInput.providerTurnId} is not active`);
             }
-            const payload = yield* resolvePromptPayload(
-              steerInput.message.text,
-              steerInput.message.attachments,
-            );
+            const compactCommand = parsePiCompactCommand(steerInput.message.text);
+            const payload =
+              compactCommand === null
+                ? yield* resolvePromptPayload(
+                    steerInput.message.text,
+                    steerInput.message.attachments,
+                  )
+                : null;
             // Prompt with streamingBehavior steer is atomic on Pi's side: it
             // queues during an active run and starts a new run if settlement
             // won the race. A direct `steer` sent after Pi became idle would
             // remain queued forever. Send fire-and-forget under the session
             // permit so a slash-command dialog cannot block the turn, and so
             // settlement cannot overtake the active-turn check.
+            // /compact is not a prompt: Pi's compact RPC aborts the agent first.
             yield* sessionEventPermit.withPermits(1)(
               Effect.gen(function* () {
                 if (threadState?.activeTurn !== turn) {
                   return yield* protocolError(`Pi turn ${steerInput.providerTurnId} is not active`);
                 }
-                yield* connection.send({
-                  type: "prompt",
-                  message: payload.message,
-                  streamingBehavior: "steer",
-                  ...(payload.images.length === 0 ? {} : { images: payload.images }),
-                });
-                pendingPromptResponses.push({
-                  providerTurnId: turn.providerTurn.id,
-                  kind: "steer",
-                });
+                if (compactCommand !== null) {
+                  turn.manualCompactInFlight = true;
+                  yield* connection.send(compactRpcRecord(compactCommand));
+                  pendingCompactResponses.push({
+                    providerTurnId: turn.providerTurn.id,
+                    kind: "steer",
+                  });
+                } else if (payload !== null) {
+                  yield* connection.send({
+                    type: "prompt",
+                    message: payload.message,
+                    streamingBehavior: "steer",
+                    ...(payload.images.length === 0 ? {} : { images: payload.images }),
+                  });
+                  pendingPromptResponses.push({
+                    providerTurnId: turn.providerTurn.id,
+                    kind: "steer",
+                  });
+                }
                 turn.settleProbeGeneration += 1;
               }),
             );
@@ -2235,10 +2320,14 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
               return yield* protocolError(`Pi turn ${interruptInput.providerTurnId} is not active`);
             }
             turn.interrupted = true;
-            if (interruptInput.requestRuntimeRestart === true || turn.settleWhenIdle) {
-              // Pi's generic abort does not cancel detached manual compaction.
-              // Once settlement has begun, terminate the process so Stop also
-              // prevents a recovery provider call from starting afterward.
+            if (
+              interruptInput.requestRuntimeRestart === true ||
+              turn.settleWhenIdle ||
+              turn.activeCompaction !== null ||
+              turn.manualCompactInFlight
+            ) {
+              // Pi's generic abort does not cancel manual compaction. Terminate
+              // so Stop covers user /compact as well as detached recovery compact.
               stopRequested = true;
               if (interruptInput.requestRuntimeRestart === true && !turn.settleWhenIdle) {
                 yield* request({ type: "abort" }, 2_000).pipe(Effect.ignore);

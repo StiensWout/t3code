@@ -45,7 +45,11 @@ import {
   EMPTY_PI_MODEL_CAPABILITIES,
   thinkingCapabilitiesForPiModel,
 } from "./piThinkingCapabilities.ts";
-import { parsePiDiscoveredCommands, type PiDiscoveredCommands } from "../PiCommands.ts";
+import {
+  parsePiDiscoveredCommands,
+  withPiBuiltinSlashCommands,
+  type PiDiscoveredCommands,
+} from "../PiCommands.ts";
 
 const PI_PRESENTATION = {
   displayName: "Pi",
@@ -145,7 +149,7 @@ const discoverPiViaRpc = (
     const { slashCommands, skills } = parsePiDiscoveredCommands(commandsData);
     return {
       models: discoveredModels,
-      slashCommands,
+      slashCommands: withPiBuiltinSlashCommands(slashCommands),
       skills,
       authenticated: discoveredModels.length > 0,
     } satisfies PiDiscovery;
