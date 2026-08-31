@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import type { GhosttyCell, GhosttyRow } from "./core";
+import type { GhosttyCell, GhosttyRow, GhosttyTheme } from "./core";
 import {
   DEFAULT_TERMINAL_FONT_FAMILY,
   DEFAULT_TERMINAL_FONT_SIZE,
@@ -23,6 +23,7 @@ import {
   terminalGridCellAt,
   terminalScrollbarGeometry,
   terminalScrollbarOffsetAtPointer,
+  terminalThemeForScreen,
   terminalLinkAtColumn,
   terminalLinkAtPosition,
   terminalLinkAtPositionWithRange,
@@ -32,6 +33,38 @@ import {
   terminalWheelArrowData,
   terminalWheelDeltaRows,
 } from "./surface";
+
+const lightTerminalTheme = {
+  background: { r: 255, g: 255, b: 255 },
+  foreground: { r: 20, g: 20, b: 20 },
+  cursor: { r: 38, g: 56, b: 78 },
+  selectionBackground: "rgb(37 63 99 / 20%)",
+} satisfies GhosttyTheme;
+
+describe("terminalThemeForScreen", () => {
+  it("keeps the app theme on the normal shell screen", () => {
+    expect(terminalThemeForScreen(lightTerminalTheme, false)).toBe(lightTerminalTheme);
+  });
+
+  it("uses coherent dark defaults for a full-screen app under a light host theme", () => {
+    expect(terminalThemeForScreen(lightTerminalTheme, true)).toEqual({
+      background: { r: 0, g: 0, b: 0 },
+      foreground: { r: 245, g: 245, b: 245 },
+      cursor: { r: 180, g: 203, b: 255 },
+      selectionBackground: "rgb(180 203 255 / 25%)",
+    });
+  });
+
+  it("leaves an existing dark app theme untouched in the alternate screen", () => {
+    const darkTheme = {
+      background: { r: 0, g: 0, b: 0 },
+      foreground: { r: 245, g: 245, b: 245 },
+      cursor: { r: 180, g: 203, b: 255 },
+    } satisfies GhosttyTheme;
+
+    expect(terminalThemeForScreen(darkTheme, true)).toBe(darkTheme);
+  });
+});
 
 const cell = (text: string): GhosttyCell => ({
   text,

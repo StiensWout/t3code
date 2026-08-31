@@ -41,6 +41,12 @@ const CURSOR_BLINK_INTERVAL_MS = 500;
 const SYNCHRONIZED_OUTPUT_RENDER_TIMEOUT_MS = 500;
 const TERMINAL_WRITE_CHUNK_CODE_UNITS = 64 * 1024;
 const TERMINAL_IMMEDIATE_WRITE_CODE_UNITS = 16 * 1024;
+const ALTERNATE_SCREEN_DARK_THEME = {
+  background: { r: 0, g: 0, b: 0 },
+  foreground: { r: 245, g: 245, b: 245 },
+  cursor: { r: 180, g: 203, b: 255 },
+  selectionBackground: "rgb(180 203 255 / 25%)",
+} satisfies GhosttyTheme;
 const TERMINAL_FONT_LOAD_TEXT = "iMW0@# .";
 const TERMINAL_FONT_LOAD_VARIANTS = [
   "normal 400",
@@ -53,6 +59,33 @@ const TERMINAL_FONT_LOAD_VARIANTS = [
 export interface GhosttyTerminalFont {
   readonly family?: string;
   readonly size?: number;
+}
+
+function linearColorChannel(value: number): number {
+  const channel = value / 255;
+  return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+}
+
+function terminalColorLuminance(color: GhosttyTheme["background"]): number {
+  return (
+    0.2126 * linearColorChannel(color.r) +
+    0.7152 * linearColorChannel(color.g) +
+    0.0722 * linearColorChannel(color.b)
+  );
+}
+
+/**
+ * Full-screen terminal apps often reset cells to the terminal defaults while
+ * repainting a dark interface. Give a light host theme coherent dark defaults
+ * only while the standard alternate screen is active; explicit app colors
+ * still win, and returning to the shell restores the host theme.
+ */
+export function terminalThemeForScreen(
+  theme: GhosttyTheme,
+  alternateScreen: boolean,
+): GhosttyTheme {
+  if (!alternateScreen || terminalColorLuminance(theme.background) < 0.5) return theme;
+  return ALTERNATE_SCREEN_DARK_THEME;
 }
 
 let symbolsFontLoad: Promise<void> | null = null;
@@ -617,9 +650,12 @@ export class GhosttyTerminalSurface {
   private focused = false;
   private resizeNotified = false;
   private canvasConfigured = false;
+  private appTheme: GhosttyTheme;
   private theme: GhosttyTheme;
+  private alternateScreenActive = false;
   private readonly suppressedKeyCodes = new Set<string>();
   private pasteShortcutToken = 0;
+  private pasteShortcutDeliveredToken: number | null = null;
   private copyShortcutToken = 0;
   private clearSelectionAfterCopy = false;
   private primedCopySelection = "";
@@ -655,6 +691,7 @@ export class GhosttyTerminalSurface {
     this.mouseAnyEventTracking = core.isMouseAnyEventTracking();
     this.metrics = metrics;
     this.options = options;
+    this.appTheme = options.theme;
     this.theme = options.theme;
     this.fontFamily = fontFamily;
     this.requestedFontFamily = options.font?.family;
@@ -762,6 +799,7 @@ export class GhosttyTerminalSurface {
   }
 
   private didWriteOutput(): void {
+    this.synchronizeScreenTheme();
     this.synchronizeMouseTrackingState();
     // Restart the blink cycle from the visible phase so the cursor never sits
     // invisible through a stream of output or a burst of typing echo.
@@ -915,10 +953,18 @@ export class GhosttyTerminalSurface {
 
   setTheme(theme: GhosttyTheme): void {
     if (this.disposed) return;
-    this.theme = theme;
-    this.core.setTheme(theme);
-    this.forceFullRender = true;
+    this.appTheme = theme;
+    this.synchronizeScreenTheme(true);
     this.requestRender();
+  }
+
+  private synchronizeScreenTheme(force = false): void {
+    const alternateScreen = this.core.isAlternateScreen();
+    if (!force && alternateScreen === this.alternateScreenActive) return;
+    this.alternateScreenActive = alternateScreen;
+    this.theme = terminalThemeForScreen(this.appTheme, alternateScreen);
+    this.core.setTheme(this.theme);
+    this.forceFullRender = true;
   }
 
   async setFont(font: GhosttyTerminalFont): Promise<void> {
@@ -1238,17 +1284,18 @@ export class GhosttyTerminalSurface {
       this.suppressedKeyCodes.add(event.code);
       const clipboard = navigator.clipboard;
       if (typeof clipboard?.readText === "function") {
-        // Race the async clipboard read against the browser's own paste event:
-        // the native event (dispatched synchronously with the default action)
-        // always claims the token first when it fires, and the read covers
-        // browsers whose paste shortcut produces no paste event. Not preventing
-        // the default keeps the native path alive when the read is denied.
+        // Race the async clipboard read against the browser's own paste event.
+        // Either may arrive first, so the winning path records the gesture and
+        // the other path becomes a no-op. The read covers browsers whose paste
+        // shortcut produces no paste event; leaving the default intact keeps
+        // the native path alive when clipboard permission is denied.
         const token = ++this.pasteShortcutToken;
         void clipboard.readText().then(
           (text) => {
             if (this.disposed || this.pasteShortcutToken !== token) return;
-            this.pasteShortcutToken += 1;
-            if (text.length > 0) this.options.onData(this.core.encodePaste(text));
+            if (text.length === 0) return;
+            this.pasteShortcutDeliveredToken = token;
+            this.options.onData(this.core.encodePaste(text));
           },
           () => {
             // Clipboard read denied; the native paste event remains the path.
@@ -1274,7 +1321,15 @@ export class GhosttyTerminalSurface {
 
   private readonly onKeyUp = (event: KeyboardEvent) => {
     this.updateLinkModifier(event);
-    if (this.suppressedKeyCodes.delete(event.code)) return;
+    if (this.suppressedKeyCodes.delete(event.code)) {
+      // A native paste belongs to the same shortcut gesture and arrives before
+      // its keyup. Do not let an async-only shortcut suppress a later context-
+      // menu paste just because the browser never dispatched the native event.
+      if (event.code === "KeyV" || event.code === "Insert") {
+        this.pasteShortcutDeliveredToken = null;
+      }
+      return;
+    }
     if (isTerminalCompositionKey(event, this.composing)) {
       return;
     }
@@ -1355,8 +1410,14 @@ export class GhosttyTerminalSurface {
     event.preventDefault();
     const data = event.clipboardData?.getData("text/plain") ?? "";
     if (data.length === 0) return;
-    // The native paste won the race with actual text; a pending clipboard read
-    // must not double. An empty native paste leaves the read as the only path.
+    const token = this.pasteShortcutToken;
+    if (this.pasteShortcutDeliveredToken === token) {
+      this.pasteShortcutDeliveredToken = null;
+      this.pasteShortcutToken += 1;
+      return;
+    }
+    // The native paste won the race with actual text; invalidate a pending
+    // clipboard read. An empty native paste leaves the read as the only path.
     this.pasteShortcutToken += 1;
     this.options.onData(this.core.encodePaste(data));
   };
