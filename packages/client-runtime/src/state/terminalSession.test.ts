@@ -371,6 +371,48 @@ describe("terminal session reducers", () => {
     });
   });
 
+  it("keeps replay and live appends distinct when both reduce before a renderer reads", () => {
+    const snapshot = applyTerminalAttachStreamEvent(EMPTY_TERMINAL_BUFFER_STATE, {
+      type: "snapshot",
+      snapshot: BASE_SNAPSHOT,
+    });
+    const cursor = {
+      resetVersion: snapshot.output.resetVersion,
+      lastChunkId: snapshot.output.latestChunkId,
+    };
+    const replayStarted = applyTerminalAttachStreamEvent(snapshot, {
+      type: "replay-start",
+      threadId: TARGET.threadId,
+      terminalId: TARGET.terminalId,
+    });
+    const replayOutput = applyTerminalAttachStreamEvent(replayStarted, {
+      type: "output",
+      threadId: TARGET.threadId,
+      terminalId: TARGET.terminalId,
+      data: " replay",
+    });
+    const replayCompleted = applyTerminalAttachStreamEvent(replayOutput, {
+      type: "replay-complete",
+      threadId: TARGET.threadId,
+      terminalId: TARGET.terminalId,
+    });
+    const liveOutput = applyTerminalAttachStreamEvent(replayCompleted, {
+      type: "output",
+      threadId: TARGET.threadId,
+      terminalId: TARGET.terminalId,
+      data: " live",
+    });
+
+    expect(readTerminalOutputUpdate(liveOutput.output, cursor)).toMatchObject({
+      type: "append",
+      data: " replay live",
+      segments: [
+        { data: " replay", delivery: "replay" },
+        { data: " live", delivery: "live" },
+      ],
+    });
+  });
+
   it("resets a renderer that falls behind retained output", () => {
     const first = applyTerminalAttachStreamEvent(
       EMPTY_TERMINAL_BUFFER_STATE,

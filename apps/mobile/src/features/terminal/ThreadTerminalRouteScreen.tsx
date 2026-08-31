@@ -52,7 +52,10 @@ import { useSelectedThreadDetail } from "../../state/use-thread-detail";
 import { EnvironmentConnectionNotice } from "../connection/EnvironmentConnectionNotice";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { TerminalSurface } from "./NativeTerminalSurface";
-import { getNativeTerminalStreamingRevision } from "./nativeTerminalModule";
+import {
+  getNativeTerminalStreamingRevision,
+  NATIVE_TERMINAL_REPLAY_STREAMING_REVISION,
+} from "./nativeTerminalModule";
 import { getMobileTerminalTheme } from "./terminalTheme";
 import { terminalDebugLog } from "./terminalDebugLog";
 import {
@@ -325,7 +328,8 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
             worktreePath: launchLocation.worktreePath,
             cols: initialAttachGridSize.cols,
             rows: initialAttachGridSize.rows,
-            ...((getNativeTerminalStreamingRevision() ?? 0) >= 1
+            ...((getNativeTerminalStreamingRevision() ?? 0) >=
+            NATIVE_TERMINAL_REPLAY_STREAMING_REVISION
               ? { replayBytes: EXTENDED_TERMINAL_REPLAY_BYTES }
               : {}),
             ...(pendingLaunch?.env ? { env: pendingLaunch.env } : {}),
@@ -1239,9 +1243,7 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
                 onInput={handleInput}
                 onResize={handleResize}
                 output={terminal.output}
-                replayCompleteVersion={terminal.replayCompleteVersion}
                 replayPaused={terminalReplayPaused}
-                replayStartVersion={terminal.replayStartVersion}
                 style={{ flex: 1 }}
                 terminalKey={terminalKey}
                 theme={terminalTheme}

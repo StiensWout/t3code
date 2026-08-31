@@ -16,6 +16,7 @@ import { TerminalSurface } from "./NativeTerminalSurface";
 import {
   getNativeTerminalStreamingRevision,
   hasNativeTerminalSurface,
+  NATIVE_TERMINAL_REPLAY_STREAMING_REVISION,
 } from "./nativeTerminalModule";
 import {
   buildThreadTerminalAttachInput,
@@ -43,7 +44,8 @@ export const ThreadTerminalPanel = memo(function ThreadTerminalPanel(
   const closeTerminal = useAtomCommand(terminalEnvironment.close, "terminal close");
   const openTerminal = useAtomCommand(terminalEnvironment.open, "terminal open");
   const nativeTerminalAvailable = hasNativeTerminalSurface();
-  const supportsStreaming = (getNativeTerminalStreamingRevision() ?? 0) >= 1;
+  const supportsReplayStreaming =
+    (getNativeTerminalStreamingRevision() ?? 0) >= NATIVE_TERMINAL_REPLAY_STREAMING_REVISION;
   const terminalId = DEFAULT_TERMINAL_ID;
   const lastGridSizeRef = useRef<TerminalGridSize>({
     cols: DEFAULT_TERMINAL_COLS,
@@ -65,10 +67,10 @@ export const ThreadTerminalPanel = memo(function ThreadTerminalPanel(
         ? buildThreadTerminalAttachInput(
             subscriptionIdentity,
             lastGridSizeRef.current,
-            supportsStreaming ? EXTENDED_TERMINAL_REPLAY_BYTES : undefined,
+            supportsReplayStreaming ? EXTENDED_TERMINAL_REPLAY_BYTES : undefined,
           )
         : null,
-    [props.visible, subscriptionIdentity, supportsStreaming],
+    [props.visible, subscriptionIdentity, supportsReplayStreaming],
   );
   const terminal = useAttachedTerminalSession({
     environmentId: props.environmentId,
@@ -261,8 +263,6 @@ export const ThreadTerminalPanel = memo(function ThreadTerminalPanel(
         onInput={handleInput}
         onResize={handleResize}
         output={terminal.output}
-        replayCompleteVersion={terminal.replayCompleteVersion}
-        replayStartVersion={terminal.replayStartVersion}
         style={{ flex: 1 }}
       />
     </View>

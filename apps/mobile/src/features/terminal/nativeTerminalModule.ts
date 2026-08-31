@@ -5,6 +5,8 @@ import { requireNativeView, requireOptionalNativeModule } from "expo";
 import { NativeViewResolutionError } from "../../native/nativeViewResolutionError";
 
 const NATIVE_TERMINAL_MODULE_NAME = "T3TerminalSurface";
+export const NATIVE_TERMINAL_STREAMING_REVISION = 1;
+export const NATIVE_TERMINAL_REPLAY_STREAMING_REVISION = 2;
 
 interface ExpoGlobalWithViewConfig {
   readonly expo?: {
@@ -102,7 +104,7 @@ export function getNativeTerminalHardwareKeyRevision(): number | null {
   }
 }
 
-/** Revision 2 adds replay-safe append commands to the streaming API. */
+/** Revision 2 adds replay-safe append commands to the revision 1 streaming API. */
 export function getNativeTerminalStreamingRevision(): number | null {
   try {
     if (typeof requireOptionalNativeModule !== "function") {

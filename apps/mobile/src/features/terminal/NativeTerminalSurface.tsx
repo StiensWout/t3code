@@ -21,6 +21,7 @@ import { useAppearancePreferences } from "../settings/appearance/AppearancePrefe
 import {
   getNativeTerminalHardwareKeyRevision,
   getNativeTerminalStreamingRevision,
+  NATIVE_TERMINAL_STREAMING_REVISION,
   resolveNativeTerminalSurfaceView,
   type NativeTerminalSurfaceHandle,
 } from "./nativeTerminalModule";
@@ -58,8 +59,6 @@ function isPendingNativeViewRegistration(error: unknown): boolean {
 interface TerminalSurfaceProps extends ViewProps {
   readonly terminalKey: string;
   readonly output: TerminalOutputState;
-  readonly replayStartVersion: number;
-  readonly replayCompleteVersion: number;
   readonly replayPaused?: boolean;
   readonly fontSize?: number;
   readonly isRunning: boolean;
@@ -206,7 +205,8 @@ export const TerminalSurface = memo(function TerminalSurface(props: TerminalSurf
   const NativeTerminalSurfaceView = resolveNativeTerminalSurfaceView();
   const hasNativeSurface = Boolean(NativeTerminalSurfaceView);
   const streamingRevision = getNativeTerminalStreamingRevision();
-  const supportsStreaming = streamingRevision !== null && streamingRevision >= 2;
+  const supportsStreaming =
+    streamingRevision !== null && streamingRevision >= NATIVE_TERMINAL_STREAMING_REVISION;
   const themeConfig = buildGhosttyThemeConfig(theme);
   const nativeRef = useRef<NativeTerminalSurfaceHandle>(null);
   const nativeCommandQueueRef = useRef(Promise.resolve());
@@ -215,7 +215,6 @@ export const TerminalSurface = memo(function TerminalSurface(props: TerminalSurf
     lastChunkId: 0,
   });
   const streamIdentityRef = useRef("");
-  const replayBoundaryRef = useRef({ start: 0, complete: 0 });
   const resetIdentity = `${props.terminalKey}:${fontSize}:${themeAppearance}:${themeConfig}`;
   const legacyBuffer =
     supportsStreaming || props.replayPaused ? "" : terminalOutputText(props.output);
@@ -247,13 +246,6 @@ export const TerminalSurface = memo(function TerminalSurface(props: TerminalSurf
     if (!supportsStreaming) return;
     const streamIdentity = props.replayPaused ? `${resetIdentity}:paused` : resetIdentity;
     const forceReset = streamIdentityRef.current !== streamIdentity;
-    const replayStarted = props.replayStartVersion > replayBoundaryRef.current.start;
-    const writeAsReplay =
-      replayStarted || replayBoundaryRef.current.start > replayBoundaryRef.current.complete;
-    replayBoundaryRef.current = {
-      start: props.replayStartVersion,
-      complete: props.replayCompleteVersion,
-    };
     const update =
       forceReset || props.replayPaused
         ? {
@@ -268,36 +260,38 @@ export const TerminalSurface = memo(function TerminalSurface(props: TerminalSurf
     streamIdentityRef.current = streamIdentity;
     outputCursorRef.current = update.cursor;
     if (update.type === "none" || (!forceReset && props.replayPaused)) return;
+    const commands =
+      update.type === "reset"
+        ? [{ type: "reset" as const, data: update.data }]
+        : update.segments.map((segment) => ({
+            type: segment.delivery === "replay" ? ("writeReplay" as const) : ("write" as const),
+            data: segment.data,
+          }));
     nativeCommandQueueRef.current = nativeCommandQueueRef.current
       .then(async () => {
-        for (let attempt = 0; attempt <= NATIVE_COMMAND_RETRY_FRAMES; attempt += 1) {
-          if (streamIdentityRef.current !== streamIdentity) return;
-          const handle = nativeRef.current;
-          const command =
-            update.type === "reset"
-              ? handle?.reset
-              : writeAsReplay
-                ? handle?.writeReplay
-                : handle?.write;
-          if (!command) {
-            if (attempt < NATIVE_COMMAND_RETRY_FRAMES) {
-              await nextAnimationFrame();
-              continue;
+        for (const pending of commands) {
+          for (let attempt = 0; attempt <= NATIVE_COMMAND_RETRY_FRAMES; attempt += 1) {
+            if (streamIdentityRef.current !== streamIdentity) return;
+            const handle = nativeRef.current;
+            const command = handle?.[pending.type];
+            if (!command) {
+              if (attempt < NATIVE_COMMAND_RETRY_FRAMES) {
+                await nextAnimationFrame();
+                continue;
+              }
+              throw new Error(`Native terminal does not support ${pending.type}`);
             }
-            throw new Error(
-              `Native terminal does not support ${writeAsReplay ? "replay append" : update.type}`,
-            );
-          }
 
-          try {
-            await command.call(handle, update.data);
-            return;
-          } catch (error) {
-            if (attempt < NATIVE_COMMAND_RETRY_FRAMES && isPendingNativeViewRegistration(error)) {
-              await nextAnimationFrame();
-              continue;
+            try {
+              await command.call(handle, pending.data);
+              break;
+            } catch (error) {
+              if (attempt < NATIVE_COMMAND_RETRY_FRAMES && isPendingNativeViewRegistration(error)) {
+                await nextAnimationFrame();
+                continue;
+              }
+              throw error;
             }
-            throw error;
           }
         }
       })
@@ -309,14 +303,7 @@ export const TerminalSurface = memo(function TerminalSurface(props: TerminalSurf
         }
         console.error("Failed to update native terminal output", error);
       });
-  }, [
-    props.output,
-    props.replayCompleteVersion,
-    props.replayPaused,
-    props.replayStartVersion,
-    resetIdentity,
-    supportsStreaming,
-  ]);
+  }, [props.output, props.replayPaused, resetIdentity, supportsStreaming]);
   const handleNativeInput = useCallback(
     (event: NativeSyntheticEvent<TerminalInputEvent>) => {
       if (!props.isRunning) {

@@ -11,6 +11,7 @@ export interface TerminalOutputChunk {
   readonly id: number;
   readonly data: string;
   readonly byteLength: number;
+  readonly delivery: "replay" | "live";
 }
 
 export interface TerminalOutputState {
@@ -31,9 +32,18 @@ export type TerminalOutputUpdate =
       readonly cursor: TerminalOutputCursor;
     }
   | {
-      readonly type: "append" | "reset";
+      readonly type: "reset";
       readonly data: string;
       readonly cursor: TerminalOutputCursor;
+    }
+  | {
+      readonly type: "append";
+      readonly data: string;
+      readonly cursor: TerminalOutputCursor;
+      readonly segments: ReadonlyArray<{
+        readonly data: string;
+        readonly delivery: "replay" | "live";
+      }>;
     };
 
 export interface TerminalSessionState {
@@ -142,6 +152,7 @@ function trimBufferToBytes(buffer: string, maxBufferBytes: number): string {
 function splitOutputChunks(
   data: string,
   firstChunkId: number,
+  delivery: "replay" | "live",
   maxChunkBytes = DEFAULT_TERMINAL_CHUNK_BYTES,
 ): {
   readonly chunks: ReadonlyArray<TerminalOutputChunk>;
@@ -172,6 +183,7 @@ function splitOutputChunks(
       id: nextChunkId,
       data: textDecoder.decode(bytes),
       byteLength: bytes.byteLength,
+      delivery,
     });
     nextChunkId += 1;
     offset = end;
@@ -188,10 +200,12 @@ function appendOutput(
   current: TerminalOutputState,
   data: string,
   maxBufferBytes: number,
+  delivery: "replay" | "live",
 ): TerminalOutputState {
   const appended = splitOutputChunks(
     data,
     current.latestChunkId + 1,
+    delivery,
     Math.min(DEFAULT_TERMINAL_CHUNK_BYTES, Math.max(1, maxBufferBytes)),
   );
   if (appended.chunks.length === 0) return current;
@@ -249,6 +263,7 @@ function resetOutput(
   const reset = splitOutputChunks(
     retained,
     current.latestChunkId + 1,
+    "replay",
     Math.min(DEFAULT_TERMINAL_CHUNK_BYTES, Math.max(1, maxBufferBytes)),
   );
   return {
@@ -283,9 +298,19 @@ export function readTerminalOutputUpdate(
   if (appended.length === 0) {
     return { type: "none", cursor: nextCursor };
   }
+  const segments: Array<{ data: string; delivery: "replay" | "live" }> = [];
+  for (const chunk of appended) {
+    const previous = segments.at(-1);
+    if (previous?.delivery === chunk.delivery) {
+      previous.data += chunk.data;
+    } else {
+      segments.push({ data: chunk.data, delivery: chunk.delivery });
+    }
+  }
   return {
     type: "append",
     data: appended.map((chunk) => chunk.data).join(""),
+    segments,
     cursor: nextCursor,
   };
 }
@@ -346,7 +371,12 @@ export function applyTerminalAttachStreamEvent(
     case "output":
       return {
         ...current,
-        output: appendOutput(current.output, event.data, maxBufferBytes),
+        output: appendOutput(
+          current.output,
+          event.data,
+          maxBufferBytes,
+          current.replayStartVersion > current.replayCompleteVersion ? "replay" : "live",
+        ),
         status: current.status === "closed" ? "running" : current.status,
         error: null,
         version: current.version + 1,
