@@ -80,7 +80,9 @@ const DEFAULT_HISTORY_MAX_BYTES = 12 * 1024 * 1024;
 const DEFAULT_REPLAY_HISTORY_TARGET_BYTES = 48 * 1024;
 const DEFAULT_REPLAY_HISTORY_MAX_BYTES = DEFAULT_TERMINAL_REPLAY_BYTES;
 const DEFAULT_OUTPUT_BATCH_WINDOW_MS = 8;
-const DEFAULT_OUTPUT_BATCH_MAX_BYTES = 16 * 1024;
+// Full-screen terminal apps commonly emit 20-40 KB synchronized updates. Keep
+// typical frames in one event while retaining a bounded live-subscriber queue.
+const DEFAULT_OUTPUT_BATCH_MAX_BYTES = 64 * 1024;
 const DEFAULT_HISTORY_STREAM_CHUNK_BYTES = 64 * 1024;
 const DEFAULT_ATTACH_BUFFERED_EVENT_LIMIT = 32;
 const DEFAULT_PERSIST_DEBOUNCE_MS = 40;

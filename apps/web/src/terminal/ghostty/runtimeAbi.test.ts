@@ -408,7 +408,7 @@ describe("vendored libghostty-vt WebAssembly", () => {
     free(options, 8);
   });
 
-  it("uses Ghostty for mouse encoding, word selection, and OSC 8 hit testing", async () => {
+  it("uses Ghostty for terminal modes, mouse encoding, selection, and link hit testing", async () => {
     const result = await WebAssembly.instantiate(
       decodeWasmDataUrl(wasmDataUrl).buffer as ArrayBuffer,
       { env: { log: () => {} } },
@@ -454,6 +454,36 @@ describe("vendored libghostty-vt WebAssembly", () => {
     call("ghostty_terminal_vt_write", terminal, anyEventResetPointer, anyEventReset.length);
     expect(call("ghostty_terminal_mode_get", terminal, 1003, modeFlag)).toBe(0);
     expect(new Uint8Array(memory.buffer, modeFlag, 1)[0]).toBe(0);
+    const synchronizedOutput = new TextEncoder().encode("\u001b[?2026h");
+    const synchronizedOutputPointer = alloc(synchronizedOutput.length);
+    new Uint8Array(memory.buffer, synchronizedOutputPointer, synchronizedOutput.length).set(
+      synchronizedOutput,
+    );
+    call(
+      "ghostty_terminal_vt_write",
+      terminal,
+      synchronizedOutputPointer,
+      synchronizedOutput.length,
+    );
+    expect(call("ghostty_terminal_mode_get", terminal, 2026, modeFlag)).toBe(0);
+    expect(new Uint8Array(memory.buffer, modeFlag, 1)[0]).toBe(1);
+    const synchronizedOutputReset = new TextEncoder().encode("\u001b[?2026l");
+    const synchronizedOutputResetPointer = alloc(synchronizedOutputReset.length);
+    new Uint8Array(
+      memory.buffer,
+      synchronizedOutputResetPointer,
+      synchronizedOutputReset.length,
+    ).set(synchronizedOutputReset);
+    call(
+      "ghostty_terminal_vt_write",
+      terminal,
+      synchronizedOutputResetPointer,
+      synchronizedOutputReset.length,
+    );
+    expect(call("ghostty_terminal_mode_get", terminal, 2026, modeFlag)).toBe(0);
+    expect(new Uint8Array(memory.buffer, modeFlag, 1)[0]).toBe(0);
+    free(synchronizedOutputResetPointer, synchronizedOutputReset.length);
+    free(synchronizedOutputPointer, synchronizedOutput.length);
     free(anyEventResetPointer, anyEventReset.length);
     free(anyEventPointer, anyEventInput.length);
     free(modeFlag, 1);

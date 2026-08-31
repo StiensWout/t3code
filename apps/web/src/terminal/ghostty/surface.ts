@@ -36,6 +36,9 @@ const CONTENT_PADDING = 4;
 const MIN_SCROLLBAR_THUMB_HEIGHT = 18;
 /** Half a blink cycle: the visible and hidden phases are equally long. */
 const CURSOR_BLINK_INTERVAL_MS = 500;
+// A missing synchronized-output reset must not leave the visible terminal
+// frozen forever. A short fallback is no worse than rendering unsynchronized.
+const SYNCHRONIZED_OUTPUT_RENDER_TIMEOUT_MS = 500;
 const TERMINAL_WRITE_CHUNK_CODE_UNITS = 64 * 1024;
 const TERMINAL_IMMEDIATE_WRITE_CODE_UNITS = 16 * 1024;
 const TERMINAL_FONT_LOAD_TEXT = "iMW0@# .";
@@ -568,6 +571,7 @@ export class GhosttyTerminalSurface {
   private readonly scrollbarThumb: HTMLDivElement;
   private snapshot: GhosttySnapshot | null = null;
   private frame = 0;
+  private synchronizedRenderTimer: number | null = null;
   private writeFrame = 0;
   private writeQueue: Array<{ data: string; offset: number; replay: boolean }> = [];
   private writeQueueIndex = 0;
@@ -897,6 +901,7 @@ export class GhosttyTerminalSurface {
   }
 
   private cancelPendingWrites(): void {
+    this.cancelSynchronizedRenderTimer();
     if (this.writeFrame !== 0) {
       window.cancelAnimationFrame(this.writeFrame);
       this.writeFrame = 0;
@@ -1145,6 +1150,7 @@ export class GhosttyTerminalSurface {
       this.options.onResize(this.cols, this.rows);
     }
     if (this.frame !== 0) window.cancelAnimationFrame(this.frame);
+    this.cancelSynchronizedRenderTimer();
     if (this.writeFrame !== 0) window.cancelAnimationFrame(this.writeFrame);
     if (this.cursorTimer !== null) window.clearTimeout(this.cursorTimer);
     if (this.compositionSuppressionTimer !== null) {
@@ -1855,11 +1861,34 @@ export class GhosttyTerminalSurface {
   }
 
   private requestRender(): void {
-    if (this.disposed || this.frame !== 0) return;
+    if (this.disposed) return;
+    if (this.core.isSynchronizedOutput()) {
+      // A render requested before the opening marker may still be queued. Once
+      // Ghostty has accepted partial frame data, that paint is no longer safe.
+      if (this.frame !== 0) {
+        window.cancelAnimationFrame(this.frame);
+        this.frame = 0;
+      }
+      if (this.synchronizedRenderTimer === null) {
+        this.synchronizedRenderTimer = window.setTimeout(() => {
+          this.synchronizedRenderTimer = null;
+          this.renderFrame();
+        }, SYNCHRONIZED_OUTPUT_RENDER_TIMEOUT_MS);
+      }
+      return;
+    }
+    this.cancelSynchronizedRenderTimer();
+    if (this.frame !== 0) return;
     this.frame = window.requestAnimationFrame(() => {
       this.frame = 0;
       this.renderFrame();
     });
+  }
+
+  private cancelSynchronizedRenderTimer(): void {
+    if (this.synchronizedRenderTimer === null) return;
+    window.clearTimeout(this.synchronizedRenderTimer);
+    this.synchronizedRenderTimer = null;
   }
 
   private renderFrame(): void {

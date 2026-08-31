@@ -2240,11 +2240,10 @@ it.layer(
     }),
   );
 
-  it.effect("coalesces burst output without changing its bytes", () =>
+  it.effect("coalesces a 128 KB PTY burst into two bounded output events", () =>
     Effect.gen(function* () {
       const { manager, ptyAdapter, getEvents } = yield* createManager({
         ptyAdapter: new FakePtyAdapter("async"),
-        outputBatchMaxBytes: 16 * 1024,
       });
       yield* manager.open(openInput());
       const process = ptyAdapter.processes[0];
@@ -2265,8 +2264,8 @@ it.layer(
       );
 
       const outputEvents = (yield* getEvents).filter((event) => event.type === "output");
-      expect(outputEvents).toHaveLength(8);
-      expect(outputEvents.every((event) => Buffer.byteLength(event.data) <= 16 * 1024)).toBe(true);
+      expect(outputEvents).toHaveLength(2);
+      expect(outputEvents.every((event) => Buffer.byteLength(event.data) <= 64 * 1024)).toBe(true);
       expect(outputEvents.map((event) => event.data).join("")).toBe(
         `${chunk.repeat(64)}${oversizedChunk}`,
       );
