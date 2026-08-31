@@ -666,6 +666,7 @@ export class GhosttyTerminalSurface {
   private focused = false;
   private resizeNotified = false;
   private canvasConfigured = false;
+  private canvasDevicePixelRatio = 0;
   private pendingCanvasConfiguration: {
     readonly width: number;
     readonly height: number;
@@ -1110,7 +1111,8 @@ export class GhosttyTerminalSurface {
     if (
       this.canvas.width !== pixelWidth ||
       this.canvas.height !== pixelHeight ||
-      !this.canvasConfigured
+      !this.canvasConfigured ||
+      this.canvasDevicePixelRatio !== ratio
     ) {
       // Changing a canvas backing size clears it immediately. Keep the last
       // complete frame visible until the gated paint can resize and redraw in
@@ -1715,7 +1717,10 @@ export class GhosttyTerminalSurface {
 
   private refreshHoveredLink(): void {
     const pointer = this.hoverPointer;
-    const link = pointer && this.linkModifierActive ? this.linkAt(pointer.x, pointer.y) : null;
+    // Make files and URLs discoverable on ordinary hover. The platform link
+    // modifier still gates activation and the pointer cursor, so an unmodified
+    // drag keeps its normal terminal-selection behavior.
+    const link = pointer ? this.linkAt(pointer.x, pointer.y) : null;
     this.setHoveredLink(link);
   }
 
@@ -1727,7 +1732,7 @@ export class GhosttyTerminalSurface {
       previous?.range.start.y === link?.range.start.y &&
       previous?.range.end.x === link?.range.end.x &&
       previous?.range.end.y === link?.range.end.y;
-    this.canvas.style.cursor = link ? "pointer" : "";
+    this.canvas.style.cursor = link && this.linkModifierActive ? "pointer" : "";
     if (unchanged) return;
     this.hoveredLink = link;
     this.forceFullRender = true;
@@ -2047,6 +2052,7 @@ export class GhosttyTerminalSurface {
       this.canvas.height = canvasConfiguration.height;
       this.context.setTransform(canvasConfiguration.ratio, 0, 0, canvasConfiguration.ratio, 0, 0);
       this.canvasConfigured = true;
+      this.canvasDevicePixelRatio = canvasConfiguration.ratio;
     }
     this.snapshot = this.core.snapshot();
     // A cursor that is not blinking right now must be drawn, never caught in an

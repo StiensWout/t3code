@@ -38,6 +38,17 @@ describe("extractTerminalLinks", () => {
     ]);
   });
 
+  it("finds a bare file name when a source position makes it unambiguous", () => {
+    expect(extractTerminalLinks("failed at surface.ts:42:7")).toEqual([
+      {
+        kind: "path",
+        text: "surface.ts:42:7",
+        start: 10,
+        end: 25,
+      },
+    ]);
+  });
+
   it("classifies uppercase schemes as URLs at activation time too", () => {
     expect(isTerminalUrl("HTTPS://example.com/docs")).toBe(true);
     expect(isTerminalUrl("Http://example.com")).toBe(true);

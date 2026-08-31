@@ -50,7 +50,7 @@ describe("measureGhosttyCell", () => {
     } as unknown as CanvasRenderingContext2D;
 
     expect(measureGhosttyCell(context, 12, "monospace")).toEqual({
-      width: 7.2,
+      width: 7,
       height: 16,
       baseline: 11,
     });
@@ -227,6 +227,72 @@ describe("renderGhosttySnapshot", () => {
       [4, 42, 10, 1],
       [14, 42, 10, 1],
     ]);
+  });
+
+  it("draws solid block elements to exact cell edges", () => {
+    const fillRectCalls: Array<{ args: number[]; style: string }> = [];
+    let fillStyle = "";
+    const context = {
+      canvas: { width: 100, height: 40 },
+      beginPath: () => {},
+      clip: () => {},
+      fillRect: (...args: number[]) => fillRectCalls.push({ args, style: fillStyle }),
+      fillText: () => {},
+      rect: () => {},
+      resetTransform: () => {},
+      restore: () => {},
+      save: () => {},
+      get fillStyle() {
+        return fillStyle;
+      },
+      set fillStyle(value: string | CanvasGradient | CanvasPattern) {
+        fillStyle = String(value);
+      },
+      set font(_value: string) {},
+      set textBaseline(_value: string) {},
+    } as unknown as CanvasRenderingContext2D;
+    const snapshot: GhosttySnapshot = {
+      cols: 3,
+      rows: 1,
+      foreground: { r: 255, g: 255, b: 255 },
+      background: { r: 0, g: 0, b: 0 },
+      cursor: { r: 255, g: 255, b: 255 },
+      cursorX: -1,
+      cursorY: -1,
+      cursorVisible: false,
+      cursorBlinking: false,
+      cursorStyle: 1,
+      dirtyRows: new Set([0]),
+      rowData: [
+        {
+          cells: [cell("▀"), cell("▄"), cell("█")],
+          text: "▀▄█",
+          isWrapContinuation: false,
+          wrapsToNext: false,
+        },
+      ],
+    };
+
+    renderGhosttySnapshot({
+      context,
+      snapshot,
+      metrics: { width: 10, height: 20, baseline: 15 },
+      fontSize: 12,
+      fontFamily: "monospace",
+      padding: 4,
+      forceFull: false,
+      cursorOn: false,
+    });
+
+    expect(fillRectCalls).toContainEqual({ args: [4, 4, 10, 10], style: "rgb(255, 255, 255)" });
+    expect(fillRectCalls).toContainEqual({
+      args: [14, 14, 10, 10],
+      style: "rgb(255, 255, 255)",
+    });
+    expect(fillRectCalls).toContainEqual({
+      args: [24, 4, 10, 20],
+      style: "rgb(255, 255, 255)",
+    });
   });
 
   it("constrains text runs and cursor glyphs to their terminal cells", () => {

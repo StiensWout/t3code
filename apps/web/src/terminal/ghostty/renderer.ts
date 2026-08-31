@@ -18,6 +18,8 @@ export interface GhosttyCellRange {
   readonly end: { readonly x: number; readonly y: number };
 }
 
+type TerminalBlockRect = readonly [x: number, y: number, width: number, height: number];
+
 const DEFAULT_SELECTION_BACKGROUND = "rgba(72, 122, 191, 0.35)";
 
 function cssColor(color: GhosttyColor): string {
@@ -61,6 +63,82 @@ function fontForCell(cell: GhosttyCell, fontSize: number, fontFamily: string): s
   return `${style} ${weight} ${fontSize}px ${fontFamily}`;
 }
 
+/** Solid Unicode block elements render as cell geometry, without font side-bearing seams. */
+function terminalBlockRects(text: string): readonly TerminalBlockRect[] | null {
+  const lower = (eighths: number): readonly TerminalBlockRect[] => [
+    [0, 1 - eighths / 8, 1, eighths / 8],
+  ];
+  const left = (eighths: number): readonly TerminalBlockRect[] => [[0, 0, eighths / 8, 1]];
+  switch (text) {
+    case "▀":
+      return [[0, 0, 1, 0.5]];
+    case "▁":
+    case "▂":
+    case "▃":
+    case "▄":
+    case "▅":
+    case "▆":
+    case "▇":
+      return lower(text.codePointAt(0)! - 0x2580);
+    case "█":
+      return [[0, 0, 1, 1]];
+    case "▉":
+    case "▊":
+    case "▋":
+    case "▌":
+    case "▍":
+    case "▎":
+    case "▏":
+      return left(0x2590 - text.codePointAt(0)!);
+    case "▐":
+      return [[0.5, 0, 0.5, 1]];
+    case "▔":
+      return [[0, 0, 1, 0.125]];
+    case "▕":
+      return [[0.875, 0, 0.125, 1]];
+    case "▖":
+      return [[0, 0.5, 0.5, 0.5]];
+    case "▗":
+      return [[0.5, 0.5, 0.5, 0.5]];
+    case "▘":
+      return [[0, 0, 0.5, 0.5]];
+    case "▙":
+      return [
+        [0, 0, 0.5, 1],
+        [0.5, 0.5, 0.5, 0.5],
+      ];
+    case "▚":
+      return [
+        [0, 0, 0.5, 0.5],
+        [0.5, 0.5, 0.5, 0.5],
+      ];
+    case "▛":
+      return [
+        [0, 0, 1, 0.5],
+        [0, 0.5, 0.5, 0.5],
+      ];
+    case "▜":
+      return [
+        [0, 0, 1, 0.5],
+        [0.5, 0.5, 0.5, 0.5],
+      ];
+    case "▝":
+      return [[0.5, 0, 0.5, 0.5]];
+    case "▞":
+      return [
+        [0.5, 0, 0.5, 0.5],
+        [0, 0.5, 0.5, 0.5],
+      ];
+    case "▟":
+      return [
+        [0.5, 0, 0.5, 1],
+        [0, 0.5, 0.5, 0.5],
+      ];
+    default:
+      return null;
+  }
+}
+
 export function measureGhosttyCell(
   context: CanvasRenderingContext2D,
   fontSize: number,
@@ -74,7 +152,10 @@ export function measureGhosttyCell(
   const glyphHeight = ascent + descent;
   const height = Math.max(1, Math.round(fontSize * 1.35), Math.ceil(glyphHeight));
   return {
-    width: Math.max(1, widthMeasurement.width),
+    // libghostty's cell and mouse APIs use integer logical pixels. Rendering
+    // the fractional browser measurement would make hit testing drift farther
+    // from the visible cell on every column.
+    width: Math.max(1, Math.round(widthMeasurement.width)),
     height,
     baseline: Math.round((height - glyphHeight) / 2 + ascent),
   };
@@ -231,7 +312,27 @@ export function renderGhosttySnapshot(options: {
         runStart += 1;
         continue;
       }
-      const runEnd = ghosttyTextRunEnd(row.cells, runStart, (cell) => sameTextStyle(cell, first));
+      const blockRects = terminalBlockRects(first.text);
+      if (blockRects !== null) {
+        if (!first.invisible) {
+          context.fillStyle = cssColor(resolveForeground(first.foreground));
+          const cellLeft = padding + runStart * metrics.width;
+          for (const [x, y, width, height] of blockRects) {
+            const left = cellLeft + Math.round(x * metrics.width);
+            const right = cellLeft + Math.round((x + width) * metrics.width);
+            const rectTop = top + Math.round(y * metrics.height);
+            const bottom = top + Math.round((y + height) * metrics.height);
+            context.fillRect(left, rectTop, right - left, bottom - rectTop);
+          }
+        }
+        runStart += 1;
+        continue;
+      }
+      const runEnd = ghosttyTextRunEnd(
+        row.cells,
+        runStart,
+        (cell) => terminalBlockRects(cell.text) === null && sameTextStyle(cell, first),
+      );
       const text = row.cells
         .slice(runStart, runEnd)
         .map((cell) => cell.text)
