@@ -152,10 +152,10 @@ export function measureGhosttyCell(
   const glyphHeight = ascent + descent;
   const height = Math.max(1, Math.round(fontSize * 1.35), Math.ceil(glyphHeight));
   return {
-    // libghostty's cell and mouse APIs use integer logical pixels. Rendering
-    // the fractional browser measurement would make hit testing drift farther
-    // from the visible cell on every column.
-    width: Math.max(1, Math.round(widthMeasurement.width)),
+    // libghostty's cell and mouse APIs use integer logical pixels. Flooring
+    // also makes CanvasRenderingContext2D condense text into the same grid,
+    // keeping glyphs, backgrounds, and mouse hit targets aligned.
+    width: Math.max(1, Math.floor(widthMeasurement.width)),
     height,
     baseline: Math.round((height - glyphHeight) / 2 + ascent),
   };

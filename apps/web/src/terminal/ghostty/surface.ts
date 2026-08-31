@@ -1143,10 +1143,14 @@ export class GhosttyTerminalSurface {
       this.scrollbarDirty = true;
       shouldRender = true;
     }
-    // ResizeObserver fires before paint, so the queued frame still updates the
-    // backing store before composition. Going through requestRender also keeps
-    // resize and DPR repaints behind DEC synchronized-output mode 2026.
-    if (shouldRender) this.requestRender();
+    // ResizeObserver runs after animation frame callbacks. Outside a gated TUI
+    // update, repaint now so this frame never stretches the old backing store.
+    // Mode 2026 keeps its atomicity and applies the pending size with its next
+    // complete synchronized frame.
+    if (shouldRender) {
+      if (this.core.isSynchronizedOutput()) this.requestRender();
+      else this.renderFrame();
+    }
     return true;
   }
 
@@ -1717,10 +1721,7 @@ export class GhosttyTerminalSurface {
 
   private refreshHoveredLink(): void {
     const pointer = this.hoverPointer;
-    // Make files and URLs discoverable on ordinary hover. The platform link
-    // modifier still gates activation and the pointer cursor, so an unmodified
-    // drag keeps its normal terminal-selection behavior.
-    const link = pointer ? this.linkAt(pointer.x, pointer.y) : null;
+    const link = pointer && this.linkModifierActive ? this.linkAt(pointer.x, pointer.y) : null;
     this.setHoveredLink(link);
   }
 
@@ -1732,7 +1733,7 @@ export class GhosttyTerminalSurface {
       previous?.range.start.y === link?.range.start.y &&
       previous?.range.end.x === link?.range.end.x &&
       previous?.range.end.y === link?.range.end.y;
-    this.canvas.style.cursor = link && this.linkModifierActive ? "pointer" : "";
+    this.canvas.style.cursor = link ? "pointer" : "";
     if (unchanged) return;
     this.hoveredLink = link;
     this.forceFullRender = true;

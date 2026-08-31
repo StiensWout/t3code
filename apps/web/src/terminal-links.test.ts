@@ -49,6 +49,12 @@ describe("extractTerminalLinks", () => {
     ]);
   });
 
+  it("does not treat host ports as bare file positions", () => {
+    expect(extractTerminalLinks("listening on api.example.com:8080 and 127.0.0.1:3000")).toEqual(
+      [],
+    );
+  });
+
   it("classifies uppercase schemes as URLs at activation time too", () => {
     expect(isTerminalUrl("HTTPS://example.com/docs")).toBe(true);
     expect(isTerminalUrl("Http://example.com")).toBe(true);
