@@ -105,7 +105,10 @@ export function renderGhosttySnapshot(options: {
   readonly focused?: boolean;
   readonly selectionBackground?: string;
   /** Remap only terminal-default colors; explicit ANSI application colors win. */
-  readonly defaultThemeOverride?: GhosttyScreenTheme;
+  readonly defaultThemeOverride?: {
+    readonly source: GhosttyScreenTheme;
+    readonly target: GhosttyScreenTheme;
+  };
   readonly hoveredLinkRange?: GhosttyCellRange | null;
   /** Vertical origin of row 0; defaults to the horizontal padding. */
   readonly originY?: number;
@@ -123,13 +126,37 @@ export function renderGhosttySnapshot(options: {
   } = options;
   const focused = options.focused ?? true;
   const selectionBackground = options.selectionBackground ?? DEFAULT_SELECTION_BACKGROUND;
-  const defaultTheme = options.defaultThemeOverride;
-  const defaultBackground = defaultTheme?.background ?? snapshot.background;
-  const defaultForeground = defaultTheme?.foreground ?? snapshot.foreground;
+  const themeOverride = options.defaultThemeOverride;
+  const defaultBackground = themeOverride?.target.background ?? snapshot.background;
+  const defaultForeground = themeOverride?.target.foreground ?? snapshot.foreground;
+  const resolveDefaultColor = (
+    color: GhosttyColor,
+    sourceDefault: GhosttyColor,
+    sourceInverse: GhosttyColor,
+    targetDefault: GhosttyColor,
+    targetInverse: GhosttyColor,
+  ) => {
+    if (!themeOverride) return color;
+    if (ghosttyColorsEqual(color, sourceDefault)) return targetDefault;
+    if (ghosttyColorsEqual(color, sourceInverse)) return targetInverse;
+    return color;
+  };
   const resolveBackground = (color: GhosttyColor) =>
-    defaultTheme && ghosttyColorsEqual(color, snapshot.background) ? defaultBackground : color;
+    resolveDefaultColor(
+      color,
+      themeOverride?.source.background ?? snapshot.background,
+      themeOverride?.source.foreground ?? snapshot.foreground,
+      defaultBackground,
+      defaultForeground,
+    );
   const resolveForeground = (color: GhosttyColor) =>
-    defaultTheme && ghosttyColorsEqual(color, snapshot.foreground) ? defaultForeground : color;
+    resolveDefaultColor(
+      color,
+      themeOverride?.source.foreground ?? snapshot.foreground,
+      themeOverride?.source.background ?? snapshot.background,
+      defaultForeground,
+      defaultBackground,
+    );
   const hoveredLinkRange = options.hoveredLinkRange ?? null;
   const originY = options.originY ?? padding;
   const rowsToDraw = forceFull
@@ -258,7 +285,10 @@ export function renderGhosttySnapshot(options: {
   if (cursorOn && snapshot.cursorVisible && snapshot.cursorX >= 0 && snapshot.cursorY >= 0) {
     const left = padding + snapshot.cursorX * metrics.width;
     const top = originY + snapshot.cursorY * metrics.height;
-    const cursor = defaultTheme?.cursor ?? snapshot.cursor;
+    const cursor =
+      themeOverride && ghosttyColorsEqual(snapshot.cursor, themeOverride.source.cursor)
+        ? themeOverride.target.cursor
+        : snapshot.cursor;
     context.fillStyle = cssColor(cursor);
     if (!focused) {
       // An unfocused terminal draws a hollow cursor so the active pane is obvious.

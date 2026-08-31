@@ -95,27 +95,32 @@ describe("renderGhosttySnapshot", () => {
       set textBaseline(_value: string) {},
     } as unknown as CanvasRenderingContext2D;
     const defaultCell = cell("a");
+    const inverseCell = {
+      ...cell("i"),
+      foreground: defaultCell.background,
+      background: defaultCell.foreground,
+    };
     const applicationCell = {
       ...cell("b"),
       foreground: { r: 10, g: 20, b: 30 },
       background: { r: 40, g: 50, b: 60 },
     };
     const snapshot: GhosttySnapshot = {
-      cols: 2,
+      cols: 3,
       rows: 1,
       foreground: defaultCell.foreground,
       background: defaultCell.background,
-      cursor: defaultCell.foreground,
-      cursorX: -1,
-      cursorY: -1,
-      cursorVisible: false,
+      cursor: { r: 9, g: 8, b: 7 },
+      cursorX: 0,
+      cursorY: 0,
+      cursorVisible: true,
       cursorBlinking: false,
-      cursorStyle: 1,
+      cursorStyle: 0,
       dirtyRows: new Set([0]),
       rowData: [
         {
-          cells: [defaultCell, applicationCell],
-          text: "ab",
+          cells: [defaultCell, inverseCell, applicationCell],
+          text: "aib",
           isWrapContinuation: false,
           wrapsToNext: false,
         },
@@ -130,11 +135,18 @@ describe("renderGhosttySnapshot", () => {
       fontFamily: "monospace",
       padding: 4,
       forceFull: true,
-      cursorOn: false,
+      cursorOn: true,
       defaultThemeOverride: {
-        background: { r: 1, g: 2, b: 3 },
-        foreground: { r: 250, g: 251, b: 252 },
-        cursor: { r: 200, g: 201, b: 202 },
+        source: {
+          background: defaultCell.background,
+          foreground: defaultCell.foreground,
+          cursor: defaultCell.foreground,
+        },
+        target: {
+          background: { r: 1, g: 2, b: 3 },
+          foreground: { r: 250, g: 251, b: 252 },
+          cursor: { r: 200, g: 201, b: 202 },
+        },
       },
     });
 
@@ -144,11 +156,20 @@ describe("renderGhosttySnapshot", () => {
     });
     expect(fillRectCalls).toContainEqual({
       args: [14, 4, 10, 20],
+      style: "rgb(250, 251, 252)",
+    });
+    expect(fillRectCalls).toContainEqual({
+      args: [24, 4, 10, 20],
       style: "rgb(40, 50, 60)",
+    });
+    expect(fillRectCalls).toContainEqual({
+      args: [4, 4, 2, 20],
+      style: "rgb(9, 8, 7)",
     });
     expect(fillTextCalls).toEqual([
       { args: ["a", 4, 19, 10], style: "rgb(250, 251, 252)" },
-      { args: ["b", 14, 19, 10], style: "rgb(10, 20, 30)" },
+      { args: ["i", 14, 19, 10], style: "rgb(1, 2, 3)" },
+      { args: ["b", 24, 19, 10], style: "rgb(10, 20, 30)" },
     ]);
   });
 

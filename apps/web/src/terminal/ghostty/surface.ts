@@ -2042,7 +2042,9 @@ export class GhosttyTerminalSurface {
       previousCursorY: this.renderedCursorY,
       focused: this.focused,
       hoveredLinkRange: this.hoveredLink?.range ?? null,
-      ...(this.alternateScreenActive ? { defaultThemeOverride: this.theme } : {}),
+      ...(this.alternateScreenActive
+        ? { defaultThemeOverride: { source: this.appTheme, target: this.theme } }
+        : {}),
       ...(this.theme.selectionBackground !== undefined
         ? { selectionBackground: this.theme.selectionBackground }
         : {}),
