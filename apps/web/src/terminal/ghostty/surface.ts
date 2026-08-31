@@ -666,6 +666,11 @@ export class GhosttyTerminalSurface {
   private focused = false;
   private resizeNotified = false;
   private canvasConfigured = false;
+  private pendingCanvasConfiguration: {
+    readonly width: number;
+    readonly height: number;
+    readonly ratio: number;
+  } | null = null;
   private appTheme: GhosttyTheme;
   private theme: GhosttyScreenTheme;
   private alternateScreenActive = false;
@@ -1107,13 +1112,21 @@ export class GhosttyTerminalSurface {
       this.canvas.height !== pixelHeight ||
       !this.canvasConfigured
     ) {
-      this.canvas.width = pixelWidth;
-      this.canvas.height = pixelHeight;
-      this.context.setTransform(ratio, 0, 0, ratio, 0, 0);
-      this.canvasConfigured = true;
+      // Changing a canvas backing size clears it immediately. Keep the last
+      // complete frame visible until the gated paint can resize and redraw in
+      // one callback, especially while a full-screen app owns mode 2026.
+      this.pendingCanvasConfiguration = {
+        width: pixelWidth,
+        height: pixelHeight,
+        ratio,
+      };
       this.forceFullRender = true;
       this.scrollbarDirty = true;
       shouldRender = true;
+    } else {
+      // A rapid drag can return to the currently painted size before its queued
+      // frame runs. Do not apply the stale intermediate backing dimensions.
+      this.pendingCanvasConfiguration = null;
     }
     const grid = terminalGridSize(width, height, this.metrics, CONTENT_PADDING);
     this.mountHeight = height;
@@ -2026,6 +2039,14 @@ export class GhosttyTerminalSurface {
     if (this.frame !== 0) {
       window.cancelAnimationFrame(this.frame);
       this.frame = 0;
+    }
+    const canvasConfiguration = this.pendingCanvasConfiguration;
+    if (canvasConfiguration !== null) {
+      this.pendingCanvasConfiguration = null;
+      this.canvas.width = canvasConfiguration.width;
+      this.canvas.height = canvasConfiguration.height;
+      this.context.setTransform(canvasConfiguration.ratio, 0, 0, canvasConfiguration.ratio, 0, 0);
+      this.canvasConfigured = true;
     }
     this.snapshot = this.core.snapshot();
     // A cursor that is not blinking right now must be drawn, never caught in an
