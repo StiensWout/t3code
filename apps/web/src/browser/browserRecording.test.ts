@@ -56,6 +56,7 @@ import {
   BrowserRecordingCaptureTimeoutError,
   BrowserRecordingConflictError,
   BrowserRecordingFormatUnavailableError,
+  BrowserRecordingStartCancelledError,
   findActiveBrowserRecordingRuntimeTabId,
   readActiveBrowserRecordingTabIds,
   readActiveBrowserRecordingTargets,
@@ -394,10 +395,7 @@ describe("browser recording", () => {
     await vi.waitFor(() => expect(readActiveBrowserRecordingTabIds().size).toBe(2));
 
     const secondStop = stopBrowserRecording("recording-tab-2");
-    await expect(secondStart).rejects.toMatchObject({
-      operation: "start-screencast",
-      tabId: "recording-tab-2",
-    });
+    await expect(secondStart).rejects.toBeInstanceOf(BrowserRecordingStartCancelledError);
     await expect(secondStop).resolves.toBeNull();
     expect(startScreencast).toHaveBeenCalledTimes(1);
 

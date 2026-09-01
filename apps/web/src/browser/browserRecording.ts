@@ -32,6 +32,17 @@ export class BrowserRecordingConflictError extends Schema.TaggedErrorClass<Brows
   }
 }
 
+export class BrowserRecordingStartCancelledError extends Schema.TaggedErrorClass<BrowserRecordingStartCancelledError>()(
+  "BrowserRecordingStartCancelledError",
+  {
+    tabId: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Browser recording start was cancelled for tab ${this.tabId}.`;
+  }
+}
+
 export class BrowserRecordingFormatUnavailableError extends Schema.TaggedErrorClass<BrowserRecordingFormatUnavailableError>()(
   "BrowserRecordingFormatUnavailableError",
   { tabId: Schema.String },
@@ -78,6 +89,9 @@ export class BrowserRecordingOperationError extends Schema.TaggedErrorClass<Brow
 
 const isBrowserRecordingOperationError = Schema.is(BrowserRecordingOperationError);
 const isBrowserRecordingCaptureTimeoutError = Schema.is(BrowserRecordingCaptureTimeoutError);
+const matchesBrowserRecordingStartCancelledError = Schema.is(BrowserRecordingStartCancelledError);
+export const isBrowserRecordingStartCancelledError = (error: unknown): boolean =>
+  matchesBrowserRecordingStartCancelledError(error);
 
 interface StartingBrowserRecordingLifecycle {
   readonly phase: "starting";
@@ -459,7 +473,7 @@ export async function startBrowserRecording(
     // arm-to-capture handoff exclusive; acquired streams can record concurrently.
     const grant = queueDisplayMediaGrant(async () => {
       if (startingLifecycle.cancelledBeforeGrant) {
-        throw recordingStartupCancelledError(recording);
+        throw new BrowserRecordingStartCancelledError({ tabId });
       }
       startingLifecycle.grantStarted = true;
       await throwIfStartupCancelled();
@@ -497,11 +511,11 @@ export async function startBrowserRecording(
         });
       }
     });
-    startingLifecycle.queuedForGrant ||= grant.queued;
+    startingLifecycle.queuedForGrant = grant.queued;
     const stream = await Promise.race([
       grant.result,
       startingLifecycle.cancelledBeforeGrantSignal.then(() => {
-        throw recordingStartupCancelledError(recording);
+        throw new BrowserRecordingStartCancelledError({ tabId });
       }),
     ]);
     await throwIfStartupCancelled();
