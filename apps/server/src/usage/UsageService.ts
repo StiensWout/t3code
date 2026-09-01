@@ -543,22 +543,30 @@ export const make = Effect.gen(function* () {
 
   const readSummary = Effect.fn("UsageService.readSummary")(function* (input: UsageSummaryInput) {
     const key = scanKey(input);
-    const existing = inflightScans.get(key);
-    if (existing !== undefined) return yield* Deferred.await(existing);
+    const deferred = yield* Effect.uninterruptible(
+      Effect.gen(function* () {
+        const existing = inflightScans.get(key);
+        if (existing !== undefined) return existing;
 
-    // No yield between the map check and set, so two misses cannot interleave.
-    const deferred = Deferred.makeUnsafe<UsageSummary, UsageReadError>();
-    inflightScans.set(key, deferred);
-    // Detached so one departing client cannot tear the scan out from under
-    // the fibers awaiting it; a finished scan warms the cache either way.
-    yield* scanSummary(input).pipe(
-      Effect.onExit((exit) =>
-        Effect.sync(() => inflightScans.delete(key)).pipe(
-          Effect.andThen(Deferred.done(deferred, exit)),
-        ),
-      ),
-      Effect.forkDetach,
+        // Enrollment and detached-fiber creation must be atomic. Otherwise a
+        // canceled first caller can leave a Deferred with no scan to finish it.
+        const created = Deferred.makeUnsafe<UsageSummary, UsageReadError>();
+        inflightScans.set(key, created);
+        // Detached so one departing client cannot tear the scan out from under
+        // the fibers awaiting it; a finished scan warms the cache either way.
+        yield* scanSummary(input).pipe(
+          Effect.onExit((exit) =>
+            Effect.sync(() => inflightScans.delete(key)).pipe(
+              Effect.andThen(Deferred.done(created, exit)),
+            ),
+          ),
+          Effect.forkDetach,
+        );
+        return created;
+      }),
     );
+    // Waiting stays interruptible. The detached scan continues for other
+    // callers and still warms the cache if this caller leaves.
     return yield* Deferred.await(deferred);
   });
 

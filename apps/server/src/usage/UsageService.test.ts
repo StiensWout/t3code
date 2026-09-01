@@ -9,7 +9,10 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 import { UsageDay, type UsageSummaryInput } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Scheduler from "effect/Scheduler";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 import * as ServerConfig from "../config.ts";
@@ -136,6 +139,88 @@ describe("UsageService", () => {
       // A later request is fresh work again, not a stale cached answer.
       yield* service.readSummary(WINDOW);
       assert.strictEqual(ratesFetches, 2);
+    }).pipe(Effect.scoped),
+  );
+
+  it.live("does not orphan an in-flight scan when its first caller is interrupted", () =>
+    Effect.gen(function* () {
+      const { settings, home } = yield* setup;
+      const service = yield* UsageService.make.pipe(
+        Effect.provide(
+          serviceLayers({ prefix: "usage-service-interruption-test", home, settings }),
+        ),
+      );
+
+      let orphanedAt: number | undefined;
+      for (let interruptAt = 1; interruptAt <= 31; interruptAt += 1) {
+        const tasks: Array<() => void> = [];
+        const dispatcher: Scheduler.SchedulerDispatcher = {
+          scheduleTask: (task) => tasks.push(task),
+          flush: () => {
+            let task: (() => void) | undefined;
+            while ((task = tasks.shift()) !== undefined) task();
+          },
+        };
+
+        let requestFiber: Fiber.Fiber<unknown, unknown> | undefined;
+        let requestChecks = 0;
+        const scheduler: Scheduler.Scheduler = {
+          executionMode: "async",
+          makeDispatcher: () => dispatcher,
+          shouldYield: (fiber) => {
+            if (fiber !== requestFiber) return false;
+            requestChecks += 1;
+            if (requestChecks !== interruptAt) return false;
+            fiber.interruptUnsafe();
+            return true;
+          },
+        };
+
+        // Each candidate needs a distinct key because the broken case leaves
+        // its entry in the service's private in-flight map. The invalid window
+        // keeps the real scan synchronous once its detached fiber starts.
+        const input: UsageSummaryInput = {
+          ...WINDOW,
+          sinceDay: UsageDay.make("2026-09-01"),
+          untilDay: UsageDay.make(`2026-08-${String(interruptAt).padStart(2, "0")}`),
+        };
+        const first = yield* service
+          .readSummary(input)
+          .pipe(
+            Effect.exit,
+            Effect.provideService(Scheduler.Scheduler, scheduler),
+            Effect.forkChild,
+          );
+        requestFiber = first;
+        yield* Effect.yieldNow;
+        dispatcher.flush();
+
+        const second = yield* service.readSummary(input).pipe(
+          Effect.match({
+            onFailure: (error) => error.reason,
+            onSuccess: () => "success" as const,
+          }),
+          Effect.provideService(Scheduler.Scheduler, scheduler),
+          Effect.forkChild,
+        );
+        yield* Effect.yieldNow;
+        dispatcher.flush();
+        const secondExit = second.pollUnsafe();
+        if (secondExit === undefined) {
+          second.interruptUnsafe();
+          orphanedAt = interruptAt;
+          break;
+        }
+        if (Exit.isFailure(secondExit)) {
+          assert.fail("the matching request fiber was interrupted");
+        }
+        assert.strictEqual(secondExit.value, "invalidWindow");
+      }
+
+      assert.isUndefined(
+        orphanedAt,
+        `interruption left the next matching request pending at scheduler check ${orphanedAt}`,
+      );
     }).pipe(Effect.scoped),
   );
 });
