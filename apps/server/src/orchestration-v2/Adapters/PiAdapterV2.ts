@@ -118,14 +118,14 @@ import {
 
 export const PI_PROVIDER = ProviderDriverKind.make("pi");
 export const PI_DRIVER_KIND = PI_PROVIDER;
-export const PI_DEFAULT_INSTANCE_ID = defaultInstanceIdForDriver(PI_DRIVER_KIND);
+const PI_DEFAULT_INSTANCE_ID = defaultInstanceIdForDriver(PI_DRIVER_KIND);
 const DEFAULT_PI_SETTINGS = Schema.decodeSync(PiSettings)({});
 
 /**
  * Sentinel model slug meaning "do not call set_model": Pi resolves the model
  * from the user's own settings.json (`defaultProvider`/`defaultModel`).
  */
-export const PI_INHERIT_MODEL_SLUG = "default";
+const PI_INHERIT_MODEL_SLUG = "default";
 
 const STREAM_FLUSH_MS = 50;
 const PI_REQUEST_TIMEOUT_MS = 15_000;

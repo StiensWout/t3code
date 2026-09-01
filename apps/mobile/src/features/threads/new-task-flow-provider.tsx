@@ -63,7 +63,6 @@ import {
   flushPendingTaskEditorWrite,
 } from "../../state/pending-task-editor-writes";
 import {
-  ensureModelOptionMemoryLoaded,
   rememberModelOptions,
   withRememberedModelOptions,
 } from "../../state/use-model-option-memory";
@@ -230,9 +229,6 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   const { enabled: legacyPlanModeEnabled, loaded: planModePreferenceLoaded } =
     useLegacyPlanModeState();
 
-  useEffect(() => {
-    ensureModelOptionMemoryLoaded();
-  }, []);
   const projectScopes = useMemo(
     () =>
       sortHomeProjectScopes({
