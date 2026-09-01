@@ -71,6 +71,7 @@ describe("OrchestrationReactor", () => {
               started.push("thread-settlement-reactor");
               return Effect.void;
             },
+            ready: Effect.void,
             drain: Effect.void,
           }),
         ),

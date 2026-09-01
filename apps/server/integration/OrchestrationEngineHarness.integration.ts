@@ -380,6 +380,7 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provideMerge(
         Layer.succeed(ThreadSettlementReactor.ThreadSettlementReactor, {
           start: () => Effect.void,
+          ready: Effect.void,
           drain: Effect.void,
         }),
       ),
