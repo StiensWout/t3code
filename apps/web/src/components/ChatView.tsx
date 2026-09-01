@@ -4924,7 +4924,6 @@ function ChatViewContent(props: ChatViewProps) {
         : "Sending a message moves it back to Active in the sidebar.",
       actions: (
         <Button
-          className="translate-y-2"
           size="xs"
           variant="outline"
           disabled={isSnoozed ? isUnsnoozing : isUnsettling}
