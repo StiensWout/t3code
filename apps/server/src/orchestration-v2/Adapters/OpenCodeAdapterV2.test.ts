@@ -1737,7 +1737,12 @@ describe("OpenCodeAdapterV2", () => {
       const runtime: OpenCodeRuntimeShape = {
         startOpenCodeServerProcess: unused("startOpenCodeServerProcess"),
         connectToOpenCodeServer: () =>
-          Effect.succeed({ url: "test://opencode", exitCode: null, external: true }),
+          Effect.succeed({
+            url: "test://opencode",
+            version: "test",
+            exitCode: null,
+            external: true,
+          }),
         runOpenCodeCommand: unused("runOpenCodeCommand"),
         createOpenCodeSdkClient: () => fakeClient,
         loadOpenCodeInventory: unused("loadOpenCodeInventory"),

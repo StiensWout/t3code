@@ -130,6 +130,8 @@ export const PI_INHERIT_MODEL_SLUG = "default";
 const STREAM_FLUSH_MS = 50;
 const PI_REQUEST_TIMEOUT_MS = 15_000;
 const PI_SKILL_DISCOVERY_TIMEOUT_MS = 4_000;
+const PI_UNSOLICITED_ACTIVITY_ERROR =
+  "Pi started agent work outside an active T3 turn. The session was stopped to prevent invisible tool execution.";
 const SETTLE_PROBE_MAX_ATTEMPTS = 3;
 const SETTLE_PROBE_RETRY_DELAY = Duration.millis(100);
 
@@ -466,6 +468,10 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
       // Keep that intent beyond turn finalization so the later stdout close is
       // not mistaken for an unexpected transport failure.
       let stopRequested = false;
+      // Pi extensions can trigger an agent turn after the owning T3 turn has
+      // settled. Until orchestration has a first-class provider-initiated run,
+      // stop that runtime before it can execute tools without a timeline owner.
+      let unsolicitedActivityDetected = false;
       let appliedModel: string | null = null;
       let appliedThinking: string | null = null;
       /** Last thread title synced into pi's session name (`/resume` listing). */
@@ -1446,10 +1452,14 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
         const turn = state?.activeTurn ?? null;
         switch (event["type"]) {
           case "agent_start": {
-            if (turn !== null) {
-              turn.sawAgentActivity = true;
-              turn.settleProbeGeneration += 1;
+            if (turn === null) {
+              unsolicitedActivityDetected = true;
+              yield* updateProviderSession("error", PI_UNSOLICITED_ACTIVITY_ERROR);
+              yield* connection.terminate;
+              return;
             }
+            turn.sawAgentActivity = true;
+            turn.settleProbeGeneration += 1;
             return;
           }
           case "message_start": {
@@ -1839,7 +1849,10 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
                     });
                 yield* finalizeTurn(state, false);
               }
-              if (stopRequested) {
+              if (unsolicitedActivityDetected) {
+                yield* updateProviderSession("error", PI_UNSOLICITED_ACTIVITY_ERROR);
+                yield* Queue.end(events);
+              } else if (stopRequested) {
                 yield* updateProviderSession("stopped", null);
                 yield* Queue.end(events);
               } else {
