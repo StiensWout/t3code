@@ -3220,6 +3220,9 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
             webContentsId: wc.id,
           });
         }
+        if (!frameCaptureWindowOpen || requestWebContents.isDestroyed()) {
+          return yield* new PreviewMainWindowClosedError({ tabId });
+        }
         installDisplayMediaRequestHandler(requestWebContents.session);
         yield* armPendingRecording(tabId, wc, requestWebContents.mainFrame.frameTreeNodeId);
       }).pipe(

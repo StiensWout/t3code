@@ -217,6 +217,7 @@ type TestDisplayMediaHandler = (
 interface TestHostWebContents {
   readonly id: number;
   readonly mainFrame: { readonly frameTreeNodeId: number };
+  readonly isDestroyed: () => boolean;
   readonly session: {
     readonly setDisplayMediaRequestHandler: ReturnType<typeof vi.fn>;
   };
@@ -228,6 +229,7 @@ const makeTestHostWebContents = (): TestHostWebContents => {
   return {
     id: 7,
     mainFrame: { frameTreeNodeId: 7 },
+    isDestroyed: () => false,
     session: {
       setDisplayMediaRequestHandler: vi.fn((next: TestDisplayMediaHandler) => {
         handler = next;
@@ -2145,6 +2147,59 @@ describe("PreviewManager", () => {
           webContents: { setBackgroundThrottling: replacementWindowThrottling },
         } as never);
         expect(replacementWindowThrottling).not.toHaveBeenCalled();
+      }),
+    ),
+  );
+
+  effectIt.effect("does not arm recording after the main window closes during warmup", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        let closeMainWindow: (() => void) | undefined;
+        let finishWarmup!: (image: TestCapturedPreviewImage) => void;
+        let markWarmupStarted!: () => void;
+        const warmupStarted = new Promise<void>((resolve) => {
+          markWarmupStarted = resolve;
+        });
+        const capturedImage = {
+          toJPEG: () => Buffer.from("recording-frame"),
+          getSize: () => ({ width: 1280, height: 720 }),
+        };
+        const capturePage = vi.fn(
+          () =>
+            new Promise<TestCapturedPreviewImage>((resolve) => {
+              markWarmupStarted();
+              finishWarmup = resolve;
+            }),
+        );
+        const host = makeTestHostWebContents();
+        fromId.mockReturnValue(makeTestPreviewWebContents(capturePage, 42, host));
+
+        yield* manager.createTab("tab_window_close_warmup");
+        yield* manager.registerWebview("tab_window_close_warmup", 42);
+        yield* manager.setMainWindow({
+          isDestroyed: () => false,
+          once: vi.fn((event: string, listener: () => void) => {
+            if (event === "closed") closeMainWindow = listener;
+          }),
+          webContents: { setBackgroundThrottling: vi.fn() },
+        } as never);
+
+        const start = yield* manager
+          .startRecording("tab_window_close_warmup")
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Effect.promise(() => warmupStarted);
+        closeMainWindow?.();
+        finishWarmup(capturedImage);
+
+        const exit = yield* Fiber.await(start);
+        expect(Exit.isFailure(exit)).toBe(true);
+        if (Exit.isFailure(exit)) {
+          expect(Option.getOrThrow(Cause.findErrorOption(exit.cause))).toMatchObject({
+            _tag: "PreviewMainWindowClosedError",
+            tabId: "tab_window_close_warmup",
+          });
+        }
+        expect(host.session.setDisplayMediaRequestHandler).not.toHaveBeenCalled();
       }),
     ),
   );
