@@ -280,6 +280,41 @@ const startHarness = Effect.fn("startThreadSettlementHarness")(function* (
 });
 
 describe("ThreadSettlementReactor", () => {
+  it.effect("becomes ready only after the initial settlement sweep", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse(NOW));
+        const lookupStarted = yield* Deferred.make<void>();
+        const releaseLookup = yield* Deferred.make<void>();
+        const readyObserved = yield* Deferred.make<void>();
+        const fixture = yield* makeHarness({
+          snapshot: makeSnapshot([makeThread("startup-thread", { branch: "saved-feature" })]),
+          branchPullRequest: () =>
+            Deferred.succeed(lookupStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(releaseLookup)),
+              Effect.as(null),
+            ),
+        });
+
+        yield* Effect.gen(function* () {
+          const reactor = yield* ThreadSettlementReactor.ThreadSettlementReactor;
+          yield* reactor.start();
+          yield* reactor.ready.pipe(
+            Effect.andThen(Deferred.succeed(readyObserved, undefined)),
+            Effect.forkScoped,
+          );
+          yield* Deferred.succeed(fixture.activation, undefined);
+          yield* Deferred.await(lookupStarted);
+
+          assert.isFalse(yield* Deferred.isDone(readyObserved));
+
+          yield* Deferred.succeed(releaseLookup, undefined);
+          yield* Deferred.await(readyObserved);
+        }).pipe(Effect.provide(fixture.layer));
+      }),
+    ),
+  );
+
   it.effect("starts without clients and skips protected threads before pull request lookup", () =>
     Effect.scoped(
       Effect.gen(function* () {

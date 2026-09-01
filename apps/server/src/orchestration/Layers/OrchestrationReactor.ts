@@ -31,6 +31,7 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
 
   return {
     start,
+    ready: threadSettlementReactor.ready,
   } satisfies OrchestrationReactorShape;
 });
 

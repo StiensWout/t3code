@@ -21,6 +21,9 @@ export interface OrchestrationReactorShape {
    * finalized on shutdown.
    */
   readonly start: () => Effect.Effect<void, never, Scope.Scope>;
+
+  /** Resolves after startup reactors have established their initial state. */
+  readonly ready: Effect.Effect<void>;
 }
 
 /**

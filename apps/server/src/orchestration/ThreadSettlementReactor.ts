@@ -4,6 +4,7 @@ import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schedule from "effect/Schedule";
@@ -26,6 +27,7 @@ export class ThreadSettlementReactor extends Context.Service<
   ThreadSettlementReactor,
   {
     readonly start: () => Effect.Effect<void, never, Scope.Scope>;
+    readonly ready: Effect.Effect<void>;
     readonly drain: Effect.Effect<void>;
   }
 >()("t3/orchestration/ThreadSettlementReactor") {}
@@ -37,6 +39,7 @@ export const make = Effect.gen(function* () {
   const git = yield* GitManager.GitManager;
   const pullRequests = yield* PullRequestService.PullRequestService;
   const crypto = yield* Crypto.Crypto;
+  const ready = yield* Deferred.make<void>();
 
   const sweep = Effect.fn("ThreadSettlementReactor.sweep")(function* () {
     const snapshot = yield* snapshots.getShellSnapshot();
@@ -162,6 +165,7 @@ export const make = Effect.gen(function* () {
       Effect.gen(function* () {
         yield* worker.enqueue(undefined);
         yield* worker.drain;
+        yield* Deferred.succeed(ready, undefined);
       }).pipe(Effect.repeat(Schedule.spaced("1 minute")), Effect.asVoid),
     );
     yield* forkParked(
@@ -179,7 +183,11 @@ export const make = Effect.gen(function* () {
     );
   });
 
-  return { start, drain: worker.drain } satisfies ThreadSettlementReactor["Service"];
+  return {
+    start,
+    ready: Deferred.await(ready),
+    drain: worker.drain,
+  } satisfies ThreadSettlementReactor["Service"];
 });
 
 export const layer = Layer.effect(ThreadSettlementReactor, make);
