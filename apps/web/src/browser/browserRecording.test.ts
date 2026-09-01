@@ -349,6 +349,35 @@ describe("browser recording", () => {
     expect(save).toHaveBeenCalledTimes(2);
   });
 
+  it("serializes display media grants for concurrent recording starts", async () => {
+    let finishFirstCapture!: (stream: MediaStream) => void;
+    const stream = { getTracks: () => [{ stop: vi.fn() }] } as unknown as MediaStream;
+    getDisplayMedia
+      .mockImplementationOnce(
+        () =>
+          new Promise<MediaStream>((resolve) => {
+            finishFirstCapture = resolve;
+          }),
+      )
+      .mockResolvedValueOnce(stream);
+
+    const firstStart = startBrowserRecording("recording-tab");
+    await vi.waitFor(() => expect(getDisplayMedia).toHaveBeenCalledOnce());
+    const secondStart = startBrowserRecording("recording-tab-2");
+    await vi.waitFor(() => expect(readActiveBrowserRecordingTabIds().size).toBe(2));
+
+    expect(startScreencast).toHaveBeenCalledTimes(1);
+    finishFirstCapture(stream);
+    await Promise.all([firstStart, secondStart]);
+
+    expect(startScreencast.mock.calls).toEqual([["recording-tab"], ["recording-tab-2"]]);
+    expect(getDisplayMedia).toHaveBeenCalledTimes(2);
+    await Promise.all([
+      stopBrowserRecording("recording-tab"),
+      stopBrowserRecording("recording-tab-2"),
+    ]);
+  });
+
   it("keeps a recording reachable through its runtime id after a server epoch changes", async () => {
     const threadRef = {
       environmentId: EnvironmentId.make("environment-recording"),

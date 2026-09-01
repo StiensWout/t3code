@@ -120,6 +120,21 @@ export function useActiveBrowserRecordingTabIds(): ReadonlySet<string> {
 }
 
 const activeRecordings = new Map<string, ActiveRecording>();
+let displayMediaGrantTail = Promise.resolve();
+
+const withDisplayMediaGrant = async <T>(useGrant: () => Promise<T>): Promise<T> => {
+  const previousGrant = displayMediaGrantTail;
+  let releaseGrant!: () => void;
+  displayMediaGrantTail = new Promise<void>((resolve) => {
+    releaseGrant = resolve;
+  });
+  await previousGrant;
+  try {
+    return await useGrant();
+  } finally {
+    releaseGrant();
+  }
+};
 
 const publishActiveRecordingTabIds = (): void => {
   appAtomRegistry.set(activeBrowserRecordingTabIdsAtom, {
@@ -386,19 +401,6 @@ export async function startBrowserRecording(
       () => getClientSettings().browserRecordingFrameRate,
     );
     const [frameRate] = await Promise.all([frameRatePromise, waitForBrowserRecordingPaint()]);
-    try {
-      await bridge.recording.startScreencast(tabId);
-    } catch (cause) {
-      if (!isRecordingStarting(recording)) {
-        throw recordingStartupCancelledError(recording, cause);
-      }
-      clearActiveRecording(recording);
-      throw new BrowserRecordingOperationError({
-        operation: "start-screencast",
-        tabId,
-        cause,
-      });
-    }
     const throwIfStartupCancelled = async (): Promise<void> => {
       // A stop requested during startup should let startup finish so the
       // caller receives a real artifact. Only replacement/removal cancels it.
@@ -417,30 +419,49 @@ export async function startBrowserRecording(
       }
       throw recordingStartupCancelledError(recording);
     };
-    await throwIfStartupCancelled();
-    try {
-      recording.stream = await captureTabMediaStreamWithTimeout(tabId, frameRate);
-    } catch (cause) {
-      const cleanupCause = await cleanupFailedRecordingStart(bridge, recording);
-      if (isBrowserRecordingCaptureTimeoutError(cause) && cleanupCause === undefined) throw cause;
-      throw new BrowserRecordingOperationError({
-        operation: "capture-media-stream",
-        tabId,
-        cause:
-          cleanupCause === undefined
-            ? cause
-            : new AggregateError(
-                [cause, cleanupCause],
-                `Browser media capture and cleanup failed for tab ${tabId}.`,
-                { cause },
-              ),
-      });
-    }
+    // The desktop process exposes one display-media grant at a time. Keep only the
+    // arm-to-capture handoff exclusive; acquired streams can record concurrently.
+    const stream = await withDisplayMediaGrant(async () => {
+      await throwIfStartupCancelled();
+      try {
+        await bridge.recording.startScreencast(tabId);
+      } catch (cause) {
+        if (!isRecordingStarting(recording)) {
+          throw recordingStartupCancelledError(recording, cause);
+        }
+        clearActiveRecording(recording);
+        throw new BrowserRecordingOperationError({
+          operation: "start-screencast",
+          tabId,
+          cause,
+        });
+      }
+      await throwIfStartupCancelled();
+      try {
+        recording.stream = await captureTabMediaStreamWithTimeout(tabId, frameRate);
+        return recording.stream;
+      } catch (cause) {
+        const cleanupCause = await cleanupFailedRecordingStart(bridge, recording);
+        if (isBrowserRecordingCaptureTimeoutError(cause) && cleanupCause === undefined) throw cause;
+        throw new BrowserRecordingOperationError({
+          operation: "capture-media-stream",
+          tabId,
+          cause:
+            cleanupCause === undefined
+              ? cause
+              : new AggregateError(
+                  [cause, cleanupCause],
+                  `Browser media capture and cleanup failed for tab ${tabId}.`,
+                  { cause },
+                ),
+        });
+      }
+    });
     await throwIfStartupCancelled();
 
     let recorder: MediaRecorder;
     try {
-      recorder = createMediaRecorder(recording.stream);
+      recorder = createMediaRecorder(stream);
       recording.recorder = recorder;
       recorder.addEventListener("dataavailable", (event) => {
         if (event.data.size > 0) chunks.push(event.data);

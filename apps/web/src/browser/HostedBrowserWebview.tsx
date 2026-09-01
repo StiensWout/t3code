@@ -241,8 +241,9 @@ export function HostedBrowserWebview(props: {
   const wrapperStyle = resolveHostedBrowserWebviewWrapperStyle({
     active,
     renderingActive,
-    // Electron 43 can leave a macOS webview blank after `visibility: hidden`.
-    // Keep it paintable offscreen without reporting it as active to automation.
+    // Electron 43 can permanently blank a macOS webview after `visibility: hidden`.
+    // Inactive macOS guests intentionally remain paintable offscreen; other platforms still
+    // suspend them, and automation continues to see the macOS guests as inactive.
     keepPaintableWhenInactive: isMacPlatform(navigator.platform),
     cornerRadius: presentation.cornerRadius,
     rect: lastRect,
