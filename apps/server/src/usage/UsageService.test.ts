@@ -1,4 +1,5 @@
-// @effect-diagnostics nodeBuiltinImport:off
+// @effect-diagnostics nodeBuiltinImport:off - the suite seeds and grows real
+// transcript trees on disk, outside the service's Effect FileSystem.
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -13,7 +14,7 @@ import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { make } from "./UsageService.ts";
+import * as UsageService from "./UsageService.ts";
 
 function claudeLine(id: number, outputTokens: number): string {
   return `${JSON.stringify({
@@ -93,7 +94,7 @@ describe("UsageService", () => {
       const { transcript, settings, home } = yield* setup;
       yield* Effect.promise(() => NodeFSP.writeFile(transcript, claudeLine(1, 5)));
 
-      const service = yield* make.pipe(
+      const service = yield* UsageService.make.pipe(
         Effect.provide(serviceLayers({ prefix: "usage-service-grow-test", home, settings })),
       );
 
@@ -112,7 +113,7 @@ describe("UsageService", () => {
       yield* Effect.promise(() => NodeFSP.writeFile(transcript, claudeLine(1, 5)));
 
       let ratesFetches = 0;
-      const service = yield* make.pipe(
+      const service = yield* UsageService.make.pipe(
         Effect.provide(
           serviceLayers({
             prefix: "usage-service-flight-test",

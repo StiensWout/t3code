@@ -1,4 +1,6 @@
-// @effect-diagnostics nodeBuiltinImport:off
+// @effect-diagnostics nodeBuiltinImport:off - resume coverage writes, appends
+// to, and truncates real transcript files byte-exactly, mirroring the reader's
+// own deliberate node:fs usage.
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -173,6 +175,32 @@ describe("readTranscriptRecords resume", () => {
     assert.deepStrictEqual(
       second.records.map((record) => record.totals.outputTokens),
       [11],
+    );
+  });
+
+  it("parses a line larger than one stream chunk", async () => {
+    // Tool-heavy transcripts carry multi-megabyte single lines; they arrive
+    // split across many chunks and must reassemble into one record.
+    const path = NodePath.join(dir, "claude.jsonl");
+    const bigLine = `${JSON.stringify({
+      type: "assistant",
+      timestamp: "2026-08-01T10:00:00Z",
+      requestId: "req_big",
+      sessionId: "session-1",
+      padding: "x".repeat(512 * 1024),
+      message: {
+        id: "msg_big",
+        model: "claude-fable-5",
+        usage: { input_tokens: 10, output_tokens: 42 },
+      },
+    })}\n`;
+    await NodeFSP.writeFile(path, bigLine + claudeLine(2, 7));
+
+    const parsed = await readTranscriptRecords(path, "claude");
+    assert.isNotNull(parsed);
+    assert.deepStrictEqual(
+      parsed.records.map((record) => record.totals.outputTokens),
+      [42, 7],
     );
   });
 

@@ -42,8 +42,10 @@ export interface TranscriptFile {
  * The guard hash fingerprints the bytes immediately before `resumeOffset`. A
  * resume only proceeds when those bytes still match: transcripts are
  * append-only by design, but a rotated or rewritten file silently mis-parsed
- * from the middle would corrupt usage totals, so the assumption is verified
- * rather than trusted.
+ * from the middle would corrupt usage totals. The window is a cheap tripwire
+ * for those realistic failure shapes, all of which disturb the file's tail at
+ * that exact offset; it deliberately does not hash the whole prefix, which
+ * would cost the full re-read the resume exists to avoid.
  */
 export interface TranscriptParsePosition {
   /** Byte offset just past the last newline-terminated line consumed. */
@@ -71,7 +73,7 @@ export interface TranscriptParseResult {
 }
 
 /** 64 bytes of JSONL tail is ample to distinguish a replaced file. */
-const GUARD_LENGTH = 64;
+export const GUARD_LENGTH = 64;
 const NEWLINE = 0x0a;
 const CARRIAGE_RETURN = 0x0d;
 
@@ -156,9 +158,9 @@ async function guardMatches(
   handle: NodeFSP.FileHandle,
   position: TranscriptParsePosition,
 ): Promise<boolean> {
-  if (position.guardLength <= 0) return false;
-  const window = Buffer.alloc(position.guardLength);
+  if (position.guardLength <= 0 || position.guardLength > GUARD_LENGTH) return false;
   try {
+    const window = Buffer.alloc(position.guardLength);
     const { bytesRead } = await handle.read(
       window,
       0,
@@ -248,14 +250,22 @@ export async function readTranscriptRecords(
     const records: UsageRecord[] = [];
     // Buffer-level line splitting rather than `readline`, because resuming
     // needs byte-exact offsets and decoded strings cannot provide them.
+    // Newline-free chunks are collected rather than concatenated as they
+    // arrive, so a single huge line costs one copy instead of one per chunk.
     let resumeOffset = start;
-    let pending: Buffer | null = null;
+    let pendingChunks: Buffer[] = [];
     const stream = handle.createReadStream({
       start,
       autoClose: false,
     }) as AsyncIterable<Buffer>;
     for await (const chunk of stream) {
-      const buffer: Buffer = pending === null ? chunk : Buffer.concat([pending, chunk]);
+      if (!chunk.includes(NEWLINE)) {
+        pendingChunks.push(chunk);
+        continue;
+      }
+      const buffer: Buffer =
+        pendingChunks.length === 0 ? chunk : Buffer.concat([...pendingChunks, chunk]);
+      pendingChunks = [];
       let lineStart = 0;
       for (;;) {
         const newlineIndex = buffer.indexOf(NEWLINE, lineStart);
@@ -264,15 +274,16 @@ export async function readTranscriptRecords(
         lineStart = newlineIndex + 1;
       }
       resumeOffset += lineStart;
-      pending = lineStart === buffer.length ? null : buffer.subarray(lineStart);
+      if (lineStart < buffer.length) pendingChunks.push(buffer.subarray(lineStart));
     }
 
     // A trailing segment without its newline is parsed for this result but not
     // consumed: a writer may still be appending to it, and counting a half
     // record now and its full form later would double count.
     const tailRecords: UsageRecord[] = [];
-    if (pending !== null && pending.length > 0) {
-      parseLine(toLineString(pending), { ...codexState }, tailRecords);
+    if (pendingChunks.length > 0) {
+      const pending = pendingChunks.length === 1 ? pendingChunks[0]! : Buffer.concat(pendingChunks);
+      if (pending.length > 0) parseLine(toLineString(pending), { ...codexState }, tailRecords);
     }
 
     const guardLength = Math.min(GUARD_LENGTH, resumeOffset);

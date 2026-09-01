@@ -19,7 +19,7 @@ import * as NodePath from "node:path";
 
 import type { UsageProviderKind } from "@t3tools/contracts";
 
-import type { TranscriptParsePosition } from "./usageTranscriptReader.ts";
+import { GUARD_LENGTH, type TranscriptParsePosition } from "./usageTranscriptReader.ts";
 import type { CodexScanState, UsageRecord } from "./usageTranscripts.ts";
 
 // v2: Codex fork-copy suppression changed what a file parses to, so v1
@@ -221,12 +221,21 @@ export function decodeScanCache(document: unknown): ScanCache {
     if (typeof entry.s !== "number" || typeof entry.m !== "number") continue;
     if (entry.p !== "claude" && entry.p !== "codex" && entry.p !== "grok") continue;
     if (!isRecordArray(entry.r) || !isRecordArray(entry.t)) continue;
+    // Position fields feed byte offsets and a Buffer allocation in the reader,
+    // so anything outside their real ranges must reject the entry: a bogus
+    // guard length would otherwise fail every parse of the file, silently
+    // dropping its usage instead of costing the documented cold re-parse.
     if (
       typeof entry.o !== "number" ||
-      !Number.isFinite(entry.o) ||
+      !Number.isSafeInteger(entry.o) ||
       entry.o < 0 ||
       typeof entry.gl !== "number" ||
-      typeof entry.gh !== "number"
+      !Number.isSafeInteger(entry.gl) ||
+      entry.gl < 0 ||
+      entry.gl > GUARD_LENGTH ||
+      entry.gl > entry.o ||
+      typeof entry.gh !== "number" ||
+      !Number.isFinite(entry.gh)
     ) {
       continue;
     }
@@ -271,7 +280,8 @@ function decodeCodexState(value: unknown): CodexScanState | null | undefined {
     (state.lastUsageSignature !== null && typeof state.lastUsageSignature !== "string") ||
     typeof state.sawSessionMeta !== "boolean" ||
     typeof state.suppressingForkCopies !== "boolean" ||
-    typeof state.forkCopyAnchorMs !== "number"
+    typeof state.forkCopyAnchorMs !== "number" ||
+    !Number.isFinite(state.forkCopyAnchorMs)
   ) {
     return undefined;
   }
