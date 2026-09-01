@@ -393,18 +393,41 @@ describe("browser recording", () => {
     const secondStart = startBrowserRecording("recording-tab-2");
     await vi.waitFor(() => expect(readActiveBrowserRecordingTabIds().size).toBe(2));
 
-    const secondStartResult = expect(secondStart).rejects.toMatchObject({
+    const secondStop = stopBrowserRecording("recording-tab-2");
+    await expect(secondStart).rejects.toMatchObject({
       operation: "start-screencast",
       tabId: "recording-tab-2",
     });
-    await expect(stopBrowserRecording("recording-tab-2")).resolves.toBeNull();
-    await secondStartResult;
+    await expect(secondStop).resolves.toBeNull();
     expect(startScreencast).toHaveBeenCalledTimes(1);
 
     finishFirstCapture(stream);
     await firstStart;
     await stopBrowserRecording("recording-tab");
     expect(getDisplayMedia).toHaveBeenCalledOnce();
+  });
+
+  it("finishes an uncontended pre-grant start before stopping", async () => {
+    const animationFrames: FrameRequestCallback[] = [];
+    vi.stubGlobal(
+      "requestAnimationFrame",
+      vi.fn((callback: FrameRequestCallback) => {
+        animationFrames.push(callback);
+        return animationFrames.length;
+      }),
+    );
+
+    const startPromise = startBrowserRecording("recording-tab");
+    await vi.waitFor(() =>
+      expect(readActiveBrowserRecordingTabIds().has("recording-tab")).toBe(true),
+    );
+    const stopPromise = stopBrowserRecording("recording-tab");
+    expect(startScreencast).not.toHaveBeenCalled();
+
+    animationFrames.shift()?.(1);
+    animationFrames.shift()?.(2);
+    await startPromise;
+    await expect(stopPromise).resolves.toMatchObject({ tabId: "recording-tab" });
   });
 
   it("keeps a recording reachable through its runtime id after a server epoch changes", async () => {
