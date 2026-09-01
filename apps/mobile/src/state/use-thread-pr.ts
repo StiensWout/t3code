@@ -15,11 +15,18 @@ import { presentThreadPr, type ThreadPrPresentation } from "./thread-pr-presenta
 import { vcsEnvironment } from "./vcs";
 
 const linkedPullRequestDetailAtom = createLinkedPullRequestDetailAtomFamily(connectionAtomRuntime);
-const threadPrSnapshotAtoms = Atom.family((key: string) =>
-  Atom.make<ThreadPrPresentation | null>(null).pipe(
-    Atom.keepAlive,
-    Atom.withLabel(`mobile:thread-pr-snapshot:${key}`),
-  ),
+const MAX_THREAD_PR_SNAPSHOTS = 500;
+
+interface ThreadPrSnapshot {
+  readonly identity: string;
+  readonly presentation: ThreadPrPresentation;
+}
+
+// One bounded cache survives row virtualization without retaining one live
+// atom for every thread, branch, directory, or linked pull request ever seen.
+const threadPrSnapshotsAtom = Atom.make<ReadonlyMap<string, ThreadPrSnapshot>>(new Map()).pipe(
+  Atom.keepAlive,
+  Atom.withLabel("mobile:thread-pr-snapshots"),
 );
 
 export {
@@ -39,12 +46,13 @@ export function useThreadPr(
   projectCwd: string | null,
 ): ThreadPrPresentation | null {
   const cwd = thread.worktreePath ?? projectCwd;
-  const snapshotKey = JSON.stringify([
-    scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+  const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+  const snapshotIdentity = JSON.stringify(
     thread.linkedPullRequest ?? { branch: thread.branch, cwd },
-  ]);
-  const snapshotAtom = useMemo(() => threadPrSnapshotAtoms(snapshotKey), [snapshotKey]);
-  const snapshot = useAtomValue(snapshotAtom);
+  );
+  const snapshots = useAtomValue(threadPrSnapshotsAtom);
+  const snapshotEntry = snapshots.get(threadKey);
+  const snapshot = snapshotEntry?.identity === snapshotIdentity ? snapshotEntry.presentation : null;
   const gitStatus = useEnvironmentQuery(
     thread.linkedPullRequest == null && thread.branch !== null && cwd !== null
       ? vcsEnvironment.status({
@@ -86,8 +94,29 @@ export function useThreadPr(
   }, [gitStatus.data, linkedPullRequest.data, thread.branch, thread.linkedPullRequest]);
 
   useEffect(() => {
-    if (live !== undefined && snapshot !== live) appAtomRegistry.set(snapshotAtom, live);
-  }, [live, snapshot, snapshotAtom]);
+    if (live === undefined) return;
+    appAtomRegistry.modify(threadPrSnapshotsAtom, (current) => {
+      const existing = current.get(threadKey);
+      if (live === null) {
+        if (existing === undefined) return [false, current];
+        const next = new Map(current);
+        next.delete(threadKey);
+        return [true, next];
+      }
+      if (existing?.identity === snapshotIdentity && existing.presentation === live) {
+        return [false, current];
+      }
+      const next = new Map(current);
+      next.delete(threadKey);
+      next.set(threadKey, { identity: snapshotIdentity, presentation: live });
+      while (next.size > MAX_THREAD_PR_SNAPSHOTS) {
+        const oldestKey = next.keys().next().value;
+        if (oldestKey === undefined) break;
+        next.delete(oldestKey);
+      }
+      return [true, next];
+    });
+  }, [live, snapshotIdentity, threadKey]);
 
   return live === undefined ? snapshot : live;
 }
