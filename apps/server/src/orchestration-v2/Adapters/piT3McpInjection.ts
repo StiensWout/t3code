@@ -289,7 +289,10 @@ export function buildPiRpcLaunch(input: {
     env: {
       ...environment,
       ...(hasT3Extension && input.runtimeMode !== undefined
-        ? { [T3_PI_RUNTIME_MODE_ENV]: input.runtimeMode }
+        ? {
+            [T3_PI_RUNTIME_MODE_ENV]:
+              input.runtimeMode === "auto" ? "approval-required" : input.runtimeMode,
+          }
         : {}),
       ...(hasT3Mcp && input.mcpSession !== undefined
         ? {

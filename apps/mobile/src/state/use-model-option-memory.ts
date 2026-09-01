@@ -85,6 +85,21 @@ export function lookupModelOptionsInState(
   return state[instanceId]?.[model];
 }
 
+/** Merge disk state with choices made while hydration was in flight. */
+export function mergeModelOptionMemoryState(
+  persisted: ModelOptionMemoryState,
+  current: ModelOptionMemoryState,
+): ModelOptionMemoryState {
+  const merged = { ...persisted };
+  for (const [instanceId, currentModels] of Object.entries(current)) {
+    merged[instanceId] = {
+      ...(persisted[instanceId] ?? {}),
+      ...currentModels,
+    };
+  }
+  return merged;
+}
+
 function normalizePersistedMemory(value: unknown): ModelOptionMemoryState {
   const parsed = decodePersistedModelOptionMemory(value);
   const byInstance: Record<
@@ -179,10 +194,10 @@ export function ensureModelOptionMemoryLoaded(): void {
       if (Object.keys(persisted).length === 0) {
         return;
       }
-      appAtomRegistry.set(modelOptionMemoryAtom, {
-        ...persisted,
-        ...appAtomRegistry.get(modelOptionMemoryAtom),
-      });
+      appAtomRegistry.set(
+        modelOptionMemoryAtom,
+        mergeModelOptionMemoryState(persisted, appAtomRegistry.get(modelOptionMemoryAtom)),
+      );
     })
     .catch((cause) => {
       console.warn(

@@ -42,6 +42,7 @@ import { appAtomRegistry } from "./atom-registry";
 import {
   flushModelOptionMemory,
   lookupModelOptionsInState,
+  mergeModelOptionMemoryState,
   modelOptionMemoryAtom,
   recordModelOptionsInState,
   rememberModelOptions,
@@ -70,6 +71,15 @@ describe("model option memory state", () => {
     const state = recordModelOptionsInState({}, "codex", "gpt-5.4", []);
     expect(state).toEqual({});
     expect(lookupModelOptionsInState(state, "codex", "gpt-5.4")).toBeUndefined();
+  });
+
+  it("keeps persisted models when current choices share an instance", () => {
+    expect(
+      mergeModelOptionMemoryState(
+        { codex: { "gpt-5.3-codex": XHIGH, "gpt-5.4": HIGH } },
+        { codex: { "gpt-5.4": XHIGH } },
+      ),
+    ).toEqual({ codex: { "gpt-5.3-codex": XHIGH, "gpt-5.4": XHIGH } });
   });
 });
 
