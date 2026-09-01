@@ -94,6 +94,10 @@ once per minute, including when no client is connected. It dispatches the guarde
 `thread.auto-settle` command, which uses the existing settlement event lifecycle. Automatic
 settlement excludes live background work and requires a comparable PR timestamp for immediate PR
 settlement. The command also rejects any later event for its thread after the reactor's snapshot.
+Each sweep first applies what it can decide locally (branchless threads and the pull request
+answers persisted by earlier sweeps in `settlement-lookups.json`), then refreshes from the network.
+Startup waits only for that local phase, so the first snapshot already carries those decisions
+without putting a GitHub round trip on the startup path.
 Clients render the persisted settlement state and do not derive settlement from PR or inactivity
 state. A committed `thread.settled` event also lets `ProviderCommandReactor` stop an idle provider
 session.

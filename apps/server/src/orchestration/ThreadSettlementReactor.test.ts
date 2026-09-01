@@ -14,9 +14,11 @@ import {
 } from "@t3tools/contracts";
 import { applyServerSettingsPatch } from "@t3tools/shared/serverSettings";
 import { assert, describe, it } from "@effect/vitest";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
@@ -24,6 +26,7 @@ import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import { TestClock } from "effect/testing";
 
+import * as ServerConfig from "../config.ts";
 import { GitManager } from "../git/GitManager.ts";
 import { PullRequestService } from "../pullRequest/PullRequestService.ts";
 import { ServerActivation } from "../serverActivation.ts";
@@ -160,6 +163,9 @@ function makePullRequestDetail(input: {
 
 interface HarnessOptions {
   readonly snapshot: OrchestrationShellSnapshot;
+  /** Share one state directory between harnesses to simulate a restart. */
+  readonly baseDir?: string;
+  readonly readSnapshot?: ProjectionSnapshotQuery["Service"]["getShellSnapshot"];
   readonly settings?: ServerSettings;
   readonly branchPullRequest?: GitManager["Service"]["branchPullRequest"];
   readonly pullRequestDetail?: PullRequestService["Service"]["detail"];
@@ -170,6 +176,12 @@ interface HarnessOptions {
 
 const makeHarness = Effect.fn("makeThreadSettlementHarness")(function* (options: HarnessOptions) {
   const activation = yield* Deferred.make<void>();
+  const baseDir =
+    options.baseDir ??
+    (yield* Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      return yield* fs.makeTempDirectoryScoped({ prefix: "t3code-thread-settlement-test-" });
+    }).pipe(Effect.provide(NodeServices.layer)));
   const snapshots = yield* Ref.make(options.snapshot);
   const snapshotReadCount = yield* Ref.make(0);
   const snapshotReads = yield* Queue.unbounded<number>();
@@ -239,7 +251,7 @@ const makeHarness = Effect.fn("makeThreadSettlementHarness")(function* (options:
       getShellSnapshot: () =>
         Ref.updateAndGet(snapshotReadCount, (count) => count + 1).pipe(
           Effect.tap((count) => Queue.offer(snapshotReads, count)),
-          Effect.andThen(Ref.get(snapshots)),
+          Effect.andThen(options.readSnapshot?.() ?? Ref.get(snapshots)),
         ),
     }),
     Layer.mock(GitManager)({ branchPullRequest }),
@@ -253,10 +265,15 @@ const makeHarness = Effect.fn("makeThreadSettlementHarness")(function* (options:
     Layer.succeed(ServerSettingsService, serverSettings),
     Layer.succeed(ServerActivation, Deferred.await(activation)),
     Layer.succeed(Crypto.Crypto, testCrypto),
+    NodeServices.layer,
+  );
+  const configLayer = ServerConfig.layerTest(process.cwd(), baseDir).pipe(
+    Layer.provide(NodeServices.layer),
   );
 
   return {
     activation,
+    baseDir,
     snapshots,
     snapshotReadCount,
     snapshotReads,
@@ -264,7 +281,10 @@ const makeHarness = Effect.fn("makeThreadSettlementHarness")(function* (options:
     branchCalls,
     detailCalls,
     updateSettings,
-    layer: ThreadSettlementReactor.layer.pipe(Layer.provide(dependencies)),
+    layer: ThreadSettlementReactor.layer.pipe(
+      Layer.provide(dependencies),
+      Layer.provideMerge(configLayer),
+    ),
   };
 });
 
@@ -280,15 +300,17 @@ const startHarness = Effect.fn("startThreadSettlementHarness")(function* (
 });
 
 describe("ThreadSettlementReactor", () => {
-  it.effect("becomes ready only after the initial settlement sweep", () =>
+  it.effect("becomes ready before the first pull request lookup completes", () =>
     Effect.scoped(
       Effect.gen(function* () {
         yield* TestClock.setTime(Date.parse(NOW));
         const lookupStarted = yield* Deferred.make<void>();
         const releaseLookup = yield* Deferred.make<void>();
-        const readyObserved = yield* Deferred.make<void>();
         const fixture = yield* makeHarness({
-          snapshot: makeSnapshot([makeThread("startup-thread", { branch: "saved-feature" })]),
+          snapshot: makeSnapshot([
+            makeThread("startup-thread", { branch: "saved-feature" }),
+            makeThread("branchless"),
+          ]),
           branchPullRequest: () =>
             Deferred.succeed(lookupStarted, undefined).pipe(
               Effect.andThen(Deferred.await(releaseLookup)),
@@ -299,17 +321,90 @@ describe("ThreadSettlementReactor", () => {
         yield* Effect.gen(function* () {
           const reactor = yield* ThreadSettlementReactor.ThreadSettlementReactor;
           yield* reactor.start();
-          yield* reactor.ready.pipe(
-            Effect.andThen(Deferred.succeed(readyObserved, undefined)),
-            Effect.forkScoped,
-          );
           yield* Deferred.succeed(fixture.activation, undefined);
           yield* Deferred.await(lookupStarted);
+          yield* reactor.ready;
 
-          assert.isFalse(yield* Deferred.isDone(readyObserved));
+          // Branchless threads settle before the network answers.
+          assert.deepStrictEqual(
+            (yield* Ref.get(fixture.commands)).map((command) => command.threadId),
+            [ThreadId.make("branchless")],
+          );
 
           yield* Deferred.succeed(releaseLookup, undefined);
-          yield* Deferred.await(readyObserved);
+          yield* reactor.drain;
+          assert.deepStrictEqual(
+            (yield* Ref.get(fixture.commands)).map((command) => command.threadId),
+            [ThreadId.make("branchless"), ThreadId.make("startup-thread")],
+          );
+        }).pipe(Effect.provide(fixture.layer));
+      }),
+    ),
+  );
+
+  it.effect("settles from the persisted pull request answer after a restart", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse(NOW));
+        const thread = makeThread("merged-thread", { branch: "saved-feature" });
+        const first = yield* makeHarness({
+          snapshot: makeSnapshot([thread]),
+          branchPullRequest: () => Effect.succeed({ state: "merged", updatedAt: NOW }),
+        });
+        yield* Effect.gen(function* () {
+          const reactor = yield* ThreadSettlementReactor.ThreadSettlementReactor;
+          yield* startHarness(reactor, first.activation, first.snapshotReads);
+          assert.deepStrictEqual(
+            (yield* Ref.get(first.commands)).map((command) => command.threadId),
+            [thread.id],
+          );
+        }).pipe(Effect.provide(first.layer));
+
+        const lookupStarted = yield* Deferred.make<void>();
+        const releaseLookup = yield* Deferred.make<void>();
+        const restarted = yield* makeHarness({
+          baseDir: first.baseDir,
+          snapshot: makeSnapshot([thread]),
+          branchPullRequest: () =>
+            Deferred.succeed(lookupStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(releaseLookup)),
+              Effect.as({ state: "merged" as const, updatedAt: NOW }),
+            ),
+        });
+        yield* Effect.gen(function* () {
+          const reactor = yield* ThreadSettlementReactor.ThreadSettlementReactor;
+          yield* reactor.start();
+          yield* Deferred.succeed(restarted.activation, undefined);
+          yield* Deferred.await(lookupStarted);
+          yield* reactor.ready;
+          assert.deepStrictEqual(
+            (yield* Ref.get(restarted.commands)).map((command) => command.threadId),
+            [thread.id],
+          );
+
+          // An unchanged network answer does not settle the thread twice.
+          yield* Deferred.succeed(releaseLookup, undefined);
+          yield* reactor.drain;
+          assert.strictEqual((yield* Ref.get(restarted.commands)).length, 1);
+        }).pipe(Effect.provide(restarted.layer));
+      }),
+    ),
+  );
+
+  it.effect("becomes ready when the first sweep fails before deciding anything", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fixture = yield* makeHarness({
+          snapshot: makeSnapshot([]),
+          readSnapshot: () => Effect.die(new Error("projection unavailable")),
+        });
+
+        yield* Effect.gen(function* () {
+          const reactor = yield* ThreadSettlementReactor.ThreadSettlementReactor;
+          yield* reactor.start();
+          yield* Deferred.succeed(fixture.activation, undefined);
+          yield* reactor.ready;
+          assert.deepStrictEqual(yield* Ref.get(fixture.commands), []);
         }).pipe(Effect.provide(fixture.layer));
       }),
     ),

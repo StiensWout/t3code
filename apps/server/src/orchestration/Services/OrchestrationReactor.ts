@@ -22,7 +22,10 @@ export interface OrchestrationReactorShape {
    */
   readonly start: () => Effect.Effect<void, never, Scope.Scope>;
 
-  /** Resolves after startup reactors have established their initial state. */
+  /**
+   * Resolves once startup reactors have applied everything they can decide
+   * locally. Network-backed refreshes keep running in the background.
+   */
   readonly ready: Effect.Effect<void>;
 }
 
