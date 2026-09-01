@@ -221,7 +221,7 @@ export const isPreviewAutomationHostError = Schema.is(PreviewAutomationHostError
 export function serializePreviewAutomationHostError(
   error: PreviewAutomationHostError,
 ): NonNullable<PreviewAutomationResponse["error"]> {
-  const detail: Record<string, unknown> = Object.fromEntries(
+  const detail = Object.fromEntries(
     Object.entries(error).filter(
       ([key]) =>
         key !== "_tag" && key !== "cause" && key !== "name" && key !== "message" && key !== "stack",

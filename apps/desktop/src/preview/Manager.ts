@@ -108,9 +108,6 @@ const MAX_EVALUATION_BYTES = 64_000;
 const MAX_VISIBLE_TEXT_LENGTH = 20_000;
 const MAX_INTERACTIVE_ELEMENTS = 200;
 const MAX_SCREENSHOT_WIDTH = 1280;
-/** Readiness probe: a tab that reports a positive viewport is scriptable and ready to capture. */
-const RECORDING_SOURCE_SIZE_EXPRESSION =
-  "({ width: Math.round(globalThis.innerWidth), height: Math.round(globalThis.innerHeight) })";
 /** How long an armed tab keeps the exclusive display-media slot before another tab may take it. */
 const RECORDING_ARM_GRACE_MS = 10_000;
 const PICTURE_IN_PICTURE_FRAME_INTERVAL_MS = Math.ceil(1_000 / 12);
@@ -406,6 +403,7 @@ interface PictureInPictureSession {
 interface PendingRecording {
   readonly tabId: string;
   readonly webContents: Electron.WebContents;
+  readonly requestingFrameTreeNodeId: number;
   readonly armedAtMillis: number;
 }
 
@@ -727,6 +725,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   });
 
   const stopAllRecordings = Effect.fn("PreviewManager.stopAllRecordings")(function* () {
+    pendingRecording = null;
     const sessions = yield* SynchronizedRef.get(frameCaptureSessionsRef);
     yield* Effect.forEach(sessions.keys(), (tabId) => stopFrameCapture(tabId, "recording"), {
       concurrency: "unbounded",
@@ -3131,6 +3130,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   const armPendingRecording = Effect.fn("PreviewManager.armPendingRecording")(function* (
     tabId: string,
     wc: Electron.WebContents,
+    requestingFrameTreeNodeId: number,
   ) {
     const now = yield* Clock.currentTimeMillis;
     const previous = pendingRecording;
@@ -3146,7 +3146,12 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         armedTabId: previous.tabId,
       });
     }
-    const armed: PendingRecording = { tabId, webContents: wc, armedAtMillis: now };
+    const armed: PendingRecording = {
+      tabId,
+      webContents: wc,
+      requestingFrameTreeNodeId,
+      armedAtMillis: now,
+    };
     pendingRecording = armed;
     // The handler callback is sync and cannot read a clock, so expiry is driven from here.
     // Identity compare: a re-arm replaces the object, and this fiber must not clobber it.
@@ -3167,14 +3172,23 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   const installDisplayMediaRequestHandler = (session: Session) => {
     if (displayMediaHandlerSessions.has(session)) return;
     displayMediaHandlerSessions.add(session);
-    session.setDisplayMediaRequestHandler((_request, callback) => {
-      const target = pendingRecording?.webContents;
-      pendingRecording = null;
-      if (!target || target.isDestroyed()) {
+    session.setDisplayMediaRequestHandler((request, callback) => {
+      const armed = pendingRecording;
+      if (!armed) {
         callback({});
         return;
       }
-      callback({ video: target.mainFrame });
+      if (armed.webContents.isDestroyed()) {
+        pendingRecording = null;
+        callback({});
+        return;
+      }
+      if (request.frame?.frameTreeNodeId !== armed.requestingFrameTreeNodeId) {
+        callback({});
+        return;
+      }
+      pendingRecording = null;
+      callback({ video: armed.webContents.mainFrame });
     });
   };
 
@@ -3190,31 +3204,6 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         const requestWebContents = wc.hostWebContents;
         if (requestWebContents === null) {
           return yield* new PreviewMainWindowClosedError({ tabId });
-        }
-        const measuredSize = yield* attemptPromise(
-          {
-            operation: "recording.measureSource",
-            tabId,
-            webContentsId: wc.id,
-          },
-          () => wc.executeJavaScript(RECORDING_SOURCE_SIZE_EXPRESSION, true),
-        );
-        if (
-          typeof measuredSize !== "object" ||
-          measuredSize === null ||
-          !("width" in measuredSize) ||
-          !("height" in measuredSize) ||
-          typeof measuredSize.width !== "number" ||
-          typeof measuredSize.height !== "number" ||
-          !Number.isInteger(measuredSize.width) ||
-          !Number.isInteger(measuredSize.height) ||
-          measuredSize.width <= 0 ||
-          measuredSize.height <= 0
-        ) {
-          return yield* new PreviewRecordingSourceSizeUnavailableError({
-            tabId,
-            webContentsId: wc.id,
-          });
         }
         yield* attemptPromise(
           {
@@ -3232,7 +3221,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
           });
         }
         installDisplayMediaRequestHandler(requestWebContents.session);
-        yield* armPendingRecording(tabId, wc);
+        yield* armPendingRecording(tabId, wc, requestWebContents.mainFrame.frameTreeNodeId);
       }).pipe(
         Effect.onError(() => {
           clearPendingRecording(tabId);
@@ -4060,15 +4049,6 @@ export class PreviewMainWindowClosedError extends Schema.TaggedErrorClass<Previe
   }
 }
 
-export class PreviewRecordingSourceSizeUnavailableError extends Schema.TaggedErrorClass<PreviewRecordingSourceSizeUnavailableError>()(
-  "PreviewRecordingSourceSizeUnavailableError",
-  { tabId: Schema.String, webContentsId: Schema.Number },
-) {
-  override get message(): string {
-    return `Preview media source dimensions are unavailable for tab ${this.tabId}`;
-  }
-}
-
 export class PreviewRecordingArmConflictError extends Schema.TaggedErrorClass<PreviewRecordingArmConflictError>()(
   "PreviewRecordingArmConflictError",
   {
@@ -4289,7 +4269,6 @@ export const PreviewManagerError = Schema.Union([
   PreviewWebContentsNotFoundError,
   PreviewWebviewNotInitializedError,
   PreviewMainWindowClosedError,
-  PreviewRecordingSourceSizeUnavailableError,
   PreviewRecordingArmConflictError,
   PreviewOperationError,
   PreviewArtifactPathOutsideDirectoryError,
