@@ -28,23 +28,32 @@ const clerkPublishableKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as string
 const app = <AppRoot router={router} />;
 
 // Managed auth is cloud-only, and the Electron Clerk provider bundles the full
-// clerk-js runtime. Lazily loading only the selected runtime keeps every Clerk
-// byte out of the startup graph for local-mode users, and keeps the bundled
-// clerk-js out of the browser build entirely.
-const ManagedAuthShell = React.lazy(() =>
-  isElectron
-    ? import("./components/clerk/ElectronManagedAuthShell")
-    : import("./components/clerk/BrowserManagedAuthShell"),
-);
+// clerk-js runtime. Loading only the selected runtime as a split chunk keeps
+// every Clerk byte out of the startup graph for local-mode users, and keeps
+// the bundled clerk-js out of the browser build entirely.
+const managedAuthShellModule =
+  clerkPublishableKey && hasCloudPublicConfig()
+    ? isElectron
+      ? import("./components/clerk/ElectronManagedAuthShell")
+      : import("./components/clerk/BrowserManagedAuthShell")
+    : null;
 
-ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-  <React.StrictMode>
-    {clerkPublishableKey && hasCloudPublicConfig() ? (
-      <React.Suspense fallback={null}>
+// The index.html boot splash lives inside #root, and React's first commit
+// clears it. Resolve everything that first commit needs — the selected
+// managed-auth runtime and the initial route's split chunks — before
+// rendering, so the splash holds until real UI paints instead of dropping to
+// a blank window while chunks download.
+void Promise.all([
+  managedAuthShellModule?.then((module) => module.default) ?? null,
+  router.load(),
+]).then(([ManagedAuthShell]) => {
+  ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
+    <React.StrictMode>
+      {ManagedAuthShell && clerkPublishableKey ? (
         <ManagedAuthShell publishableKey={clerkPublishableKey}>{app}</ManagedAuthShell>
-      </React.Suspense>
-    ) : (
-      app
-    )}
-  </React.StrictMode>,
-);
+      ) : (
+        app
+      )}
+    </React.StrictMode>,
+  );
+});
