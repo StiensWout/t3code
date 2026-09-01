@@ -1,4 +1,8 @@
-import { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import {
+  DESKTOP_PREVIEW_RECORDING_CAPTURE_TRIGGER,
+  EnvironmentId,
+  ThreadId,
+} from "@t3tools/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const {
@@ -6,6 +10,7 @@ const {
   events,
   getDisplayMedia,
   registrySet,
+  requestDisplayMediaCapture,
   save,
   startScreencast,
   stopScreencast,
@@ -15,6 +20,7 @@ const {
     clientSettings: { browserRecordingFrameRate: 30 as 30 | 60 },
     events,
     getDisplayMedia: vi.fn(),
+    requestDisplayMediaCapture: vi.fn((_tabId: string) => undefined),
     registrySet: vi.fn((_atom: unknown, value: { readonly tabIds: ReadonlySet<string> }) => {
       events.push(
         value.tabIds.size === 0 ? "clear" : `publish:${Array.from(value.tabIds).join(",")}`,
@@ -37,7 +43,15 @@ const {
 
 vi.mock("~/components/preview/previewBridge", () => ({
   previewBridge: {
-    recording: { onFrame: vi.fn(), save, startScreencast, stopScreencast },
+    recording: {
+      onFrame: vi.fn(),
+      save,
+      startScreencast: async (tabId: string) => {
+        await startScreencast(tabId);
+        requestDisplayMediaCapture(tabId);
+      },
+      stopScreencast,
+    },
   },
 }));
 
@@ -132,6 +146,12 @@ describe("browser recording", () => {
     getDisplayMedia.mockResolvedValue({
       getTracks: () => [{ stop: vi.fn() }],
     });
+    requestDisplayMediaCapture.mockImplementation((tabId: string) => {
+      const trigger = Reflect.get(globalThis, DESKTOP_PREVIEW_RECORDING_CAPTURE_TRIGGER);
+      if (typeof trigger !== "function" || trigger(tabId) !== true) {
+        throw new Error(`No pending display-media capture for ${tabId}.`);
+      }
+    });
     vi.stubGlobal("navigator", { mediaDevices: { getDisplayMedia } });
     useBrowserSurfaceStore.setState({ activityByTabId: {}, byTabId: {} });
   });
@@ -147,6 +167,14 @@ describe("browser recording", () => {
 
     await stopBrowserRecording("recording-tab");
     expect(startupEvents).toEqual(["publish:recording-tab", "start-screencast"]);
+  });
+
+  it("routes gesture-free starts through the desktop capture trigger", async () => {
+    await startBrowserRecording("automation-recording-tab");
+
+    expect(requestDisplayMediaCapture).toHaveBeenCalledWith("automation-recording-tab");
+    expect(getDisplayMedia).toHaveBeenCalledOnce();
+    await stopBrowserRecording("automation-recording-tab");
   });
 
   it("paints and holds a hidden browser surface for the recording lifetime", async () => {

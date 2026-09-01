@@ -5,6 +5,7 @@
  * elements live in the renderer; we only attach listeners and forward state
  * here). Single layer-scoped browser session partition.
  */
+import { DESKTOP_PREVIEW_RECORDING_CAPTURE_TRIGGER } from "@t3tools/contracts";
 import type {
   DesktopPreviewAnnotationTheme,
   DesktopPreviewAutomationStatus,
@@ -121,6 +122,8 @@ const DIAGNOSTIC_BUFFER_LIMIT = 200;
 const MAX_ARTIFACT_SITE_SLUG_LENGTH = 80;
 const AGENT_CURSOR_MOVE_MS = 160;
 const AGENT_CURSOR_CLICK_LEAD_MS = 40;
+const requestRecordingCaptureExpression = (tabId: string): string =>
+  `globalThis[${JSON.stringify(DESKTOP_PREVIEW_RECORDING_CAPTURE_TRIGGER)}]?.(${JSON.stringify(tabId)}) === true`;
 const encodeUnknownJson = Schema.encodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 const DEFAULT_ANNOTATION_THEME: DesktopPreviewAnnotationTheme = {
   colorScheme: "light",
@@ -3225,6 +3228,23 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         }
         installDisplayMediaRequestHandler(requestWebContents.session);
         yield* armPendingRecording(tabId, wc, requestWebContents.mainFrame.frameTreeNodeId);
+        const captureRequested = yield* attemptPromise(
+          {
+            operation: "recording.requestCapture",
+            tabId,
+            webContentsId: requestWebContents.id,
+          },
+          () =>
+            requestWebContents.executeJavaScript(requestRecordingCaptureExpression(tabId), true),
+        );
+        if (captureRequested !== true) {
+          return yield* new PreviewOperationError({
+            operation: "recording.requestCapture",
+            tabId,
+            webContentsId: requestWebContents.id,
+            cause: new Error("The preview recording capture handler is unavailable."),
+          });
+        }
       }).pipe(
         Effect.onError(() => {
           clearPendingRecording(tabId);

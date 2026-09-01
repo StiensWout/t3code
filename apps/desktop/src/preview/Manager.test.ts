@@ -1,4 +1,5 @@
 import { it as effectIt } from "@effect/vitest";
+import { DESKTOP_PREVIEW_RECORDING_CAPTURE_TRIGGER } from "@t3tools/contracts";
 import type { DesktopPreviewRecordingFrame } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Cause from "effect/Cause";
@@ -217,6 +218,7 @@ type TestDisplayMediaHandler = (
 interface TestHostWebContents {
   readonly id: number;
   readonly mainFrame: { readonly frameTreeNodeId: number };
+  readonly executeJavaScript: ReturnType<typeof vi.fn>;
   readonly isDestroyed: () => boolean;
   readonly session: {
     readonly setDisplayMediaRequestHandler: ReturnType<typeof vi.fn>;
@@ -229,6 +231,7 @@ const makeTestHostWebContents = (): TestHostWebContents => {
   return {
     id: 7,
     mainFrame: { frameTreeNodeId: 7 },
+    executeJavaScript: vi.fn(async () => true),
     isDestroyed: () => false,
     session: {
       setDisplayMediaRequestHandler: vi.fn((next: TestDisplayMediaHandler) => {
@@ -2296,6 +2299,27 @@ describe("PreviewManager", () => {
           concurrency: 2,
           discard: true,
         });
+      }),
+    ),
+  );
+
+  effectIt.effect("requests display media with a fresh renderer gesture", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const { host, takeGrant } = yield* setupRecordingRaceTabs(manager);
+
+        yield* manager.startRecording("tab_race_a");
+
+        expect(host.executeJavaScript).toHaveBeenCalledWith(
+          expect.stringContaining(DESKTOP_PREVIEW_RECORDING_CAPTURE_TRIGGER),
+          true,
+        );
+        expect(host.executeJavaScript).toHaveBeenCalledWith(
+          expect.stringContaining("tab_race_a"),
+          true,
+        );
+        takeGrant();
+        yield* manager.stopRecording("tab_race_a");
       }),
     ),
   );

@@ -1,3 +1,4 @@
+import { DESKTOP_PREVIEW_RECORDING_CAPTURE_TRIGGER } from "@t3tools/contracts";
 import type { DesktopPreviewRecordingArtifact, ScopedThreadRef } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import * as Schema from "effect/Schema";
@@ -263,13 +264,75 @@ const stopMediaStream = (stream: MediaStream | null): void => {
   for (const track of stream?.getTracks() ?? []) track.stop();
 };
 
+interface PendingTabMediaCapture {
+  readonly start: () => void;
+}
+
+const pendingTabMediaCaptures = new Map<string, PendingTabMediaCapture>();
+
+const prepareTabMediaCapture = (tabId: string, frameRate: number) => {
+  let acceptStream = true;
+  let capturedStream: MediaStream | null = null;
+  let resolveCapture!: (stream: MediaStream | PromiseLike<MediaStream>) => void;
+  let rejectCapture!: (cause: unknown) => void;
+  const capturePromise = new Promise<MediaStream>((resolve, reject) => {
+    resolveCapture = resolve;
+    rejectCapture = reject;
+  }).then((stream) => {
+    capturedStream = stream;
+    if (!acceptStream) {
+      stopMediaStream(stream);
+      capturedStream = null;
+    }
+    return stream;
+  });
+  const pending: PendingTabMediaCapture = {
+    start: () => {
+      try {
+        // Electron invokes this callback through executeJavaScript(..., true), so even automated
+        // and delayed queued starts satisfy getDisplayMedia's transient-activation requirement.
+        resolveCapture(captureTabMediaStream(frameRate));
+      } catch (cause) {
+        rejectCapture(cause);
+      }
+    },
+  };
+  pendingTabMediaCaptures.set(tabId, pending);
+  return {
+    capturePromise,
+    cancel: () => {
+      acceptStream = false;
+      if (capturedStream) {
+        stopMediaStream(capturedStream);
+        capturedStream = null;
+      }
+      if (pendingTabMediaCaptures.get(tabId) === pending) pendingTabMediaCaptures.delete(tabId);
+      void capturePromise.catch(() => undefined);
+    },
+  };
+};
+
+const triggerTabMediaCapture = (tabId: unknown): boolean => {
+  if (typeof tabId !== "string") return false;
+  const pending = pendingTabMediaCaptures.get(tabId);
+  if (!pending) return false;
+  pendingTabMediaCaptures.delete(tabId);
+  pending.start();
+  return true;
+};
+
+Object.defineProperty(globalThis, DESKTOP_PREVIEW_RECORDING_CAPTURE_TRIGGER, {
+  configurable: true,
+  value: triggerTabMediaCapture,
+});
+
 const captureTabMediaStreamWithTimeout = async (
   tabId: string,
-  frameRate: number,
+  capturePromise: Promise<MediaStream>,
 ): Promise<MediaStream> => {
   let acceptStream = true;
   let timeoutId: number | null = null;
-  const streamPromise = captureTabMediaStream(frameRate).then((stream) => {
+  const streamPromise = capturePromise.then((stream) => {
     if (!acceptStream) stopMediaStream(stream);
     return stream;
   });
@@ -475,9 +538,11 @@ export async function startBrowserRecording(
       }
       startingLifecycle.grantStarted = true;
       await throwIfStartupCancelled();
+      const capture = prepareTabMediaCapture(tabId, frameRate);
       try {
         await bridge.recording.startScreencast(tabId);
       } catch (cause) {
+        capture.cancel();
         if (!isRecordingStarting(recording)) {
           throw recordingStartupCancelledError(recording, cause);
         }
@@ -488,9 +553,14 @@ export async function startBrowserRecording(
           cause,
         });
       }
-      await throwIfStartupCancelled();
       try {
-        recording.stream = await captureTabMediaStreamWithTimeout(tabId, frameRate);
+        await throwIfStartupCancelled();
+      } catch (cause) {
+        capture.cancel();
+        throw cause;
+      }
+      try {
+        recording.stream = await captureTabMediaStreamWithTimeout(tabId, capture.capturePromise);
         return recording.stream;
       } catch (cause) {
         const cleanupCause = await cleanupFailedRecordingStart(bridge, recording);
