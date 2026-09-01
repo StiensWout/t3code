@@ -1395,6 +1395,20 @@ describe("OpenCodeAdapterV2", () => {
     assert.isFalse(admission.admissionPending);
   });
 
+  it("releases admission when an assistant completes under a provider-assigned message id", () => {
+    const admission = {
+      admissionPending: true,
+      admissionAccepted: false,
+      admissionMessageObserved: false,
+      idleDuringAdmission: true,
+    };
+
+    assert.equal(advanceOpenCodePromptAdmission(admission, "assistant-completed"), "release");
+    assert.isTrue(admission.admissionAccepted);
+    assert.isTrue(admission.admissionMessageObserved);
+    assert.isFalse(admission.admissionPending);
+  });
+
   it("invalidates pending admission before aborting a turn", () => {
     const admission = {
       admissionGeneration: 4,

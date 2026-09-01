@@ -327,7 +327,12 @@ interface ActiveOpenCodeTurn {
   admissionAbortController: AbortController | null;
 }
 
-type OpenCodeAdmissionSignal = "accepted" | "busy" | "idle" | "user-message";
+type OpenCodeAdmissionSignal =
+  | "accepted"
+  | "assistant-completed"
+  | "busy"
+  | "idle"
+  | "user-message";
 type OpenCodeAdmissionAction = "hold" | "reconcile-idle" | "release";
 
 export function advanceOpenCodePromptAdmission(
@@ -338,6 +343,12 @@ export function advanceOpenCodePromptAdmission(
   signal: OpenCodeAdmissionSignal,
 ): OpenCodeAdmissionAction {
   if (!admission.admissionPending) return "release";
+  if (signal === "assistant-completed") {
+    admission.admissionAccepted = true;
+    admission.admissionMessageObserved = true;
+    admission.admissionPending = false;
+    return "release";
+  }
   if (signal === "idle") {
     admission.idleDuringAdmission = true;
     return "hold";
@@ -2579,7 +2590,7 @@ export function makeOpenCodeAdapterV2(options: OpenCodeAdapterV2Options): Provid
           // completed assistant message is definitive admission evidence, so
           // let the following idle event settle the turn without weakening
           // the stale-user-message guard.
-          turn.admissionPending = false;
+          advanceOpenCodePromptAdmission(turn, "assistant-completed");
           for (const partId of turn.partIdsByMessage.get(message.id) ?? []) {
             const part = turn.parts.get(partId);
             if (part?.type === "text" || part?.type === "reasoning") {
