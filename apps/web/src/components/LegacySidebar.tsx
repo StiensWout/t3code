@@ -185,6 +185,7 @@ import {
   orderItemsByPreferredIds,
   shouldClearThreadSelectionOnMouseDown,
   sortProjectsForSidebar,
+  useSidebarRowSubscriptionLease,
   useThreadJumpHintVisibility,
   ThreadStatusPill,
 } from "./Sidebar.logic";
@@ -376,6 +377,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
   } = props;
   const threadRef = scopeThreadRef(thread.environmentId, thread.id);
   const threadKey = scopedThreadKey(threadRef);
+  const { leaseLiveStatus, rowRef } = useSidebarRowSubscriptionLease(isActive);
   const lastVisitedAt = useUiStateStore((state) => state.threadLastVisitedAtById[threadKey]);
   const isSelected = useThreadSelectionStore((state) => state.selectedThreadKeys.has(threadKey));
   const runningTerminalIds = useThreadRunningTerminalIds({
@@ -417,7 +419,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
   const threadProjectCwd = threadProject?.workspaceRoot ?? null;
   const gitCwd = thread.worktreePath ?? threadProjectCwd ?? props.projectCwd;
   const gitStatus = useEnvironmentQuery(
-    thread.linkedPullRequest == null && thread.branch != null && gitCwd !== null
+    leaseLiveStatus && thread.linkedPullRequest == null && thread.branch != null && gitCwd !== null
       ? vcsEnvironment.status({
           environmentId: thread.environmentId,
           input: { cwd: gitCwd },
@@ -459,16 +461,26 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
     },
   });
   const linkedPullRequestStatus = useLinkedThreadPullRequest(
-    thread.environmentId,
-    thread.linkedPullRequest,
+    leaseLiveStatus ? thread.environmentId : null,
+    leaseLiveStatus ? thread.linkedPullRequest : null,
   );
+  const gitStatusSnapshotRef = useRef(gitStatus.data);
+  const linkedPullRequestStatusSnapshotRef = useRef(linkedPullRequestStatus);
+  if (gitStatus.data !== null) gitStatusSnapshotRef.current = gitStatus.data;
+  if (linkedPullRequestStatus !== null) {
+    linkedPullRequestStatusSnapshotRef.current = linkedPullRequestStatus;
+  }
+  const visibleGitStatus = gitStatus.data ?? gitStatusSnapshotRef.current;
+  const visibleLinkedPullRequestStatus =
+    linkedPullRequestStatus ?? linkedPullRequestStatusSnapshotRef.current;
   const pr =
     thread.linkedPullRequest == null
-      ? resolveThreadPr({ threadBranch: thread.branch, gitStatus: gitStatus.data })
-      : (linkedPullRequestStatus?.pr ?? null);
+      ? resolveThreadPr({ threadBranch: thread.branch, gitStatus: visibleGitStatus })
+      : (visibleLinkedPullRequestStatus?.pr ?? null);
   const prStatus = prStatusIndicator(
     pr,
-    linkedPullRequestStatus?.sourceControlProvider ?? gitStatus.data?.sourceControlProvider,
+    visibleLinkedPullRequestStatus?.sourceControlProvider ??
+      visibleGitStatus?.sourceControlProvider,
   );
   const terminalStatus = terminalStatusFromRunningIds(runningTerminalIds);
   const isConfirmingArchive = confirmingArchiveThreadKey === threadKey && !isThreadRunning;
@@ -681,6 +693,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
 
   return (
     <SidebarMenuSubItem
+      ref={rowRef}
       className="w-full"
       data-thread-item
       onMouseLeave={handleMouseLeave}
