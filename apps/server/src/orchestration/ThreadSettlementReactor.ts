@@ -86,6 +86,8 @@ export const make = Effect.gen(function* () {
   const { settlementLookupsPath } = yield* ServerConfig.ServerConfig;
   const ready = yield* Deferred.make<void>();
   const lookups = new Map<string, SettlementPullRequest | null>();
+  // Answers waiting to reach disk. Stays set across sweeps until a write lands.
+  let unsaved = false;
 
   const loadLookups = Effect.gen(function* () {
     if (!(yield* fs.exists(settlementLookupsPath))) return;
@@ -117,6 +119,7 @@ export const make = Effect.gen(function* () {
         filePath: settlementLookupsPath,
         contents: `${contents}\n`,
       });
+      unsaved = false;
     }).pipe(
       Effect.catch((cause) =>
         Effect.logWarning("settlement lookups not persisted", {
@@ -254,7 +257,8 @@ export const make = Effect.gen(function* () {
 
     const retain = new Set(snapshot.threads.map(lookupKey));
     const stale = [...lookups.keys()].some((key) => !retain.has(key));
-    if (changed || stale) yield* saveLookups(retain);
+    if (changed || stale) unsaved = true;
+    if (unsaved) yield* saveLookups(retain);
   });
 
   const worker = yield* makeDrainableWorker(() =>
