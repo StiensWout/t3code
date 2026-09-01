@@ -433,6 +433,46 @@ describe("browser recording", () => {
     expect(getDisplayMedia).toHaveBeenCalledOnce();
   });
 
+  it("latches a stop that arrives before the start becomes queued", async () => {
+    let releaseDelayedPaint!: (timestamp: number) => void;
+    let frameId = 0;
+    vi.stubGlobal(
+      "requestAnimationFrame",
+      vi.fn((callback: FrameRequestCallback) => {
+        frameId += 1;
+        if (frameId === 1) releaseDelayedPaint = callback;
+        else callback(frameId);
+        return frameId;
+      }),
+    );
+    let finishBlockingCapture!: (stream: MediaStream) => void;
+    const stream = { getTracks: () => [{ stop: vi.fn() }] } as unknown as MediaStream;
+    getDisplayMedia.mockImplementationOnce(
+      () =>
+        new Promise<MediaStream>((resolve) => {
+          finishBlockingCapture = resolve;
+        }),
+    );
+
+    const delayedStart = startBrowserRecording("delayed-tab");
+    await vi.waitFor(() =>
+      expect(readActiveBrowserRecordingTabIds().has("delayed-tab")).toBe(true),
+    );
+    const blockingStart = startBrowserRecording("blocking-tab");
+    await vi.waitFor(() => expect(getDisplayMedia).toHaveBeenCalledOnce());
+
+    const delayedStop = stopBrowserRecording("delayed-tab");
+    releaseDelayedPaint(1);
+
+    await expect(delayedStart).rejects.toBeInstanceOf(BrowserRecordingStartCancelledError);
+    await expect(delayedStop).resolves.toBeNull();
+    expect(startScreencast).toHaveBeenCalledOnce();
+
+    finishBlockingCapture(stream);
+    await blockingStart;
+    await stopBrowserRecording("blocking-tab");
+  });
+
   it("finishes an uncontended pre-grant start before stopping", async () => {
     const animationFrames: FrameRequestCallback[] = [];
     vi.stubGlobal(

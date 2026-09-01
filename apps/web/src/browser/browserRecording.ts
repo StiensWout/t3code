@@ -94,11 +94,13 @@ export const isBrowserRecordingStartCancelledError = Schema.is(BrowserRecordingS
 
 interface StartingBrowserRecordingLifecycle {
   readonly phase: "starting";
-  queuedForGrant: boolean;
+  queuedForGrant: boolean | null;
   grantStarted: boolean;
+  stopRequestedBeforeGrant: boolean;
   cancelledBeforeGrant: boolean;
   readonly cancelledBeforeGrantSignal: Promise<void>;
   readonly cancelBeforeGrant: () => void;
+  readonly setQueuedForGrant: (queued: boolean) => void;
 }
 
 type BrowserRecordingLifecycle =
@@ -145,24 +147,30 @@ const activeRecordings = new Map<string, ActiveRecording>();
 let displayMediaGrantTail = Promise.resolve();
 let displayMediaGrantQueueDepth = 0;
 
-const makeStartingBrowserRecordingLifecycle = (
-  queuedForGrant: boolean,
-): StartingBrowserRecordingLifecycle => {
+const makeStartingBrowserRecordingLifecycle = (): StartingBrowserRecordingLifecycle => {
   let signalCancellation!: () => void;
   const cancelledBeforeGrantSignal = new Promise<void>((resolve) => {
     signalCancellation = resolve;
   });
   const lifecycle: StartingBrowserRecordingLifecycle = {
     phase: "starting",
-    queuedForGrant,
+    queuedForGrant: null,
     grantStarted: false,
+    stopRequestedBeforeGrant: false,
     cancelledBeforeGrant: false,
     cancelledBeforeGrantSignal,
     cancelBeforeGrant: () => {
-      if (!lifecycle.queuedForGrant || lifecycle.grantStarted || lifecycle.cancelledBeforeGrant)
-        return;
-      lifecycle.cancelledBeforeGrant = true;
-      signalCancellation();
+      // Queue position is unknown during paint/settings warmup. Keep the stop request so a start
+      // that later turns out to be contended can still be cancelled before native capture.
+      lifecycle.stopRequestedBeforeGrant = true;
+      if (lifecycle.queuedForGrant && !lifecycle.grantStarted && !lifecycle.cancelledBeforeGrant) {
+        lifecycle.cancelledBeforeGrant = true;
+        signalCancellation();
+      }
+    },
+    setQueuedForGrant: (queued) => {
+      lifecycle.queuedForGrant = queued;
+      if (queued && lifecycle.stopRequestedBeforeGrant) lifecycle.cancelBeforeGrant();
     },
   };
   return lifecycle;
@@ -491,7 +499,7 @@ export async function startBrowserRecording(
   const startupSettled = new Promise<void>((resolve) => {
     settleStartup = resolve;
   });
-  const startingLifecycle = makeStartingBrowserRecordingLifecycle(displayMediaGrantQueueDepth > 0);
+  const startingLifecycle = makeStartingBrowserRecordingLifecycle();
   const releaseSurfaceActivity = acquireBrowserSurfaceActivity(tabId);
   const recording: ActiveRecording = {
     tabId,
@@ -579,7 +587,7 @@ export async function startBrowserRecording(
         });
       }
     });
-    startingLifecycle.queuedForGrant = grant.queued;
+    startingLifecycle.setQueuedForGrant(grant.queued);
     const stream = await Promise.race([
       grant.result,
       startingLifecycle.cancelledBeforeGrantSignal.then(() => {
