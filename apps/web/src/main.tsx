@@ -25,6 +25,40 @@ if (isElectron) {
 
 const clerkPublishableKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as string | undefined;
 
+// With split chunks, a deploy (or desktop server swap) between page load and a
+// lazy fetch can 404 the old hashed assets. Reload once to pick up the fresh
+// index.html; the guard keeps a persistent failure from becoming a reload loop
+// and instead lets the error surface through the normal paths.
+const CHUNK_RELOAD_GUARD_KEY = "t3code:chunk-load-reloaded";
+const readChunkReloadGuard = () => {
+  // Blocked storage degrades to reloading on every chunk failure, which is
+  // still better than stranding the page.
+  try {
+    return window.sessionStorage.getItem(CHUNK_RELOAD_GUARD_KEY) === "1";
+  } catch {
+    return false;
+  }
+};
+const writeChunkReloadGuard = (reloaded: boolean) => {
+  try {
+    if (reloaded) {
+      window.sessionStorage.setItem(CHUNK_RELOAD_GUARD_KEY, "1");
+    } else {
+      window.sessionStorage.removeItem(CHUNK_RELOAD_GUARD_KEY);
+    }
+  } catch {
+    // See readChunkReloadGuard.
+  }
+};
+window.addEventListener("vite:preloadError", (event) => {
+  if (readChunkReloadGuard()) {
+    return;
+  }
+  writeChunkReloadGuard(true);
+  event.preventDefault();
+  window.location.reload();
+});
+
 const app = <AppRoot router={router} />;
 
 // Managed auth is cloud-only, and the Electron Clerk provider bundles the full
@@ -47,6 +81,7 @@ void Promise.all([
   managedAuthShellModule?.then((module) => module.default) ?? null,
   router.load(),
 ]).then(([ManagedAuthShell]) => {
+  writeChunkReloadGuard(false);
   ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <React.StrictMode>
       {ManagedAuthShell && clerkPublishableKey ? (
