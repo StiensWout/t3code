@@ -2575,6 +2575,11 @@ export function makeOpenCodeAdapterV2(options: OpenCodeAdapterV2Options): Provid
           const state = threads.get(message.sessionID);
           const turn = state?.activeTurn;
           if (state === undefined || turn === null || turn === undefined) return;
+          // Some OpenCode versions ignore the client-provided message ID. A
+          // completed assistant message is definitive admission evidence, so
+          // let the following idle event settle the turn without weakening
+          // the stale-user-message guard.
+          turn.admissionPending = false;
           for (const partId of turn.partIdsByMessage.get(message.id) ?? []) {
             const part = turn.parts.get(partId);
             if (part?.type === "text" || part?.type === "reasoning") {
