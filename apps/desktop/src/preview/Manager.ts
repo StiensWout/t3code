@@ -3238,11 +3238,9 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
             requestWebContents.executeJavaScript(requestRecordingCaptureExpression(tabId), true),
         );
         if (captureRequested !== true) {
-          return yield* new PreviewOperationError({
-            operation: "recording.requestCapture",
+          return yield* new PreviewRecordingCaptureUnavailableError({
             tabId,
             webContentsId: requestWebContents.id,
-            cause: new Error("The preview recording capture handler is unavailable."),
           });
         }
       }).pipe(
@@ -4085,6 +4083,18 @@ export class PreviewRecordingArmConflictError extends Schema.TaggedErrorClass<Pr
   }
 }
 
+export class PreviewRecordingCaptureUnavailableError extends Schema.TaggedErrorClass<PreviewRecordingCaptureUnavailableError>()(
+  "PreviewRecordingCaptureUnavailableError",
+  {
+    tabId: Schema.String,
+    webContentsId: Schema.Number,
+  },
+) {
+  override get message(): string {
+    return `Preview recording capture is unavailable for tab ${this.tabId} in WebContents ${this.webContentsId}`;
+  }
+}
+
 export class PreviewOperationError extends Schema.TaggedErrorClass<PreviewOperationError>()(
   "PreviewOperationError",
   {
@@ -4293,6 +4303,7 @@ export const PreviewManagerError = Schema.Union([
   PreviewWebviewNotInitializedError,
   PreviewMainWindowClosedError,
   PreviewRecordingArmConflictError,
+  PreviewRecordingCaptureUnavailableError,
   PreviewOperationError,
   PreviewArtifactPathOutsideDirectoryError,
   PreviewArtifactImageLoadError,
