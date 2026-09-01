@@ -124,7 +124,7 @@ const {
 } = vi.hoisted(() => ({
   browserWindowConstructor: vi.fn(),
   createFromPath: vi.fn((): { readonly isEmpty: () => boolean } => ({ isEmpty: () => false })),
-  fromId: vi.fn((_id?: number) => null),
+  fromId: vi.fn<(_id?: number) => Electron.WebContents | null>((_id?: number) => null),
   getFocusedWebContents: vi.fn(() => null),
   mkdir: vi.fn((_path: string) => undefined),
   showItemInFolder: vi.fn(),
@@ -226,6 +226,10 @@ interface TestHostWebContents {
   readonly displayMediaHandler: () => TestDisplayMediaHandler | undefined;
 }
 
+type TestPreviewWebContents = Electron.WebContents & {
+  readonly setBackgroundThrottling: ReturnType<typeof vi.fn<(enabled: boolean) => void>>;
+};
+
 const makeTestHostWebContents = (): TestHostWebContents => {
   let handler: TestDisplayMediaHandler | undefined;
   return {
@@ -246,8 +250,9 @@ const makeTestPreviewWebContents = (
   capturePage: () => Promise<TestCapturedPreviewImage>,
   id = 42,
   hostWebContents: TestHostWebContents = makeTestHostWebContents(),
-) =>
-  ({
+) => {
+  const setBackgroundThrottling = vi.fn<(enabled: boolean) => void>();
+  return {
     id,
     mainFrame: { routingId: id },
     hostWebContents,
@@ -260,6 +265,7 @@ const makeTestPreviewWebContents = (
     getZoomFactor: () => 1,
     setZoomFactor: vi.fn(),
     setAudioMuted: vi.fn(),
+    setBackgroundThrottling,
     isCurrentlyAudible: () => false,
     on: vi.fn(),
     off: vi.fn(),
@@ -275,7 +281,8 @@ const makeTestPreviewWebContents = (
       off: vi.fn(),
     },
     capturePage,
-  }) as never;
+  } as unknown as TestPreviewWebContents;
+};
 
 /** Two ready tabs (41, 42) sharing one window, so they contend for the single display-media slot. */
 const setupRecordingRaceTabs = (manager: PreviewManager.PreviewManager["Service"]) =>
@@ -1936,7 +1943,7 @@ describe("PreviewManager", () => {
     ),
   );
 
-  effectIt.effect("keeps window unthrottled until the final frame capture stops", () =>
+  effectIt.effect("keeps every recorded guest unthrottled until its frame capture stops", () =>
     withManager((manager) =>
       Effect.gen(function* () {
         const setBackgroundThrottling = vi.fn();
@@ -1945,9 +1952,11 @@ describe("PreviewManager", () => {
           getSize: () => ({ width: 1280, height: 720 }),
         }));
         const host = makeTestHostWebContents();
+        const firstWebContents = makeTestPreviewWebContents(capturePage, 41, host);
+        const secondWebContents = makeTestPreviewWebContents(capturePage, 42, host);
         const webContentsById = new Map([
-          [41, makeTestPreviewWebContents(capturePage, 41, host)],
-          [42, makeTestPreviewWebContents(capturePage, 42, host)],
+          [41, firstWebContents],
+          [42, secondWebContents],
         ]);
         fromId.mockImplementation((id) =>
           id === undefined ? null : (webContentsById.get(id) ?? null),
@@ -1968,12 +1977,17 @@ describe("PreviewManager", () => {
         host.displayMediaHandler()?.({ frame: host.mainFrame }, () => {});
         yield* manager.startRecording("tab_capture_throttling_2");
         expect(setBackgroundThrottling.mock.calls).toEqual([[false]]);
+        expect(firstWebContents.setBackgroundThrottling.mock.calls).toEqual([[false]]);
+        expect(secondWebContents.setBackgroundThrottling.mock.calls).toEqual([[false]]);
 
         yield* manager.stopRecording("tab_capture_throttling_1");
         expect(setBackgroundThrottling.mock.calls).toEqual([[false]]);
+        expect(firstWebContents.setBackgroundThrottling.mock.calls).toEqual([[false], [true]]);
+        expect(secondWebContents.setBackgroundThrottling.mock.calls).toEqual([[false]]);
 
         yield* manager.stopRecording("tab_capture_throttling_2");
         expect(setBackgroundThrottling.mock.calls).toEqual([[false], [true]]);
+        expect(secondWebContents.setBackgroundThrottling.mock.calls).toEqual([[false], [true]]);
       }),
     ),
   );
@@ -2023,6 +2037,48 @@ describe("PreviewManager", () => {
           [false],
           [true],
         ]);
+      }),
+    ),
+  );
+
+  effectIt.effect("rolls back window throttling when a recorded guest cannot be unthrottled", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const setWindowBackgroundThrottling = vi.fn();
+        const capturePage = vi.fn(async () => ({
+          toJPEG: () => Buffer.from("recording-frame"),
+          getSize: () => ({ width: 1280, height: 720 }),
+        }));
+        const wc = makeTestPreviewWebContents(capturePage);
+        fromId.mockReturnValue(wc);
+
+        yield* manager.createTab("tab_guest_throttling_failure");
+        yield* manager.registerWebview("tab_guest_throttling_failure", 42);
+        yield* manager.setMainWindow({
+          isDestroyed: () => false,
+          once: vi.fn(),
+          webContents: { setBackgroundThrottling: setWindowBackgroundThrottling },
+        } as never);
+
+        wc.setBackgroundThrottling.mockImplementationOnce(() => {
+          throw new Error("guest throttling update failed");
+        });
+        const failedStart = yield* Effect.exit(
+          manager.startRecording("tab_guest_throttling_failure"),
+        );
+        expect(Exit.isFailure(failedStart)).toBe(true);
+        expect(setWindowBackgroundThrottling.mock.calls).toEqual([[false], [true]]);
+        expect(wc.setBackgroundThrottling.mock.calls).toEqual([[false]]);
+
+        yield* manager.startRecording("tab_guest_throttling_failure");
+        yield* manager.stopRecording("tab_guest_throttling_failure");
+        expect(setWindowBackgroundThrottling.mock.calls).toEqual([
+          [false],
+          [true],
+          [false],
+          [true],
+        ]);
+        expect(wc.setBackgroundThrottling.mock.calls).toEqual([[false], [false], [true]]);
       }),
     ),
   );
@@ -2244,6 +2300,7 @@ describe("PreviewManager", () => {
             getZoomFactor: () => 1,
             setZoomFactor: vi.fn(),
             setAudioMuted: vi.fn(),
+            setBackgroundThrottling: vi.fn(),
             isCurrentlyAudible: () => false,
             on: vi.fn(),
             off: vi.fn(),
@@ -2508,7 +2565,14 @@ describe("PreviewManager", () => {
         yield* Fiber.join(start);
         yield* Fiber.join(replacement);
         expect(replacementOn).toHaveBeenCalled();
+        expect(initialWebContents.setBackgroundThrottling.mock.calls).toEqual([[false]]);
+        expect(replacementWebContents.setBackgroundThrottling.mock.calls).toEqual([[false]]);
         yield* manager.stopRecording("tab_recording_replacement_race");
+        expect(initialWebContents.setBackgroundThrottling.mock.calls).toEqual([[false], [true]]);
+        expect(replacementWebContents.setBackgroundThrottling.mock.calls).toEqual([
+          [false],
+          [true],
+        ]);
       }),
     ),
   );
@@ -2538,6 +2602,7 @@ describe("PreviewManager", () => {
           getZoomFactor: () => 1,
           setZoomFactor: vi.fn(),
           setAudioMuted: vi.fn(),
+          setBackgroundThrottling: vi.fn(),
           isCurrentlyAudible: () => false,
           on: vi.fn(),
           off: vi.fn(),
