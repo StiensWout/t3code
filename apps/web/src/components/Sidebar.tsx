@@ -813,10 +813,23 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
         })
       : null,
   );
+  const gitStatusSnapshotKey = JSON.stringify([thread.environmentId, gitCwd]);
+  const gitStatusSnapshotRef = useRef<{
+    readonly key: string;
+    readonly value: NonNullable<typeof gitStatus.data>;
+  } | null>(null);
+  if (gitStatus.data !== null) {
+    gitStatusSnapshotRef.current = { key: gitStatusSnapshotKey, value: gitStatus.data };
+  }
+  const visibleGitStatus =
+    gitStatus.data ??
+    (gitStatusSnapshotRef.current?.key === gitStatusSnapshotKey
+      ? gitStatusSnapshotRef.current.value
+      : null);
   const retainTerminalOnBranchMismatch = thread.worktreePath === null;
   const pr = resolveDisplayedThreadPr({
     threadBranch: thread.branch,
-    gitStatus: gitStatus.data,
+    gitStatus: visibleGitStatus,
     snapshot: changeRequestSnapshot,
     retainTerminalOnBranchMismatch,
     linkedPullRequest: thread.linkedPullRequest,
@@ -911,11 +924,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     effectiveEnvMode: thread.worktreePath === null ? "local" : "worktree",
     activeWorktreePath: thread.worktreePath,
     activeThreadBranch: thread.branch,
-    currentGitBranch: gitStatus.data?.refName ?? null,
+    currentGitBranch: visibleGitStatus?.refName ?? null,
   });
   const prProvider = resolveDisplayedThreadPrProvider({
     threadBranch: thread.branch,
-    gitStatus: gitStatus.data,
+    gitStatus: visibleGitStatus,
     snapshot: changeRequestSnapshot,
     retainTerminalOnBranchMismatch,
     linkedPullRequest: thread.linkedPullRequest,
@@ -926,7 +939,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   useEffect(() => {
     const nextSnapshot = nextThreadChangeRequestSnapshot({
       threadBranch: thread.branch,
-      gitStatus: gitStatus.data,
+      gitStatus: visibleGitStatus,
       snapshot: changeRequestSnapshot,
       retainTerminalOnBranchMismatch,
       linkedPullRequest: thread.linkedPullRequest,
@@ -936,7 +949,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     onChangeRequestSnapshot(threadKey, nextSnapshot);
   }, [
     changeRequestSnapshot,
-    gitStatus.data,
+    visibleGitStatus,
     linkedPullRequestStatus,
     onChangeRequestSnapshot,
     retainTerminalOnBranchMismatch,
@@ -1653,11 +1666,24 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
         })
       : null,
   );
+  const gitStatusSnapshotKey = JSON.stringify([thread.environmentId, gitCwd]);
+  const gitStatusSnapshotRef = useRef<{
+    readonly key: string;
+    readonly value: NonNullable<typeof gitStatus.data>;
+  } | null>(null);
+  if (gitStatus.data !== null) {
+    gitStatusSnapshotRef.current = { key: gitStatusSnapshotKey, value: gitStatus.data };
+  }
+  const visibleGitStatus =
+    gitStatus.data ??
+    (gitStatusSnapshotRef.current?.key === gitStatusSnapshotKey
+      ? gitStatusSnapshotRef.current.value
+      : null);
   const branchMismatch = resolveLocalCheckoutBranchMismatch({
     effectiveEnvMode: thread.worktreePath === null ? "local" : "worktree",
     activeWorktreePath: thread.worktreePath,
     activeThreadBranch: thread.branch,
-    currentGitBranch: gitStatus.data?.refName ?? null,
+    currentGitBranch: visibleGitStatus?.refName ?? null,
   });
   const modelInstanceId = thread.session?.providerInstanceId ?? thread.modelSelection.instanceId;
   const providerEntry = props.providerEntryByInstanceId.get(modelInstanceId) ?? null;
