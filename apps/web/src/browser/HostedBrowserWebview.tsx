@@ -6,7 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { previewBridge } from "~/components/preview/previewBridge";
 import { usePreviewBridge } from "~/components/preview/usePreviewBridge";
-import { cn } from "~/lib/utils";
+import { cn, isMacPlatform } from "~/lib/utils";
 
 import { resolveBrowserSurfacePanelRect, useBrowserSurfaceStore } from "./browserSurfaceStore";
 import { useActiveBrowserRecordingTabIds } from "./browserRecording";
@@ -237,7 +237,14 @@ export function HostedBrowserWebview(props: {
 
   if (!config) return null;
 
-  const renderingActive = active || backgroundActivity || pictureInPicture || recordingActive;
+  // Electron 43 can leave a macOS webview blank after `visibility: hidden`.
+  // Keep macOS guests paintable offscreen until Electron can reliably resume them.
+  const renderingActive =
+    active ||
+    backgroundActivity ||
+    pictureInPicture ||
+    recordingActive ||
+    isMacPlatform(navigator.platform);
   const wrapperStyle = resolveHostedBrowserWebviewWrapperStyle({
     active,
     renderingActive,
