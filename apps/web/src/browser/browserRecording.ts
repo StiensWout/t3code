@@ -89,9 +89,7 @@ export class BrowserRecordingOperationError extends Schema.TaggedErrorClass<Brow
 
 const isBrowserRecordingOperationError = Schema.is(BrowserRecordingOperationError);
 const isBrowserRecordingCaptureTimeoutError = Schema.is(BrowserRecordingCaptureTimeoutError);
-const matchesBrowserRecordingStartCancelledError = Schema.is(BrowserRecordingStartCancelledError);
-export const isBrowserRecordingStartCancelledError = (error: unknown): boolean =>
-  matchesBrowserRecordingStartCancelledError(error);
+export const isBrowserRecordingStartCancelledError = Schema.is(BrowserRecordingStartCancelledError);
 
 interface StartingBrowserRecordingLifecycle {
   readonly phase: "starting";

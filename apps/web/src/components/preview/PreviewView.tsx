@@ -399,11 +399,12 @@ export function PreviewView({
       }
       if (record) {
         void startBrowserRecording(runtimeTabId, threadRef, tabId).catch((error) => {
+          const description = error instanceof Error ? error.message : "An error occurred.";
           if (isBrowserRecordingStartCancelledError(error)) return;
           toastManager.add({
             type: "error",
             title: "Unable to start recording",
-            description: error instanceof Error ? error.message : "An error occurred.",
+            description,
           });
         });
         return;
