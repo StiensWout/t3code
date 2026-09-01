@@ -378,6 +378,35 @@ describe("browser recording", () => {
     ]);
   });
 
+  it("cancels a queued recording when stopped before its media grant", async () => {
+    let finishFirstCapture!: (stream: MediaStream) => void;
+    const stream = { getTracks: () => [{ stop: vi.fn() }] } as unknown as MediaStream;
+    getDisplayMedia.mockImplementationOnce(
+      () =>
+        new Promise<MediaStream>((resolve) => {
+          finishFirstCapture = resolve;
+        }),
+    );
+
+    const firstStart = startBrowserRecording("recording-tab");
+    await vi.waitFor(() => expect(getDisplayMedia).toHaveBeenCalledOnce());
+    const secondStart = startBrowserRecording("recording-tab-2");
+    await vi.waitFor(() => expect(readActiveBrowserRecordingTabIds().size).toBe(2));
+
+    const secondStartResult = expect(secondStart).rejects.toMatchObject({
+      operation: "start-screencast",
+      tabId: "recording-tab-2",
+    });
+    await expect(stopBrowserRecording("recording-tab-2")).resolves.toBeNull();
+    await secondStartResult;
+    expect(startScreencast).toHaveBeenCalledTimes(1);
+
+    finishFirstCapture(stream);
+    await firstStart;
+    await stopBrowserRecording("recording-tab");
+    expect(getDisplayMedia).toHaveBeenCalledOnce();
+  });
+
   it("keeps a recording reachable through its runtime id after a server epoch changes", async () => {
     const threadRef = {
       environmentId: EnvironmentId.make("environment-recording"),

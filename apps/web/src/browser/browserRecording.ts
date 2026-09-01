@@ -79,8 +79,16 @@ export class BrowserRecordingOperationError extends Schema.TaggedErrorClass<Brow
 const isBrowserRecordingOperationError = Schema.is(BrowserRecordingOperationError);
 const isBrowserRecordingCaptureTimeoutError = Schema.is(BrowserRecordingCaptureTimeoutError);
 
+interface StartingBrowserRecordingLifecycle {
+  readonly phase: "starting";
+  grantStarted: boolean;
+  cancelledBeforeGrant: boolean;
+  readonly cancelledBeforeGrantSignal: Promise<void>;
+  readonly cancelBeforeGrant: () => void;
+}
+
 type BrowserRecordingLifecycle =
-  | { readonly phase: "starting" }
+  | StartingBrowserRecordingLifecycle
   | { readonly phase: "recording" }
   | {
       readonly phase: "stopping";
@@ -122,18 +130,32 @@ export function useActiveBrowserRecordingTabIds(): ReadonlySet<string> {
 const activeRecordings = new Map<string, ActiveRecording>();
 let displayMediaGrantTail = Promise.resolve();
 
-const withDisplayMediaGrant = async <T>(useGrant: () => Promise<T>): Promise<T> => {
-  const previousGrant = displayMediaGrantTail;
-  let releaseGrant!: () => void;
-  displayMediaGrantTail = new Promise<void>((resolve) => {
-    releaseGrant = resolve;
+const makeStartingBrowserRecordingLifecycle = (): StartingBrowserRecordingLifecycle => {
+  let signalCancellation!: () => void;
+  const cancelledBeforeGrantSignal = new Promise<void>((resolve) => {
+    signalCancellation = resolve;
   });
-  await previousGrant;
-  try {
-    return await useGrant();
-  } finally {
-    releaseGrant();
-  }
+  const lifecycle: StartingBrowserRecordingLifecycle = {
+    phase: "starting",
+    grantStarted: false,
+    cancelledBeforeGrant: false,
+    cancelledBeforeGrantSignal,
+    cancelBeforeGrant: () => {
+      if (lifecycle.grantStarted || lifecycle.cancelledBeforeGrant) return;
+      lifecycle.cancelledBeforeGrant = true;
+      signalCancellation();
+    },
+  };
+  return lifecycle;
+};
+
+const withDisplayMediaGrant = <T>(useGrant: () => Promise<T>): Promise<T> => {
+  const result = displayMediaGrantTail.then(useGrant);
+  displayMediaGrantTail = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
 };
 
 const publishActiveRecordingTabIds = (): void => {
@@ -381,6 +403,7 @@ export async function startBrowserRecording(
   const startupSettled = new Promise<void>((resolve) => {
     settleStartup = resolve;
   });
+  const startingLifecycle = makeStartingBrowserRecordingLifecycle();
   const releaseSurfaceActivity = acquireBrowserSurfaceActivity(tabId);
   const recording: ActiveRecording = {
     tabId,
@@ -392,7 +415,7 @@ export async function startBrowserRecording(
     releaseSurfaceActivity,
     stream: null,
     recorder: null,
-    lifecycle: { phase: "starting" },
+    lifecycle: startingLifecycle,
   };
   activeRecordings.set(tabId, recording);
   publishActiveRecordingTabIds();
@@ -421,42 +444,52 @@ export async function startBrowserRecording(
     };
     // The desktop process exposes one display-media grant at a time. Keep only the
     // arm-to-capture handoff exclusive; acquired streams can record concurrently.
-    const stream = await withDisplayMediaGrant(async () => {
-      await throwIfStartupCancelled();
-      try {
-        await bridge.recording.startScreencast(tabId);
-      } catch (cause) {
-        if (!isRecordingStarting(recording)) {
-          throw recordingStartupCancelledError(recording, cause);
+    const stream = await Promise.race([
+      withDisplayMediaGrant(async () => {
+        if (startingLifecycle.cancelledBeforeGrant) {
+          throw recordingStartupCancelledError(recording);
         }
-        clearActiveRecording(recording);
-        throw new BrowserRecordingOperationError({
-          operation: "start-screencast",
-          tabId,
-          cause,
-        });
-      }
-      await throwIfStartupCancelled();
-      try {
-        recording.stream = await captureTabMediaStreamWithTimeout(tabId, frameRate);
-        return recording.stream;
-      } catch (cause) {
-        const cleanupCause = await cleanupFailedRecordingStart(bridge, recording);
-        if (isBrowserRecordingCaptureTimeoutError(cause) && cleanupCause === undefined) throw cause;
-        throw new BrowserRecordingOperationError({
-          operation: "capture-media-stream",
-          tabId,
-          cause:
-            cleanupCause === undefined
-              ? cause
-              : new AggregateError(
-                  [cause, cleanupCause],
-                  `Browser media capture and cleanup failed for tab ${tabId}.`,
-                  { cause },
-                ),
-        });
-      }
-    });
+        startingLifecycle.grantStarted = true;
+        await throwIfStartupCancelled();
+        try {
+          await bridge.recording.startScreencast(tabId);
+        } catch (cause) {
+          if (!isRecordingStarting(recording)) {
+            throw recordingStartupCancelledError(recording, cause);
+          }
+          clearActiveRecording(recording);
+          throw new BrowserRecordingOperationError({
+            operation: "start-screencast",
+            tabId,
+            cause,
+          });
+        }
+        await throwIfStartupCancelled();
+        try {
+          recording.stream = await captureTabMediaStreamWithTimeout(tabId, frameRate);
+          return recording.stream;
+        } catch (cause) {
+          const cleanupCause = await cleanupFailedRecordingStart(bridge, recording);
+          if (isBrowserRecordingCaptureTimeoutError(cause) && cleanupCause === undefined)
+            throw cause;
+          throw new BrowserRecordingOperationError({
+            operation: "capture-media-stream",
+            tabId,
+            cause:
+              cleanupCause === undefined
+                ? cause
+                : new AggregateError(
+                    [cause, cleanupCause],
+                    `Browser media capture and cleanup failed for tab ${tabId}.`,
+                    { cause },
+                  ),
+          });
+        }
+      }),
+      startingLifecycle.cancelledBeforeGrantSignal.then(() => {
+        throw recordingStartupCancelledError(recording);
+      }),
+    ]);
     await throwIfStartupCancelled();
 
     let recorder: MediaRecorder;
@@ -643,6 +676,7 @@ export function stopBrowserRecording(
   const recording = activeRecordings.get(tabId);
   if (!bridge || !recording) return Promise.resolve(null);
   if (recording.lifecycle.phase === "stopping") return recording.lifecycle.stopPromise;
+  if (recording.lifecycle.phase === "starting") recording.lifecycle.cancelBeforeGrant();
 
   const stopPromise = Promise.resolve()
     .then(() => finalizeBrowserRecording(bridge, recording))
