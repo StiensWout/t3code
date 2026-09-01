@@ -79,4 +79,24 @@ describe("resolveHostedBrowserWebviewWrapperStyle", () => {
       visibility: "visible",
     });
   });
+
+  it("keeps an inactive webview paintable without marking it as rendering-active", () => {
+    const style = resolveHostedBrowserWebviewWrapperStyle({
+      active: false,
+      renderingActive: false,
+      keepPaintableWhenInactive: true,
+      rect: null,
+      hiddenSize: { width: 1280, height: 800 },
+    });
+
+    expect(style).toEqual({
+      left: HIDDEN_BROWSER_WEBVIEW_OFFSET,
+      top: HIDDEN_BROWSER_WEBVIEW_OFFSET,
+      width: 1280,
+      height: 800,
+      zIndex: -1,
+      pointerEvents: "none",
+      visibility: "visible",
+    });
+  });
 });
