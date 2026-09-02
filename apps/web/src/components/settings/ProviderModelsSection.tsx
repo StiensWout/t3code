@@ -220,7 +220,10 @@ export function ProviderModelsSection({
       return;
     }
 
+    // Clear the filter so the new row renders even when it does not match,
+    // which is also what lets the pending scroll target resolve and clear.
     scrollToSlugRef.current = normalized;
+    setFilter("");
     onChange([...customModels, normalized]);
     setInput("");
     setError(null);
