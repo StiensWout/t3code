@@ -416,7 +416,7 @@ export function ProviderModelsSection({
         key={`${instanceId}:${model.slug}`}
         data-model-slug={model.slug}
         className={cn(
-          "grid h-7 grid-cols-[1.5rem_minmax(0,1fr)_auto_3rem_auto] items-center gap-2 rounded-md px-2 transition-colors hover:bg-muted/30",
+          "grid h-7 grid-cols-[1.5rem_minmax(0,1fr)_auto_4rem_auto] items-center gap-2 rounded-md px-2 transition-colors hover:bg-muted/30",
           isHidden && "opacity-50",
         )}
       >
