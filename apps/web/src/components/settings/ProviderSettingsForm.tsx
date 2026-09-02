@@ -205,7 +205,9 @@ function ProviderSettingsFieldRow({
 
   if (variant === "grid") {
     // Label cell, then a control cell where the description sits beside a
-    // fixed-width control and wraps under it when the pane is narrow.
+    // fixed-width control and wraps under it when the pane is narrow. The
+    // description is outside the label, so the control points at it instead.
+    const descriptionId = field.description ? `${inputId}-description` : undefined;
     return (
       <>
         {field.control === "switch" ? (
@@ -224,11 +226,13 @@ function ProviderSettingsFieldRow({
                   onChange(nextProviderConfigWithFieldValue(value, field, Boolean(checked)))
                 }
                 aria-label={field.label}
+                aria-describedby={descriptionId}
               />
             </span>
           ) : field.control === "textarea" ? (
             <Textarea
               id={inputId}
+              aria-describedby={descriptionId}
               className="w-full max-w-sm"
               value={readProviderConfigString(value, field.key)}
               onChange={(event) =>
@@ -240,6 +244,7 @@ function ProviderSettingsFieldRow({
           ) : (
             <DraftInput
               id={inputId}
+              aria-describedby={descriptionId}
               className="w-56"
               type={field.control === "password" ? "password" : undefined}
               autoComplete={field.control === "password" ? "off" : undefined}
@@ -250,7 +255,7 @@ function ProviderSettingsFieldRow({
             />
           )}
           {field.description ? (
-            <span className="text-[11px] leading-snug text-muted-foreground">
+            <span id={descriptionId} className="text-[11px] leading-snug text-muted-foreground">
               {field.description}
             </span>
           ) : null}

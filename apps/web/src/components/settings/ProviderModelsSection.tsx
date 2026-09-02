@@ -434,8 +434,11 @@ export function ProviderModelsSection({
             </code>
           ) : null}
         </span>
+        {/* The capability column sizes to its content, so it yields to the name on phone widths. */}
         {capLabels.length > 0 ? (
-          <span className="text-[11px] text-muted-foreground/70">{capLabels.join(" · ")}</span>
+          <span className="hidden text-[11px] text-muted-foreground/70 sm:block">
+            {capLabels.join(" · ")}
+          </span>
         ) : (
           <span />
         )}
