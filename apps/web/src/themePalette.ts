@@ -80,23 +80,6 @@ type CustomThemeLibrarySnapshot =
   | Readonly<{ status: "unavailable"; reason: "storage-unavailable"; cause: unknown }>;
 
 let customThemeLibrarySnapshot: CustomThemeLibrarySnapshot | null = null;
-const themePreviewListeners = new Set<() => void>();
-let themePreviewSidebarArtwork: boolean | null = null;
-
-export function getThemePreviewSidebarArtwork(): boolean | null {
-  return themePreviewSidebarArtwork;
-}
-
-export function subscribeToThemePreview(listener: () => void): () => void {
-  themePreviewListeners.add(listener);
-  return () => themePreviewListeners.delete(listener);
-}
-
-function setThemePreviewSidebarArtwork(next: boolean | null): void {
-  if (themePreviewSidebarArtwork === next) return;
-  themePreviewSidebarArtwork = next;
-  for (const listener of themePreviewListeners) listener();
-}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -1456,13 +1439,8 @@ export function getThemeDefinition(theme: ThemePreference): ThemeDefinition | nu
   );
 }
 
-/** Artwork palettes are reviewed alongside built-ins; user themes always use the pill fallback. */
-export function themeAllowsSidebarArtwork(theme: ThemePreference): boolean {
-  const themeId = themeIdFromPreference(theme);
-  return (
-    BUILT_IN_THEME_DEFINITIONS.find((definition) => definition.id === themeId)?.sidebarArtwork ===
-    true
-  );
+function isBuiltInThemeId(themeId: string): boolean {
+  return BUILT_IN_THEME_DEFINITIONS.some((definition) => definition.id === themeId);
 }
 
 /**
@@ -1864,6 +1842,70 @@ export function getThemeColorVariable(role: ThemeColorRole): string {
   return APP_THEME_VARIABLES[role];
 }
 
+/** Pigments the Dev blueprint reads; the Nightly sky is mixed from them in CSS. */
+const STAGE_ARTWORK_VARIABLES = [
+  "--stage-art-top",
+  "--stage-art-mid",
+  "--stage-art-bottom",
+  "--stage-art-highlight",
+  "--stage-art-secondary",
+  "--stage-art-tertiary",
+  "--stage-art-line",
+] as const;
+type StageArtworkVariable = (typeof STAGE_ARTWORK_VARIABLES)[number];
+export type StageArtworkColors = Readonly<Record<StageArtworkVariable, string>>;
+
+/**
+ * Environment artwork pigments for a palette T3 Code does not hand-tune.
+ * Built-ins keep reviewed values in index.css; this follows their structure so
+ * a user theme gets the same kind of art: a fixed lightness ladder per
+ * appearance keeps the white wordmark readable whatever the accent, hue and
+ * chroma come from the accent, and the tertiary glow takes the companion
+ * action color's hue. A gray accent yields a grayscale blueprint.
+ */
+export function deriveStageArtworkColors(
+  colors: ThemeColors,
+  appearance: ThemeAppearance,
+): StageArtworkColors {
+  const dark = appearance === "dark";
+  const canvas = parseThemeColor(colors.canvas)?.color ?? { L: dark ? 0.2 : 0.98, C: 0, h: 0 };
+  const accent = parseThemeColor(colors.accent)?.color ?? canvas;
+  const action = parseThemeColor(colors.messageAction)?.color ?? accent;
+  const h = accent.C < 0.03 ? canvas.h : accent.h;
+  const c = Math.min(0.19, accent.C);
+  const tertiaryHue = action.C < 0.03 ? (h + 50) % 360 : action.h;
+  const pigment = (color: ThemeOklch) => themeOklchToThemeColor(color);
+  return {
+    "--stage-art-top": pigment({ L: dark ? 0.58 : 0.77, C: c * 0.8, h }),
+    "--stage-art-mid": pigment({ L: dark ? 0.44 : 0.59, C: c, h }),
+    "--stage-art-bottom": pigment({ L: dark ? 0.28 : 0.39, C: c * 0.75, h }),
+    "--stage-art-highlight": pigment({ L: dark ? 0.93 : 0.96, C: Math.min(0.035, c), h }),
+    "--stage-art-secondary": pigment({ L: dark ? 0.7 : 0.79, C: c * 0.85, h }),
+    "--stage-art-tertiary": pigment({
+      L: dark ? 0.66 : 0.73,
+      C: Math.min(0.18, action.C),
+      h: tertiaryHue,
+    }),
+    "--stage-art-line": pigment({ L: dark ? 0.95 : 0.97, C: Math.min(0.028, c), h }),
+  };
+}
+
+/**
+ * Inline pigments outrank the built-in rules in index.css, so a built-in must
+ * clear them or it would keep wearing the previous custom theme's art. The
+ * attribute tells CSS to mix the Nightly sky and glow aliases from them.
+ */
+function applyStageArtwork(root: HTMLElement, artwork: StageArtworkColors | null): void {
+  if (artwork) {
+    root.dataset.themeArtwork = "derived";
+    for (const [variable, value] of Object.entries(artwork))
+      root.style.setProperty(variable, value);
+    return;
+  }
+  delete root.dataset.themeArtwork;
+  for (const variable of STAGE_ARTWORK_VARIABLES) root.style.removeProperty(variable);
+}
+
 /** Marks the document as wearing an unsaved draft rather than a stored theme. */
 export const THEME_PREVIEW_ID = "__preview";
 
@@ -1877,15 +1919,15 @@ export function applyThemeColorPreview(colors: ThemeColors, appearance: ThemeApp
   const root = document.documentElement;
   if (!root?.style) return;
 
-  // Drafts become user-controlled themes when saved, so their preview keeps
-  // the fixed stage artwork hidden even when it was seeded from a built-in.
-  setThemePreviewSidebarArtwork(false);
   root.dataset.themeId = THEME_PREVIEW_ID;
   root.classList.toggle("dark", appearance === "dark");
   for (const [role, value] of Object.entries(colors) as Array<[ThemeColorRole, string]>) {
     // A half-typed hex keeps the last good value instead of blanking the role.
     if (isThemeColor(value)) root.style.setProperty(APP_THEME_VARIABLES[role], value);
   }
+  // Drafts become user-controlled themes when saved, so they preview with
+  // derived art even when seeded from a built-in.
+  applyStageArtwork(root, deriveStageArtworkColors(colors, appearance));
 }
 
 export function applyThemePalette(theme: ThemePreference, appearance?: ThemeAppearance): void {
@@ -1894,7 +1936,6 @@ export function applyThemePalette(theme: ThemePreference, appearance?: ThemeAppe
   const root = document.documentElement;
   if (!root?.style) return;
 
-  setThemePreviewSidebarArtwork(null);
   const palette = getThemeDefinition(theme);
 
   if (palette) {
@@ -1904,6 +1945,10 @@ export function applyThemePalette(theme: ThemePreference, appearance?: ThemeAppe
     for (const [role, value] of Object.entries(colors) as Array<[ThemeColorRole, string]>) {
       root.style.setProperty(APP_THEME_VARIABLES[role], value);
     }
+    applyStageArtwork(
+      root,
+      isBuiltInThemeId(palette.id) ? null : deriveStageArtworkColors(colors, mode),
+    );
     return;
   }
 
@@ -1911,6 +1956,7 @@ export function applyThemePalette(theme: ThemePreference, appearance?: ThemeAppe
   for (const variable of Object.values(APP_THEME_VARIABLES)) {
     root.style.removeProperty(variable);
   }
+  applyStageArtwork(root, null);
 }
 
 export function resolveThemeAppearance(
