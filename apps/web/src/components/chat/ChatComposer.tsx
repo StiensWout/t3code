@@ -191,7 +191,7 @@ import {
 import { resolveComposerMenuActiveItemId } from "./composerMenuHighlight";
 import {
   searchSlashCommandItems,
-  slashCommandItemsForPromptPosition,
+  slashCommandItemsForTriggerKind,
 } from "./composerSlashCommandSearch";
 import {
   getComposerPromptInjectionState,
@@ -2120,9 +2120,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       const visibleProviderSlashCommandItems = providerSlashCommandItems.filter(
         (item) => item.command.name !== "compact" || compactSlashCommandAvailable,
       );
-      const slashCommandItems = slashCommandItemsForPromptPosition(
+      const slashCommandItems = slashCommandItemsForTriggerKind(
         [...builtInSlashCommandItems, ...visibleProviderSlashCommandItems, ...skillItems],
-        composerTrigger.rangeStart === 0,
+        composerTrigger.kind,
       );
       return searchSlashCommandItems(slashCommandItems, query);
     }

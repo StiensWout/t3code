@@ -18,11 +18,11 @@ type SlashSearchItem = Extract<
  * there. Built-ins apply locally on selection and skills insert a `$` mention
  * the server dispatches from any position, so both stay available.
  */
-export function slashCommandItemsForPromptPosition(
+export function slashCommandItemsForTriggerKind(
   items: ReadonlyArray<SlashSearchItem>,
-  isAtPromptStart: boolean,
+  triggerKind: "slash-command" | "slash-skill",
 ): SlashSearchItem[] {
-  if (isAtPromptStart) {
+  if (triggerKind === "slash-command") {
     return [...items];
   }
   return items.filter((item) => item.type !== "provider-slash-command");

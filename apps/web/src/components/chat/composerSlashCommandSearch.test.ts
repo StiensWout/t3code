@@ -4,7 +4,7 @@ import { ProviderDriverKind } from "@t3tools/contracts";
 import type { ComposerCommandItem } from "./ComposerCommandMenu";
 import {
   searchSlashCommandItems,
-  slashCommandItemsForPromptPosition,
+  slashCommandItemsForTriggerKind,
 } from "./composerSlashCommandSearch";
 
 describe("searchSlashCommandItems", () => {
@@ -210,11 +210,11 @@ describe("searchSlashCommandItems", () => {
       Extract<ComposerCommandItem, { type: "slash-command" | "provider-slash-command" | "skill" }>
     >;
 
-    expect(slashCommandItemsForPromptPosition(items, false).map((item) => item.id)).toEqual([
+    expect(slashCommandItemsForTriggerKind(items, "slash-skill").map((item) => item.id)).toEqual([
       "slash:model",
       "skill:claudeAgent:unslop",
     ]);
-    expect(slashCommandItemsForPromptPosition(items, true).map((item) => item.id)).toEqual([
+    expect(slashCommandItemsForTriggerKind(items, "slash-command").map((item) => item.id)).toEqual([
       "slash:model",
       "provider-slash-command:claudeAgent:compact",
       "skill:claudeAgent:unslop",
