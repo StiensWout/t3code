@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 import { ProviderDriverKind } from "@t3tools/contracts";
 
+import { INLINE_TERMINAL_CONTEXT_PLACEHOLDER } from "../../lib/terminalContext";
 import type { ComposerCommandItem } from "./ComposerCommandMenu";
 import {
   searchSlashCommandItems,
-  slashCommandItemsForTriggerKind,
+  slashCommandItemsForPromptPosition,
 } from "./composerSlashCommandSearch";
 
 describe("searchSlashCommandItems", () => {
@@ -177,7 +178,7 @@ describe("searchSlashCommandItems", () => {
     ]);
   });
 
-  it("hides provider commands from slash completion after the first message line", () => {
+  it("shows provider commands only when send-time content does not precede the slash", () => {
     const items = [
       {
         id: "slash:model",
@@ -210,14 +211,24 @@ describe("searchSlashCommandItems", () => {
       Extract<ComposerCommandItem, { type: "slash-command" | "provider-slash-command" | "skill" }>
     >;
 
-    expect(slashCommandItemsForTriggerKind(items, "slash-skill").map((item) => item.id)).toEqual([
-      "slash:model",
-      "skill:claudeAgent:unslop",
-    ]);
-    expect(slashCommandItemsForTriggerKind(items, "slash-command").map((item) => item.id)).toEqual([
+    expect(
+      slashCommandItemsForPromptPosition(items, "Use /compact", "Use ".length).map(
+        (item) => item.id,
+      ),
+    ).toEqual(["slash:model", "skill:claudeAgent:unslop"]);
+    expect(
+      slashCommandItemsForPromptPosition(items, " \n/compact", 2).map((item) => item.id),
+    ).toEqual([
       "slash:model",
       "provider-slash-command:claudeAgent:compact",
       "skill:claudeAgent:unslop",
     ]);
+    expect(
+      slashCommandItemsForPromptPosition(
+        items,
+        `${INLINE_TERMINAL_CONTEXT_PLACEHOLDER}\n/compact`,
+        2,
+      ).map((item) => item.id),
+    ).toEqual(["slash:model", "skill:claudeAgent:unslop"]);
   });
 });
