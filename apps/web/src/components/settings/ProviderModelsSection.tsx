@@ -256,7 +256,128 @@ export function ProviderModelsSection({
     onModelOrderChange(next);
   };
 
-  const renderRow = (model: (typeof displayModels)[number]) => {
+  type DisplayModel = (typeof displayModels)[number];
+
+  const starButton = (model: DisplayModel, isFavorite: boolean) => (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            size="icon-micro"
+            variant="ghost"
+            className={cn(
+              "[--control-icon-color:currentColor]",
+              isFavorite
+                ? "text-yellow-500 hover:text-yellow-600"
+                : "text-muted-foreground/40 hover:text-muted-foreground",
+            )}
+            onClick={() => handleToggleFavorite(model.slug)}
+            aria-label={`${isFavorite ? "Remove" : "Add"} ${model.name} ${
+              isFavorite ? "from" : "to"
+            } favorites`}
+          />
+        }
+      >
+        <StarIcon className={cn("size-3", isFavorite && "fill-current")} />
+      </TooltipTrigger>
+      <TooltipPopup side="top">
+        {isFavorite ? "Remove from favorites" : "Add to favorites"}
+      </TooltipPopup>
+    </Tooltip>
+  );
+
+  // Reorder and remove stay in the row at all times (dimmed when unavailable)
+  // so ordering is discoverable without hovering.
+  const rowActions = (
+    model: DisplayModel,
+    options: {
+      readonly isHidden: boolean;
+      readonly canMoveUp: boolean;
+      readonly canMoveDown: boolean;
+    },
+  ) => (
+    <span className="flex shrink-0 items-center justify-end gap-0.5">
+      {!options.isHidden && !isFiltering ? (
+        <>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  size="icon-micro"
+                  variant="ghost-muted"
+                  disabled={!options.canMoveUp}
+                  onClick={() => handleMove(model.slug, -1)}
+                  aria-label={`Move ${model.name} up`}
+                />
+              }
+            >
+              <ArrowUpIcon className="size-3" />
+            </TooltipTrigger>
+            <TooltipPopup side="top">Move up</TooltipPopup>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  size="icon-micro"
+                  variant="ghost-muted"
+                  disabled={!options.canMoveDown}
+                  onClick={() => handleMove(model.slug, 1)}
+                  aria-label={`Move ${model.name} down`}
+                />
+              }
+            >
+              <ArrowDownIcon className="size-3" />
+            </TooltipTrigger>
+            <TooltipPopup side="top">Move down</TooltipPopup>
+          </Tooltip>
+        </>
+      ) : null}
+      {model.isCustom ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                size="icon-micro"
+                variant="ghost-muted"
+                aria-label={`Remove ${model.slug}`}
+                onClick={() => handleRemove(model.slug)}
+              />
+            }
+          >
+            <XIcon className="size-3" />
+          </TooltipTrigger>
+          <TooltipPopup side="top">Remove custom model</TooltipPopup>
+        </Tooltip>
+      ) : null}
+    </span>
+  );
+
+  const pickerTooltip = (model: DisplayModel, isHidden: boolean) =>
+    model.isCustom
+      ? "Custom models are always shown in the picker"
+      : isHidden
+        ? "Hidden from picker"
+        : "Shown in picker";
+
+  // The trigger is a wrapper span: a disabled switch gets no pointer events,
+  // so it could not open the tooltip itself.
+  const pickerSwitch = (model: DisplayModel, isHidden: boolean) => (
+    <Tooltip>
+      <TooltipTrigger render={<span className="flex shrink-0 items-center" />}>
+        <Switch
+          className="sm:[--thumb-size:--spacing(3.5)]"
+          checked={!isHidden}
+          disabled={model.isCustom}
+          onCheckedChange={(checked) => setHidden(model.slug, !checked)}
+          aria-label={`Show ${model.name} in the model picker`}
+        />
+      </TooltipTrigger>
+      <TooltipPopup side="top">{pickerTooltip(model, isHidden)}</TooltipPopup>
+    </Tooltip>
+  );
+
+  const renderRow = (model: DisplayModel) => {
     const capLabels = describeModelCapabilities(model);
     const group = groupOf(model);
     // Hidden is read from the preference itself: a favorited model can still be
@@ -271,132 +392,34 @@ export function ProviderModelsSection({
     const canMoveUp =
       !isFiltering && previousModel !== undefined && groupOf(previousModel) === group;
     const canMoveDown = !isFiltering && nextModel !== undefined && groupOf(nextModel) === group;
+    const nameClassName = cn("text-xs", isHidden ? "text-muted-foreground" : "text-foreground/90");
 
     return (
       <div
         key={`${instanceId}:${model.slug}`}
         className={cn(
-          "group flex min-h-8 items-center gap-2 rounded-md px-2 py-1 transition-colors hover:bg-muted/30",
+          "grid h-7 grid-cols-[1.5rem_minmax(0,1fr)_auto_3rem_auto] items-center gap-2 rounded-md px-2 transition-colors hover:bg-muted/30",
           isHidden && "opacity-50",
         )}
       >
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Button
-                size="icon-micro"
-                variant="ghost"
-                className={cn(
-                  "[--control-icon-color:currentColor]",
-                  isFavorite
-                    ? "text-yellow-500 hover:text-yellow-600"
-                    : "text-muted-foreground/40 hover:text-muted-foreground",
-                )}
-                onClick={() => handleToggleFavorite(model.slug)}
-                aria-label={`${isFavorite ? "Remove" : "Add"} ${model.name} ${
-                  isFavorite ? "from" : "to"
-                } favorites`}
-              />
-            }
-          >
-            <StarIcon className={cn("size-3", isFavorite && "fill-current")} />
-          </TooltipTrigger>
-          <TooltipPopup side="top">
-            {isFavorite ? "Remove from favorites" : "Add to favorites"}
-          </TooltipPopup>
-        </Tooltip>
-        <span className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2">
-          <span
-            className={cn("text-xs", isHidden ? "text-muted-foreground" : "text-foreground/90")}
-          >
-            {model.name}
-          </span>
-          {model.name !== model.slug ? (
+        {starButton(model, isFavorite)}
+        <span className="flex min-w-0 items-baseline gap-2">
+          <span className={cn(nameClassName, "truncate")}>{model.name}</span>
+          {model.isCustom ? (
+            <span className="text-[11px] text-muted-foreground/70">custom</span>
+          ) : model.name !== model.slug ? (
             <code className="truncate font-mono text-[11px] text-muted-foreground/70">
               {model.slug}
             </code>
           ) : null}
-          {model.isCustom ? (
-            <span className="text-[11px] text-muted-foreground/70">custom</span>
-          ) : null}
-          {capLabels.length > 0 ? (
-            <span className="text-[11px] text-muted-foreground/70">{capLabels.join(" · ")}</span>
-          ) : null}
         </span>
-        <span className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity pointer-coarse:opacity-100 group-focus-within:opacity-100 group-hover:opacity-100">
-          {!isHidden && !isFiltering ? (
-            <>
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <Button
-                      size="icon-micro"
-                      variant="ghost-muted"
-                      disabled={!canMoveUp}
-                      onClick={() => handleMove(model.slug, -1)}
-                      aria-label={`Move ${model.name} up`}
-                    />
-                  }
-                >
-                  <ArrowUpIcon className="size-3" />
-                </TooltipTrigger>
-                <TooltipPopup side="top">Move up</TooltipPopup>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <Button
-                      size="icon-micro"
-                      variant="ghost-muted"
-                      disabled={!canMoveDown}
-                      onClick={() => handleMove(model.slug, 1)}
-                      aria-label={`Move ${model.name} down`}
-                    />
-                  }
-                >
-                  <ArrowDownIcon className="size-3" />
-                </TooltipTrigger>
-                <TooltipPopup side="top">Move down</TooltipPopup>
-              </Tooltip>
-            </>
-          ) : null}
-          {model.isCustom ? (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    size="icon-micro"
-                    variant="ghost-muted"
-                    aria-label={`Remove ${model.slug}`}
-                    onClick={() => handleRemove(model.slug)}
-                  />
-                }
-              >
-                <XIcon className="size-3" />
-              </TooltipTrigger>
-              <TooltipPopup side="top">Remove custom model</TooltipPopup>
-            </Tooltip>
-          ) : null}
-        </span>
-        {/* The trigger is a wrapper span: a disabled switch gets no pointer events, so it could not open the tooltip itself. */}
-        <Tooltip>
-          <TooltipTrigger render={<span className="flex shrink-0 items-center" />}>
-            <Switch
-              className="sm:[--thumb-size:--spacing(3.5)]"
-              checked={!isHidden}
-              disabled={model.isCustom}
-              onCheckedChange={(checked) => setHidden(model.slug, !checked)}
-              aria-label={`Show ${model.name} in the model picker`}
-            />
-          </TooltipTrigger>
-          <TooltipPopup side="top">
-            {model.isCustom
-              ? "Custom models are always shown in the picker"
-              : isHidden
-                ? "Hidden from picker"
-                : "Shown in picker"}
-          </TooltipPopup>
-        </Tooltip>
+        {capLabels.length > 0 ? (
+          <span className="text-[11px] text-muted-foreground/70">{capLabels.join(" · ")}</span>
+        ) : (
+          <span />
+        )}
+        {rowActions(model, { isHidden, canMoveUp, canMoveDown })}
+        {pickerSwitch(model, isHidden)}
       </div>
     );
   };

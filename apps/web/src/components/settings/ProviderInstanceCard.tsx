@@ -53,9 +53,12 @@ import {
 
 const ENVIRONMENT_VARIABLE_NAME_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 
-/** Label-left field grid shared by the identity and runtime groups. */
+/** Label-left field grid for the Configuration tab: one row per field. */
 const PROVIDER_FIELD_GRID_CLASS_NAME =
-  "grid gap-x-4 gap-y-3 sm:grid-cols-[9rem_minmax(0,1fr)] sm:items-start";
+  "grid gap-x-4 gap-y-2.5 sm:grid-cols-[8rem_minmax(0,1fr)] sm:items-start";
+/** Full-width divider row that names the group of fields below it. */
+const PROVIDER_FIELD_GROUP_LABEL_CLASS_NAME =
+  "col-span-full mt-1 border-t border-border/60 pt-2.5 text-[11px] text-muted-foreground";
 
 let environmentVariableDraftId = 0;
 const nextEnvironmentVariableDraftId = () => `provider-env-${environmentVariableDraftId++}`;
@@ -479,6 +482,9 @@ export function ProviderInstanceCard({
     liveModels: liveProvider?.models,
     customModels,
   });
+  const hiddenModelCount = modelsForDisplay.filter(
+    (model) => !model.isCustom && hiddenModels.includes(model.slug),
+  ).length;
 
   const updateDisplayName = (value: string) => {
     const trimmed = value.trim();
@@ -818,10 +824,14 @@ export function ProviderInstanceCard({
           <button
             type="button"
             aria-pressed={visibleTab === "models"}
-            className={providerSettingsTabClassName(visibleTab === "models")}
+            className={cn(providerSettingsTabClassName(visibleTab === "models"), "gap-1.5")}
             onClick={() => setActiveTab("models")}
           >
             Models
+            <span className="font-normal text-muted-foreground/70">
+              {modelsForDisplay.length}
+              {hiddenModelCount > 0 ? ` · ${hiddenModelCount} hidden` : ""}
+            </span>
           </button>
         ) : null}
       </div>
@@ -836,7 +846,7 @@ export function ProviderInstanceCard({
           <div
             inert={readOnly}
             aria-disabled={readOnly || undefined}
-            className={cn("space-y-5 px-4 py-5", readOnly && "opacity-50 select-none")}
+            className={cn("px-4 py-4", readOnly && "opacity-50 select-none")}
           >
             <div className={PROVIDER_FIELD_GRID_CLASS_NAME}>
               <label
@@ -862,9 +872,7 @@ export function ProviderInstanceCard({
                   commitDelayMs={120}
                 />
               </div>
-            </div>
-
-            <div className={cn(PROVIDER_FIELD_GRID_CLASS_NAME, "border-t border-border/60 pt-5")}>
+              <div className={PROVIDER_FIELD_GROUP_LABEL_CLASS_NAME}>Runtime</div>
               {driverOption ? (
                 <ProviderSettingsForm
                   definition={driverOption}
@@ -884,11 +892,13 @@ export function ProviderInstanceCard({
                   </p>
                 </>
               )}
-              <span className="pt-1.5 text-xs font-medium text-foreground">Environment</span>
-              <ProviderEnvironmentSection
-                environment={instance.environment ?? []}
-                onChange={updateEnvironment}
-              />
+              <div className={PROVIDER_FIELD_GROUP_LABEL_CLASS_NAME}>Environment</div>
+              <div className="col-span-full">
+                <ProviderEnvironmentSection
+                  environment={instance.environment ?? []}
+                  onChange={updateEnvironment}
+                />
+              </div>
             </div>
           </div>
         </ScrollArea>

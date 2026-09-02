@@ -161,7 +161,8 @@ interface ProviderSettingsFormProps {
   /**
    * `card` stacks label over control, `dialog` is the compact wizard layout,
    * `grid` emits a label cell and a control cell per field for a parent
-   * two-column grid (label column left, control right).
+   * two-column grid (label column left, control right), with the description
+   * beside a fixed-width control so each field stays on one line.
    */
   readonly variant: "card" | "dialog" | "grid";
   readonly onChange: (nextConfig: Record<string, unknown> | undefined) => void;
@@ -203,17 +204,20 @@ function ProviderSettingsFieldRow({
   ) : null;
 
   if (variant === "grid") {
-    const gridLabel = (
-      <label htmlFor={inputId} className="pt-1.5 text-xs font-medium text-foreground">
-        {field.label}
-      </label>
-    );
-    if (field.control === "switch") {
-      return (
-        <>
+    // Label cell, then a control cell where the description sits beside a
+    // fixed-width control and wraps under it when the pane is narrow.
+    return (
+      <>
+        {field.control === "switch" ? (
           <span className="pt-1.5 text-xs font-medium text-foreground">{field.label}</span>
-          <div className="min-w-0">
-            <div className="flex h-8 items-center">
+        ) : (
+          <label htmlFor={inputId} className="pt-1.5 text-xs font-medium text-foreground">
+            {field.label}
+          </label>
+        )}
+        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+          {field.control === "switch" ? (
+            <span className="flex h-8 items-center">
               <Switch
                 checked={readProviderConfigBoolean(value, field.key, field.defaultBooleanValue)}
                 onCheckedChange={(checked) =>
@@ -221,19 +225,11 @@ function ProviderSettingsFieldRow({
                 }
                 aria-label={field.label}
               />
-            </div>
-            {description}
-          </div>
-        </>
-      );
-    }
-    if (field.control === "textarea") {
-      return (
-        <>
-          {gridLabel}
-          <div className="min-w-0">
+            </span>
+          ) : field.control === "textarea" ? (
             <Textarea
               id={inputId}
+              className="w-full max-w-sm"
               value={readProviderConfigString(value, field.key)}
               onChange={(event) =>
                 onChange(nextProviderConfigWithFieldValue(value, field, event.target.value))
@@ -241,26 +237,23 @@ function ProviderSettingsFieldRow({
               placeholder={field.placeholder}
               spellCheck={false}
             />
-            {description}
-          </div>
-        </>
-      );
-    }
-    return (
-      <>
-        {gridLabel}
-        <div className="min-w-0">
-          <DraftInput
-            id={inputId}
-            className="max-w-md"
-            type={field.control === "password" ? "password" : undefined}
-            autoComplete={field.control === "password" ? "off" : undefined}
-            value={readProviderConfigString(value, field.key)}
-            onCommit={(next) => onChange(nextProviderConfigWithFieldValue(value, field, next))}
-            placeholder={field.placeholder}
-            spellCheck={false}
-          />
-          {description}
+          ) : (
+            <DraftInput
+              id={inputId}
+              className="w-56"
+              type={field.control === "password" ? "password" : undefined}
+              autoComplete={field.control === "password" ? "off" : undefined}
+              value={readProviderConfigString(value, field.key)}
+              onCommit={(next) => onChange(nextProviderConfigWithFieldValue(value, field, next))}
+              placeholder={field.placeholder}
+              spellCheck={false}
+            />
+          )}
+          {field.description ? (
+            <span className="text-[11px] leading-snug text-muted-foreground">
+              {field.description}
+            </span>
+          ) : null}
         </div>
       </>
     );
