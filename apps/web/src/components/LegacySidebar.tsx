@@ -185,6 +185,7 @@ import {
   orderItemsByPreferredIds,
   shouldClearThreadSelectionOnMouseDown,
   sortProjectsForSidebar,
+  useRetainedValue,
   useSidebarRowSubscriptionLease,
   useThreadJumpHintVisibility,
   ThreadStatusPill,
@@ -464,39 +465,16 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
     leaseLiveStatus ? thread.environmentId : null,
     leaseLiveStatus ? thread.linkedPullRequest : null,
   );
-  const gitStatusSnapshotKey = JSON.stringify([thread.environmentId, gitCwd]);
-  const gitStatusSnapshotRef = useRef<{
-    readonly key: string;
-    readonly value: NonNullable<typeof gitStatus.data>;
-  } | null>(null);
-  const linkedPullRequestSnapshotKey =
+  const visibleGitStatus = useRetainedValue(
+    JSON.stringify([thread.environmentId, gitCwd]),
+    gitStatus.data,
+  );
+  const visibleLinkedPullRequestStatus = useRetainedValue(
     thread.linkedPullRequest === null
       ? null
-      : JSON.stringify([thread.environmentId, thread.linkedPullRequest]);
-  const linkedPullRequestStatusSnapshotRef = useRef<{
-    readonly key: string;
-    readonly value: NonNullable<typeof linkedPullRequestStatus>;
-  } | null>(null);
-  if (gitStatus.data !== null) {
-    gitStatusSnapshotRef.current = { key: gitStatusSnapshotKey, value: gitStatus.data };
-  }
-  if (linkedPullRequestStatus !== null && linkedPullRequestSnapshotKey !== null) {
-    linkedPullRequestStatusSnapshotRef.current = {
-      key: linkedPullRequestSnapshotKey,
-      value: linkedPullRequestStatus,
-    };
-  }
-  const visibleGitStatus =
-    gitStatus.data ??
-    (gitStatusSnapshotRef.current?.key === gitStatusSnapshotKey
-      ? gitStatusSnapshotRef.current.value
-      : null);
-  const visibleLinkedPullRequestStatus =
-    linkedPullRequestStatus ??
-    (linkedPullRequestSnapshotKey !== null &&
-    linkedPullRequestStatusSnapshotRef.current?.key === linkedPullRequestSnapshotKey
-      ? linkedPullRequestStatusSnapshotRef.current.value
-      : null);
+      : JSON.stringify([thread.environmentId, thread.linkedPullRequest]),
+    linkedPullRequestStatus,
+  );
   const pr =
     thread.linkedPullRequest == null
       ? resolveThreadPr({ threadBranch: thread.branch, gitStatus: visibleGitStatus })

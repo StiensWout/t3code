@@ -6,7 +6,7 @@ import {
   pullRequestDetailToVcsStatus,
 } from "@t3tools/client-runtime/state/pull-requests";
 import { Atom } from "effect/unstable/reactivity";
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 
 import { connectionAtomRuntime } from "../connection/runtime";
 import { appAtomRegistry } from "./atom-registry";
@@ -50,8 +50,14 @@ export function useThreadPr(
   const snapshotIdentity = JSON.stringify(
     thread.linkedPullRequest ?? { branch: thread.branch, cwd },
   );
-  const snapshots = useAtomValue(threadPrSnapshotsAtom);
-  const snapshotEntry = snapshots.get(threadKey);
+  // Select this row's entry so writes for other rows do not re-render it.
+  const snapshotEntry = useAtomValue(
+    threadPrSnapshotsAtom,
+    useCallback(
+      (current: ReadonlyMap<string, ThreadPrSnapshot>) => current.get(threadKey),
+      [threadKey],
+    ),
+  );
   const snapshot = snapshotEntry?.identity === snapshotIdentity ? snapshotEntry.presentation : null;
   const gitStatus = useEnvironmentQuery(
     thread.linkedPullRequest == null && thread.branch !== null && cwd !== null

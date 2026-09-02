@@ -143,6 +143,7 @@ import {
   sortPinnedThreadsForSidebar,
   sortSettledThreadsForSidebar,
   sortThreadsForSidebar,
+  useRetainedValue,
   useSidebarRowSubscriptionLease,
   useThreadJumpHintVisibility,
 } from "./Sidebar.logic";
@@ -813,19 +814,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
         })
       : null,
   );
-  const gitStatusSnapshotKey = JSON.stringify([thread.environmentId, gitCwd]);
-  const gitStatusSnapshotRef = useRef<{
-    readonly key: string;
-    readonly value: NonNullable<typeof gitStatus.data>;
-  } | null>(null);
-  if (gitStatus.data !== null) {
-    gitStatusSnapshotRef.current = { key: gitStatusSnapshotKey, value: gitStatus.data };
-  }
-  const visibleGitStatus =
-    gitStatus.data ??
-    (gitStatusSnapshotRef.current?.key === gitStatusSnapshotKey
-      ? gitStatusSnapshotRef.current.value
-      : null);
+  const visibleGitStatus = useRetainedValue(
+    JSON.stringify([thread.environmentId, gitCwd]),
+    gitStatus.data,
+  );
   const retainTerminalOnBranchMismatch = thread.worktreePath === null;
   const pr = resolveDisplayedThreadPr({
     threadBranch: thread.branch,
@@ -1666,19 +1658,10 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
         })
       : null,
   );
-  const gitStatusSnapshotKey = JSON.stringify([thread.environmentId, gitCwd]);
-  const gitStatusSnapshotRef = useRef<{
-    readonly key: string;
-    readonly value: NonNullable<typeof gitStatus.data>;
-  } | null>(null);
-  if (gitStatus.data !== null) {
-    gitStatusSnapshotRef.current = { key: gitStatusSnapshotKey, value: gitStatus.data };
-  }
-  const visibleGitStatus =
-    gitStatus.data ??
-    (gitStatusSnapshotRef.current?.key === gitStatusSnapshotKey
-      ? gitStatusSnapshotRef.current.value
-      : null);
+  const visibleGitStatus = useRetainedValue(
+    JSON.stringify([thread.environmentId, gitCwd]),
+    gitStatus.data,
+  );
   const branchMismatch = resolveLocalCheckoutBranchMismatch({
     effectiveEnvMode: thread.worktreePath === null ? "local" : "worktree",
     activeWorktreePath: thread.worktreePath,

@@ -63,6 +63,18 @@ export function useSidebarRowSubscriptionLease(isActive: boolean): {
   };
 }
 
+// A row keeps the last live value it rendered so a released lease never
+// blanks its badge. The value is bound to `key`, so a different worktree or
+// linked pull request cannot reuse the previous one.
+export function useRetainedValue<T>(key: string | null, value: T | null): T | null {
+  const retained = React.useRef<{ readonly key: string; readonly value: T } | null>(null);
+  if (key !== null && value !== null) {
+    retained.current = { key, value };
+  }
+  if (value !== null) return value;
+  return key !== null && retained.current?.key === key ? retained.current.value : null;
+}
+
 // The list already reaches its destination through sortable transforms while
 // the pointer is down. dnd-kit's default also animates the committed DOM order
 // after release, replaying the same movement across every affected row.
