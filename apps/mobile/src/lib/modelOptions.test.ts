@@ -223,7 +223,7 @@ describe("mobile model options", () => {
     expect(resolveDefaultableModelSelection(null, legacy)).toBe(legacy);
   });
 
-  it("resolves new tasks from draft, project, sticky, then provider defaults", () => {
+  it("resolves new tasks from draft, sticky, project, then provider defaults", () => {
     const draft = { instanceId: ProviderInstanceId.make("codex"), model: "draft" };
     const project = { instanceId: ProviderInstanceId.make("codex"), model: "project" };
     const sticky = { instanceId: ProviderInstanceId.make("codex"), model: "sticky" };
@@ -244,7 +244,8 @@ describe("mobile model options", () => {
       });
 
     expect(resolve(draft, project, sticky)).toBe(draft);
-    expect(resolve(null, project, sticky)).toBe(project);
+    expect(resolve(null, project, sticky)).toBe(sticky);
+    expect(resolve(null, project, null)).toBe(project);
     expect(resolve(null, null, sticky)).toBe(sticky);
     expect(resolve(null, null, null)).toBe(providerDefault.selection);
   });

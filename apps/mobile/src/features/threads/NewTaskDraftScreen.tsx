@@ -931,7 +931,7 @@ export function NewTaskDraftScreen(props: {
         flow.finishEditingPendingTask();
       } else {
         // Drop draft-local model/workspace selections with the content. The
-        // next task re-resolves project defaults before sticky app defaults.
+        // next task re-resolves sticky app defaults before project defaults.
         clearComposerDraftContent(draftKey, {
           clearModelSelection: true,
           clearWorkspaceSelection: true,

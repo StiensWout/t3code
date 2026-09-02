@@ -58,6 +58,7 @@ describe("chatThreadActions", () => {
     expect(
       resolveNewThreadModelSelectionOverride({
         projectDefaultSelection: null,
+        stickySelection: null,
         carrySelection: CARRIED_SELECTION,
         carrySourceDraftId: "draft-a",
         destinationDraftId: "draft-a",
@@ -69,6 +70,7 @@ describe("chatThreadActions", () => {
     expect(
       resolveNewThreadModelSelectionOverride({
         projectDefaultSelection: null,
+        stickySelection: null,
         carrySelection: CARRIED_SELECTION,
         carrySourceDraftId: "draft-a",
         destinationDraftId: "draft-b",
@@ -76,15 +78,28 @@ describe("chatThreadActions", () => {
     ).toEqual(CARRIED_SELECTION);
   });
 
-  it("keeps the project default above any carried selection", () => {
+  it("keeps a carried selection above the sticky and project defaults", () => {
     expect(
       resolveNewThreadModelSelectionOverride({
         projectDefaultSelection: PROJECT_DEFAULT_SELECTION,
+        stickySelection: PROJECT_DEFAULT_SELECTION,
         carrySelection: CARRIED_SELECTION,
         carrySourceDraftId: "draft-a",
         destinationDraftId: "draft-b",
       }),
-    ).toEqual(PROJECT_DEFAULT_SELECTION);
+    ).toEqual(CARRIED_SELECTION);
+  });
+
+  it("keeps the sticky selection above the project default", () => {
+    expect(
+      resolveNewThreadModelSelectionOverride({
+        projectDefaultSelection: PROJECT_DEFAULT_SELECTION,
+        stickySelection: CARRIED_SELECTION,
+        carrySelection: null,
+        carrySourceDraftId: null,
+        destinationDraftId: "draft-b",
+      }),
+    ).toEqual(CARRIED_SELECTION);
   });
 
   it("only applies the start-from-origin default to new worktree drafts", () => {

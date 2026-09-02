@@ -89,15 +89,17 @@ export function useNewThreadHandler() {
         getDraftSession,
         getDraftThread,
         applyStickyState,
+        stickyActiveProvider,
+        stickyModelSelectionByProvider,
         setDraftThreadContext,
         setLogicalProjectDraftThreadId,
         setModelSelection,
       } = useComposerDraftStore.getState();
       const currentRouteTarget = getCurrentRouteTarget();
       // A new thread carries the user's working mode from the thread being
-      // viewed. The target project's configured model still wins; runtime and
-      // interaction modes carry independently. Branch, worktree, and env mode
-      // come from configured defaults unless the caller passes them explicitly.
+      // viewed. Runtime and interaction modes carry independently. Branch,
+      // worktree, and env mode come from configured defaults unless the caller
+      // passes them explicitly.
       const carrySourceShell =
         currentRouteTarget?.kind === "server"
           ? readThreadShell(currentRouteTarget.threadRef)
@@ -134,9 +136,13 @@ export function useNewThreadHandler() {
           candidate.id === projectRef.projectId &&
           candidate.environmentId === projectRef.environmentId,
       );
+      const stickyModelSelection = stickyActiveProvider
+        ? (stickyModelSelectionByProvider[stickyActiveProvider] ?? null)
+        : null;
       const resolveModelSelectionOverride = (destinationDraftId: DraftId) =>
         resolveNewThreadModelSelectionOverride({
           projectDefaultSelection: project?.defaultModelSelection ?? null,
+          stickySelection: stickyModelSelection,
           carrySelection: carryModelSelection,
           carrySourceDraftId:
             currentRouteTarget?.kind === "draft" ? currentRouteTarget.draftId : null,
@@ -261,9 +267,9 @@ export function useNewThreadHandler() {
             });
           }
           // Model intent: an explicit human pick always stands. Seeds and
-          // legacy entries alike re-resolve here — sticky first, mirroring
-          // the mint-fresh path, then the project default or carried
-          // selection on top. This runs even when the draft is already open:
+          // legacy entries alike re-resolve here from the current thread,
+          // then the app-wide sticky choice, then the project default. This
+          // runs even when the draft is already open:
           // without it, a changed pin could never reach the draft the user
           // is looking at, because explicit picks are the only thing the
           // flag protects.
@@ -409,8 +415,8 @@ export function useNewThreadHandler() {
         applyStickyState(draftId);
         const modelSelectionOverride = resolveModelSelectionOverride(draftId);
         if (modelSelectionOverride) {
-          // Project defaults and carried selections both outrank global sticky
-          // state. The project default wins when both are present.
+          // The current thread wins over global sticky state. Project defaults
+          // only fill in when neither user-wide source has a selection.
           setModelSelection(draftId, modelSelectionOverride, { replaceOptions: true });
         }
         await router.navigate({

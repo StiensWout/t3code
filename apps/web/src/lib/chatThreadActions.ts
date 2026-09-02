@@ -46,13 +46,15 @@ export function resolveNewDraftStartFromOrigin(input: {
 
 export function resolveNewThreadModelSelectionOverride(input: {
   readonly projectDefaultSelection: ModelSelection | null;
+  readonly stickySelection: ModelSelection | null;
   readonly carrySelection: ModelSelection | null;
   readonly carrySourceDraftId: string | null;
   readonly destinationDraftId: string;
 }): ModelSelection | null {
   return (
-    input.projectDefaultSelection ??
-    (input.carrySourceDraftId === input.destinationDraftId ? null : input.carrySelection)
+    (input.carrySourceDraftId === input.destinationDraftId ? null : input.carrySelection) ??
+    input.stickySelection ??
+    input.projectDefaultSelection
   );
 }
 
