@@ -1,7 +1,7 @@
 "use client";
 
 import { ArrowDownIcon, ArrowUpIcon, PlusIcon, StarIcon, XIcon } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ProviderDriverKind,
   type ProviderInstanceId,
@@ -159,6 +159,9 @@ export function ProviderModelsSection({
   const [isAdding, setIsAdding] = useState(false);
   const [filter, setFilter] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  // Slug of a just-added custom model, scrolled into view once its row exists.
+  const scrollToSlugRef = useRef<string | null>(null);
   const hiddenModelSet = useMemo(() => new Set(hiddenModels), [hiddenModels]);
   const favoriteModelSet = useMemo(() => new Set(favoriteModels), [favoriteModels]);
   const displayModels = useMemo(
@@ -185,6 +188,19 @@ export function ProviderModelsSection({
       )
     : displayModels;
 
+  // The parent commits the new custom model and hands back an updated
+  // `models` list, so the row can only be scrolled to after that render.
+  useEffect(() => {
+    const slug = scrollToSlugRef.current;
+    if (slug === null) return;
+    const row = listRef.current?.querySelector<HTMLElement>(
+      `[data-model-slug="${CSS.escape(slug)}"]`,
+    );
+    if (!row) return;
+    scrollToSlugRef.current = null;
+    row.scrollIntoView({ block: "nearest" });
+  }, [displayModels]);
+
   const handleAdd = () => {
     const normalized = normalizeCustomModelSlug(input);
     if (!normalized) {
@@ -204,6 +220,7 @@ export function ProviderModelsSection({
       return;
     }
 
+    scrollToSlugRef.current = normalized;
     onChange([...customModels, normalized]);
     setInput("");
     setError(null);
@@ -397,6 +414,7 @@ export function ProviderModelsSection({
     return (
       <div
         key={`${instanceId}:${model.slug}`}
+        data-model-slug={model.slug}
         className={cn(
           "grid h-7 grid-cols-[1.5rem_minmax(0,1fr)_auto_3rem_auto] items-center gap-2 rounded-md px-2 transition-colors hover:bg-muted/30",
           isHidden && "opacity-50",
@@ -450,7 +468,10 @@ export function ProviderModelsSection({
           {hiddenCount > 0 ? ` · ${hiddenCount} hidden` : ""}
         </span>
       </div>
-      <div className="mt-2 -mx-2 max-h-64 overflow-y-auto lg:max-h-none lg:min-h-0 lg:flex-1">
+      <div
+        ref={listRef}
+        className="mt-2 -mx-2 max-h-64 overflow-y-auto lg:max-h-none lg:min-h-0 lg:flex-1"
+      >
         {visibleModels.length === 0 ? (
           <p className="px-2 py-2 text-xs text-muted-foreground">
             {isFiltering ? "No models match." : "No models reported for this provider yet."}
