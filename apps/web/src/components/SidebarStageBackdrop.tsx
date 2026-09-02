@@ -74,8 +74,8 @@ export function StageBackdropButtonArt({ variant }: { variant: SidebarStageBackd
   return variant === "nightly" ? <NightlySkyArt compact /> : <DevBlueprintArt compact />;
 }
 
-/** The sidebar background the artwork dissolves into; the send-button crop has no stage wrapper, so fall back to the chrome. */
-const STAGE_FADE = "var(--stage-fade, var(--app-chrome-background))";
+/** The sidebar background the header art dissolves into, set by the sidebar-stage-backdrop utility. */
+const STAGE_FADE = "var(--stage-fade)";
 
 /** A dissolve into the sidebar across the lower part of the art, stepping in OKLCH so light sidebars pass through tints of the art's own hue instead of gray. */
 function StageDissolve({ id, anchor }: { id: string; anchor: string }) {
@@ -200,7 +200,8 @@ function NightlySkyArt({ compact = false }: { compact?: boolean }) {
       <rect width="100%" height="96" fill={`url(#${skyId})`} />
       <rect width="100%" height="96" fill={`url(#${hazePatternId})`} />
       <rect width="100%" height="96" fill={`url(#${starsId})`} />
-      <rect width="100%" height="96" fill={`url(#${fadeId})`} />
+      {/* The send-button crop sits on the composer, not the sidebar, so it keeps the raw art. */}
+      {compact ? null : <rect width="100%" height="96" fill={`url(#${fadeId})`} />}
     </svg>
   );
 }
@@ -383,7 +384,8 @@ function DevBlueprintArt({ compact = false }: { compact?: boolean }) {
       <rect width="100%" height="96" fill={`url(#${majorGridId})`} />
       <rect width="100%" height="6" fill={`url(#${rulerId})`} />
       <rect width="100%" height="96" fill={`url(#${annotationsId})`} />
-      <rect width="100%" height="96" fill={`url(#${fadeId})`} />
+      {/* The send-button crop sits on the composer, not the sidebar, so it keeps the raw art. */}
+      {compact ? null : <rect width="100%" height="96" fill={`url(#${fadeId})`} />}
     </svg>
   );
 }
