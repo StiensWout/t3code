@@ -254,7 +254,7 @@ export function ProviderModelsSection({
                         <Button
                           size="icon-micro"
                           variant="ghost"
-                          className="text-muted-foreground/60 hover:text-muted-foreground data-pressed:text-muted-foreground"
+                          className="text-muted-foreground/60 hover:text-muted-foreground"
                           aria-label={`Details for ${model.name}`}
                         />
                       }
