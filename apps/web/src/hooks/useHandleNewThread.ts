@@ -89,8 +89,6 @@ export function useNewThreadHandler() {
         getDraftSession,
         getDraftThread,
         applyStickyState,
-        stickyActiveProvider,
-        stickyModelSelectionByProvider,
         setDraftThreadContext,
         setLogicalProjectDraftThreadId,
         setModelSelection,
@@ -136,18 +134,20 @@ export function useNewThreadHandler() {
           candidate.id === projectRef.projectId &&
           candidate.environmentId === projectRef.environmentId,
       );
-      const stickyModelSelection = stickyActiveProvider
-        ? (stickyModelSelectionByProvider[stickyActiveProvider] ?? null)
-        : null;
-      const resolveModelSelectionOverride = (destinationDraftId: DraftId) =>
-        resolveNewThreadModelSelectionOverride({
+      const resolveModelSelectionOverride = (destinationDraftId: DraftId) => {
+        const { stickyActiveProvider, stickyModelSelectionByProvider } =
+          useComposerDraftStore.getState();
+        return resolveNewThreadModelSelectionOverride({
           projectDefaultSelection: project?.defaultModelSelection ?? null,
-          stickySelection: stickyModelSelection,
+          stickySelection: stickyActiveProvider
+            ? (stickyModelSelectionByProvider[stickyActiveProvider] ?? null)
+            : null,
           carrySelection: carryModelSelection,
           carrySourceDraftId:
             currentRouteTarget?.kind === "draft" ? currentRouteTarget.draftId : null,
           destinationDraftId,
         });
+      };
       // The shared resolver owns the priority order. The t3.json read is
       // skipped entirely when a higher-priority source decides, and its
       // query atom caches per project after the first call.
