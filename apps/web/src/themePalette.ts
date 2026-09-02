@@ -1842,7 +1842,7 @@ export function getThemeColorVariable(role: ThemeColorRole): string {
   return APP_THEME_VARIABLES[role];
 }
 
-/** Pigments the Dev blueprint reads; the Nightly sky is mixed from them in CSS. */
+/** Every pigment the Dev blueprint and Nightly sky read. */
 const STAGE_ARTWORK_VARIABLES = [
   "--stage-art-top",
   "--stage-art-mid",
@@ -1851,6 +1851,13 @@ const STAGE_ARTWORK_VARIABLES = [
   "--stage-art-secondary",
   "--stage-art-tertiary",
   "--stage-art-line",
+  "--stage-night-top",
+  "--stage-night-mid",
+  "--stage-night-bottom",
+  "--stage-night-highlight",
+  "--stage-night-secondary",
+  "--stage-night-tertiary",
+  "--stage-night-line",
 ] as const;
 type StageArtworkVariable = (typeof STAGE_ARTWORK_VARIABLES)[number];
 export type StageArtworkColors = Readonly<Record<StageArtworkVariable, string>>;
@@ -1858,10 +1865,12 @@ export type StageArtworkColors = Readonly<Record<StageArtworkVariable, string>>;
 /**
  * Environment artwork pigments for a palette T3 Code does not hand-tune.
  * Built-ins keep reviewed values in index.css; this follows their structure so
- * a user theme gets the same kind of art: a fixed lightness ladder per
- * appearance keeps the white wordmark readable whatever the accent, hue and
+ * a user theme gets the same kind of art: fixed lightness ladders per
+ * appearance keep the white wordmark readable whatever the accent, hue and
  * chroma come from the accent, and the tertiary glow takes the companion
- * action color's hue. A gray accent yields a grayscale blueprint.
+ * action color's hue. The Nightly sky stays in the theme's own hue rather
+ * than the stock violet, so a gray accent yields a grayscale blueprint and a
+ * slate sky.
  */
 export function deriveStageArtworkColors(
   colors: ThemeColors,
@@ -1873,7 +1882,8 @@ export function deriveStageArtworkColors(
   const action = parseThemeColor(colors.messageAction)?.color ?? accent;
   const h = accent.C < 0.03 ? canvas.h : accent.h;
   const c = Math.min(0.19, accent.C);
-  const tertiaryHue = action.C < 0.03 ? (h + 50) % 360 : action.h;
+  const th = action.C < 0.03 ? (h + 50) % 360 : action.h;
+  const tc = Math.min(0.18, action.C);
   const pigment = (color: ThemeOklch) => themeOklchToThemeColor(color);
   return {
     "--stage-art-top": pigment({ L: dark ? 0.58 : 0.77, C: c * 0.8, h }),
@@ -1881,19 +1891,26 @@ export function deriveStageArtworkColors(
     "--stage-art-bottom": pigment({ L: dark ? 0.28 : 0.39, C: c * 0.75, h }),
     "--stage-art-highlight": pigment({ L: dark ? 0.93 : 0.96, C: Math.min(0.035, c), h }),
     "--stage-art-secondary": pigment({ L: dark ? 0.7 : 0.79, C: c * 0.85, h }),
-    "--stage-art-tertiary": pigment({
-      L: dark ? 0.66 : 0.73,
-      C: Math.min(0.18, action.C),
-      h: tertiaryHue,
-    }),
+    "--stage-art-tertiary": pigment({ L: dark ? 0.66 : 0.73, C: tc, h: th }),
     "--stage-art-line": pigment({ L: dark ? 0.95 : 0.97, C: Math.min(0.028, c), h }),
+    "--stage-night-top": pigment({ L: dark ? 0.4 : 0.46, C: c * 0.6, h }),
+    "--stage-night-mid": pigment({ L: dark ? 0.28 : 0.36, C: c * 0.5, h }),
+    "--stage-night-bottom": pigment({ L: dark ? 0.2 : 0.25, C: c * 0.35, h }),
+    "--stage-night-highlight": pigment({ L: dark ? 0.86 : 0.9, C: Math.min(0.06, c * 0.45), h }),
+    "--stage-night-secondary": pigment({ L: dark ? 0.57 : 0.65, C: c * 0.8, h }),
+    "--stage-night-tertiary": pigment({
+      L: dark ? 0.55 : 0.62,
+      C: Math.min(0.13, tc * 0.8),
+      h: th,
+    }),
+    "--stage-night-line": pigment({ L: dark ? 0.9 : 0.93, C: Math.min(0.045, c * 0.33), h }),
   };
 }
 
 /**
  * Inline pigments outrank the built-in rules in index.css, so a built-in must
  * clear them or it would keep wearing the previous custom theme's art. The
- * attribute tells CSS to mix the Nightly sky and glow aliases from them.
+ * attribute tells CSS to alias the glow and grid pigments from them.
  */
 function applyStageArtwork(root: HTMLElement, artwork: StageArtworkColors | null): void {
   if (artwork) {
@@ -1926,8 +1943,15 @@ export function applyThemeColorPreview(colors: ThemeColors, appearance: ThemeApp
     if (isThemeColor(value)) root.style.setProperty(APP_THEME_VARIABLES[role], value);
   }
   // Drafts become user-controlled themes when saved, so they preview with
-  // derived art even when seeded from a built-in.
-  applyStageArtwork(root, deriveStageArtworkColors(colors, appearance));
+  // derived art even when seeded from a built-in. A half-typed color keeps
+  // the last good pigment here too, so the art does not snap to gray mid-edit.
+  const lastGood = Object.fromEntries(
+    (Object.entries(colors) as Array<[ThemeColorRole, string]>).map(([role, value]) => [
+      role,
+      isThemeColor(value) ? value : root.style.getPropertyValue(APP_THEME_VARIABLES[role]) || value,
+    ]),
+  ) as ThemeColors;
+  applyStageArtwork(root, deriveStageArtworkColors(lastGood, appearance));
 }
 
 export function applyThemePalette(theme: ThemePreference, appearance?: ThemeAppearance): void {

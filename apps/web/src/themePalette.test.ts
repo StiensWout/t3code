@@ -407,6 +407,20 @@ describe("theme files", () => {
     vi.unstubAllGlobals();
   });
 
+  it("keeps the Nightly sky in a warm theme's own hue", () => {
+    const artwork = deriveStageArtworkColors(
+      { ...getDefaultThemeColors("light"), accent: "oklch(0.58 0.15 40)" },
+      "light",
+    );
+    for (const variable of [
+      "--stage-night-top",
+      "--stage-night-mid",
+      "--stage-night-bottom",
+    ] as const) {
+      expect(parseOklch(artwork[variable]).h).toBeCloseTo(40, 0);
+    }
+  });
+
   it("keeps a gray accent's artwork grayscale", () => {
     const artwork = deriveStageArtworkColors(
       { ...getDefaultThemeColors("dark"), accent: "#9a9a9a", messageAction: "#777777" },
