@@ -269,7 +269,9 @@ function HostedStaticEnvironmentBootstrap() {
 
 function RootRouteErrorView({ error, reset }: ErrorComponentProps) {
   const message = errorMessage(error);
-  const report = useMemo(() => errorReport(error), [error]);
+  // Router pathname rather than window.location: desktop uses hash history, where the window path is always "/".
+  const pathname = useLocation({ select: (location) => location.pathname });
+  const report = useMemo(() => errorReport(error, pathname), [error, pathname]);
 
   return (
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-background px-4 py-10 text-foreground sm:px-6">
@@ -352,13 +354,13 @@ const MAX_ERROR_CAUSE_DEPTH = 5;
 
 /**
  * Full error text for bug reports: app build, page path, time, then the stack
- * and any cause chain. Uses the pathname only so tokens in the query never
+ * and any cause chain. Takes the pathname only so tokens in the query never
  * land on the clipboard.
  */
-function errorReport(error: unknown): string {
+function errorReport(error: unknown, pathname: string): string {
   const lines = [
     `${APP_DISPLAY_NAME} ${APP_VERSION}`,
-    `Path: ${window.location.pathname}`,
+    `Path: ${pathname}`,
     `Time: ${new Date().toISOString()}`,
     "",
     errorDetails(error),
