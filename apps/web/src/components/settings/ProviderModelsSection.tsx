@@ -434,14 +434,15 @@ export function ProviderModelsSection({
             </code>
           ) : null}
         </span>
-        {/* The capability column sizes to its content, so it yields to the name on phone widths. */}
-        {capLabels.length > 0 ? (
-          <span className="hidden text-[11px] text-muted-foreground/70 sm:block">
-            {capLabels.join(" · ")}
-          </span>
-        ) : (
-          <span />
-        )}
+        {/*
+          Always a grid item so the columns line up across rows; the text
+          itself drops out on phone widths where it would starve the name.
+        */}
+        <span className="text-[11px] text-muted-foreground/70">
+          {capLabels.length > 0 ? (
+            <span className="hidden sm:inline">{capLabels.join(" · ")}</span>
+          ) : null}
+        </span>
         {rowActions(model, { isHidden, canMoveUp, canMoveDown })}
         {pickerSwitch(model, isHidden)}
       </div>
