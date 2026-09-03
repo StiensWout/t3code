@@ -169,18 +169,17 @@ export const make = Effect.fn("UsageLimitsService.make")(function* (sources: Usa
   ) {
     const adapter = yield* sources.getAdapter(instanceId);
     const provider = usageProviderFor(adapter.provider);
-    if (provider === null) {
-      // Re-pointed at a provider without limits: drop what the old one left.
-      const dropped = yield* Ref.modify(state, (map) => {
-        if (!map.has(instanceId)) return [false, map] as const;
-        const next = new Map(map);
-        next.delete(instanceId);
-        return [true, next] as const;
-      });
-      if (dropped) yield* PubSub.publish(changes, yield* snapshot);
-      return;
-    }
-    if (adapter.readAccountLimits === undefined) return;
+    // Re-pointed at another provider, or one without limits: whatever the old
+    // provider left behind goes, even if the new one has nothing to say yet.
+    const dropped = yield* Ref.modify(state, (map) => {
+      const stored = map.get(instanceId);
+      if (stored === undefined || stored.limits.provider === provider) return [false, map] as const;
+      const next = new Map(map);
+      next.delete(instanceId);
+      return [true, next] as const;
+    });
+    if (dropped) yield* PubSub.publish(changes, yield* snapshot);
+    if (provider === null || adapter.readAccountLimits === undefined) return;
     const startedAt = yield* Clock.currentTimeMillis;
     const update = yield* adapter.readAccountLimits;
     if (update === null) return;
@@ -219,9 +218,13 @@ export const make = Effect.fn("UsageLimitsService.make")(function* (sources: Usa
     if (provider === null) return Effect.void;
     const instanceId = event.providerInstanceId;
     return Effect.gen(function* () {
-      // A session outliving its instance's removal must not resurrect it.
-      const live = yield* sources.listInstances;
-      if (!live.includes(instanceId)) return;
+      // A session outliving its instance's removal or re-pointing must not
+      // resurrect the old provider's numbers.
+      const current = yield* sources.getAdapter(instanceId).pipe(
+        Effect.map((adapter) => usageProviderFor(adapter.provider)),
+        Effect.orElseSucceed(() => null),
+      );
+      if (current !== provider) return;
       yield* apply(instanceId, provider, event.payload.limits, Number.POSITIVE_INFINITY);
     });
   }).pipe(Effect.forkScoped);
