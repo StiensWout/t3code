@@ -60,8 +60,15 @@ const UsageLimit = Schema.Struct({
     ),
   ),
 });
+const ExtraUsage = Schema.NullOr(
+  Schema.Struct({
+    is_enabled: Schema.Boolean,
+    utilization: Schema.NullOr(Schema.Number),
+  }),
+);
 const UsageResponse = Schema.Struct({
   limits: Schema.optional(Schema.NullOr(Schema.Array(UsageLimit))),
+  extra_usage: Schema.optional(ExtraUsage),
   five_hour: Schema.optional(UsageWindow),
   seven_day: Schema.optional(UsageWindow),
   seven_day_opus: Schema.optional(UsageWindow),
@@ -128,6 +135,18 @@ export function normalizeClaudeUsage(
         resetsAt: limit.resets_at,
       });
     }
+    // Turn events report extra usage under `overage`; a complete read must
+    // carry the same window or it would delete what an event created.
+    const extra = response.extra_usage;
+    if (extra && extra.is_enabled && extra.utilization !== null) {
+      windows.push({
+        id: "overage",
+        label: "Extra usage",
+        usedPercent: clamp(extra.utilization),
+        resetsAt: null,
+        windowMinutes: null,
+      });
+    }
     return { complete: true, windows, plan };
   }
 
@@ -142,7 +161,8 @@ export function normalizeClaudeUsage(
       windowMinutes: legacy.windowMinutes,
     });
   }
-  return { complete: true, windows, plan };
+  // The named keys are a partial view, so they merge rather than replace.
+  return { complete: false, windows, plan };
 }
 
 const requestError = (detail: string, cause?: unknown) =>
@@ -154,9 +174,10 @@ const requestError = (detail: string, cause?: unknown) =>
   });
 
 /**
- * Where Claude Code keeps this instance's credentials. A configured home is
- * handed to the CLI as `CLAUDE_CONFIG_DIR`, and an instance environment may
- * override that or `HOME` itself, so the same precedence applies here.
+ * Where Claude Code keeps this instance's credentials, with the precedence
+ * the driver gives the CLI: a configured home becomes `CLAUDE_CONFIG_DIR`
+ * and wins outright; otherwise the instance environment's own
+ * `CLAUDE_CONFIG_DIR` or `HOME` applies, then the machine's home.
  */
 export function claudeConfigDir(input: {
   readonly environment: NodeJS.ProcessEnv | undefined;
@@ -164,9 +185,9 @@ export function claudeConfigDir(input: {
   readonly resolvedHome: string;
   readonly join: (...parts: string[]) => string;
 }): string {
+  if (input.homePath.trim().length > 0) return input.resolvedHome;
   const configured = input.environment?.CLAUDE_CONFIG_DIR?.trim();
   if (configured) return configured;
-  if (input.homePath.trim().length > 0) return input.resolvedHome;
   const home = input.environment?.HOME?.trim();
   return input.join(home || input.resolvedHome, ".claude");
 }

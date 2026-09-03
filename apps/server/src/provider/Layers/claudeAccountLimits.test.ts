@@ -23,6 +23,7 @@ describe("normalizeClaudeUsage", () => {
             },
           ],
           five_hour: { utilization: 99, resets_at: null },
+          extra_usage: { is_enabled: true, utilization: 12 },
         },
         "Max 20x",
       ),
@@ -50,6 +51,13 @@ describe("normalizeClaudeUsage", () => {
           usedPercent: 36,
           resetsAt: "2026-09-08T11:00:00+00:00",
           windowMinutes: 10080,
+        },
+        {
+          id: "overage",
+          label: "Extra usage",
+          usedPercent: 12,
+          resetsAt: null,
+          windowMinutes: null,
         },
       ],
     });
@@ -85,6 +93,15 @@ describe("normalizeClaudeUsage", () => {
         join,
       }),
     ).toBe("/work/claude-config");
+    // The driver hands a configured home to the CLI as CLAUDE_CONFIG_DIR, so it wins.
+    expect(
+      claudeConfigDir({
+        environment: { CLAUDE_CONFIG_DIR: "/work/claude-config" },
+        homePath: "~/.claude_work",
+        resolvedHome: "/home/me/.claude_work",
+        join,
+      }),
+    ).toBe("/home/me/.claude_work");
     expect(
       claudeConfigDir({
         environment: {},

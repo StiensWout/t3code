@@ -375,8 +375,10 @@ export function UsageLimitsSection({
             </span>
           ))
         : null}
-      {providers.length === 0 && !isPending && failedEnvironments.length === 0 ? (
-        <span className="text-sm text-muted-foreground">No limits reported yet.</span>
+      {providers.length === 0 && failedEnvironments.length === 0 ? (
+        <span className="text-sm text-muted-foreground">
+          {isPending ? "Reading limits…" : "No limits reported yet."}
+        </span>
       ) : null}
       {providers.map((entry) => (
         <section key={entryKey(entry)} className="flex flex-col gap-3">
