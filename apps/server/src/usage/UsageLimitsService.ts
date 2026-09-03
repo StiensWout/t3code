@@ -217,9 +217,11 @@ export const make = Effect.fn("UsageLimitsService.make")(function* (sources: Usa
     const startedAt = yield* Clock.currentTimeMillis;
     const update = yield* adapter.readAccountLimits;
     if (update === null) return;
-    // The instance may have been removed or re-pointed while the read ran.
+    // The instance may have been removed or re-pointed at another provider
+    // or account while the read ran; the numbers would belong to the old one.
     const current = yield* currentProvider(instanceId);
-    if (current !== provider) return;
+    const identityNow = yield* sources.getInstanceIdentity(instanceId);
+    if (current !== provider || identityNow !== identity) return;
     yield* apply(instanceId, provider, update, startedAt);
   });
 
