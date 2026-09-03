@@ -6,7 +6,7 @@ import type { DailyTotals, HourlyTotals } from "@t3tools/shared/usageMerge";
 
 import { isElectron } from "../../env";
 import { cn } from "../../lib/utils";
-import { useUsage, type EnvironmentUsageStatus } from "../../state/usage";
+import { useUsage, useUsageLimits, type EnvironmentUsageStatus } from "../../state/usage";
 import {
   enumerateDays,
   enumerateHourStarts,
@@ -31,6 +31,7 @@ import {
 } from "../WorkspaceBreadcrumb";
 import { WorkspacePageContainer } from "../WorkspacePageContainer";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
+import { UsageLimitsSection } from "./UsageLimits";
 import { UsageProviderChart, type UsageChartMetric } from "./UsageProviderChart";
 import { PROVIDER_ORDER, PROVIDER_PRESENTATION, providersWithUsage } from "./usageProviders";
 
@@ -41,12 +42,20 @@ const WINDOW_OPTIONS = [
   { days: 90, label: "90 days" },
 ] as const;
 
+type UsageMetric = UsageChartMetric | "limits";
+const METRIC_LABELS = { cost: "Cost", tokens: "Tokens", limits: "Limits" } as const;
+
+function isUsageMetric(value: string | null | undefined): value is UsageMetric {
+  return value === "cost" || value === "tokens" || value === "limits";
+}
+
 export function UsagePage() {
   const [windowSelection, setWindowSelection] = useState(() => ({
     days: 30,
     window: makeWindow(30),
   }));
-  const [metric, setMetric] = useState<UsageChartMetric>("cost");
+  const [metric, setMetric] = useState<UsageMetric>("cost");
+  const limits = useUsageLimits();
   const [breakdown, setBreakdown] = useState<"model" | "time">("model");
   const { days: windowDays, window } = windowSelection;
   const isPast24Hours = windowDays === 1;
@@ -93,6 +102,10 @@ export function UsagePage() {
     });
   };
   const refreshWindow = () => {
+    if (metric === "limits") {
+      limits.refresh();
+      return;
+    }
     const nextWindow = makeWindow(windowDays, undefined, isPast24Hours ? "hour" : "day");
     if (
       nextWindow.sinceDay === window.sinceDay &&
@@ -115,10 +128,14 @@ export function UsagePage() {
         <WorkspaceBreadcrumbItem current>
           <h1>Usage</h1>
         </WorkspaceBreadcrumbItem>
-        <WorkspaceBreadcrumbSeparator className="hidden md:flex" />
-        <WorkspaceBreadcrumbItem className="hidden min-w-0 shrink md:flex">
-          <span className="truncate">{windowLabel}</span>
-        </WorkspaceBreadcrumbItem>
+        {metric === "limits" ? null : (
+          <>
+            <WorkspaceBreadcrumbSeparator className="hidden md:flex" />
+            <WorkspaceBreadcrumbItem className="hidden min-w-0 shrink md:flex">
+              <span className="truncate">{windowLabel}</span>
+            </WorkspaceBreadcrumbItem>
+          </>
+        )}
       </WorkspaceBreadcrumb>
       <div className="ms-auto hidden min-w-0 items-center justify-end gap-2 lg:flex">
         <ToggleGroup
@@ -127,30 +144,32 @@ export function UsagePage() {
           value={[metric]}
           onValueChange={(next) => {
             const value = next[0];
-            if (value === "cost" || value === "tokens") setMetric(value);
+            if (isUsageMetric(value)) setMetric(value);
           }}
         >
-          {(["cost", "tokens"] as const).map((option) => (
+          {(["cost", "tokens", "limits"] as const).map((option) => (
             <Toggle key={option} value={option}>
-              {option === "cost" ? "Cost" : "Tokens"}
+              {METRIC_LABELS[option]}
             </Toggle>
           ))}
         </ToggleGroup>
-        <ToggleGroup
-          aria-label="Usage period"
-          variant="segmented"
-          value={[String(windowDays)]}
-          onValueChange={(next) => {
-            const value = next[0];
-            if (value) selectWindow(Number(value));
-          }}
-        >
-          {WINDOW_OPTIONS.map((option) => (
-            <Toggle key={option.days} value={String(option.days)}>
-              {option.label}
-            </Toggle>
-          ))}
-        </ToggleGroup>
+        {metric === "limits" ? null : (
+          <ToggleGroup
+            aria-label="Usage period"
+            variant="segmented"
+            value={[String(windowDays)]}
+            onValueChange={(next) => {
+              const value = next[0];
+              if (value) selectWindow(Number(value));
+            }}
+          >
+            {WINDOW_OPTIONS.map((option) => (
+              <Toggle key={option.days} value={String(option.days)}>
+                {option.label}
+              </Toggle>
+            ))}
+          </ToggleGroup>
+        )}
         <Button onClick={refreshWindow} aria-label="Refresh usage" size="icon-sm" variant="ghost">
           <RefreshCwIcon className="size-3.5" />
         </Button>
@@ -159,7 +178,7 @@ export function UsagePage() {
         <Select
           value={metric}
           onValueChange={(value) => {
-            if (value === "cost" || value === "tokens") setMetric(value);
+            if (isUsageMetric(value)) setMetric(value);
           }}
         >
           <SelectTrigger
@@ -168,32 +187,35 @@ export function UsagePage() {
             variant="ghost"
             className="w-auto min-w-0"
           >
-            <SelectValue>{metric === "cost" ? "Cost" : "Tokens"}</SelectValue>
+            <SelectValue>{METRIC_LABELS[metric]}</SelectValue>
           </SelectTrigger>
           <SelectPopup align="end" alignItemWithTrigger={false}>
             <SelectItem value="cost">Cost</SelectItem>
             <SelectItem value="tokens">Tokens</SelectItem>
+            <SelectItem value="limits">Limits</SelectItem>
           </SelectPopup>
         </Select>
-        <Select value={String(windowDays)} onValueChange={(value) => selectWindow(Number(value))}>
-          <SelectTrigger
-            aria-label="Usage period"
-            size="compact"
-            variant="ghost"
-            className="w-auto min-w-0"
-          >
-            <SelectValue>
-              {WINDOW_OPTIONS.find((option) => option.days === windowDays)?.label}
-            </SelectValue>
-          </SelectTrigger>
-          <SelectPopup align="end" alignItemWithTrigger={false}>
-            {WINDOW_OPTIONS.map((option) => (
-              <SelectItem key={option.days} value={String(option.days)}>
-                {option.label}
-              </SelectItem>
-            ))}
-          </SelectPopup>
-        </Select>
+        {metric === "limits" ? null : (
+          <Select value={String(windowDays)} onValueChange={(value) => selectWindow(Number(value))}>
+            <SelectTrigger
+              aria-label="Usage period"
+              size="compact"
+              variant="ghost"
+              className="w-auto min-w-0"
+            >
+              <SelectValue>
+                {WINDOW_OPTIONS.find((option) => option.days === windowDays)?.label}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectPopup align="end" alignItemWithTrigger={false}>
+              {WINDOW_OPTIONS.map((option) => (
+                <SelectItem key={option.days} value={String(option.days)}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectPopup>
+          </Select>
+        )}
         <Button onClick={refreshWindow} aria-label="Refresh usage" size="icon-sm" variant="ghost">
           <RefreshCwIcon className="size-3.5" />
         </Button>
@@ -208,7 +230,13 @@ export function UsagePage() {
 
         <ScrollArea className="min-h-0 flex-1">
           <WorkspacePageContainer width="wide">
-            {settling ? (
+            {metric === "limits" ? (
+              <UsageLimitsSection
+                providers={limits.providers}
+                now={limits.receivedAt}
+                isPending={limits.isPending}
+              />
+            ) : settling ? (
               <>
                 {environments.length > 1 ? <UsageDeviceStrip environments={environments} /> : null}
                 <UsageSkeleton />

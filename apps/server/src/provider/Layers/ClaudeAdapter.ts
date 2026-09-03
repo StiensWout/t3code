@@ -19,6 +19,7 @@ import {
   type SDKUserMessage,
   type ModelUsage,
 } from "@anthropic-ai/claude-agent-sdk";
+import { normalizeClaudeRateLimit } from "./claudeRateLimits.ts";
 import { parseCliArgs } from "@t3tools/shared/cliArgs";
 import { isWorkspaceImagePreviewPath } from "@t3tools/shared/filePreview";
 import {
@@ -26,6 +27,7 @@ import {
   type CanonicalItemType,
   type CanonicalRequestType,
   type ClaudeSettings,
+  type UsageLimitsUpdate,
   EventId,
   type ProviderApprovalDecision,
   ProviderDriverKind,
@@ -342,6 +344,8 @@ export interface ClaudeAdapterLiveOptions {
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
   readonly modelCatalog?: Effect.Effect<ClaudeModelCatalog>;
+  /** On-demand account limits; the driver builds it with its HTTP and process services. */
+  readonly accountLimits?: Effect.Effect<UsageLimitsUpdate | null, ProviderAdapterError>;
 }
 
 function isUuid(value: string): boolean {
@@ -3595,12 +3599,12 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     }
 
     if (message.type === "rate_limit_event") {
+      const limits = normalizeClaudeRateLimit(message.rate_limit_info);
+      if (limits === null) return;
       yield* offerRuntimeEvent({
         ...base,
         type: "account.rate-limits.updated",
-        payload: {
-          rateLimits: message,
-        },
+        payload: { limits },
       });
       return;
     }
@@ -4815,6 +4819,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     listSessions,
     hasSession,
     stopAll,
+    ...(options?.accountLimits ? { readAccountLimits: options.accountLimits } : {}),
     get streamEvents() {
       return Stream.fromQueue(runtimeEventQueue);
     },

@@ -1,0 +1,40 @@
+import { describe, expect, it } from "@effect/vitest";
+
+import { normalizeClaudeRateLimit } from "./claudeRateLimits.ts";
+
+describe("normalizeClaudeRateLimit", () => {
+  it("maps one window per event from a utilization fraction", () => {
+    expect(
+      normalizeClaudeRateLimit({
+        status: "allowed_warning",
+        rateLimitType: "seven_day_opus",
+        utilization: 0.91,
+        resetsAt: 1_800_000_000,
+      }),
+    ).toEqual({
+      windows: [
+        {
+          id: "seven_day_opus",
+          label: "Weekly Opus",
+          usedPercent: 91,
+          resetsAt: "2027-01-15T08:00:00.000Z",
+          windowMinutes: 10080,
+        },
+      ],
+    });
+  });
+
+  it("treats a rejection without utilization as a full window", () => {
+    expect(
+      normalizeClaudeRateLimit({ status: "rejected", rateLimitType: "five_hour" })?.windows[0]
+        ?.usedPercent,
+    ).toBe(100);
+  });
+
+  it("drops events without a known window", () => {
+    expect(normalizeClaudeRateLimit({ status: "allowed", utilization: 0.2 })).toBeNull();
+    expect(
+      normalizeClaudeRateLimit({ status: "allowed", rateLimitType: "mystery", utilization: 0.2 }),
+    ).toBeNull();
+  });
+});

@@ -881,6 +881,15 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.serverGetUsageSummary,
       staleTimeMs: 60_000,
     }),
+    usageLimits: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:server:usage-limits",
+      tag: WS_METHODS.subscribeUsageLimits,
+      idleTtlMs: 0,
+    }),
+    consumeUsageLimitReset: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:consume-usage-limit-reset",
+      tag: WS_METHODS.serverConsumeUsageLimitReset,
+    }),
     configProjection,
     welcome: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:welcome",

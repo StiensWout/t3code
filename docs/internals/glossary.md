@@ -121,6 +121,10 @@ A point-in-time view of state. The word is used in multiple layers, including or
 
 The per-driver list of current model slugs that decides which models land in the model picker's legacy section. Bundled at `apps/server/src/provider/model-manifest.json` and refreshed at runtime from the same file on `main`, so classification updates ship as commits instead of releases. See the [provider architecture][16] model manifest section.
 
+#### Limit window
+
+A rolling quota window a subscription provider reports for the signed-in account, such as Codex's 5 hour and weekly windows or Claude Code's five-hour and per-model weekly windows. Adapters normalise native payloads into `UsageLimitsUpdate` in `packages/contracts/src/usageLimits.ts`; `UsageLimitsService` keeps the latest snapshot per provider instance in memory and streams it to clients over `subscribeUsageLimits`. Limits are account state, not thread history, so they are never persisted or event-sourced.
+
 ### Checkpointing
 
 Checkpointing captures workspace state over time so the app can diff turns and restore earlier points. The main pieces are [CheckpointStore.ts][19], [CheckpointDiffQuery.ts][20], and [CheckpointReactor.ts][6].

@@ -21,6 +21,8 @@ import type {
   ThreadId,
   ProviderTurnStartResult,
   TurnId,
+  UsageLimitsConsumeResetOutcome,
+  UsageLimitsUpdate,
 } from "@t3tools/contracts";
 import type * as Effect from "effect/Effect";
 import type * as Stream from "effect/Stream";
@@ -127,6 +129,17 @@ export interface ProviderAdapterShape<TError> {
   readonly uploadFeedback?: (
     input: ProviderUploadFeedbackInput,
   ) => Effect.Effect<ProviderUploadFeedbackResult, TError>;
+
+  /**
+   * Latest account limits the provider can report right now, or null when no
+   * live process can answer. Sparse: windows merge by id downstream.
+   */
+  readonly readAccountLimits?: Effect.Effect<UsageLimitsUpdate | null, TError>;
+
+  /**
+   * Redeem one banked rate-limit reset credit on the signed-in account.
+   */
+  readonly consumeRateLimitResetCredit?: Effect.Effect<UsageLimitsConsumeResetOutcome, TError>;
 
   /**
    * Stop all sessions owned by this adapter.

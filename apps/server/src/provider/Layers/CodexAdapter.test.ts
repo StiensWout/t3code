@@ -106,6 +106,12 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
     Promise.resolve({ threadId: "provider-thread-1" }),
   );
 
+  readRateLimits = Effect.succeed({ rateLimits: {} });
+
+  consumeRateLimitResetCredit(_idempotencyKey: string) {
+    return Effect.succeed({ outcome: "reset" as const });
+  }
+
   public readonly respondToRequestImpl = vi.fn(
     (_requestId: ApprovalRequestId, _decision: ProviderApprovalDecision): Promise<void> =>
       Promise.resolve(undefined),

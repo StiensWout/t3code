@@ -28,6 +28,7 @@ import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderDriverError } from "../Errors.ts";
+import { makeClaudeAccountLimitsReader } from "../Layers/claudeAccountLimits.ts";
 import { makeClaudeAdapter } from "../Layers/ClaudeAdapter.ts";
 import {
   checkClaudeProviderStatus,
@@ -138,6 +139,12 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
         instanceId,
         environment: processEnv,
         modelCatalog,
+        accountLimits: makeClaudeAccountLimitsReader({
+          settings: effectiveConfig,
+          fileSystem,
+          path,
+          httpClient,
+        }),
         ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
       };
       const adapter = yield* makeClaudeAdapter(effectiveConfig, adapterOptions);

@@ -67,6 +67,8 @@ import {
   type CodexSessionRuntimeOptions,
   type CodexSessionRuntimeShape,
 } from "./CodexSessionRuntime.ts";
+import { withCodexAccountClient } from "./codexAccountClient.ts";
+import { normalizeCodexRateLimits } from "./codexRateLimits.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import { resolveCodexLaunchArgs } from "./codexLaunchArgs.ts";
 const isCodexAppServerProcessExitedError = Schema.is(CodexErrors.CodexAppServerProcessExitedError);
@@ -1725,7 +1727,11 @@ function mapToRuntimeEvents(
   }
 
   if (event.method === "account/rateLimits/updated") {
-    if (!readPayload(EffectCodexSchema.V2AccountRateLimitsUpdatedNotification, event.payload)) {
+    const payload = readPayload(
+      EffectCodexSchema.V2AccountRateLimitsUpdatedNotification,
+      event.payload,
+    );
+    if (!payload) {
       return [];
     }
     return [
@@ -1733,7 +1739,7 @@ function mapToRuntimeEvents(
         type: "account.rate-limits.updated",
         ...runtimeEventBase(event, canonicalThreadId),
         payload: {
-          rateLimits: event.payload ?? {},
+          limits: normalizeCodexRateLimits(payload),
         },
       },
     ];
@@ -2229,6 +2235,68 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     );
   };
 
+  // Account requests ride on a live session's app-server when one exists and
+  // otherwise on a short-lived process, so limits never need an open thread.
+  const liveSession = () => {
+    for (const session of sessions.values()) {
+      if (!session.stopped) return session;
+    }
+    return undefined;
+  };
+
+  const accountRequest = <A>(
+    method: string,
+    viaSession: (runtime: CodexSessionRuntimeShape) => Effect.Effect<A, CodexSessionRuntimeError>,
+    viaClient: (
+      client: Parameters<Parameters<typeof withCodexAccountClient<A, never>>[1]>[0],
+    ) => Effect.Effect<A, CodexErrors.CodexAppServerError>,
+  ): Effect.Effect<A, ProviderAdapterError> =>
+    Effect.suspend(() => {
+      const session = liveSession();
+      if (session) {
+        return viaSession(session.runtime).pipe(
+          Effect.mapError((cause) => mapCodexRuntimeError(session.threadId, method, cause)),
+        );
+      }
+      return withCodexAccountClient(
+        {
+          binaryPath: codexConfig.binaryPath,
+          launchArgs: resolveCodexLaunchArgs(codexConfig.launchArgs, options?.environment),
+          environment: options?.environment,
+          homePath: codexConfig.homePath,
+          cwd: process.cwd(),
+        },
+        viaClient,
+      ).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner),
+        Effect.mapError(
+          (cause) =>
+            new ProviderAdapterRequestError({
+              provider: PROVIDER,
+              method,
+              detail: cause instanceof Error ? cause.message : String(cause),
+              cause,
+            }),
+        ),
+      );
+    });
+
+  const readAccountLimits: NonNullable<CodexAdapterShape["readAccountLimits"]> = accountRequest(
+    "account/rateLimits/read",
+    (runtime) => runtime.readRateLimits,
+    (client) => client.request("account/rateLimits/read", undefined),
+  ).pipe(Effect.map((response) => normalizeCodexRateLimits(response)));
+
+  const consumeRateLimitResetCredit: NonNullable<CodexAdapterShape["consumeRateLimitResetCredit"]> =
+    Effect.suspend(() => {
+      const idempotencyKey = NodeCrypto.randomUUID();
+      return accountRequest(
+        "account/rateLimitResetCredit/consume",
+        (runtime) => runtime.consumeRateLimitResetCredit(idempotencyKey),
+        (client) => client.request("account/rateLimitResetCredit/consume", { idempotencyKey }),
+      ).pipe(Effect.map((response) => response.outcome));
+    });
+
   const uploadFeedback: CodexAdapterShape["uploadFeedback"] = (input) =>
     requireSession(input.threadId).pipe(
       Effect.flatMap((session) => session.runtime.uploadFeedback(input.reason)),
@@ -2329,6 +2397,8 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     readThread,
     rollbackThread,
     uploadFeedback,
+    readAccountLimits,
+    consumeRateLimitResetCredit,
     respondToRequest,
     respondToUserInput,
     stopSession,
