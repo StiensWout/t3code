@@ -129,9 +129,11 @@ export const make = Effect.fn("UsageLimitsService.make")(function* (sources: Usa
     update: UsageLimitsUpdate,
     since: number,
   ) {
+    const instanceLabel = yield* sources.getInstanceLabel(instanceId);
+    // Stamp right before the write, after the last yield, so a read that
+    // started while the label lookup ran still counts as older than this.
     const nowMs = yield* Clock.currentTimeMillis;
     const observedAt = DateTime.formatIso(DateTime.makeUnsafe(nowMs));
-    const instanceLabel = yield* sources.getInstanceLabel(instanceId);
     yield* Ref.update(state, (map) => {
       // An instance re-pointed at another provider starts from a clean slate.
       const stored = map.get(instanceId);
