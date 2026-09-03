@@ -12,6 +12,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
   USAGE_CONTRACT_VERSION,
+  type UsageProviderLimits,
   type EnvironmentId,
   type UsageSummary,
   type UsageSummaryInput,
@@ -144,6 +145,91 @@ export function useUsage(input: UsageSummaryInput): UsageView {
     environments,
     isPending: answeredCount === 0 && stillReporting > 0,
     isPartial: answeredCount > 0 && stillReporting > 0,
+    refresh,
+  };
+}
+
+/** One provider instance's limits, tagged with the environment that reported them. */
+export interface EnvironmentProviderLimits extends UsageProviderLimits {
+  readonly environmentId: EnvironmentId;
+  readonly environmentLabel: string;
+}
+
+interface EnvironmentLimitsStatus {
+  readonly environmentId: EnvironmentId;
+  readonly label: string;
+  readonly isPending: boolean;
+  readonly failed: boolean;
+  readonly providers: readonly UsageProviderLimits[] | null;
+}
+
+/**
+ * Every environment's live limits subscription. Subscribing makes the server
+ * read fresh numbers first, so a refresh is a resubscribe.
+ */
+const usageLimitsAtom = Atom.make((get) => {
+  const presentations = get(environmentPresentations.presentationsAtom);
+  const statuses: EnvironmentLimitsStatus[] = [];
+  for (const [environmentId, presentation] of presentations) {
+    const result = get(serverEnvironment.usageLimits({ environmentId, input: {} }));
+    const snapshot = Option.getOrNull(AsyncResult.value(result));
+    statuses.push({
+      environmentId,
+      label: presentation.entry.target.label,
+      isPending: result.waiting && snapshot === null,
+      failed: result._tag === "Failure",
+      providers: snapshot?.providers ?? null,
+    });
+  }
+  // Countdowns anchor to the moment a report lands rather than ticking.
+  return { environments: statuses, receivedAt: Date.now() };
+}).pipe(Atom.withLabel("mobile-usage:limits"));
+
+export interface UsageLimitsView {
+  readonly providers: readonly EnvironmentProviderLimits[];
+  readonly failedEnvironments: readonly string[];
+  /** Wall-clock time of the latest report, for reset countdowns. */
+  readonly receivedAt: number;
+  /** True until at least one environment has answered. */
+  readonly isPending: boolean;
+  readonly refresh: () => void;
+}
+
+export function useUsageLimits(): UsageLimitsView {
+  const { environments, receivedAt } = useAtomValue(usageLimitsAtom);
+
+  const providers = useMemo(
+    () =>
+      environments.flatMap((environment) =>
+        (environment.providers ?? []).map((entry) => ({
+          ...entry,
+          environmentId: environment.environmentId,
+          environmentLabel: environment.label,
+        })),
+      ),
+    [environments],
+  );
+  const failedEnvironments = useMemo(
+    () => environments.filter((environment) => environment.failed).map((e) => e.label),
+    [environments],
+  );
+
+  const refresh = useCallback(() => {
+    for (const environment of environments) {
+      appAtomRegistry.refresh(
+        serverEnvironment.usageLimits({ environmentId: environment.environmentId, input: {} }),
+      );
+    }
+  }, [environments]);
+
+  return {
+    providers,
+    failedEnvironments,
+    receivedAt,
+    isPending:
+      environments.length > 0 &&
+      environments.every((environment) => environment.providers === null) &&
+      environments.some((environment) => environment.isPending),
     refresh,
   };
 }
