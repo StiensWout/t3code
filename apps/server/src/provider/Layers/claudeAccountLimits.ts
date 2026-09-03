@@ -35,9 +35,7 @@ const StoredCredentials = Schema.Struct({
   ),
 });
 const decodeStoredCredentials = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(
-    StoredCredentials as unknown as Schema.Codec<typeof StoredCredentials.Type>,
-  ),
+  Schema.fromJsonString(StoredCredentials),
 );
 
 const UsageWindow = Schema.NullOr(
