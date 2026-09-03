@@ -129,7 +129,9 @@ export const make = Effect.fn("UsageLimitsService.make")(function* (sources: Usa
     const observedAt = DateTime.formatIso(DateTime.makeUnsafe(nowMs));
     const instanceLabel = yield* sources.getInstanceLabel(instanceId);
     yield* Ref.update(state, (map) => {
-      const previous = map.get(instanceId);
+      // An instance re-pointed at another provider starts from a clean slate.
+      const stored = map.get(instanceId);
+      const previous = stored?.limits.provider === provider ? stored : undefined;
       const fresh = update.windows.filter(
         (window) => (previous?.stamps.get(window.id) ?? 0) <= since,
       );
@@ -167,7 +169,18 @@ export const make = Effect.fn("UsageLimitsService.make")(function* (sources: Usa
   ) {
     const adapter = yield* sources.getAdapter(instanceId);
     const provider = usageProviderFor(adapter.provider);
-    if (provider === null || adapter.readAccountLimits === undefined) return;
+    if (provider === null) {
+      // Re-pointed at a provider without limits: drop what the old one left.
+      const dropped = yield* Ref.modify(state, (map) => {
+        if (!map.has(instanceId)) return [false, map] as const;
+        const next = new Map(map);
+        next.delete(instanceId);
+        return [true, next] as const;
+      });
+      if (dropped) yield* PubSub.publish(changes, yield* snapshot);
+      return;
+    }
+    if (adapter.readAccountLimits === undefined) return;
     const startedAt = yield* Clock.currentTimeMillis;
     const update = yield* adapter.readAccountLimits;
     if (update === null) return;
