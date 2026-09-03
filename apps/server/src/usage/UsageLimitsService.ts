@@ -134,9 +134,10 @@ export const make = Effect.fn("UsageLimitsService.make")(function* (sources: Usa
     provider: UsageProviderKind,
     update: UsageLimitsUpdate,
     since: number,
+    /** The account the numbers belong to, captured by the caller before its own yields. */
+    identity: string | null,
   ) {
     const instanceLabel = yield* sources.getInstanceLabel(instanceId);
-    const identity = yield* sources.getInstanceIdentity(instanceId);
     // Stamp right before the write, after the last yield, so a read that
     // started while the label lookup ran still counts as older than this.
     const nowMs = yield* Clock.currentTimeMillis;
@@ -222,7 +223,9 @@ export const make = Effect.fn("UsageLimitsService.make")(function* (sources: Usa
     const current = yield* currentProvider(instanceId);
     const identityNow = yield* sources.getInstanceIdentity(instanceId);
     if (current !== provider || identityNow !== identity) return;
-    yield* apply(instanceId, provider, update, startedAt);
+    // Filed under the identity the read was made for: if the instance is
+    // re-pointed after this point, the next refresh drops the entry.
+    yield* apply(instanceId, provider, update, startedAt, identity);
   });
 
   const refresh: UsageLimitsService["Service"]["refresh"] = Effect.gen(function* () {
@@ -261,7 +264,8 @@ export const make = Effect.fn("UsageLimitsService.make")(function* (sources: Usa
       // resurrect the old provider's numbers.
       const current = yield* currentProvider(instanceId);
       if (current !== provider) return;
-      yield* apply(instanceId, provider, event.payload.limits, Number.POSITIVE_INFINITY);
+      const identity = yield* sources.getInstanceIdentity(instanceId);
+      yield* apply(instanceId, provider, event.payload.limits, Number.POSITIVE_INFINITY, identity);
     });
   }).pipe(Effect.forkScoped);
 
