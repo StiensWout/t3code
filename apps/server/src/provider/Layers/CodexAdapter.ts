@@ -2245,6 +2245,9 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   };
 
   const ACCOUNT_REQUEST_TIMEOUT = "20 seconds";
+  const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
+  /** A live session that does not answer quickly is treated as unusable and bypassed. */
+  const LIVE_SESSION_TIMEOUT = "8 seconds";
 
   const accountRequest = <A>(
     method: string,
@@ -2271,23 +2274,29 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       viaClient,
     ).pipe(
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner),
+      Effect.timeout(ACCOUNT_REQUEST_TIMEOUT),
+      Effect.catchTags({
+        TimeoutError: () =>
+          requestError(`Codex did not answer ${method} within ${ACCOUNT_REQUEST_TIMEOUT}.`),
+      }),
+      // A stable description; the spawn or protocol failure travels in `cause`.
       Effect.mapError((cause) =>
-        requestError(cause instanceof Error ? cause.message : String(cause), cause),
+        isProviderAdapterRequestError(cause)
+          ? cause
+          : requestError(`Codex could not answer ${method}.`, cause),
       ),
     );
     return Effect.suspend(() => {
       const session = liveSession();
-      // A session whose app-server died is still in the map until it is
-      // stopped, so any failure there falls through to a fresh process.
-      const request = session
-        ? viaSession(session.runtime).pipe(Effect.catch(() => standalone))
+      // A session whose app-server died, or one that hangs, is still in the
+      // map until it is stopped; any failure there falls through to a fresh
+      // process with its own budget.
+      return session
+        ? viaSession(session.runtime).pipe(
+            Effect.timeout(LIVE_SESSION_TIMEOUT),
+            Effect.catch(() => standalone),
+          )
         : standalone;
-      return request.pipe(
-        Effect.timeout(ACCOUNT_REQUEST_TIMEOUT),
-        Effect.catchTag("TimeoutError", () =>
-          requestError(`Codex did not answer ${method} within ${ACCOUNT_REQUEST_TIMEOUT}.`),
-        ),
-      );
     });
   };
 

@@ -1,5 +1,5 @@
 import { CheckIcon, RefreshCwIcon, XIcon } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 
 import type { DailyTotals, HourlyTotals } from "@t3tools/shared/usageMerge";
 
@@ -58,7 +58,9 @@ export function UsagePage() {
     window: makeWindow(30),
   }));
   const [metric, setMetric] = useState<UsageMetric>("cost");
-  const limits = useUsageLimits();
+  // The limits subscription spawns provider reads, so it only exists while
+  // the Limits tab is mounted; the tab hands its refresh back through a ref.
+  const limitsRefreshRef = useRef<(() => void) | null>(null);
   const [breakdown, setBreakdown] = useState<"model" | "time">("model");
   const { days: windowDays, window } = windowSelection;
   const isPast24Hours = windowDays === 1;
@@ -106,7 +108,7 @@ export function UsagePage() {
   };
   const refreshWindow = () => {
     if (metric === "limits") {
-      limits.refresh();
+      limitsRefreshRef.current?.();
       return;
     }
     const nextWindow = makeWindow(windowDays, undefined, isPast24Hours ? "hour" : "day");
@@ -234,12 +236,7 @@ export function UsagePage() {
         <ScrollArea className="min-h-0 flex-1">
           <WorkspacePageContainer width="wide">
             {metric === "limits" ? (
-              <UsageLimitsSection
-                providers={limits.providers}
-                failedEnvironments={limits.failedEnvironments}
-                now={limits.receivedAt}
-                isPending={limits.isPending}
-              />
+              <UsageLimitsTab refreshRef={limitsRefreshRef} />
             ) : settling ? (
               <>
                 {environments.length > 1 ? <UsageDeviceStrip environments={environments} /> : null}
@@ -493,6 +490,29 @@ export function UsagePage() {
         </ScrollArea>
       </div>
     </SidebarInset>
+  );
+}
+
+/** Owns the limits subscription so it only runs while the tab is visible. */
+function UsageLimitsTab({
+  refreshRef,
+}: {
+  readonly refreshRef: MutableRefObject<(() => void) | null>;
+}) {
+  const limits = useUsageLimits();
+  useEffect(() => {
+    refreshRef.current = limits.refresh;
+    return () => {
+      refreshRef.current = null;
+    };
+  }, [limits.refresh, refreshRef]);
+  return (
+    <UsageLimitsSection
+      providers={limits.providers}
+      failedEnvironments={limits.failedEnvironments}
+      now={limits.receivedAt}
+      isPending={limits.isPending}
+    />
   );
 }
 

@@ -82,7 +82,7 @@ export type UsageLimitsConsumeResetResult = typeof UsageLimitsConsumeResetResult
 export class UsageLimitsError extends Schema.TaggedErrorClass<UsageLimitsError>()(
   "UsageLimitsError",
   {
-    reason: Schema.Literals(["unsupported", "noSession", "requestFailed"]),
+    reason: Schema.Literals(["unsupported", "requestFailed"]),
     /** Stable, bounded description. The underlying failure travels in `cause`. */
     detail: TrimmedNonEmptyString,
     cause: Schema.optional(Schema.Defect()),
