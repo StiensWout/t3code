@@ -92,17 +92,20 @@ function errorDetail(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
 }
 
+interface InstanceState {
+  readonly limits: UsageProviderLimits;
+  /** Window id → millis of the last change, so a slow read cannot undo a newer event. */
+  readonly stamps: ReadonlyMap<string, number>;
+}
+
 export const make = Effect.fn("UsageLimitsService.make")(function* (sources: UsageLimitsSources) {
-  const state = yield* Ref.make(new Map<ProviderInstanceId, UsageProviderLimits>());
-  /** When each window last changed, so a slow read cannot undo a newer event. */
-  const windowStamps = yield* Ref.make(new Map<string, number>());
-  const stampKey = (instanceId: ProviderInstanceId, windowId: string) =>
-    `${instanceId}:${windowId}`;
+  /** Limits per instance plus when each window last changed, in one Ref so checks and writes are atomic. */
+  const state = yield* Ref.make(new Map<ProviderInstanceId, InstanceState>());
   const changes = yield* PubSub.sliding<UsageLimitsSnapshot>(8);
 
   const snapshot: Effect.Effect<UsageLimitsSnapshot> = Ref.get(state).pipe(
     Effect.map((map) => ({
-      providers: Array.from(map.values()).toSorted(
+      providers: Array.from(map.values(), (entry) => entry.limits).toSorted(
         (left, right) =>
           left.provider.localeCompare(right.provider) ||
           left.instanceId.localeCompare(right.instanceId),
@@ -113,7 +116,8 @@ export const make = Effect.fn("UsageLimitsService.make")(function* (sources: Usa
   /**
    * Merge a sparse update into one instance's limits and publish the result.
    * `since` is when a read began: windows that an event touched after that
-   * moment keep the event's newer numbers.
+   * moment keep the event's newer numbers. The stamp check and the write are
+   * one `Ref.update`, so concurrent applies cannot interleave between them.
    */
   const apply = Effect.fn("UsageLimitsService.apply")(function* (
     instanceId: ProviderInstanceId,
@@ -124,31 +128,34 @@ export const make = Effect.fn("UsageLimitsService.make")(function* (sources: Usa
     const nowMs = yield* Clock.currentTimeMillis;
     const observedAt = DateTime.formatIso(DateTime.makeUnsafe(nowMs));
     const instanceLabel = yield* sources.getInstanceLabel(instanceId);
-    const stamps = yield* Ref.get(windowStamps);
-    const fresh = update.windows.filter(
-      (window) => (stamps.get(stampKey(instanceId, window.id)) ?? 0) <= since,
-    );
-    yield* Ref.update(windowStamps, (map) => {
-      const next = new Map(map);
-      for (const window of fresh) next.set(stampKey(instanceId, window.id), nowMs);
-      return next;
-    });
     yield* Ref.update(state, (map) => {
       const previous = map.get(instanceId);
-      const windows = new Map((previous?.windows ?? []).map((window) => [window.id, window]));
-      for (const window of fresh) windows.set(window.id, window);
+      const fresh = update.windows.filter(
+        (window) => (previous?.stamps.get(window.id) ?? 0) <= since,
+      );
+      const windows = new Map(
+        (previous?.limits.windows ?? []).map((window) => [window.id, window]),
+      );
+      const stamps = new Map(previous?.stamps ?? []);
+      for (const window of fresh) {
+        windows.set(window.id, window);
+        stamps.set(window.id, nowMs);
+      }
       const next = new Map(map);
       next.set(instanceId, {
-        provider,
-        instanceId,
-        instanceLabel,
-        plan: update.plan === undefined ? (previous?.plan ?? null) : update.plan,
-        windows: Array.from(windows.values()),
-        resetCredits:
-          update.resetCredits === undefined
-            ? (previous?.resetCredits ?? null)
-            : update.resetCredits,
-        observedAt,
+        limits: {
+          provider,
+          instanceId,
+          instanceLabel,
+          plan: update.plan === undefined ? (previous?.limits.plan ?? null) : update.plan,
+          windows: Array.from(windows.values()),
+          resetCredits:
+            update.resetCredits === undefined
+              ? (previous?.limits.resetCredits ?? null)
+              : update.resetCredits,
+          observedAt,
+        },
+        stamps,
       });
       return next;
     });
@@ -175,16 +182,7 @@ export const make = Effect.fn("UsageLimitsService.make")(function* (sources: Usa
       const next = new Map([...map].filter(([instanceId]) => live.has(instanceId)));
       return [next.size !== map.size, next] as const;
     });
-    if (pruned) {
-      yield* Ref.update(windowStamps, (map) => {
-        const next = new Map(map);
-        for (const key of next.keys()) {
-          if (!live.has(key.slice(0, key.indexOf(":")) as ProviderInstanceId)) next.delete(key);
-        }
-        return next;
-      });
-      yield* PubSub.publish(changes, yield* snapshot);
-    }
+    if (pruned) yield* PubSub.publish(changes, yield* snapshot);
     yield* Effect.forEach(
       instances,
       (instanceId) =>
