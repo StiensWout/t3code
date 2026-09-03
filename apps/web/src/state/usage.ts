@@ -173,7 +173,7 @@ const usageLimitsAtom = Atom.make((get) => {
     statuses.push({
       environmentId,
       label: presentation.entry.target.label,
-      isPending: result.waiting && snapshot === null,
+      isPending: result.waiting,
       failed: result._tag === "Failure",
       providers: snapshot?.providers ?? null,
     });
@@ -187,6 +187,10 @@ export interface UsageLimitsView {
   readonly providers: readonly EnvironmentProviderLimits[];
   /** Labels of environments whose limits subscription failed. */
   readonly failedEnvironments: readonly string[];
+  /** Labels of environments that have not answered yet while others have. */
+  readonly pendingEnvironments: readonly string[];
+  /** True while any environment is re-reading after a refresh. */
+  readonly isRefreshing: boolean;
   /** Wall-clock time of the latest report, for reset countdowns. */
   readonly receivedAt: number;
   /** True until at least one environment has answered. */
@@ -225,9 +229,21 @@ export function useUsageLimits(): UsageLimitsView {
     [environments],
   );
 
+  const pendingEnvironments = useMemo(
+    () =>
+      environments
+        .filter((environment) => environment.isPending && !environment.failed)
+        .map((e) => e.label),
+    [environments],
+  );
+
   return {
     providers,
     failedEnvironments,
+    pendingEnvironments,
+    isRefreshing: environments.some(
+      (environment) => environment.providers !== null && environment.isPending,
+    ),
     receivedAt,
     isPending:
       environments.length > 0 &&

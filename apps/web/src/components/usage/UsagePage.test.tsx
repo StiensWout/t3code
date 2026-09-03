@@ -42,6 +42,8 @@ vi.mock("../../state/usage", () => ({
   useUsageLimits: () => ({
     providers: [],
     failedEnvironments: [],
+    pendingEnvironments: [],
+    isRefreshing: false,
     receivedAt: 0,
     isPending: false,
     refresh: () => {},

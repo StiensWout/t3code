@@ -1,4 +1,5 @@
 import type { UsageLimitsConsumeResetOutcome } from "@t3tools/contracts";
+import { elapsedShare, formatDuration, type LimitPace, paceOf } from "@t3tools/shared/usageLimits";
 import { GaugeIcon, TrendingDownIcon, TrendingUpIcon } from "lucide-react";
 import { Fragment, useState } from "react";
 
@@ -19,20 +20,6 @@ import { Button } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { PROVIDER_PRESENTATION, ProviderMark } from "./usageProviders";
-
-const HOUR = 60 * 60 * 1000;
-const DAY = 24 * HOUR;
-
-/** `2h 13m`, `3d 4h`, `12m`. */
-function formatDuration(ms: number): string {
-  const remaining = Math.max(0, ms);
-  const days = Math.floor(remaining / DAY);
-  const hours = Math.floor((remaining % DAY) / HOUR);
-  const minutes = Math.floor((remaining % HOUR) / 60000);
-  if (days > 0) return `${days}d ${hours}h`;
-  if (hours > 0) return `${hours}h ${minutes}m`;
-  return `${minutes}m`;
-}
 
 function formatUntil(iso: string | null, now: number): string | null {
   if (iso === null) return null;
@@ -197,40 +184,14 @@ function ProviderHeading({
   );
 }
 
-function resetMillis(window: LimitWindow): number | null {
-  if (window.resetsAt === null) return null;
-  const at = Date.parse(window.resetsAt);
-  return Number.isFinite(at) ? at : null;
-}
-
-/** Elapsed share of the window, 0..1, or null when the window has no known length. */
-function elapsedShare(window: LimitWindow, now: number): number | null {
-  const resetsAt = resetMillis(window);
-  if (resetsAt === null || window.windowMinutes === null) return null;
-  const length = window.windowMinutes * 60000;
-  return Math.max(0, Math.min(1, (length - (resetsAt - now)) / length));
-}
-
-type Pace = "ahead" | "on" | "under";
-
-/** Usage against the clock: within five points is on pace. */
-function paceOf(window: LimitWindow, now: number): Pace | null {
-  const elapsed = elapsedShare(window, now);
-  if (elapsed === null) return null;
-  const gap = window.usedPercent - elapsed * 100;
-  if (gap > 5) return "ahead";
-  if (gap < -5) return "under";
-  return "on";
-}
-
-const PACE: Record<Pace, { readonly label: string; readonly icon: typeof GaugeIcon }> = {
+const PACE: Record<LimitPace, { readonly label: string; readonly icon: typeof GaugeIcon }> = {
   ahead: { label: "Ahead of pace: spending faster than the window elapses", icon: TrendingUpIcon },
   on: { label: "On pace with the window", icon: GaugeIcon },
   under: { label: "Under pace: headroom left for the rest of the window", icon: TrendingDownIcon },
 };
 
 /** Pace as a glyph with the words on hover. */
-function PaceIcon({ pace }: { readonly pace: Pace }) {
+function PaceIcon({ pace }: { readonly pace: LimitPace }) {
   const Icon = PACE[pace].icon;
   return (
     <Tooltip>
@@ -269,13 +230,23 @@ function WindowBar({
   const used = Math.max(0, Math.min(100, window.usedPercent)) / 100;
   const at = formatResetAt(window.resetsAt);
   const until = formatUntil(window.resetsAt, now);
+  const summary = `${window.label}: ${formatUsed(window.usedPercent)} used${
+    elapsed === null ? "" : `, ${Math.round(elapsed * 100)}% of the window elapsed`
+  }${until ? `, resets in ${until}` : ""}`;
   return (
     <Popover>
       <PopoverTrigger
         openOnHover
         delay={150}
         closeDelay={0}
-        render={<div className="relative h-6 cursor-default outline-none" />}
+        render={
+          <div
+            role="img"
+            aria-label={summary}
+            tabIndex={0}
+            className="relative h-6 cursor-default rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+          />
+        }
       >
         <div className="absolute inset-x-0 inset-y-1.5 rounded-full bg-muted" />
         {used > 0 ? (
@@ -368,11 +339,13 @@ function ProviderWindows({
 export function UsageLimitsSection({
   providers,
   failedEnvironments,
+  pendingEnvironments,
   now,
   isPending,
 }: {
   readonly providers: readonly EnvironmentProviderLimits[];
   readonly failedEnvironments: readonly string[];
+  readonly pendingEnvironments: readonly string[];
   readonly now: number;
   readonly isPending: boolean;
 }) {
@@ -395,12 +368,27 @@ export function UsageLimitsSection({
           {label} could not report limits.
         </span>
       ))}
+      {providers.length > 0
+        ? pendingEnvironments.map((label) => (
+            <span key={label} className="text-sm text-muted-foreground">
+              {label} is still reading its limits.
+            </span>
+          ))
+        : null}
       {providers.length === 0 && !isPending && failedEnvironments.length === 0 ? (
         <span className="text-sm text-muted-foreground">No limits reported yet.</span>
       ) : null}
       {providers.map((entry) => (
         <section key={entryKey(entry)} className="flex flex-col gap-3">
           <ProviderHeading entry={entry} props={props} />
+          {entry.readError ? (
+            <span className="text-xs text-muted-foreground">
+              Could not read limits.
+              {entry.windows.length > 0
+                ? ` Showing the last report from ${formatDuration(now - Date.parse(entry.observedAt))} ago.`
+                : ""}
+            </span>
+          ) : null}
           <ProviderWindows entry={entry} now={now} />
           <ResetCredits entry={entry} now={now} />
         </section>

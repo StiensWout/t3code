@@ -510,6 +510,7 @@ function UsageLimitsTab({
     <UsageLimitsSection
       providers={limits.providers}
       failedEnvironments={limits.failedEnvironments}
+      pendingEnvironments={limits.pendingEnvironments}
       now={limits.receivedAt}
       isPending={limits.isPending}
     />

@@ -74,7 +74,8 @@ export function UsageRouteScreen() {
   // The pull spinner tracks re-scans of environments that have answered
   // before. The initial scan renders its own placeholder, and an unreachable
   // environment stays pending forever — neither may pin the spinner on.
-  const refreshing = environments.some((entry) => entry.isPending && entry.summary !== null);
+  const refreshing =
+    environments.some((entry) => entry.isPending && entry.summary !== null) || limits.isRefreshing;
   const selectWindow = (days: number) => {
     setWindowSelection({
       days,
@@ -145,6 +146,7 @@ export function UsageRouteScreen() {
             <UsageLimitsSection
               providers={limits.providers}
               failedEnvironments={limits.failedEnvironments}
+              pendingEnvironments={limits.pendingEnvironments}
               now={limits.receivedAt}
               isPending={limits.isPending}
             />

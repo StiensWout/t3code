@@ -1,3 +1,4 @@
+import { elapsedShare, formatDuration, paceOf, resetMillis } from "@t3tools/shared/usageLimits";
 import { View } from "react-native";
 
 import { AppText as Text } from "../../components/AppText";
@@ -5,44 +6,13 @@ import type { EnvironmentProviderLimits } from "../../state/usage";
 import { SettingsSection } from "../settings/components/SettingsSection";
 import { PROVIDER_LABEL, useProviderColors } from "./usageProviders";
 
-const HOUR = 60 * 60 * 1000;
-const DAY = 24 * HOUR;
-
-/** `2h 13m`, `3d 4h`, `12m`. */
-function formatDuration(ms: number): string {
-  const remaining = Math.max(0, ms);
-  const days = Math.floor(remaining / DAY);
-  const hours = Math.floor((remaining % DAY) / HOUR);
-  const minutes = Math.floor((remaining % HOUR) / 60000);
-  if (days > 0) return `${days}d ${hours}h`;
-  if (hours > 0) return `${hours}h ${minutes}m`;
-  return `${minutes}m`;
-}
-
 type LimitWindow = EnvironmentProviderLimits["windows"][number];
 
-function resetMillis(window: LimitWindow): number | null {
-  if (window.resetsAt === null) return null;
-  const at = Date.parse(window.resetsAt);
-  return Number.isFinite(at) ? at : null;
-}
+const PACE_LABEL = { ahead: "ahead of pace", on: "on pace", under: "under pace" } as const;
 
-/** Elapsed share of the window, 0..1, or null when the window has no known length. */
-function elapsedShare(window: LimitWindow, now: number): number | null {
-  const resetsAt = resetMillis(window);
-  if (resetsAt === null || window.windowMinutes === null) return null;
-  const length = window.windowMinutes * 60000;
-  return Math.max(0, Math.min(1, (length - (resetsAt - now)) / length));
-}
-
-/** Usage against the clock: within five points is on pace. */
 function paceLabel(window: LimitWindow, now: number): string | null {
-  const elapsed = elapsedShare(window, now);
-  if (elapsed === null) return null;
-  const gap = window.usedPercent - elapsed * 100;
-  if (gap > 5) return "ahead of pace";
-  if (gap < -5) return "under pace";
-  return "on pace";
+  const pace = paceOf(window, now);
+  return pace === null ? null : PACE_LABEL[pace];
 }
 
 /**
@@ -85,10 +55,11 @@ function WindowBar({
 export function UsageLimitsSection(props: {
   readonly providers: readonly EnvironmentProviderLimits[];
   readonly failedEnvironments: readonly string[];
+  readonly pendingEnvironments: readonly string[];
   readonly now: number;
   readonly isPending: boolean;
 }) {
-  const { providers, failedEnvironments, now, isPending } = props;
+  const { providers, failedEnvironments, pendingEnvironments, now, isPending } = props;
   const colors = useProviderColors();
   const environmentCount = new Set(providers.map((entry) => entry.environmentId)).size;
   const instanceCounts = new Map<string, number>();
@@ -104,6 +75,13 @@ export function UsageLimitsSection(props: {
           {label} could not report limits.
         </Text>
       ))}
+      {providers.length > 0
+        ? pendingEnvironments.map((label) => (
+            <Text key={label} className="p-4 text-sm text-foreground-muted">
+              {label} is still reading its limits.
+            </Text>
+          ))
+        : null}
       {providers.length === 0 && failedEnvironments.length === 0 ? (
         <Text className="p-4 text-sm text-foreground-muted">
           {isPending ? "Reading limits…" : "No limits reported yet."}
@@ -124,19 +102,31 @@ export function UsageLimitsSection(props: {
             key={`${entry.environmentId}:${entry.provider}:${entry.instanceId}`}
             className={index === 0 ? "gap-3 p-4" : "gap-3 border-t border-border-subtle p-4"}
           >
-            <View className="flex-row items-baseline gap-2">
+            <View className="flex-row flex-wrap items-baseline gap-x-2 gap-y-0.5">
               <View
                 className="size-2.5 self-center rounded-full"
                 style={{ backgroundColor: colors[entry.provider] }}
               />
-              <Text className="text-lg text-foreground">{PROVIDER_LABEL[entry.provider]}</Text>
+              <Text className="shrink text-lg text-foreground" numberOfLines={1}>
+                {PROVIDER_LABEL[entry.provider]}
+              </Text>
               {qualifier ? (
-                <Text className="text-sm text-foreground-muted">{qualifier}</Text>
+                <Text className="shrink text-sm text-foreground-muted" numberOfLines={1}>
+                  {qualifier}
+                </Text>
               ) : null}
               {entry.plan ? (
                 <Text className="text-sm text-foreground-muted">· {entry.plan}</Text>
               ) : null}
             </View>
+            {entry.readError ? (
+              <Text className="text-xs text-foreground-muted">
+                Could not read limits.
+                {entry.windows.length > 0
+                  ? ` Showing the last report from ${formatDuration(now - Date.parse(entry.observedAt))} ago.`
+                  : ""}
+              </Text>
+            ) : null}
             {windows.length === 0 ? (
               <Text className="text-sm text-foreground-muted">No usage in any window.</Text>
             ) : (
