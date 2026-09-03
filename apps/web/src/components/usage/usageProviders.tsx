@@ -1,5 +1,6 @@
 import type { UsageProviderKind } from "@t3tools/contracts";
 
+import { cn } from "../../lib/utils";
 import { ClaudeAI, GrokIcon, type Icon, OpenAI } from "../Icons";
 
 type UsageProviderPresentation = {
@@ -49,4 +50,16 @@ export function providersWithUsage(
       .map((entry) => entry.provider),
   );
   return PROVIDER_ORDER.filter((provider) => active.has(provider));
+}
+
+/** Brand mark for the harness a row belongs to. */
+export function ProviderMark({
+  provider,
+  className,
+}: {
+  readonly provider: UsageProviderKind;
+  readonly className?: string;
+}) {
+  const Mark = PROVIDER_PRESENTATION[provider].mark;
+  return <Mark className={cn("shrink-0", className)} aria-hidden />;
 }

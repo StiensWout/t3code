@@ -16,9 +16,10 @@ pricing update.
 
 The **Limits** tab shows the rolling quota windows your subscription providers report for the
 signed-in account, across every connected environment. Each window in use is a bar from the moment
-it opened to its reset, filled by how much of the quota is spent. A thin line marks how far into the
-window you are, which is also where even spending would have put the fill, and a small icon says
-whether you are ahead of, on, or under that pace. Hover a bar for the exact figures and the reset
+it opened to its reset, filled by how much of the quota is spent. When the provider reports the
+window's length and reset time, a thin line marks how far into the window you are, which is also
+where even spending would have put the fill, and a small icon says whether you are ahead of, on, or
+under that pace. Windows with nothing used yet are left out until they see use. Hover a bar for the exact figures and the reset
 time. Codex and Claude Code limits are read from the signed-in subscription whenever the tab opens
 or refreshes and update as turns run. Codex accounts with banked reset credits also show how many
 are left, and **Use a reset** redeems one after a confirmation. API key sessions and Grok Build do

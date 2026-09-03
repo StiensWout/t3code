@@ -31,6 +31,16 @@ describe("normalizeClaudeRateLimit", () => {
     ).toBe(100);
   });
 
+  it("names scoped weekly buckets after their model so reads and events share rows", () => {
+    expect(
+      normalizeClaudeRateLimit({
+        status: "allowed",
+        rateLimitType: "seven_day_fable",
+        utilization: 0.36,
+      })?.windows[0],
+    ).toMatchObject({ id: "seven_day_fable", label: "Weekly Fable", usedPercent: 36 });
+  });
+
   it("drops events without a known window", () => {
     expect(normalizeClaudeRateLimit({ status: "allowed", utilization: 0.2 })).toBeNull();
     expect(

@@ -156,6 +156,7 @@ interface EnvironmentLimitsStatus {
   readonly environmentId: EnvironmentId;
   readonly label: string;
   readonly isPending: boolean;
+  readonly failed: boolean;
   readonly providers: readonly UsageProviderLimits[] | null;
 }
 
@@ -173,6 +174,7 @@ const usageLimitsAtom = Atom.make((get) => {
       environmentId,
       label: presentation.entry.target.label,
       isPending: result.waiting && snapshot === null,
+      failed: result._tag === "Failure",
       providers: snapshot?.providers ?? null,
     });
   }
@@ -183,6 +185,8 @@ const usageLimitsAtom = Atom.make((get) => {
 
 export interface UsageLimitsView {
   readonly providers: readonly EnvironmentProviderLimits[];
+  /** Labels of environments whose limits subscription failed. */
+  readonly failedEnvironments: readonly string[];
   /** Wall-clock time of the latest report, for reset countdowns. */
   readonly receivedAt: number;
   /** True until at least one environment has answered. */
@@ -216,8 +220,14 @@ export function useUsageLimits(): UsageLimitsView {
     }
   }, [environments]);
 
+  const failedEnvironments = useMemo(
+    () => environments.filter((environment) => environment.failed).map((e) => e.label),
+    [environments],
+  );
+
   return {
     providers,
+    failedEnvironments,
     receivedAt,
     isPending:
       environments.length > 0 &&

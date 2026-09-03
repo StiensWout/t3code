@@ -16,7 +16,7 @@ import { make } from "./UsageLimitsService.ts";
 const codexInstance = ProviderInstanceId.make("codex");
 
 describe("UsageLimitsService", () => {
-  it.effect("reads adapters on subscribe and merges sparse events by window id", () =>
+  it.effect("reads adapters before the first snapshot and merges sparse events by window id", () =>
     Effect.gen(function* () {
       const events = yield* PubSub.unbounded<ProviderRuntimeEvent>();
       const service = yield* make({
@@ -50,16 +50,16 @@ describe("UsageLimitsService", () => {
       });
 
       const subscription = yield* service.subscribe;
-      assert.deepStrictEqual(subscription.latest.providers, []);
-
-      const afterRead = Option.getOrThrow(yield* Stream.runHead(subscription.changes));
-      const codex = afterRead.providers[0];
+      const codex = subscription.latest.providers[0];
       assert.strictEqual(codex?.plan, "Pro");
       assert.strictEqual(codex?.instanceLabel, "Personal");
       assert.strictEqual(codex?.resetCredits?.availableCount, 2);
       assert.strictEqual(codex?.windows.length, 2);
 
       const next = yield* service.subscribe;
+      // Let the forked ingestion fiber attach to the event stream first.
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
       yield* PubSub.publish(events, {
         eventId: EventId.make("evt-1"),
         provider: ProviderDriverKind.make("codex"),

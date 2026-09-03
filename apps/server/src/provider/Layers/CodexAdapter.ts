@@ -2244,42 +2244,52 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     return undefined;
   };
 
+  const ACCOUNT_REQUEST_TIMEOUT = "20 seconds";
+
   const accountRequest = <A>(
     method: string,
     viaSession: (runtime: CodexSessionRuntimeShape) => Effect.Effect<A, CodexSessionRuntimeError>,
     viaClient: (
       client: Parameters<Parameters<typeof withCodexAccountClient<A, never>>[1]>[0],
     ) => Effect.Effect<A, CodexErrors.CodexAppServerError>,
-  ): Effect.Effect<A, ProviderAdapterError> =>
-    Effect.suspend(() => {
+  ): Effect.Effect<A, ProviderAdapterError> => {
+    const requestError = (detail: string, cause?: unknown) =>
+      new ProviderAdapterRequestError({
+        provider: PROVIDER,
+        method,
+        detail,
+        ...(cause === undefined ? {} : { cause }),
+      });
+    const standalone = withCodexAccountClient(
+      {
+        binaryPath: codexConfig.binaryPath,
+        launchArgs: resolveCodexLaunchArgs(codexConfig.launchArgs, options?.environment),
+        environment: options?.environment,
+        homePath: codexConfig.homePath,
+        cwd: process.cwd(),
+      },
+      viaClient,
+    ).pipe(
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner),
+      Effect.mapError((cause) =>
+        requestError(cause instanceof Error ? cause.message : String(cause), cause),
+      ),
+    );
+    return Effect.suspend(() => {
       const session = liveSession();
-      if (session) {
-        return viaSession(session.runtime).pipe(
-          Effect.mapError((cause) => mapCodexRuntimeError(session.threadId, method, cause)),
-        );
-      }
-      return withCodexAccountClient(
-        {
-          binaryPath: codexConfig.binaryPath,
-          launchArgs: resolveCodexLaunchArgs(codexConfig.launchArgs, options?.environment),
-          environment: options?.environment,
-          homePath: codexConfig.homePath,
-          cwd: process.cwd(),
-        },
-        viaClient,
-      ).pipe(
-        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner),
-        Effect.mapError(
-          (cause) =>
-            new ProviderAdapterRequestError({
-              provider: PROVIDER,
-              method,
-              detail: cause instanceof Error ? cause.message : String(cause),
-              cause,
-            }),
+      // A session whose app-server died is still in the map until it is
+      // stopped, so any failure there falls through to a fresh process.
+      const request = session
+        ? viaSession(session.runtime).pipe(Effect.catch(() => standalone))
+        : standalone;
+      return request.pipe(
+        Effect.timeout(ACCOUNT_REQUEST_TIMEOUT),
+        Effect.catchTag("TimeoutError", () =>
+          requestError(`Codex did not answer ${method} within ${ACCOUNT_REQUEST_TIMEOUT}.`),
         ),
       );
     });
+  };
 
   const readAccountLimits: NonNullable<CodexAdapterShape["readAccountLimits"]> = accountRequest(
     "account/rateLimits/read",

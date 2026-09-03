@@ -39,7 +39,7 @@ import {
 } from "../utils/subscribeBeforeSnapshot.ts";
 
 export interface UsageLimitsServiceShape {
-  /** Latest snapshot plus every later change. Subscribing also triggers a fresh read. */
+  /** Fresh read, then the latest snapshot plus every later change. */
   readonly subscribe: Effect.Effect<SnapshotSubscription<UsageLimitsSnapshot>, never, Scope.Scope>;
   /** Ask every adapter that can answer for its current limits. Never fails. */
   readonly refresh: Effect.Effect<void>;
@@ -146,6 +146,13 @@ export const make = Effect.fn("UsageLimitsService.make")(function* (sources: Usa
 
   const refresh: UsageLimitsServiceShape["refresh"] = Effect.gen(function* () {
     const instances = yield* sources.listInstances;
+    // Instances removed from settings take their limits with them.
+    const live = new Set(instances);
+    const pruned = yield* Ref.modify(state, (map) => {
+      const next = new Map([...map].filter(([instanceId]) => live.has(instanceId)));
+      return [next.size !== map.size, next] as const;
+    });
+    if (pruned) yield* PubSub.publish(changes, yield* snapshot);
     yield* Effect.forEach(
       instances,
       (instanceId) =>
@@ -171,10 +178,10 @@ export const make = Effect.fn("UsageLimitsService.make")(function* (sources: Usa
   }).pipe(Effect.forkScoped);
 
   const subscribe: UsageLimitsServiceShape["subscribe"] = Effect.gen(function* () {
-    const subscription = yield* subscribeBeforeSnapshotWithoutMutex(changes, snapshot);
-    // Fresh numbers land as a change on the stream the subscriber just opened.
-    yield* Effect.forkScoped(refresh);
-    return subscription;
+    // Read first so the initial snapshot already carries fresh numbers and a
+    // client never mistakes the boot-time empty map for "nothing reported".
+    yield* refresh;
+    return yield* subscribeBeforeSnapshotWithoutMutex(changes, snapshot);
   });
 
   const consumeReset: UsageLimitsServiceShape["consumeReset"] = Effect.fn(

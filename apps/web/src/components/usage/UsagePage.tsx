@@ -1,11 +1,9 @@
-import type { UsageProviderKind } from "@t3tools/contracts";
 import { CheckIcon, RefreshCwIcon, XIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import type { DailyTotals, HourlyTotals } from "@t3tools/shared/usageMerge";
 
 import { isElectron } from "../../env";
-import { cn } from "../../lib/utils";
 import { useUsage, useUsageLimits, type EnvironmentUsageStatus } from "../../state/usage";
 import {
   enumerateDays,
@@ -33,7 +31,12 @@ import { WorkspacePageContainer } from "../WorkspacePageContainer";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { UsageLimitsSection } from "./UsageLimits";
 import { UsageProviderChart, type UsageChartMetric } from "./UsageProviderChart";
-import { PROVIDER_ORDER, PROVIDER_PRESENTATION, providersWithUsage } from "./usageProviders";
+import {
+  PROVIDER_ORDER,
+  PROVIDER_PRESENTATION,
+  ProviderMark,
+  providersWithUsage,
+} from "./usageProviders";
 
 const WINDOW_OPTIONS = [
   { days: 1, label: "Past 24h" },
@@ -233,6 +236,7 @@ export function UsagePage() {
             {metric === "limits" ? (
               <UsageLimitsSection
                 providers={limits.providers}
+                failedEnvironments={limits.failedEnvironments}
                 now={limits.receivedAt}
                 isPending={limits.isPending}
               />
@@ -490,18 +494,6 @@ export function UsagePage() {
       </div>
     </SidebarInset>
   );
-}
-
-/** Brand mark for the harness a row belongs to. */
-function ProviderMark({
-  provider,
-  className,
-}: {
-  readonly provider: UsageProviderKind;
-  readonly className: string;
-}) {
-  const Mark = PROVIDER_PRESENTATION[provider].mark;
-  return <Mark className={cn("shrink-0", className)} aria-hidden />;
 }
 
 function Metric({ label, value }: { readonly label: string; readonly value: string }) {

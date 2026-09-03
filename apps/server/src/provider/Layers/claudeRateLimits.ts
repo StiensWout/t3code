@@ -25,9 +25,23 @@ const WINDOWS: Record<string, { readonly label: string; readonly windowMinutes: 
   overage: { label: "Extra usage", windowMinutes: null },
 };
 
+/** `seven_day_fable` → `Weekly Fable`, matching the ids the on-demand read produces. */
+function scopedWeekly(
+  type: string,
+): { readonly label: string; readonly windowMinutes: number } | null {
+  const scope = type.startsWith("seven_day_") ? type.slice("seven_day_".length) : "";
+  if (scope.length === 0) return null;
+  const name = scope
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+  return { label: `Weekly ${name}`, windowMinutes: 10080 };
+}
+
 export function normalizeClaudeRateLimit(info: ClaudeRateLimitInfo): UsageLimitsUpdate | null {
-  const kind = info.rateLimitType === undefined ? undefined : WINDOWS[info.rateLimitType];
-  if (info.rateLimitType === undefined || kind === undefined) return null;
+  if (info.rateLimitType === undefined) return null;
+  const kind = WINDOWS[info.rateLimitType] ?? scopedWeekly(info.rateLimitType);
+  if (kind === null) return null;
   const usedPercent =
     info.utilization === undefined
       ? info.status === "rejected"

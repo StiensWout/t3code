@@ -1,4 +1,4 @@
-import type { UsageLimitsConsumeResetOutcome, UsageProviderKind } from "@t3tools/contracts";
+import type { UsageLimitsConsumeResetOutcome } from "@t3tools/contracts";
 import { GaugeIcon, TrendingDownIcon, TrendingUpIcon } from "lucide-react";
 import { Fragment, useState } from "react";
 
@@ -18,7 +18,7 @@ import {
 import { Button } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { PROVIDER_PRESENTATION } from "./usageProviders";
+import { PROVIDER_PRESENTATION, ProviderMark } from "./usageProviders";
 
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
@@ -65,17 +65,6 @@ const OUTCOME_TEXT: Record<UsageLimitsConsumeResetOutcome, string> = {
   noCredit: "No reset credit left.",
   alreadyRedeemed: "That credit was already redeemed.",
 };
-
-function ProviderMark({
-  provider,
-  className,
-}: {
-  readonly provider: UsageProviderKind;
-  readonly className?: string;
-}) {
-  const Mark = PROVIDER_PRESENTATION[provider].mark;
-  return <Mark className={cn("shrink-0", className)} aria-hidden />;
-}
 
 /**
  * Banked Codex reset credits with a confirmed redeem action. Redeeming spends
@@ -378,10 +367,12 @@ function ProviderWindows({
  */
 export function UsageLimitsSection({
   providers,
+  failedEnvironments,
   now,
   isPending,
 }: {
   readonly providers: readonly EnvironmentProviderLimits[];
+  readonly failedEnvironments: readonly string[];
   readonly now: number;
   readonly isPending: boolean;
 }) {
@@ -399,7 +390,12 @@ export function UsageLimitsSection({
   };
   return (
     <div className="flex flex-col gap-8">
-      {providers.length === 0 && !isPending ? (
+      {failedEnvironments.map((label) => (
+        <span key={label} className="text-sm text-muted-foreground">
+          {label} could not report limits.
+        </span>
+      ))}
+      {providers.length === 0 && !isPending && failedEnvironments.length === 0 ? (
         <span className="text-sm text-muted-foreground">No limits reported yet.</span>
       ) : null}
       {providers.map((entry) => (
