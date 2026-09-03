@@ -82,6 +82,7 @@ export function UsageRouteScreen() {
     });
   };
   const refreshWindow = () => {
+    limits.refresh();
     const nextWindow = makeWindow(windowDays, undefined, isPast24Hours ? "hour" : "day");
     if (
       nextWindow.sinceDay === window.sinceDay &&
