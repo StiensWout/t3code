@@ -653,7 +653,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
         );
       });
 
-      it("drops custom models the refreshed snapshot no longer carries", () => {
+      it("drops Claude models omitted by a successful refresh", () => {
         const previousProvider = {
           instanceId: ProviderInstanceId.make("claudeAgent"),
           driver: ProviderDriverKind.make("claudeAgent"),
@@ -667,6 +667,12 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             {
               slug: "claude-sonnet-4-6",
               name: "Sonnet 4.6",
+              isCustom: false,
+              capabilities: null,
+            },
+            {
+              slug: "claude-stale-model",
+              name: "Stale model",
               isCustom: false,
               capabilities: null,
             },
