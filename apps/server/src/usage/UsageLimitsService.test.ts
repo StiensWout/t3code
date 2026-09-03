@@ -21,6 +21,7 @@ describe("UsageLimitsService", () => {
       const events = yield* PubSub.unbounded<ProviderRuntimeEvent>();
       const service = yield* make({
         streamEvents: Stream.fromPubSub(events),
+        instanceChanges: Stream.empty,
         listInstances: Effect.succeed([codexInstance]),
         getInstanceLabel: () => Effect.succeed("Personal"),
         getInstanceIdentity: () => Effect.succeed("codex:home:/home/me/.codex"),
@@ -107,6 +108,7 @@ describe("UsageLimitsService", () => {
     Effect.gen(function* () {
       const service = yield* make({
         streamEvents: Stream.empty,
+        instanceChanges: Stream.empty,
         listInstances: Effect.succeed([]),
         getInstanceLabel: () => Effect.succeed(null),
         getInstanceIdentity: () => Effect.succeed(null),

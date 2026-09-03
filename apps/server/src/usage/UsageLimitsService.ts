@@ -76,6 +76,8 @@ export interface UsageLimitsSources {
   readonly getInstanceLabel: (instanceId: ProviderInstanceId) => Effect.Effect<string | null>;
   /** Stable key for the account an instance points at; changes when its home is reconfigured. */
   readonly getInstanceIdentity: (instanceId: ProviderInstanceId) => Effect.Effect<string | null>;
+  /** Fires whenever instances are added, removed, or rebuilt. */
+  readonly instanceChanges: Stream.Stream<void>;
 }
 
 /** Only subscription providers report limits; everything else is ignored. */
@@ -261,6 +263,10 @@ export const make = Effect.fn("UsageLimitsService.make")(function* (sources: Usa
     });
   }).pipe(Effect.forkScoped);
 
+  // Settings edits that add, remove, or rebuild an instance re-read straight
+  // away, so a removed provider leaves the snapshot without waiting for a client.
+  yield* Stream.runForEach(sources.instanceChanges, () => refresh).pipe(Effect.forkScoped);
+
   const subscribe: UsageLimitsService["Service"]["subscribe"] = Effect.gen(function* () {
     // Read first so the initial snapshot already carries fresh numbers and a
     // client never mistakes the boot-time empty map for "nothing reported".
@@ -301,8 +307,10 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const providerService = yield* ProviderService;
     const registry = yield* ProviderAdapterRegistry;
+    const instanceChanges = yield* registry.subscribeChanges;
     return yield* make({
       streamEvents: providerService.streamEvents,
+      instanceChanges: Stream.fromSubscription(instanceChanges),
       listInstances: registry.listInstances(),
       getInstanceLabel: (instanceId) =>
         registry.getInstanceInfo(instanceId).pipe(
@@ -334,6 +342,7 @@ export const layerTest = Layer.effect(
   UsageLimitsService,
   make({
     streamEvents: Stream.empty,
+    instanceChanges: Stream.empty,
     listInstances: Effect.succeed([]),
     getInstanceLabel: () => Effect.succeed(null),
     getInstanceIdentity: () => Effect.succeed(null),
