@@ -37,6 +37,11 @@ import { checkCodexProviderStatus, type CodexAppServerProviderSnapshot } from ".
 import { checkClaudeProviderStatus } from "./ClaudeProvider.ts";
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import { AntigravityInstallation } from "../AntigravityInstallation.ts";
+import {
+  SYNTHETIC_CLAUDE_CAPABLE_MODEL,
+  SYNTHETIC_CLAUDE_COLLIDING_ALIAS,
+  SYNTHETIC_CLAUDE_MODEL_CATALOG,
+} from "../ClaudeModelCatalog.testFixtures.ts";
 import * as ModelManifest from "../ModelManifest.ts";
 import * as CodexResetCredit from "./codexResetCredit.ts";
 import * as OpenCodeRuntime from "../opencodeRuntime.ts";
@@ -143,6 +148,7 @@ type TestClaudeCapabilities = {
   readonly tokenSource: string | undefined;
   readonly apiProvider: string | undefined;
   readonly slashCommands: ReadonlyArray<ServerProviderSlashCommand>;
+  readonly models: ReadonlyArray<{ readonly value: string; readonly displayName: string }>;
 };
 
 function claudeCapabilities(overrides: Partial<TestClaudeCapabilities> = {}) {
@@ -153,6 +159,7 @@ function claudeCapabilities(overrides: Partial<TestClaudeCapabilities> = {}) {
       tokenSource: undefined,
       apiProvider: undefined,
       slashCommands: [],
+      models: [],
       ...overrides,
     });
 }
@@ -2750,6 +2757,39 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
                   stderr: "",
                   code: 0,
                 };
+              throw new Error(`Unexpected args: ${joined}`);
+            }),
+          ),
+        ),
+      );
+
+      it.effect("publishes the models reported by Claude initialization", () =>
+        Effect.gen(function* () {
+          const status = yield* checkClaudeProviderStatus(
+            defaultClaudeSettings,
+            claudeCapabilities({
+              models: [
+                {
+                  value: `${SYNTHETIC_CLAUDE_COLLIDING_ALIAS}[expanded]`,
+                  displayName: "Synthetic Capable",
+                },
+              ],
+            }),
+            undefined,
+            undefined,
+            SYNTHETIC_CLAUDE_MODEL_CATALOG,
+          );
+
+          assert.deepStrictEqual(
+            status.models.filter((model) => !model.isLegacy).map((model) => model.slug),
+            [SYNTHETIC_CLAUDE_CAPABLE_MODEL],
+          );
+          assert.ok((status.models[0]?.capabilities?.optionDescriptors?.length ?? 0) > 0);
+        }).pipe(
+          Effect.provide(
+            mockSpawnerLayer((args) => {
+              const joined = args.join(" ");
+              if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
               throw new Error(`Unexpected args: ${joined}`);
             }),
           ),

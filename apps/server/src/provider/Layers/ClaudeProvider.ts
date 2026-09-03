@@ -15,6 +15,7 @@ import { createModelCapabilities } from "@t3tools/shared/model";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import {
   query as claudeQuery,
+  type ModelInfo as ClaudeModelInfo,
   type Options as ClaudeQueryOptions,
   type SlashCommand as ClaudeSlashCommand,
   type SDKControlGetUsageResponse,
@@ -44,8 +45,9 @@ import {
 import {
   BUNDLED_CLAUDE_MODEL_CATALOG,
   type ClaudeModelCatalog,
+  type ClaudeRuntimeModel,
   formatClaudeVersionUpgradeMessage,
-  resolveClaudeModelsForVersion,
+  resolveClaudeModelAvailability,
 } from "../ClaudeModelCatalog.ts";
 
 const DEFAULT_CLAUDE_MODEL_CAPABILITIES: ModelCapabilities = createModelCapabilities({
@@ -240,7 +242,25 @@ type ClaudeCapabilitiesProbe = {
    * otherwise successful response mean the account has none (API key).
    */
   readonly usage?: Pick<SDKControlGetUsageResponse, "rate_limits_available" | "rate_limits">;
+  readonly models: ReadonlyArray<ClaudeRuntimeModel>;
 };
+
+function parseClaudeInitializationModels(
+  models: ReadonlyArray<ClaudeModelInfo> | undefined,
+): ReadonlyArray<ClaudeRuntimeModel> {
+  const seen = new Set<string>();
+  return (models ?? []).flatMap((model) => {
+    const value = nonEmptyProbeString(model.value);
+    if (!value || seen.has(value)) return [];
+    seen.add(value);
+    return [
+      {
+        value,
+        displayName: nonEmptyProbeString(model.displayName) ?? value,
+      },
+    ];
+  });
+}
 
 function parseClaudeInitializationCommands(
   commands: ReadonlyArray<ClaudeSlashCommand> | undefined,
@@ -385,6 +405,7 @@ const probeClaudeCapabilities = (
           tokenSource: account?.tokenSource,
           apiProvider: account?.apiProvider,
           slashCommands: parseClaudeInitializationCommands(init.commands),
+          models: parseClaudeInitializationModels(init.models),
           ...(usage ? { usage } : {}),
         } satisfies ClaudeCapabilitiesProbe;
       }),
@@ -522,16 +543,23 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     });
   }
 
-  const models = providerModelsFromSettings(
-    resolveClaudeModelsForVersion(modelCatalog, parsedVersion),
-    claudeSettings.customModels,
-    DEFAULT_CLAUDE_MODEL_CAPABILITIES,
-  );
-  const versionUpgradeMessage = formatClaudeVersionUpgradeMessage(modelCatalog, parsedVersion);
-
   const capabilities = resolveCapabilities
     ? yield* resolveCapabilities(claudeSettings).pipe(Effect.orElseSucceed(() => undefined))
     : undefined;
+  const modelAvailability = resolveClaudeModelAvailability(
+    modelCatalog,
+    parsedVersion,
+    capabilities?.models,
+  );
+  const models = providerModelsFromSettings(
+    modelAvailability.models,
+    claudeSettings.customModels,
+    DEFAULT_CLAUDE_MODEL_CAPABILITIES,
+  );
+  const versionUpgradeMessage =
+    modelAvailability.source === "manifest"
+      ? formatClaudeVersionUpgradeMessage(modelCatalog, parsedVersion)
+      : undefined;
   const skills = yield* discoverClaudeSkills(claudeSettings, cwd, resolvedEnvironment);
   const slashCommands = [COMPACT_SLASH_COMMAND, ...(capabilities?.slashCommands ?? [])];
   const dedupedSlashCommands = dedupeSlashCommands(slashCommands);

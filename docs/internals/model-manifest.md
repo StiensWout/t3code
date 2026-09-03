@@ -10,11 +10,17 @@ A newer bundle outranks the cached remote manifest by `updatedAt`, so a release 
 correct model data before the next successful fetch. Bump `updatedAt` whenever the
 file changes. Fetch time cannot establish which copy contains the newer edit.
 
-Generic catalog data describes presentation and capabilities. Each provider owns
-its adapter schema and dispatch mappings. Claude uses the manifest for its entire
-built-in catalog. Adding a model with an existing capability profile is a JSON
-edit; a new profile is needed only for a new capability combination. Codex still
-gets its model list from its app server.
+Claude Code reports the current session's available models during provider initialization. A
+non-empty runtime inventory filters the manifest's current models and can add a model before the
+manifest knows about it. Matching manifest entries still own presentation, aliases, capabilities,
+legacy status, and dispatch metadata. T3 keeps version-compatible legacy entries as an explicit
+escape hatch and falls back to the version-filtered manifest when runtime discovery is empty or
+unavailable.
+
+To add metadata for a Claude model that uses an existing profile, add one object to
+`providers.claudeAgent.models`. Do not add a test or change application code. Add or change a
+profile in the same JSON file only when the model exposes a capability combination that does not
+already exist.
 
 `currentModels.claudeAgent` is frozen for releases that predate catalog discovery.
 Do not extend it when adding Claude models. Codex uses `currentModels.codex` as a
