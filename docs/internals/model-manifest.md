@@ -11,12 +11,13 @@ correct model data before the next successful fetch. Bump `updatedAt` whenever t
 file changes. Fetch time cannot establish which copy contains the newer edit.
 
 Claude Code reports the current session's available models during provider initialization. A
-non-empty runtime inventory filters the manifest's current models and can add a model before the
-manifest knows about it. Matching manifest entries still own presentation, aliases, capabilities,
-legacy status, and dispatch metadata. T3 keeps version-compatible legacy entries as an explicit
-escape hatch and falls back to the version-filtered manifest when runtime discovery is empty or
-unavailable. Runtime-backed snapshots mark their model inventory as authoritative so provider
-reconciliation does not restore models Claude omitted.
+runtime inventory with at least one concrete model filters the manifest's current models and can
+add a model before the manifest knows about it. Matching manifest entries still own presentation,
+aliases, capabilities, legacy status, and dispatch metadata. T3 keeps version-compatible legacy
+entries as an explicit escape hatch and falls back to the version-filtered manifest when runtime
+discovery is empty, unavailable, or contains only `default`. Only snapshots backed by a concrete
+runtime inventory mark that inventory as authoritative, so provider reconciliation does not
+restore models Claude omitted.
 
 To add metadata for a Claude model that uses an existing profile, add one object to
 `providers.claudeAgent.models`. Do not add a test or change application code. Add or change a
