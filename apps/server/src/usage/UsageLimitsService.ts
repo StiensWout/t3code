@@ -92,6 +92,10 @@ function errorDetail(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
 }
 
+/** Stamp keys for the account-level fields, beside the window ids. */
+const PLAN_STAMP = "$plan";
+const CREDITS_STAMP = "$resetCredits";
+
 interface InstanceState {
   readonly limits: UsageProviderLimits;
   /** Window id → millis of the last change, so a slow read cannot undo a newer event. */
@@ -132,9 +136,10 @@ export const make = Effect.fn("UsageLimitsService.make")(function* (sources: Usa
       // An instance re-pointed at another provider starts from a clean slate.
       const stored = map.get(instanceId);
       const previous = stored?.limits.provider === provider ? stored : undefined;
-      const fresh = update.windows.filter(
-        (window) => (previous?.stamps.get(window.id) ?? 0) <= since,
-      );
+      const isFresh = (key: string) => (previous?.stamps.get(key) ?? 0) <= since;
+      const fresh = update.windows.filter((window) => isFresh(window.id));
+      const plan = update.plan !== undefined && isFresh(PLAN_STAMP);
+      const credits = update.resetCredits !== undefined && isFresh(CREDITS_STAMP);
       const windows = new Map(
         (previous?.limits.windows ?? []).map((window) => [window.id, window]),
       );
@@ -143,18 +148,19 @@ export const make = Effect.fn("UsageLimitsService.make")(function* (sources: Usa
         windows.set(window.id, window);
         stamps.set(window.id, nowMs);
       }
+      if (plan) stamps.set(PLAN_STAMP, nowMs);
+      if (credits) stamps.set(CREDITS_STAMP, nowMs);
       const next = new Map(map);
       next.set(instanceId, {
         limits: {
           provider,
           instanceId,
           instanceLabel,
-          plan: update.plan === undefined ? (previous?.limits.plan ?? null) : update.plan,
+          plan: plan ? (update.plan ?? null) : (previous?.limits.plan ?? null),
           windows: Array.from(windows.values()),
-          resetCredits:
-            update.resetCredits === undefined
-              ? (previous?.limits.resetCredits ?? null)
-              : update.resetCredits,
+          resetCredits: credits
+            ? (update.resetCredits ?? null)
+            : (previous?.limits.resetCredits ?? null),
           observedAt,
         },
         stamps,
@@ -163,6 +169,17 @@ export const make = Effect.fn("UsageLimitsService.make")(function* (sources: Usa
     });
     yield* PubSub.publish(changes, yield* snapshot);
   });
+
+  /** The provider an instance currently resolves to, or null when it is gone or has no limits. */
+  const currentProvider = (instanceId: ProviderInstanceId) =>
+    sources.getAdapter(instanceId).pipe(
+      Effect.flatMap((adapter) =>
+        Effect.map(sources.listInstances, (live) =>
+          live.includes(instanceId) ? usageProviderFor(adapter.provider) : null,
+        ),
+      ),
+      Effect.orElseSucceed(() => null),
+    );
 
   const refreshInstance = Effect.fn("UsageLimitsService.refreshInstance")(function* (
     instanceId: ProviderInstanceId,
@@ -183,6 +200,9 @@ export const make = Effect.fn("UsageLimitsService.make")(function* (sources: Usa
     const startedAt = yield* Clock.currentTimeMillis;
     const update = yield* adapter.readAccountLimits;
     if (update === null) return;
+    // The instance may have been removed or re-pointed while the read ran.
+    const current = yield* currentProvider(instanceId);
+    if (current !== provider) return;
     yield* apply(instanceId, provider, update, startedAt);
   });
 
@@ -220,10 +240,7 @@ export const make = Effect.fn("UsageLimitsService.make")(function* (sources: Usa
     return Effect.gen(function* () {
       // A session outliving its instance's removal or re-pointing must not
       // resurrect the old provider's numbers.
-      const current = yield* sources.getAdapter(instanceId).pipe(
-        Effect.map((adapter) => usageProviderFor(adapter.provider)),
-        Effect.orElseSucceed(() => null),
-      );
+      const current = yield* currentProvider(instanceId);
       if (current !== provider) return;
       yield* apply(instanceId, provider, event.payload.limits, Number.POSITIVE_INFINITY);
     });
