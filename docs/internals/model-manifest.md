@@ -15,7 +15,8 @@ non-empty runtime inventory filters the manifest's current models and can add a 
 manifest knows about it. Matching manifest entries still own presentation, aliases, capabilities,
 legacy status, and dispatch metadata. T3 keeps version-compatible legacy entries as an explicit
 escape hatch and falls back to the version-filtered manifest when runtime discovery is empty or
-unavailable.
+unavailable. Runtime-backed snapshots mark their model inventory as authoritative so provider
+reconciliation does not restore models Claude omitted.
 
 To add metadata for a Claude model that uses an existing profile, add one object to
 `providers.claudeAgent.models`. Do not add a test or change application code. Add or change a

@@ -599,6 +599,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     presentation: CLAUDE_PRESENTATION,
     enabled: claudeSettings.enabled,
     checkedAt,
+    ...(modelAvailability.source === "runtime" ? { modelInventory: "authoritative" as const } : {}),
     models,
     slashCommands: dedupedSlashCommands,
     skills,

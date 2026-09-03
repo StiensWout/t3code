@@ -653,7 +653,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
         );
       });
 
-      it("drops Claude models omitted by a successful refresh", () => {
+      it("uses Claude inventory authority when reconciling snapshots", () => {
         const previousProvider = {
           instanceId: ProviderInstanceId.make("claudeAgent"),
           driver: ProviderDriverKind.make("claudeAgent"),
@@ -689,11 +689,23 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
         const refreshedProvider = {
           ...previousProvider,
           checkedAt: "2026-04-14T00:01:00.000Z",
+          modelInventory: "authoritative",
+          models: [previousProvider.models[0]],
+        } satisfies ServerProvider;
+        const partialProvider = {
+          ...previousProvider,
+          status: "warning",
+          auth: { status: "unknown" },
+          checkedAt: "2026-04-14T00:02:00.000Z",
           models: [previousProvider.models[0]],
         } satisfies ServerProvider;
 
         assert.deepStrictEqual(mergeProviderSnapshot(previousProvider, refreshedProvider).models, [
           ...refreshedProvider.models,
+        ]);
+        assert.deepStrictEqual(mergeProviderSnapshot(previousProvider, partialProvider).models, [
+          previousProvider.models[0],
+          previousProvider.models[1],
         ]);
       });
 
@@ -2790,6 +2802,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             status.models.filter((model) => !model.isLegacy).map((model) => model.slug),
             [SYNTHETIC_CLAUDE_CAPABLE_MODEL],
           );
+          assert.strictEqual(status.modelInventory, "authoritative");
           assert.ok((status.models[0]?.capabilities?.optionDescriptors?.length ?? 0) > 0);
         }).pipe(
           Effect.provide(
@@ -2922,6 +2935,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           assert.strictEqual(status.status, "warning");
           assert.strictEqual(status.installed, true);
           assert.strictEqual(status.auth.status, "unknown");
+          assert.strictEqual(status.modelInventory, undefined);
           assert.strictEqual(
             status.message,
             "Could not verify Claude authentication status from initialization result.",
