@@ -77,7 +77,15 @@ function planLabel(planType: string): string | null {
     .join(" ");
 }
 
-export function normalizeCodexRateLimits(input: CodexRateLimitsInput): UsageLimitsUpdate {
+/**
+ * `complete` marks a full `account/rateLimits/read` response. The rolling
+ * `account/rateLimits/updated` notification is documented as sparse, so its
+ * missing windows mean "unchanged" rather than "gone".
+ */
+export function normalizeCodexRateLimits(
+  input: CodexRateLimitsInput,
+  options: { readonly complete: boolean },
+): UsageLimitsUpdate {
   const { rateLimits } = input;
   const windows: UsageLimitWindow[] = [];
   if (rateLimits.primary) windows.push(toWindow("primary", "5 hour", rateLimits.primary));
@@ -91,6 +99,7 @@ export function normalizeCodexRateLimits(input: CodexRateLimitsInput): UsageLimi
       .filter((value): value is number => typeof value === "number") ?? [];
 
   return {
+    complete: options.complete,
     windows,
     ...(rateLimits.planType === undefined || rateLimits.planType === null
       ? {}

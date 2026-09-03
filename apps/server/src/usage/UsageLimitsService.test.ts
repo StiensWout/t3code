@@ -11,6 +11,7 @@ import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Stream from "effect/Stream";
 
+import { ProviderAdapterRequestError } from "../provider/Errors.ts";
 import { make } from "./UsageLimitsService.ts";
 
 const codexInstance = ProviderInstanceId.make("codex");
@@ -29,6 +30,7 @@ describe("UsageLimitsService", () => {
           Effect.succeed({
             provider: ProviderDriverKind.make("codex"),
             readAccountLimits: Effect.succeed({
+              complete: true,
               plan: "Pro",
               windows: [
                 {
@@ -71,6 +73,7 @@ describe("UsageLimitsService", () => {
         type: "account.rate-limits.updated",
         payload: {
           limits: {
+            complete: false,
             windows: [
               {
                 id: "primary",
@@ -118,6 +121,84 @@ describe("UsageLimitsService", () => {
         .consumeReset({ instanceId: ProviderInstanceId.make("claudeAgent") })
         .pipe(Effect.flip);
       assert.strictEqual(result.reason, "unsupported");
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a complete read drops windows the account no longer reports", () =>
+    Effect.gen(function* () {
+      let windows = [
+        { id: "primary", label: "5 hour", usedPercent: 40, resetsAt: null, windowMinutes: 300 },
+        { id: "secondary", label: "Weekly", usedPercent: 60, resetsAt: null, windowMinutes: 10080 },
+      ];
+      const service = yield* make({
+        streamEvents: Stream.empty,
+        instanceChanges: Stream.empty,
+        listInstances: Effect.succeed([codexInstance]),
+        getInstanceLabel: () => Effect.succeed(null),
+        getInstanceIdentity: () => Effect.succeed("codex:home:x"),
+        getAdapter: () =>
+          Effect.succeed({
+            provider: ProviderDriverKind.make("codex"),
+            readAccountLimits: Effect.sync(() => ({ complete: true, windows })),
+          }),
+      });
+      const first = yield* service.subscribe;
+      assert.deepStrictEqual(
+        first.latest.providers[0]?.windows.map((window) => window.id),
+        ["primary", "secondary"],
+      );
+      windows = windows.slice(0, 1);
+      const second = yield* service.subscribe;
+      assert.deepStrictEqual(
+        second.latest.providers[0]?.windows.map((window) => window.id),
+        ["primary"],
+      );
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a failed read keeps the last good numbers and says so", () =>
+    Effect.gen(function* () {
+      let fail = false;
+      const service = yield* make({
+        streamEvents: Stream.empty,
+        instanceChanges: Stream.empty,
+        listInstances: Effect.succeed([codexInstance]),
+        getInstanceLabel: () => Effect.succeed(null),
+        getInstanceIdentity: () => Effect.succeed("codex:home:x"),
+        getAdapter: () =>
+          Effect.succeed({
+            provider: ProviderDriverKind.make("codex"),
+            readAccountLimits: Effect.suspend(() =>
+              fail
+                ? Effect.fail(
+                    new ProviderAdapterRequestError({
+                      provider: "codex",
+                      method: "account/rateLimits/read",
+                      detail: "Codex could not answer account/rateLimits/read.",
+                    }),
+                  )
+                : Effect.succeed({
+                    complete: true,
+                    windows: [
+                      {
+                        id: "primary",
+                        label: "5 hour",
+                        usedPercent: 40,
+                        resetsAt: null,
+                        windowMinutes: 300,
+                      },
+                    ],
+                  }),
+            ),
+          }),
+      });
+      const good = yield* service.subscribe;
+      assert.strictEqual(good.latest.providers[0]?.readError, null);
+      fail = true;
+      const bad = yield* service.subscribe;
+      const entry = bad.latest.providers[0];
+      assert.strictEqual(entry?.windows[0]?.usedPercent, 40);
+      assert.match(entry?.readError ?? "", /could not answer/);
     }).pipe(Effect.scoped),
   );
 });

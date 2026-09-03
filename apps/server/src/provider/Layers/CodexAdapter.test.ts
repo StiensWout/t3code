@@ -108,8 +108,22 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
 
   readRateLimits = Effect.succeed({ rateLimits: {} });
 
-  consumeRateLimitResetCredit(_idempotencyKey: string) {
-    return Effect.succeed({ outcome: "reset" as const });
+  public readonly consumeResetImpl = vi.fn(
+    (_idempotencyKey: string): Promise<{ outcome: "reset" | "nothingToReset" }> =>
+      Promise.resolve({ outcome: "reset" as const }),
+  );
+
+  consumeRateLimitResetCredit(idempotencyKey: string) {
+    return Effect.tryPromise({
+      try: () => this.consumeResetImpl(idempotencyKey),
+      catch: (cause) =>
+        new CodexErrors.CodexAppServerRequestError({
+          code: -1,
+          errorMessage: cause instanceof Error ? cause.message : String(cause),
+          method: "account/rateLimitResetCredit/consume",
+          cause,
+        }),
+    });
   }
 
   public readonly respondToRequestImpl = vi.fn(
@@ -308,7 +322,9 @@ const sessionErrorLayer = it.layer(
   Layer.effect(
     CodexAdapter,
     Effect.gen(function* () {
-      const codexConfig = decodeCodexSettings({});
+      // Account requests can spawn a real app-server when no fake session
+      // answers; a binary that cannot exist guarantees these tests never do.
+      const codexConfig = decodeCodexSettings({ binaryPath: "/nonexistent/codex-test-binary" });
       return yield* makeCodexAdapter(codexConfig, {
         makeRuntime: sessionRuntimeFactory.factory,
       });
@@ -340,6 +356,52 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
     }),
   );
 
+  it.effect("redeems reset credits one at a time and reuses the key until an outcome lands", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("sess-reset"),
+        cwd: process.cwd(),
+        runtimeMode: "approval-required",
+      });
+      const runtime = sessionRuntimeFactory.lastRuntime;
+      NodeAssert.ok(runtime);
+      const consume = adapter.consumeRateLimitResetCredit;
+      NodeAssert.ok(consume);
+
+      // First attempt hangs until released; the second must wait, not race.
+      let release = (): void => {};
+      const gate = new Promise<{ outcome: "reset" }>((resolve) => {
+        release = () => resolve({ outcome: "reset" });
+      });
+      runtime.consumeResetImpl.mockImplementationOnce(() => gate);
+      const first = yield* Effect.forkChild(consume);
+      const second = yield* Effect.forkChild(consume);
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+      NodeAssert.equal(runtime.consumeResetImpl.mock.calls.length, 1);
+      release();
+      NodeAssert.equal(yield* Fiber.join(first), "reset");
+      NodeAssert.equal(yield* Fiber.join(second), "reset");
+      NodeAssert.equal(runtime.consumeResetImpl.mock.calls.length, 2);
+      const [firstKey, secondKey] = runtime.consumeResetImpl.mock.calls.map(([key]) => key);
+      NodeAssert.notEqual(firstKey, secondKey);
+
+      // A failed attempt has no known outcome, so the retry re-sends its key.
+      runtime.consumeResetImpl.mockImplementationOnce(() =>
+        Promise.reject(new Error("socket hang up")),
+      );
+      const failed = yield* consume.pipe(Effect.result);
+      NodeAssert.equal(failed._tag, "Failure");
+      NodeAssert.equal(yield* consume, "reset");
+      const [failedKey, retriedKey] = runtime.consumeResetImpl.mock.calls
+        .slice(-2)
+        .map(([key]) => key);
+      NodeAssert.equal(failedKey, retriedKey);
+    }),
+  );
+
   it.effect("uploads feedback for the active Codex thread", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;
@@ -351,6 +413,8 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
       });
       const runtime = sessionRuntimeFactory.lastRuntime;
       NodeAssert.ok(runtime);
+      const consume = adapter.consumeRateLimitResetCredit;
+      NodeAssert.ok(consume);
 
       const result = yield* adapter.uploadFeedback({
         threadId,
@@ -386,6 +450,8 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
       });
       const runtime = sessionRuntimeFactory.lastRuntime;
       NodeAssert.ok(runtime);
+      const consume = adapter.consumeRateLimitResetCredit;
+      NodeAssert.ok(consume);
       runtime.sendTurnImpl.mockClear();
 
       yield* Effect.ignore(

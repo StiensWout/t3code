@@ -33,10 +33,12 @@ export const UsageLimitResetCredits = Schema.Struct({
 export type UsageLimitResetCredits = typeof UsageLimitResetCredits.Type;
 
 /**
- * Sparse update from one provider event or read. Windows replace by id, the
- * other fields only when present.
+ * One provider event or read. Windows replace by id and the other fields only
+ * when present. A complete update is the account's whole window set, so
+ * windows it omits are gone; a sparse one only touches what it carries.
  */
 export const UsageLimitsUpdate = Schema.Struct({
+  complete: Schema.Boolean,
   plan: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   windows: Schema.Array(UsageLimitWindow),
   resetCredits: Schema.optional(Schema.NullOr(UsageLimitResetCredits)),
@@ -53,6 +55,8 @@ export const UsageProviderLimits = Schema.Struct({
   resetCredits: Schema.NullOr(UsageLimitResetCredits),
   /** When the provider last reported any of these numbers. */
   observedAt: IsoDateTime,
+  /** Set when the latest on-demand read failed; the numbers above are the last good report. */
+  readError: Schema.NullOr(TrimmedNonEmptyString),
 });
 export type UsageProviderLimits = typeof UsageProviderLimits.Type;
 

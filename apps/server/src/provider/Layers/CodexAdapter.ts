@@ -38,6 +38,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import * as CodexErrors from "effect-codex-app-server/errors";
@@ -1739,7 +1740,7 @@ function mapToRuntimeEvents(
         type: "account.rate-limits.updated",
         ...runtimeEventBase(event, canonicalThreadId),
         payload: {
-          limits: normalizeCodexRateLimits(payload),
+          limits: normalizeCodexRateLimits(payload, { complete: false }),
         },
       },
     ];
@@ -2255,6 +2256,12 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     viaClient: (
       client: Parameters<Parameters<typeof withCodexAccountClient<A, never>>[1]>[0],
     ) => Effect.Effect<A, CodexErrors.CodexAppServerError>,
+    /**
+     * Whether a failing live session may be retried on a fresh process. Reads
+     * are harmless to repeat; a redemption is not, so it surfaces the failure
+     * and keeps its idempotency key for the user's own retry.
+     */
+    policy: { readonly fallbackAfterSession: boolean },
   ): Effect.Effect<A, ProviderAdapterError> => {
     const requestError = (detail: string, cause?: unknown) =>
       new ProviderAdapterRequestError({
@@ -2291,12 +2298,16 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       // A session whose app-server died, or one that hangs, is still in the
       // map until it is stopped; any failure there falls through to a fresh
       // process with its own budget.
-      return session
-        ? viaSession(session.runtime).pipe(
-            Effect.timeout(LIVE_SESSION_TIMEOUT),
-            Effect.catch(() => standalone),
-          )
-        : standalone;
+      if (!session) return standalone;
+      const viaLive = viaSession(session.runtime).pipe(
+        Effect.timeout(LIVE_SESSION_TIMEOUT),
+        Effect.mapError((cause) =>
+          cause._tag === "TimeoutError"
+            ? requestError(`Codex did not answer ${method} within ${LIVE_SESSION_TIMEOUT}.`, cause)
+            : mapCodexRuntimeError(session.threadId, method, cause),
+        ),
+      );
+      return policy.fallbackAfterSession ? viaLive.pipe(Effect.catch(() => standalone)) : viaLive;
     });
   };
 
@@ -2304,17 +2315,32 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     "account/rateLimits/read",
     (runtime) => runtime.readRateLimits,
     (client) => client.request("account/rateLimits/read", undefined),
-  ).pipe(Effect.map((response) => normalizeCodexRateLimits(response)));
+    { fallbackAfterSession: true },
+  ).pipe(Effect.map((response) => normalizeCodexRateLimits(response, { complete: true })));
 
+  // Redemption is single-flight per instance, and one idempotency key is kept
+  // until Codex reports an outcome: overlapping confirmations serialise, and
+  // a retry after a timeout re-sends the same attempt instead of a new one.
+  const consumeResetLock = yield* Semaphore.make(1);
+  let pendingResetKey: string | null = null;
   const consumeRateLimitResetCredit: NonNullable<CodexAdapterShape["consumeRateLimitResetCredit"]> =
-    Effect.suspend(() => {
-      const idempotencyKey = NodeCrypto.randomUUID();
-      return accountRequest(
-        "account/rateLimitResetCredit/consume",
-        (runtime) => runtime.consumeRateLimitResetCredit(idempotencyKey),
-        (client) => client.request("account/rateLimitResetCredit/consume", { idempotencyKey }),
-      ).pipe(Effect.map((response) => response.outcome));
-    });
+    consumeResetLock.withPermits(1)(
+      Effect.suspend(() => {
+        const idempotencyKey = pendingResetKey ?? NodeCrypto.randomUUID();
+        pendingResetKey = idempotencyKey;
+        return accountRequest(
+          "account/rateLimitResetCredit/consume",
+          (runtime) => runtime.consumeRateLimitResetCredit(idempotencyKey),
+          (client) => client.request("account/rateLimitResetCredit/consume", { idempotencyKey }),
+          { fallbackAfterSession: false },
+        ).pipe(
+          Effect.map((response) => {
+            pendingResetKey = null;
+            return response.outcome;
+          }),
+        );
+      }),
+    );
 
   const uploadFeedback: CodexAdapterShape["uploadFeedback"] = (input) =>
     requireSession(input.threadId).pipe(

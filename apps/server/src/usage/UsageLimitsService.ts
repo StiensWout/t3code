@@ -155,6 +155,17 @@ export const make = Effect.fn("UsageLimitsService.make")(function* (sources: Usa
         (previous?.limits.windows ?? []).map((window) => [window.id, window]),
       );
       const stamps = new Map(previous?.stamps ?? []);
+      if (update.complete) {
+        // A full account snapshot: windows it no longer lists are gone,
+        // unless an event refreshed them after this read began.
+        const listed = new Set(update.windows.map((window) => window.id));
+        for (const id of windows.keys()) {
+          if (!listed.has(id) && isFresh(id)) {
+            windows.delete(id);
+            stamps.delete(id);
+          }
+        }
+      }
       for (const window of fresh) {
         windows.set(window.id, window);
         stamps.set(window.id, nowMs);
@@ -173,8 +184,47 @@ export const make = Effect.fn("UsageLimitsService.make")(function* (sources: Usa
             ? (update.resetCredits ?? null)
             : (previous?.limits.resetCredits ?? null),
           observedAt,
+          readError: null,
         },
         stamps,
+        identity,
+      });
+      return next;
+    });
+    yield* PubSub.publish(changes, yield* snapshot);
+  });
+
+  /**
+   * A failed on-demand read is visible: the entry keeps its last good numbers
+   * and carries the failure, or exists only to carry it when nothing was read yet.
+   */
+  const recordReadError = Effect.fn("UsageLimitsService.recordReadError")(function* (
+    instanceId: ProviderInstanceId,
+    provider: UsageProviderKind,
+    identity: string | null,
+    detail: string,
+  ) {
+    const instanceLabel = yield* sources.getInstanceLabel(instanceId);
+    const observedAt = DateTime.formatIso(yield* DateTime.now);
+    yield* Ref.update(state, (map) => {
+      const stored = map.get(instanceId);
+      const previous =
+        stored?.limits.provider === provider && stored.identity === identity ? stored : undefined;
+      const next = new Map(map);
+      next.set(instanceId, {
+        limits: previous
+          ? { ...previous.limits, readError: detail }
+          : {
+              provider,
+              instanceId,
+              instanceLabel,
+              plan: null,
+              windows: [],
+              resetCredits: null,
+              observedAt,
+              readError: detail,
+            },
+        stamps: previous?.stamps ?? new Map(),
         identity,
       });
       return next;
@@ -216,16 +266,20 @@ export const make = Effect.fn("UsageLimitsService.make")(function* (sources: Usa
     if (dropped) yield* PubSub.publish(changes, yield* snapshot);
     if (provider === null || adapter.readAccountLimits === undefined) return;
     const startedAt = yield* Clock.currentTimeMillis;
-    const update = yield* adapter.readAccountLimits;
-    if (update === null) return;
+    const read = yield* Effect.result(adapter.readAccountLimits);
     // The instance may have been removed or re-pointed at another provider
-    // or account while the read ran; the numbers would belong to the old one.
+    // or account while the read ran; the result would belong to the old one.
     const current = yield* currentProvider(instanceId);
     const identityNow = yield* sources.getInstanceIdentity(instanceId);
     if (current !== provider || identityNow !== identity) return;
+    if (read._tag === "Failure") {
+      yield* recordReadError(instanceId, provider, identity, read.failure.message);
+      return;
+    }
+    if (read.success === null) return;
     // Filed under the identity the read was made for: if the instance is
     // re-pointed after this point, the next refresh drops the entry.
-    yield* apply(instanceId, provider, update, startedAt, identity);
+    yield* apply(instanceId, provider, read.success, startedAt, identity);
   });
 
   const refresh: UsageLimitsService["Service"]["refresh"] = Effect.gen(function* () {

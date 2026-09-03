@@ -50,6 +50,8 @@ export function normalizeClaudeRateLimit(info: ClaudeRateLimitInfo): UsageLimits
       : Math.max(0, Math.min(100, info.utilization * 100));
   if (usedPercent === null) return null;
   return {
+    // One window per event: everything else is unchanged.
+    complete: false,
     windows: [
       {
         id: info.rateLimitType,

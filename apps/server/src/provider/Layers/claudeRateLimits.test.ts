@@ -12,6 +12,7 @@ describe("normalizeClaudeRateLimit", () => {
         resetsAt: 1_800_000_000,
       }),
     ).toEqual({
+      complete: false,
       windows: [
         {
           id: "seven_day_opus",

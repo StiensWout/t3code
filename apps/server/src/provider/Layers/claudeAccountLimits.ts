@@ -128,7 +128,7 @@ export function normalizeClaudeUsage(
         resetsAt: limit.resets_at,
       });
     }
-    return { windows, plan };
+    return { complete: true, windows, plan };
   }
 
   for (const legacy of LEGACY_WINDOWS) {
@@ -142,7 +142,7 @@ export function normalizeClaudeUsage(
       windowMinutes: legacy.windowMinutes,
     });
   }
-  return { windows, plan };
+  return { complete: true, windows, plan };
 }
 
 const requestError = (detail: string, cause?: unknown) =>
@@ -153,8 +153,28 @@ const requestError = (detail: string, cause?: unknown) =>
     ...(cause === undefined ? {} : { cause }),
   });
 
+/**
+ * Where Claude Code keeps this instance's credentials. A configured home is
+ * handed to the CLI as `CLAUDE_CONFIG_DIR`, and an instance environment may
+ * override that or `HOME` itself, so the same precedence applies here.
+ */
+export function claudeConfigDir(input: {
+  readonly environment: NodeJS.ProcessEnv | undefined;
+  readonly homePath: string;
+  readonly resolvedHome: string;
+  readonly join: (...parts: string[]) => string;
+}): string {
+  const configured = input.environment?.CLAUDE_CONFIG_DIR?.trim();
+  if (configured) return configured;
+  if (input.homePath.trim().length > 0) return input.resolvedHome;
+  const home = input.environment?.HOME?.trim();
+  return input.join(home || input.resolvedHome, ".claude");
+}
+
 export interface ClaudeAccountLimitsServices {
   readonly settings: Pick<ClaudeSettings, "homePath">;
+  /** The instance's process environment, for `CLAUDE_CONFIG_DIR` and `HOME` overrides. */
+  readonly environment: NodeJS.ProcessEnv | undefined;
   readonly fileSystem: FileSystem.FileSystem;
   readonly path: Path.Path;
   readonly httpClient: HttpClient.HttpClient;
@@ -169,15 +189,18 @@ export interface ClaudeAccountLimitsServices {
 export function makeClaudeAccountLimitsReader(
   services: ClaudeAccountLimitsServices,
 ): Effect.Effect<UsageLimitsUpdate | null, ProviderAdapterError> {
-  const { settings, fileSystem, path, httpClient } = services;
+  const { settings, environment, fileSystem, path, httpClient } = services;
 
   const readCredentials = Effect.gen(function* () {
-    // A configured home is used as CLAUDE_CONFIG_DIR itself; the default home
-    // keeps Claude Code's config under `~/.claude`.
     const home = yield* resolveClaudeHomePath(settings).pipe(
       Effect.provideService(Path.Path, path),
     );
-    const configDir = settings.homePath.trim().length > 0 ? home : path.join(home, ".claude");
+    const configDir = claudeConfigDir({
+      environment,
+      homePath: settings.homePath,
+      resolvedHome: home,
+      join: (...parts) => path.join(...parts),
+    });
     // macOS keeps Claude Code's credentials in the login keychain, and reading
     // that item from another process triggers a Keychain prompt on every
     // refresh. Until that is an explicit opt-in, macOS relies on turn events.

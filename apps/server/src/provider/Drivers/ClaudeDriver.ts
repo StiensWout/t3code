@@ -141,6 +141,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
         modelCatalog,
         accountLimits: makeClaudeAccountLimitsReader({
           settings: effectiveConfig,
+          environment: processEnv,
           fileSystem,
           path,
           httpClient,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 
-import { normalizeClaudeUsage, tierLabel } from "./claudeAccountLimits.ts";
+import { claudeConfigDir, normalizeClaudeUsage, tierLabel } from "./claudeAccountLimits.ts";
 
 describe("normalizeClaudeUsage", () => {
   it("reads the structured limits array, naming scoped weekly buckets after their model", () => {
@@ -27,6 +27,7 @@ describe("normalizeClaudeUsage", () => {
         "Max 20x",
       ),
     ).toEqual({
+      complete: true,
       plan: "Max 20x",
       windows: [
         {
@@ -72,5 +73,36 @@ describe("normalizeClaudeUsage", () => {
     expect(tierLabel("max", "default_claude_max_5x")).toBe("Max 5x");
     expect(tierLabel("pro", null)).toBe("Pro");
     expect(tierLabel(null, null)).toBeNull();
+  });
+
+  it("resolves the credentials directory the way the CLI would for this instance", () => {
+    const join = (...parts: string[]) => parts.join("/");
+    expect(
+      claudeConfigDir({
+        environment: { CLAUDE_CONFIG_DIR: "/work/claude-config" },
+        homePath: "",
+        resolvedHome: "/home/me",
+        join,
+      }),
+    ).toBe("/work/claude-config");
+    expect(
+      claudeConfigDir({
+        environment: {},
+        homePath: "~/.claude_work",
+        resolvedHome: "/home/me/.claude_work",
+        join,
+      }),
+    ).toBe("/home/me/.claude_work");
+    expect(
+      claudeConfigDir({
+        environment: { HOME: "/srv/other" },
+        homePath: "",
+        resolvedHome: "/home/me",
+        join,
+      }),
+    ).toBe("/srv/other/.claude");
+    expect(
+      claudeConfigDir({ environment: undefined, homePath: "", resolvedHome: "/home/me", join }),
+    ).toBe("/home/me/.claude");
   });
 });
