@@ -74,6 +74,8 @@ export interface UsageLimitsSources {
   ) => Effect.Effect<UsageLimitsAdapter, UsageLimitsError>;
   /** Configured display name for an instance, null when it has none. */
   readonly getInstanceLabel: (instanceId: ProviderInstanceId) => Effect.Effect<string | null>;
+  /** Stable key for the account an instance points at; changes when its home is reconfigured. */
+  readonly getInstanceIdentity: (instanceId: ProviderInstanceId) => Effect.Effect<string | null>;
 }
 
 /** Only subscription providers report limits; everything else is ignored. */
@@ -98,6 +100,8 @@ const CREDITS_STAMP = "$resetCredits";
 
 interface InstanceState {
   readonly limits: UsageProviderLimits;
+  /** Continuation identity at the time of the last write; a change means another account. */
+  readonly identity: string | null;
   /** Window id → millis of the last change, so a slow read cannot undo a newer event. */
   readonly stamps: ReadonlyMap<string, number>;
 }
@@ -130,14 +134,16 @@ export const make = Effect.fn("UsageLimitsService.make")(function* (sources: Usa
     since: number,
   ) {
     const instanceLabel = yield* sources.getInstanceLabel(instanceId);
+    const identity = yield* sources.getInstanceIdentity(instanceId);
     // Stamp right before the write, after the last yield, so a read that
     // started while the label lookup ran still counts as older than this.
     const nowMs = yield* Clock.currentTimeMillis;
     const observedAt = DateTime.formatIso(DateTime.makeUnsafe(nowMs));
     yield* Ref.update(state, (map) => {
-      // An instance re-pointed at another provider starts from a clean slate.
+      // An instance re-pointed at another provider or account starts from a clean slate.
       const stored = map.get(instanceId);
-      const previous = stored?.limits.provider === provider ? stored : undefined;
+      const previous =
+        stored?.limits.provider === provider && stored.identity === identity ? stored : undefined;
       const isFresh = (key: string) => (previous?.stamps.get(key) ?? 0) <= since;
       const fresh = update.windows.filter((window) => isFresh(window.id));
       const plan = update.plan !== undefined && isFresh(PLAN_STAMP);
@@ -166,6 +172,7 @@ export const make = Effect.fn("UsageLimitsService.make")(function* (sources: Usa
           observedAt,
         },
         stamps,
+        identity,
       });
       return next;
     });
@@ -188,11 +195,17 @@ export const make = Effect.fn("UsageLimitsService.make")(function* (sources: Usa
   ) {
     const adapter = yield* sources.getAdapter(instanceId);
     const provider = usageProviderFor(adapter.provider);
-    // Re-pointed at another provider, or one without limits: whatever the old
-    // provider left behind goes, even if the new one has nothing to say yet.
+    // Re-pointed at another provider, account, or one without limits: whatever
+    // was there goes, even if the new configuration has nothing to say yet.
+    const identity = yield* sources.getInstanceIdentity(instanceId);
     const dropped = yield* Ref.modify(state, (map) => {
       const stored = map.get(instanceId);
-      if (stored === undefined || stored.limits.provider === provider) return [false, map] as const;
+      if (
+        stored === undefined ||
+        (stored.limits.provider === provider && stored.identity === identity)
+      ) {
+        return [false, map] as const;
+      }
       const next = new Map(map);
       next.delete(instanceId);
       return [true, next] as const;
@@ -296,6 +309,11 @@ export const layer = Layer.effect(
           Effect.map((info) => info.displayName?.trim() || null),
           Effect.orElseSucceed(() => null),
         ),
+      getInstanceIdentity: (instanceId) =>
+        registry.getInstanceInfo(instanceId).pipe(
+          Effect.map((info) => info.continuationIdentity.continuationKey),
+          Effect.orElseSucceed(() => null),
+        ),
       getAdapter: (instanceId) =>
         registry.getByInstance(instanceId).pipe(
           Effect.mapError(
@@ -318,6 +336,7 @@ export const layerTest = Layer.effect(
     streamEvents: Stream.empty,
     listInstances: Effect.succeed([]),
     getInstanceLabel: () => Effect.succeed(null),
+    getInstanceIdentity: () => Effect.succeed(null),
     getAdapter: () => Effect.die("UsageLimitsService.layerTest has no adapters"),
   }),
 );

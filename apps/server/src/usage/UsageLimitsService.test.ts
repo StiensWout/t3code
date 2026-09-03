@@ -23,6 +23,7 @@ describe("UsageLimitsService", () => {
         streamEvents: Stream.fromPubSub(events),
         listInstances: Effect.succeed([codexInstance]),
         getInstanceLabel: () => Effect.succeed("Personal"),
+        getInstanceIdentity: () => Effect.succeed("codex:home:/home/me/.codex"),
         getAdapter: () =>
           Effect.succeed({
             provider: ProviderDriverKind.make("codex"),
@@ -108,6 +109,7 @@ describe("UsageLimitsService", () => {
         streamEvents: Stream.empty,
         listInstances: Effect.succeed([]),
         getInstanceLabel: () => Effect.succeed(null),
+        getInstanceIdentity: () => Effect.succeed(null),
         getAdapter: () => Effect.succeed({ provider: ProviderDriverKind.make("claudeAgent") }),
       });
       const result = yield* service
