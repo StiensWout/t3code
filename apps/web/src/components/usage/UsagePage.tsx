@@ -88,6 +88,7 @@ export function UsagePage() {
   }));
   const [metric, setMetric] = useState<UsageMetric>("cost");
   const showingLimits = metric === "limits";
+  const [isRefreshingLimits, setIsRefreshingLimits] = useState(false);
   const [breakdown, setBreakdown] = useState<"model" | "time">("model");
   const [selectedEnvironmentIds, setSelectedEnvironmentIds] =
     useState<ReadonlySet<EnvironmentId> | null>(null);
@@ -139,12 +140,15 @@ export function UsagePage() {
   };
   const refreshWindow = () => {
     if (showingLimits) {
-      for (const [environmentId, presentation] of presentations) {
-        if (selectedEnvironmentIds !== null && !selectedEnvironmentIds.has(environmentId)) continue;
-        if (presentation.connection.phase === "connected" && presentation.serverConfig !== null) {
-          void refreshProviders({ environmentId, input: {} });
-        }
-      }
+      setIsRefreshingLimits(true);
+      void Promise.all(
+        Array.from(presentations, ([environmentId, presentation]) => {
+          if (selectedEnvironmentIds !== null && !selectedEnvironmentIds.has(environmentId)) return;
+          if (presentation.connection.phase === "connected" && presentation.serverConfig !== null) {
+            return refreshProviders({ environmentId, input: {} });
+          }
+        }),
+      ).finally(() => setIsRefreshingLimits(false));
       return;
     }
     const nextWindow = makeWindow(windowDays, undefined, isPast24Hours ? "hour" : "day");
@@ -159,6 +163,9 @@ export function UsagePage() {
       setWindowSelection({ days: windowDays, window: nextWindow });
     }
   };
+  const isRefreshing = showingLimits
+    ? isRefreshingLimits
+    : environments.some((environment) => environment.isPending);
   const windowLabel =
     isPast24Hours && window.sinceTime !== undefined && window.untilTime !== undefined
       ? `${formatDateTimeShort(window.sinceTime, window.timeZone)} to ${formatDateTimeShort(window.untilTime, window.timeZone)}`
@@ -225,10 +232,12 @@ export function UsagePage() {
         <Button
           onClick={refreshWindow}
           aria-label={showingLimits ? "Refresh limits" : "Refresh usage"}
+          aria-busy={isRefreshing}
+          disabled={isRefreshing}
           size="icon-sm"
           variant="ghost"
         >
-          <RefreshCwIcon className="size-3.5" />
+          <RefreshCwIcon className={cn("size-3.5", isRefreshing && "animate-spin")} />
         </Button>
       </div>
       <div className="col-span-2 ms-auto flex min-w-0 items-center justify-end gap-1 xl:hidden">
@@ -282,10 +291,12 @@ export function UsagePage() {
         <Button
           onClick={refreshWindow}
           aria-label={showingLimits ? "Refresh limits" : "Refresh usage"}
+          aria-busy={isRefreshing}
+          disabled={isRefreshing}
           size="icon-sm"
           variant="ghost"
         >
-          <RefreshCwIcon className="size-3.5" />
+          <RefreshCwIcon className={cn("size-3.5", isRefreshing && "animate-spin")} />
         </Button>
       </div>
     </div>
