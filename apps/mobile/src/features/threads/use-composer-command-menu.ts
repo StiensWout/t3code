@@ -51,7 +51,9 @@ function composerSelectionAtEnd(draftMessage: string): ComposerEditorSelection {
 
 export function buildComposerSlashCommandItems(input: {
   readonly query: string;
-  readonly atMessageStart: boolean;
+  readonly triggerKind: "slash-command" | "slash-skill";
+  readonly draftMessage: string;
+  readonly triggerRangeStart: number;
   readonly hasThread: boolean;
   readonly hasCompactableConversation?: boolean;
   /** Whether T3 itself offers /usage-limits for the selected provider. */
@@ -88,13 +90,22 @@ export function buildComposerSlashCommandItems(input: {
       description: "Switch to default mode",
     },
   ] satisfies ComposerCommandItem[];
-  const items: ComposerCommandItem[] = builtIn.filter(
-    (item) => item.command.includes(query) && (item.command === "model" || allowInteractionMode),
-  );
+  const items: ComposerCommandItem[] =
+    input.triggerKind === "slash-skill"
+      ? []
+      : builtIn.filter(
+          (item) =>
+            item.command.includes(query) && (item.command === "model" || allowInteractionMode),
+        );
 
   // Providers expand commands only at the start of a message. T3 commands
   // change local state and do not have this restriction.
-  if (!input.atMessageStart) return items;
+  if (
+    input.triggerKind === "slash-skill" ||
+    input.draftMessage.slice(0, input.triggerRangeStart).trim() !== ""
+  ) {
+    return items;
+  }
   for (const command of input.selectedProviderStatus?.slashCommands ?? []) {
     if (!command.name.toLowerCase().includes(query)) continue;
     if (command.name === "compact" && !input.hasCompactableConversation) continue;
@@ -330,16 +341,24 @@ export function useComposerCommandMenu({
     }
 
     if (trigger.kind === "slash-command" || trigger.kind === "slash-skill") {
-      const isSkillOnlySlash = trigger.kind === "slash-skill";
       const q = trigger.query.toLowerCase();
+<<<<<<< HEAD
       const visibleSkills = getProviderSkillsForSlashMenu(skills, true);
       const commandItems = isSkillOnlySlash ? [] : buildComposerSlashCommandItems({
         query: q,
         atMessageStart: draftMessage.slice(0, trigger.rangeStart).trim() === "",
+=======
+      const commandItems = buildComposerSlashCommandItems({
+        query: q,
+        triggerKind: trigger.kind,
+        draftMessage,
+        triggerRangeStart: trigger.rangeStart,
+>>>>>>> 937053cf47 (fix(composer): handle inline slash edge cases)
         hasThread,
         hasCompactableConversation,
         offersUsageLimits,
         allowInteractionMode: onUpdateInteractionMode !== undefined,
+<<<<<<< HEAD
         selectedProviderStatus: selectedProviderStatus
           ? {
               ...selectedProviderStatus,
@@ -349,6 +368,9 @@ export function useComposerCommandMenu({
               ),
             }
           : null,
+=======
+        selectedProviderStatus,
+>>>>>>> 937053cf47 (fix(composer): handle inline slash edge cases)
       });
 
       const skillItems = visibleSkills
@@ -463,6 +485,7 @@ export function useComposerCommandMenu({
 
     return [];
   }, [
+    draftMessage,
     hasThread,
     hasCompactableConversation,
     onUpdateInteractionMode,

@@ -217,6 +217,11 @@ describe("searchSlashCommandItems", () => {
       ),
     ).toEqual(["slash:model", "skill:claudeAgent:unslop"]);
     expect(
+      slashCommandItemsForPromptPosition(items, "Use\n/compact", "Use\n".length).map(
+        (item) => item.id,
+      ),
+    ).toEqual(["slash:model", "skill:claudeAgent:unslop"]);
+    expect(
       slashCommandItemsForPromptPosition(items, " \n/compact", 2).map((item) => item.id),
     ).toEqual([
       "slash:model",
