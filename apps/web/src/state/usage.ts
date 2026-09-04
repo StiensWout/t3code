@@ -13,8 +13,14 @@ import {
   type UsageSummary,
   type UsageSummaryInput,
 } from "@t3tools/contracts";
-import { runAtomCommand } from "@t3tools/client-runtime/state/runtime";
+import { EnvironmentRpcUnavailableError } from "@t3tools/client-runtime/rpc";
+import {
+  executeAtomQuery,
+  runAtomCommand,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { useCallback, useMemo } from "react";
 
@@ -22,6 +28,8 @@ import { mergeUsage, type EnvironmentUsage, type MergedUsage } from "@t3tools/sh
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentPresentations } from "./presentation";
 import { serverEnvironment } from "./server";
+
+const isEnvironmentRpcUnavailable = Schema.is(EnvironmentRpcUnavailableError);
 
 export interface EnvironmentUsageStatus {
   readonly environmentId: EnvironmentId;
@@ -121,12 +129,38 @@ export function useUsage(
       await Promise.all(
         selectedEnvironments.map(async ({ environmentId }) => {
           const query = serverEnvironment.usageSummary({ environmentId, input });
-          await runAtomCommand(
-            appAtomRegistry,
-            serverEnvironment.refreshUsageRates,
-            { environmentId, input: {} },
-            { reportFailure: false },
-          ).finally(() => appAtomRegistry.refresh(query));
+          const presentationAtom = environmentPresentations.presentationAtom(environmentId);
+          const controller = new AbortController();
+          const abortWhenDisconnected = () => {
+            if (appAtomRegistry.get(presentationAtom)?.connection.phase !== "connected") {
+              controller.abort();
+            }
+          };
+          const unsubscribe = appAtomRegistry.subscribe(presentationAtom, abortWhenDisconnected);
+          abortWhenDisconnected();
+
+          try {
+            const ratesResult = await runAtomCommand(
+              appAtomRegistry,
+              serverEnvironment.refreshUsageRates,
+              { environmentId, input: {} },
+              { reportFailure: false },
+            );
+            const sessionUnavailable =
+              ratesResult._tag === "Failure" &&
+              isEnvironmentRpcUnavailable(squashAtomCommandFailure(ratesResult));
+            if (sessionUnavailable || controller.signal.aborted) {
+              appAtomRegistry.refresh(query);
+              return;
+            }
+            await executeAtomQuery(appAtomRegistry, query, {
+              refresh: true,
+              reportFailure: false,
+              signal: controller.signal,
+            });
+          } finally {
+            unsubscribe();
+          }
         }),
       );
     },
