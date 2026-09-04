@@ -1659,6 +1659,42 @@ it.layer(
     }),
   );
 
+  it.effect("delivers a write queued behind a held release to the restarted process", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter, getEvents } = yield* createManager();
+      yield* manager.open(openInput());
+      const first = ptyAdapter.processes[0];
+      expect(first).toBeDefined();
+      if (!first) return;
+
+      first.emitData("\u001b[?1002h\u001b[?1006h");
+      yield* waitFor(
+        Effect.map(getEvents, (events) =>
+          events.some((event) => event.type === "output" && event.data.includes("1002h")),
+        ),
+        "1200 millis",
+      );
+
+      // The typed input queues behind the release's hold window; the restart
+      // replaces the process before either write reaches the PTY.
+      const release = yield* manager
+        .write({ threadId: "thread-1", terminalId: DEFAULT_TERMINAL_ID, data: "\u001b[<0;10;5m" })
+        .pipe(Effect.forkScoped);
+      const typed = yield* manager
+        .write({ threadId: "thread-1", terminalId: DEFAULT_TERMINAL_ID, data: "ls\r" })
+        .pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+      yield* manager.restart(restartInput());
+      yield* Fiber.join(release);
+      yield* Fiber.join(typed);
+
+      const second = ptyAdapter.processes[1];
+      expect(second).toBeDefined();
+      expect(first.writes).toEqual([]);
+      expect(second?.writes).toEqual(["ls\r"]);
+    }),
+  );
+
   it.effect("recovers a partially written append with bounded history", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;

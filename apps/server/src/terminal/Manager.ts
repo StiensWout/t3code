@@ -3355,13 +3355,23 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             return;
           }
         }
+        // A restart can replace the process while this write waited for the
+        // permit. Deliver to the session's current process, never a stopped one.
+        const liveProcess = session.process;
+        if (!liveProcess || session.status !== "running") {
+          if (session.status === "exited") return;
+          return yield* new TerminalNotRunningError({
+            threadId: input.threadId,
+            terminalId,
+          });
+        }
         yield* Effect.try({
-          try: () => process.write(input.data),
+          try: () => liveProcess.write(input.data),
           catch: (cause) =>
             new TerminalWriteError({
               threadId: input.threadId,
               terminalId,
-              terminalPid: process.pid,
+              terminalPid: liveProcess.pid,
               cause,
             }),
         });
