@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { APP_DISPLAY_NAME, APP_STAGE_LABEL, APP_VERSION } from "../branding";
 import { cn } from "../lib/utils";
 import { resolveEnvironmentIdentificationPillLabel } from "./SidebarStageBackdrop";
-import { T3Wordmark } from "./T3Wordmark";
+import { T3CodeBrand } from "./T3Wordmark";
 import { Badge } from "./ui/badge";
 
 /**
@@ -18,10 +18,7 @@ export function StandaloneSurface({ children }: { readonly children: ReactNode }
     <div className="flex min-h-dvh flex-col bg-background px-5 text-foreground">
       <main className="mx-auto flex w-full max-w-md flex-1 flex-col justify-center py-12">
         <div className="mb-6 flex h-7 items-center">
-          <span className="inline-flex items-baseline gap-1">
-            <T3Wordmark aria-label="T3" className="h-2.5 w-auto shrink-0" />
-            <span className="text-sm font-medium tracking-tight text-muted-foreground">Code</span>
-          </span>
+          <T3CodeBrand />
           {stagePillLabel ? (
             <Badge
               className="ml-1 rounded-full px-1.5 text-muted-foreground"
