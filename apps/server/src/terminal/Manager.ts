@@ -281,6 +281,10 @@ export interface TerminalSessionState {
   pendingHistoryControlSequence: string;
   /** Last observed state of replayable DEC private modes for the live process. */
   trackedDecModes: Map<number, boolean>;
+  /** Mode state at the first byte of `history`, advanced as caps drop its prefix. */
+  historyStartDecModes: Map<number, boolean>;
+  /** Mode state at the first byte of `persistenceHistory`. */
+  persistenceStartDecModes: Map<number, boolean>;
   pendingOutputHighSurrogate: string;
   pendingProcessEvents: Array<PendingProcessEvent>;
   pendingProcessEventIndex: number;
@@ -394,7 +398,7 @@ function snapshot(session: TerminalSessionState): TerminalSessionSnapshot {
     worktreePath: session.worktreePath,
     status: session.status,
     pid: session.pid,
-    history: `${decModeReplayPrefix(session.trackedDecModes, session.history)}${session.history}`,
+    history: `${decModeReplayPrefix(session.historyStartDecModes)}${session.history}`,
     exitCode: session.exitCode,
     exitSignal: session.exitSignal,
     label: terminalWireLabel(session),
@@ -1093,10 +1097,13 @@ const REPLAYABLE_DEC_MODE_DEFAULTS = new Map<number, boolean>([
 // one and leaving via another must not leave a sibling recorded as active.
 const ALTERNATE_SCREEN_DEC_MODES = [47, 1047, 1049];
 
-// Mode sets plus the full-terminal resets (RIS `ESC c`, DECSTR `CSI !p`) that
-// restore power-on defaults without individual mode resets.
-const DEC_MODE_SET_PATTERN =
-  /(?:\u001b\[|\u009b)\?([0-9;]+)([hl])|\u001b(c)|(?:\u001b\[|\u009b)(!p)/gu;
+// Mode sets plus the full reset (RIS `ESC c`) that restores power-on defaults
+// without individual mode resets. DECSTR (`CSI !p`) is deliberately not one:
+// the vendored libghostty-vt leaves every mode listed above untouched on a
+// soft reset, so treating it as a reset would desynchronize the tracked state
+// from what the renderer shows.
+// eslint-disable-next-line no-control-regex -- matches DEC private mode and RIS sequences.
+const DEC_MODE_SET_PATTERN = /(?:\u001b\[|\u009b)\?([0-9;]+)([hl])|\u001b(c)/gu;
 
 function forEachDecModeSet(
   text: string,
@@ -1104,7 +1111,7 @@ function forEachDecModeSet(
   onTerminalReset?: () => void,
 ): void {
   for (const match of text.matchAll(DEC_MODE_SET_PATTERN)) {
-    if (match[3] !== undefined || match[4] !== undefined) {
+    if (match[3] !== undefined) {
       onTerminalReset?.();
       continue;
     }
@@ -1149,10 +1156,17 @@ function isMouseTrackingActive(modes: Map<number, boolean>): boolean {
 // this very release.
 const DEFAULT_MOUSE_RELEASE_HOLD_MS = 50;
 
+// How long an attach holds the off-by-one PTY size before restoring it.
+// ncurses only reports KEY_RESIZE when the size it reads differs from the
+// one it has, so two immediate resizes collapse into a no-op and the app
+// never repaints. A deliberate timing allowance: the app must observe the
+// intermediate size before the restore.
+const DEFAULT_ATTACH_REPAINT_HOLD_MS = 100;
+
 // SGR releases (`<...m`) and X10 releases (`ESC [ M` with button bits 3, any
 // modifier combination), which clients emit when SGR encoding is not enabled.
 // eslint-disable-next-line no-control-regex -- matches mouse release sequences.
-const MOUSE_RELEASE_WRITE_PATTERN = /^(?:\u001b\[<\d+;\d+;\d+m|\u001b\[M[#'+\/37;?][^]{2})+$/;
+const MOUSE_RELEASE_WRITE_PATTERN = /^(?:\u001b\[<\d+;\d+;\d+m|\u001b\[M[#'+/37;?][^]{2})+$/;
 
 /**
  * Sequences restoring every tracked mode the given history leaves deviating
@@ -1184,28 +1198,31 @@ function decModeResetSuffix(history: string): string {
 }
 
 /**
- * Sequences that re-establish tracked mode deviations a capped replay can no
- * longer convey. A full-screen app's alternate-screen, cursor, and mouse mode
+ * Sequences that put the renderer into the mode state the retained tail
+ * starts in. A full-screen app's alternate-screen, cursor, and mouse mode
  * switches age out of the bounded history long before the app exits; without
  * this prefix a reattach rebuilds the app's cells on the primary screen with
- * the host theme. Modes still mentioned inside the replay are left to it,
- * since the replayed tail already ends in the authoritative state.
+ * the host theme. The tail may itself leave and re-enter a mode (an app that
+ * exited and relaunched), so only the state at its first byte is authoritative.
  */
-function decModeReplayPrefix(modes: Map<number, boolean>, replayHistory: string): string {
-  let deviations: Array<[number, boolean]> | null = null;
+function decModeReplayPrefix(modes: Map<number, boolean>): string {
+  let prefix = "";
   for (const [mode, enabled] of modes) {
     if (enabled !== REPLAYABLE_DEC_MODE_DEFAULTS.get(mode)) {
-      (deviations ??= []).push([mode, enabled]);
+      prefix += `\u001b[?${mode}${enabled ? "h" : "l"}`;
     }
   }
-  if (deviations === null) return "";
+  return prefix;
+}
 
-  const mentioned = new Set<number>();
-  forEachDecModeSet(replayHistory, (mode) => mentioned.add(mode));
-  return deviations
-    .filter(([mode]) => !mentioned.has(mode))
-    .map(([mode, enabled]) => `\u001b[?${mode}${enabled ? "h" : "l"}`)
-    .join("");
+/** Advance a tail-start mode state past the prefix a cap dropped to keep `kept` of `full`. */
+function advanceDecModesPastDroppedPrefix(
+  modes: Map<number, boolean>,
+  full: string,
+  kept: string,
+): void {
+  if (kept.length === full.length) return;
+  updateTrackedDecModes(modes, full.slice(0, full.length - kept.length));
 }
 
 function shouldStripOscSequence(content: string): boolean {
@@ -1624,8 +1641,10 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       };
     }
 
-    session.persistenceHistory = capHistoryByBytes(nextHistory, historyTargetBytes);
-    session.persistenceHistoryBytes = Buffer.byteLength(session.persistenceHistory);
+    const capped = capHistoryByBytes(nextHistory, historyTargetBytes);
+    advanceDecModesPastDroppedPrefix(session.persistenceStartDecModes, nextHistory, capped);
+    session.persistenceHistory = capped;
+    session.persistenceHistoryBytes = Buffer.byteLength(capped);
     return {
       visibleText: sanitized.visibleText,
       write: { contents: session.persistenceHistory, mode: "truncate" },
@@ -2194,8 +2213,10 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
               session.history = nextHistory;
               session.historyBytes += visibleBytes;
             } else {
-              session.history = capHistoryByBytes(nextHistory, replayHistoryTargetBytes);
-              session.historyBytes = Buffer.byteLength(session.history);
+              const capped = capHistoryByBytes(nextHistory, replayHistoryTargetBytes);
+              advanceDecModesPastDroppedPrefix(session.historyStartDecModes, nextHistory, capped);
+              session.history = capped;
+              session.historyBytes = Buffer.byteLength(capped);
             }
           }
           const eventStamp = advanceEventSequence(session);
@@ -2781,6 +2802,11 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         Buffer.byteLength(persistenceHistory) > replayHistoryMaxBytes
           ? capHistoryByBytes(persistenceHistory, replayHistoryTargetBytes)
           : persistenceHistory;
+      // Loaded history was neutralized to end at the defaults; its start is
+      // taken as the defaults too, and the replay tail's start follows from
+      // whatever the cap dropped in between.
+      const historyStartDecModes = new Map<number, boolean>();
+      advanceDecModesPastDroppedPrefix(historyStartDecModes, persistenceHistory, history);
       const cols = input.cols ?? DEFAULT_OPEN_COLS;
       const rows = input.rows ?? DEFAULT_OPEN_ROWS;
       const session: TerminalSessionState = {
@@ -2796,6 +2822,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         persistenceHistoryBytes: Buffer.byteLength(persistenceHistory),
         pendingHistoryControlSequence: "",
         trackedDecModes: new Map(),
+        historyStartDecModes,
+        persistenceStartDecModes: new Map(),
         pendingOutputHighSurrogate: "",
         pendingProcessEvents: [],
         pendingProcessEventIndex: 0,
@@ -2864,6 +2892,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       liveSession.historyBytes = 0;
       liveSession.persistenceHistory = "";
       liveSession.persistenceHistoryBytes = 0;
+      liveSession.historyStartDecModes = new Map();
+      liveSession.persistenceStartDecModes = new Map();
       liveSession.pendingHistoryControlSequence = "";
       liveSession.pendingOutputHighSurrogate = "";
       resetPendingProcessQueue(liveSession);
@@ -2875,6 +2905,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       liveSession.historyBytes = 0;
       liveSession.persistenceHistory = "";
       liveSession.persistenceHistoryBytes = 0;
+      liveSession.historyStartDecModes = new Map();
+      liveSession.persistenceStartDecModes = new Map();
       liveSession.pendingHistoryControlSequence = "";
       liveSession.pendingOutputHighSurrogate = "";
       resetPendingProcessQueue(liveSession);
@@ -2974,6 +3006,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         // the replay as ordinary live events. Shells never sit in the
         // alternate screen, so attach still cannot redraw a shell prompt. A
         // real size change above already delivered the same repaint signal.
+        // The intermediate size is held long enough for the app to read it.
         const altScreenActive =
           session.trackedDecModes.get(1049) === true ||
           session.trackedDecModes.get(1047) === true ||
@@ -2987,6 +3020,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
           const process = session.process;
           const wiggleCols = session.cols > 1 ? session.cols - 1 : session.cols + 1;
           yield* resizePtyProcess(session, process, wiggleCols, session.rows);
+          yield* Effect.sleep(DEFAULT_ATTACH_REPAINT_HOLD_MS);
           yield* resizePtyProcess(session, process, session.cols, session.rows);
         }
         const requestedReplayBytes = input.replayBytes ?? DEFAULT_TERMINAL_REPLAY_BYTES;
@@ -2998,9 +3032,15 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
           session.persistenceHistoryBytes > requestedReplayBytes
             ? capHistoryByBytes(session.persistenceHistory, requestedReplayBytes)
             : session.persistenceHistory;
+        const replayStartDecModes = new Map(session.persistenceStartDecModes);
+        advanceDecModesPastDroppedPrefix(
+          replayStartDecModes,
+          session.persistenceHistory,
+          replayHistory,
+        );
         return {
           snapshot: { ...initialSnapshot, history: "" },
-          replayHistory: `${decModeReplayPrefix(session.trackedDecModes, replayHistory)}${replayHistory}`,
+          replayHistory: `${decModeReplayPrefix(replayStartDecModes)}${replayHistory}`,
         } as const;
       }),
     );
@@ -3364,6 +3404,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         session.historyBytes = 0;
         session.persistenceHistory = "";
         session.persistenceHistoryBytes = 0;
+        session.historyStartDecModes = new Map();
+        session.persistenceStartDecModes = new Map();
         session.pendingHistoryControlSequence = "";
         session.pendingOutputHighSurrogate = "";
         session.pendingProcessEvents = [];
@@ -3408,6 +3450,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             persistenceHistoryBytes: 0,
             pendingHistoryControlSequence: "",
             trackedDecModes: new Map(),
+            historyStartDecModes: new Map(),
+            persistenceStartDecModes: new Map(),
             pendingOutputHighSurrogate: "",
             pendingProcessEvents: [],
             pendingProcessEventIndex: 0,
@@ -3451,6 +3495,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         session.historyBytes = 0;
         session.persistenceHistory = "";
         session.persistenceHistoryBytes = 0;
+        session.historyStartDecModes = new Map();
+        session.persistenceStartDecModes = new Map();
         session.pendingHistoryControlSequence = "";
         session.pendingOutputHighSurrogate = "";
         resetPendingProcessQueue(session);

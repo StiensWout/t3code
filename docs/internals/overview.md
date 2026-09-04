@@ -74,17 +74,17 @@ still streaming buffer up to 4 MB behind it; live delivery then flows through a 
 queue. When either bound overflows, the server replaces queued deltas with its latest bounded
 snapshot and re-marks the replay complete so clients never stay latched in replay mode. Replay
 markers are only sent to clients that requested `replayBytes`; older clients get the plain snapshot
-stream their bundled contracts can decode. This applies equally to loopback, LAN, Tailscale, relay,
-and SSH-forwarded connections because they all use the same RPC stream.
+stream their bundled contracts can decode.
 
 [`terminalSession.ts`][terminal-state] retains replay as byte-bounded chunks instead of rebuilding a
 growing string for every event. Web and native mobile renderers consume those chunks incrementally;
 if their cursor falls behind retained history, they reset from the current snapshot. The web
 renderer also yields between large Ghostty writes so extended replay does not monopolize the main
 thread. Web and native renderers suppress terminal query replies while replaying retained history.
-Hidden web drawers unmount their renderer and attach subscription while the server-owned PTY
-continues running. Ghostty renderers use a 64 MB internal scrollback budget so the 4 MB text replay
-remains available after it expands into styled terminal cells.
+Web keeps a bounded set of hidden thread drawers mounted so switching back is instant, and skips
+painting while a drawer has no size; a drawer that does unmount releases its attach subscription at
+once. Ghostty renderers use a 64 MB internal scrollback budget so the 4 MB text replay remains
+available after it expands into styled terminal cells.
 
 ## Orchestration is event-sourced
 

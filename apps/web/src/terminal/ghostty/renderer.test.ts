@@ -295,6 +295,60 @@ describe("renderGhosttySnapshot", () => {
     });
   });
 
+  it("keeps one-eighth block edges at least one pixel wide in narrow cells", () => {
+    const fillRectCalls: number[][] = [];
+    const context = {
+      canvas: { width: 100, height: 40 },
+      beginPath: () => {},
+      clip: () => {},
+      fillRect: (...args: number[]) => fillRectCalls.push(args),
+      fillText: () => {},
+      rect: () => {},
+      resetTransform: () => {},
+      restore: () => {},
+      save: () => {},
+      set fillStyle(_value: string | CanvasGradient | CanvasPattern) {},
+      set font(_value: string) {},
+      set textBaseline(_value: string) {},
+    } as unknown as CanvasRenderingContext2D;
+    const snapshot: GhosttySnapshot = {
+      cols: 2,
+      rows: 1,
+      foreground: { r: 255, g: 255, b: 255 },
+      background: { r: 0, g: 0, b: 0 },
+      cursor: { r: 255, g: 255, b: 255 },
+      cursorX: -1,
+      cursorY: -1,
+      cursorVisible: false,
+      cursorBlinking: false,
+      cursorStyle: 1,
+      dirtyRows: new Set([0]),
+      rowData: [
+        {
+          cells: [cell("▏"), cell("▕")],
+          text: "▏▕",
+          isWrapContinuation: false,
+          wrapsToNext: false,
+        },
+      ],
+    };
+
+    renderGhosttySnapshot({
+      context,
+      snapshot,
+      metrics: { width: 4, height: 20, baseline: 15 },
+      fontSize: 7,
+      fontFamily: "monospace",
+      padding: 4,
+      forceFull: false,
+      cursorOn: false,
+    });
+
+    // Rounding 7/8 of a 4px cell would collapse the right bar to nothing.
+    expect(fillRectCalls).toContainEqual([4, 4, 1, 20]);
+    expect(fillRectCalls).toContainEqual([11, 4, 1, 20]);
+  });
+
   it("constrains text runs and cursor glyphs to their terminal cells", () => {
     const fillTextCalls: unknown[][] = [];
     const context = {

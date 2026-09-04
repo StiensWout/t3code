@@ -139,6 +139,22 @@ function terminalBlockRects(text: string): readonly TerminalBlockRect[] | null {
   }
 }
 
+/** Rounds a block fraction to whole pixels, keeping thin edges at least one pixel wide inside the cell. */
+function blockPixelSpan(
+  origin: number,
+  start: number,
+  length: number,
+  size: number,
+): readonly [from: number, to: number] {
+  let from = Math.round(start * size);
+  let to = Math.round((start + length) * size);
+  if (to <= from) {
+    if (to >= size) from = to - 1;
+    else to = from + 1;
+  }
+  return [origin + from, origin + to];
+}
+
 export function measureGhosttyCell(
   context: CanvasRenderingContext2D,
   fontSize: number,
@@ -318,10 +334,8 @@ export function renderGhosttySnapshot(options: {
           context.fillStyle = cssColor(resolveForeground(first.foreground));
           const cellLeft = padding + runStart * metrics.width;
           for (const [x, y, width, height] of blockRects) {
-            const left = cellLeft + Math.round(x * metrics.width);
-            const right = cellLeft + Math.round((x + width) * metrics.width);
-            const rectTop = top + Math.round(y * metrics.height);
-            const bottom = top + Math.round((y + height) * metrics.height);
+            const [left, right] = blockPixelSpan(cellLeft, x, width, metrics.width);
+            const [rectTop, bottom] = blockPixelSpan(top, y, height, metrics.height);
             context.fillRect(left, rectTop, right - left, bottom - rectTop);
           }
         }

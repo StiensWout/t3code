@@ -5,7 +5,7 @@ import {
   type TerminalOutputCursor,
   type TerminalOutputState,
 } from "@t3tools/client-runtime/state/terminal";
-import { memo, useCallback, useEffect, useRef } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import {
   Pressable,
   ScrollView,
@@ -216,7 +216,12 @@ export const TerminalSurface = memo(function TerminalSurface(props: TerminalSurf
   const outputCursorRef = useRef<TerminalOutputCursor>(INITIAL_TERMINAL_OUTPUT_CURSOR);
   const streamIdentityRef = useRef("");
   const deferredEmptyResetRef = useRef(false);
-  const resetIdentity = `${props.terminalKey}:${fontSize}:${themeAppearance}:${themeConfig}`;
+  const surfaceIdentity = `${props.terminalKey}:${fontSize}:${themeAppearance}:${themeConfig}`;
+  // A failed native command rebuilds the surface once from the retained
+  // snapshot; without that, an idle terminal would stay stale until new output.
+  const [nativeRecoveryVersion, setNativeRecoveryVersion] = useState(0);
+  const recoveredSurfaceIdentityRef = useRef<string | null>(null);
+  const resetIdentity = `${surfaceIdentity}:${nativeRecoveryVersion}`;
   const legacyBuffer =
     supportsStreaming || props.replayPaused ? "" : terminalOutputText(props.output);
 
@@ -328,14 +333,23 @@ export const TerminalSurface = memo(function TerminalSurface(props: TerminalSurf
         }
       })
       .catch((error: unknown) => {
-        if (streamIdentityRef.current === streamIdentity) {
-          // The next output update will rebuild the native surface from the
-          // retained snapshot instead of continuing after a missing command.
-          streamIdentityRef.current = "";
-        }
         console.error("Failed to update native terminal output", error);
+        if (streamIdentityRef.current !== streamIdentity) return;
+        // The next output update rebuilds the native surface from the retained
+        // snapshot instead of continuing after a missing command.
+        streamIdentityRef.current = "";
+        if (recoveredSurfaceIdentityRef.current === surfaceIdentity) return;
+        recoveredSurfaceIdentityRef.current = surfaceIdentity;
+        setNativeRecoveryVersion((version) => version + 1);
       });
-  }, [props.output, props.replayPaused, props.replayPending, resetIdentity, supportsStreaming]);
+  }, [
+    props.output,
+    props.replayPaused,
+    props.replayPending,
+    resetIdentity,
+    supportsStreaming,
+    surfaceIdentity,
+  ]);
   const handleNativeInput = useCallback(
     (event: NativeSyntheticEvent<TerminalInputEvent>) => {
       if (!props.isRunning) {

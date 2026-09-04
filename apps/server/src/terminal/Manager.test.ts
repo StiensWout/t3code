@@ -1440,6 +1440,72 @@ it.layer(
     }),
   );
 
+  it.effect("restores the mode state at the tail start when the app relaunched inside it", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter, getEvents } = yield* createManager({
+        replayHistoryTargetBytes: 32,
+        replayHistoryMaxBytes: 64,
+      });
+      yield* manager.open(openInput());
+      const ptyProcess = ptyAdapter.processes[0];
+      expect(ptyProcess).toBeDefined();
+      if (!ptyProcess) return;
+
+      // The first app's entry ages out of the tail; its frames, exit, and the
+      // second app's entry stay. Replaying the tail on the primary screen
+      // would paint the first app's frames there for the shell to inherit.
+      ptyProcess.emitData(`\u001b[?1049h${"a".repeat(30)}`);
+      ptyProcess.emitData("a".repeat(30));
+      ptyProcess.emitData(`\u001b[?1049l\u001b[?1049h${"b".repeat(6)}`);
+      yield* waitFor(
+        Effect.map(getEvents, (events) =>
+          events.some((event) => event.type === "output" && event.data.includes("bbbbbb")),
+        ),
+        "1200 millis",
+      );
+
+      const resynced = yield* manager.readSnapshot({
+        threadId: "thread-1",
+        terminalId: DEFAULT_TERMINAL_ID,
+      });
+      const history = Option.getOrThrow(resynced).history;
+      expect(history.startsWith("\u001b[?1049ha")).toBe(true);
+      expect(history.endsWith("\u001b[?1049l\u001b[?1049hbbbbbb")).toBe(true);
+    }),
+  );
+
+  it.effect("keeps tracked modes through a DECSTR soft reset", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter, getEvents } = yield* createManager({
+        replayHistoryTargetBytes: 32,
+        replayHistoryMaxBytes: 64,
+      });
+      yield* manager.open(openInput());
+      const ptyProcess = ptyAdapter.processes[0];
+      expect(ptyProcess).toBeDefined();
+      if (!ptyProcess) return;
+
+      // libghostty-vt leaves these modes untouched on `CSI !p`, so the
+      // renderer is still in the alternate screen with mouse tracking on.
+      ptyProcess.emitData("\u001b[?1049h\u001b[?1002h\u001b[!p");
+      ptyProcess.emitData(`${"x".repeat(256)}aged-out`);
+      yield* waitFor(
+        Effect.map(getEvents, (events) =>
+          events.some((event) => event.type === "output" && event.data.includes("aged-out")),
+        ),
+        "1200 millis",
+      );
+
+      const resynced = yield* manager.readSnapshot({
+        threadId: "thread-1",
+        terminalId: DEFAULT_TERMINAL_ID,
+      });
+      expect(Option.getOrThrow(resynced).history.startsWith("\u001b[?1049h\u001b[?1002h")).toBe(
+        true,
+      );
+    }),
+  );
+
   it.effect("neutralizes dangling modes when the process dies without restoring them", () =>
     Effect.gen(function* () {
       const { manager, ptyAdapter, getEvents } = yield* createManager();

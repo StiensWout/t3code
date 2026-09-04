@@ -466,7 +466,7 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
       length: terminal.output.retainedBytes,
       preview: terminalOutputText(terminal.output).slice(0, 160),
     });
-  }, [terminal.output, terminal.output.retainedBytes, terminalKey]);
+  }, [terminal.output, terminalKey]);
   const cwd = terminal.summary?.cwd ?? selectedThreadProject?.workspaceRoot ?? null;
   const serverConfigs = useServerConfigs();
   const hostOs =
@@ -1282,7 +1282,12 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
                 onResize={handleResize}
                 output={terminal.output}
                 replayPaused={terminalReplayPaused}
-                replayPending={terminal.replayStartVersion > terminal.replayCompleteVersion}
+                // The attach seed (version 0) precedes the server's reply the
+                // same way an open replay does: hold the last frame until it lands.
+                replayPending={
+                  terminal.version === 0 ||
+                  terminal.replayStartVersion > terminal.replayCompleteVersion
+                }
                 style={{ flex: 1 }}
                 terminalKey={terminalKey}
                 theme={terminalTheme}

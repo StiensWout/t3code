@@ -1621,12 +1621,6 @@ export class GhosttyTerminalSurface {
     // Hover motion is only reportable in any-event tracking (DEC 1003); normal and
     // button-event tracking never report motion without a captured pressed button.
     const anyEventTracking = this.synchronizeMouseTrackingState();
-    if (this.mouseReportingPointerId === event.pointerId && !this.core.isMouseTracking()) {
-      // The application stopped tracking the mouse mid-drag (it may have just
-      // exited). End the reporting session instead of typing reports into
-      // whatever now owns the shell.
-      this.endMouseReporting(event.pointerId);
-    }
     if (
       this.mouseReportingPointerId === event.pointerId ||
       shouldReportTerminalMouse(anyEventTracking, event)
@@ -1639,7 +1633,13 @@ export class GhosttyTerminalSurface {
       this.setHoveredLink(null);
       this.hoverBaseCursor = "default";
       this.canvas.style.cursor = "default";
-      this.sendMouse("motion", this.buttonFromButtons(event.buttons), event);
+      // The application may stop tracking mid-drag (it may have just exited).
+      // The press was its, so the rest of the gesture stays captured and
+      // silent until pointerup rather than typing reports into whatever now
+      // owns the shell or turning into a text selection.
+      if (this.core.isMouseTracking()) {
+        this.sendMouse("motion", this.buttonFromButtons(event.buttons), event);
+      }
       return;
     }
     this.lastMouseMotionData = "";
@@ -1705,15 +1705,6 @@ export class GhosttyTerminalSurface {
       const pointer = this.selectionPointer;
       if (pointer) this.extendSelectionTo(pointer.x, pointer.y);
     }, 80);
-  }
-
-  private endMouseReporting(pointerId: number): void {
-    this.mouseReportingPointerId = null;
-    this.mouseReportingButton = null;
-    this.lastMouseMotionData = "";
-    if (this.canvas.hasPointerCapture(pointerId)) {
-      this.canvas.releasePointerCapture(pointerId);
-    }
   }
 
   private updateHoverCursor(event: PointerEvent): void {
@@ -2114,6 +2105,13 @@ export class GhosttyTerminalSurface {
     if (this.frame !== 0) {
       window.cancelAnimationFrame(this.frame);
       this.frame = 0;
+    }
+    // Hidden thread drawers stay mounted so switching back is instant, but a
+    // display:none canvas has nothing to show. Ghostty keeps parsing; the
+    // ResizeObserver refits and repaints in full once the mount has a size.
+    if (this.mount.clientWidth === 0 || this.mount.clientHeight === 0) {
+      this.forceFullRender = true;
+      return;
     }
     const canvasConfiguration = this.pendingCanvasConfiguration;
     if (canvasConfiguration !== null) {
