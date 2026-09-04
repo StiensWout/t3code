@@ -2,41 +2,78 @@ import type { ReactNode } from "react";
 
 import { APP_DISPLAY_NAME, APP_STAGE_LABEL, APP_VERSION } from "../branding";
 import { cn } from "../lib/utils";
-import { resolveEnvironmentIdentificationPillLabel } from "./SidebarStageBackdrop";
+import {
+  resolveEnvironmentIdentificationPillLabel,
+  resolveSidebarStageBackdropVariant,
+  StageBackdropArt,
+} from "./SidebarStageBackdrop";
 import { T3CodeBrand } from "./T3Wordmark";
 import { Badge } from "./ui/badge";
 
 /**
  * Page frame for screens shown outside the app shell: pairing, CLI connect,
- * and the root error view. A narrow column centered on the plain app canvas,
- * the sidebar brand above it, the build version pinned to the bottom.
+ * and the root error view. The sidebar's topbar runs page-wide, carrying the
+ * stage art on Dev and Nightly builds and naming the host on the right.
+ * Content sits in a narrow centered column on the plain app canvas, with the
+ * build version pinned to the bottom.
  */
 export function StandaloneSurface({ children }: { readonly children: ReactNode }) {
-  const stagePillLabel = resolveEnvironmentIdentificationPillLabel(APP_STAGE_LABEL);
-
   return (
-    <div className="flex min-h-dvh flex-col bg-background px-5 text-foreground">
-      <main className="mx-auto flex w-full max-w-md flex-1 flex-col justify-center py-12">
-        <div className="mb-6 flex h-7 items-center">
-          <T3CodeBrand />
-          {stagePillLabel ? (
-            <Badge
-              className="ml-1 rounded-full px-1.5 text-muted-foreground"
-              size="sm"
-              variant="secondary"
-            >
-              {stagePillLabel}
-            </Badge>
-          ) : null}
-        </div>
-
+    <div className="flex min-h-dvh flex-col bg-background text-foreground">
+      <StageTopbar />
+      <main className="mx-auto flex w-full max-w-md flex-1 flex-col justify-center px-5 py-12">
         {children}
       </main>
-
-      <p className="mx-auto w-full max-w-md pb-5 text-[11px] text-muted-foreground/60">
+      <p className="px-5 pb-5 text-center text-[11px] text-muted-foreground/60">
         {APP_DISPLAY_NAME} {APP_VERSION}
       </p>
     </div>
+  );
+}
+
+/**
+ * Mirrors the sidebar header: stage art with the brand in white on Dev and
+ * Nightly, otherwise a hairline bar with the brand and the stage pill.
+ */
+function StageTopbar() {
+  const stageVariant = resolveSidebarStageBackdropVariant(APP_STAGE_LABEL);
+  const stagePillLabel = stageVariant
+    ? null
+    : resolveEnvironmentIdentificationPillLabel(APP_STAGE_LABEL);
+
+  return (
+    <header
+      className={cn(
+        "relative flex h-[var(--workspace-topbar-height)] shrink-0 items-center justify-between gap-4 overflow-hidden px-4 sm:px-5",
+        stageVariant ? "text-white" : "border-b border-border",
+      )}
+    >
+      {stageVariant ? (
+        <div aria-hidden className="absolute inset-0">
+          <StageBackdropArt variant={stageVariant} />
+        </div>
+      ) : null}
+      <div className="relative ml-[var(--workspace-titlebar-content-left)] flex h-7 items-center">
+        <T3CodeBrand labelClassName={stageVariant ? "text-white/70" : undefined} />
+        {stagePillLabel ? (
+          <Badge
+            className="ml-1 rounded-full px-1.5 text-muted-foreground"
+            size="sm"
+            variant="secondary"
+          >
+            {stagePillLabel}
+          </Badge>
+        ) : null}
+      </div>
+      <span
+        className={cn(
+          "relative truncate font-mono text-xs",
+          stageVariant ? "text-white/80" : "text-muted-foreground",
+        )}
+      >
+        {window.location.host}
+      </span>
+    </header>
   );
 }
 
