@@ -201,17 +201,24 @@ describe("detectComposerTrigger", () => {
     });
   });
 
-  it("uses an inline slash to search skills without reopening commands", () => {
-    const text = "Use /capt";
+  it("uses a bare inline slash name to search skills without reopening commands", () => {
+    const text = "Use /unslop";
     const trigger = detectComposerTrigger(text, text.length);
 
     expect(trigger).toEqual({
       kind: "slash-skill",
-      query: "capt",
+      query: "unslop",
       rangeStart: "Use ".length,
       rangeEnd: text.length,
     });
   });
+
+  it.each(["Use /tmp/build.sh", "Use /etc/hosts"])(
+    "keeps the absolute path in %s as ordinary text",
+    (text) => {
+      expect(detectComposerTrigger(text, text.length)).toBeNull();
+    },
+  );
 
   it("keeps later-line slashes skill-only when the draft already has text", () => {
     const text = "Use a skill\n/";
