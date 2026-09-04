@@ -11,7 +11,7 @@ import {
   RefreshCwIcon,
   SlidersHorizontalIcon,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 import {
   isCompatibleUsageContractVersion,
@@ -88,7 +88,8 @@ export function UsagePage() {
   }));
   const [metric, setMetric] = useState<UsageMetric>("cost");
   const showingLimits = metric === "limits";
-  const [isRefreshingLimits, setIsRefreshingLimits] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const refreshingRef = useRef(false);
   const [breakdown, setBreakdown] = useState<"model" | "time">("model");
   const [selectedEnvironmentIds, setSelectedEnvironmentIds] =
     useState<ReadonlySet<EnvironmentId> | null>(null);
@@ -139,8 +140,11 @@ export function UsagePage() {
     });
   };
   const refreshWindow = () => {
+    if (refreshingRef.current) return;
+
     if (showingLimits) {
-      setIsRefreshingLimits(true);
+      refreshingRef.current = true;
+      setIsRefreshing(true);
       void Promise.all(
         Array.from(presentations, ([environmentId, presentation]) => {
           if (selectedEnvironmentIds !== null && !selectedEnvironmentIds.has(environmentId)) return;
@@ -148,24 +152,28 @@ export function UsagePage() {
             return refreshProviders({ environmentId, input: {} });
           }
         }),
-      ).finally(() => setIsRefreshingLimits(false));
+      ).finally(() => {
+        refreshingRef.current = false;
+        setIsRefreshing(false);
+      });
       return;
     }
     const nextWindow = makeWindow(windowDays, undefined, isPast24Hours ? "hour" : "day");
     if (
-      nextWindow.sinceDay === window.sinceDay &&
-      nextWindow.untilDay === window.untilDay &&
-      nextWindow.sinceTime === window.sinceTime &&
-      nextWindow.untilTime === window.untilTime
+      nextWindow.sinceDay !== window.sinceDay ||
+      nextWindow.untilDay !== window.untilDay ||
+      nextWindow.sinceTime !== window.sinceTime ||
+      nextWindow.untilTime !== window.untilTime
     ) {
-      refresh();
-    } else {
       setWindowSelection({ days: windowDays, window: nextWindow });
     }
+    refreshingRef.current = true;
+    setIsRefreshing(true);
+    void refresh(nextWindow).finally(() => {
+      refreshingRef.current = false;
+      setIsRefreshing(false);
+    });
   };
-  const isRefreshing = showingLimits
-    ? isRefreshingLimits
-    : environments.some((environment) => environment.isPending);
   const windowLabel =
     isPast24Hours && window.sinceTime !== undefined && window.untilTime !== undefined
       ? `${formatDateTimeShort(window.sinceTime, window.timeZone)} to ${formatDateTimeShort(window.untilTime, window.timeZone)}`
