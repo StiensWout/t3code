@@ -44,7 +44,7 @@ export function MarkdownCodeHighlight({
     }
   }, [code, language, themeName, cached, isStreaming, complete]);
 
-  const html = cached ?? (compatible ? result.html : null);
+  const html = cached ?? (compatible && (isStreaming || complete) ? result.html : null);
 
   useEffect(() => {
     if (cacheKey !== null && compatible && result.code === code && result.html !== null) {
