@@ -2783,10 +2783,16 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
 
       it.effect("publishes the models reported by Claude initialization", () =>
         Effect.gen(function* () {
+          const customModel = {
+            slug: "runtime-custom",
+            name: "Configured Runtime Model",
+            capabilities: SYNTHETIC_CLAUDE_MODEL_CATALOG.models[0]!.model.capabilities!,
+          };
           const status = yield* checkClaudeProviderStatus(
-            defaultClaudeSettings,
+            { ...defaultClaudeSettings, customModels: [customModel] },
             claudeCapabilities({
               models: [
+                { value: customModel.slug, displayName: "Runtime Name" },
                 {
                   value: `${SYNTHETIC_CLAUDE_COLLIDING_ALIAS}[expanded]`,
                   displayName: "Synthetic Capable",
@@ -2800,7 +2806,14 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
 
           assert.deepStrictEqual(
             status.models.filter((model) => !model.isLegacy).map((model) => model.slug),
-            [SYNTHETIC_CLAUDE_CAPABLE_MODEL],
+            [SYNTHETIC_CLAUDE_CAPABLE_MODEL, customModel.slug],
+          );
+          assert.deepStrictEqual(
+            status.models.find((model) => model.slug === customModel.slug),
+            {
+              ...customModel,
+              isCustom: true,
+            },
           );
           assert.strictEqual(status.modelInventory, "authoritative");
           assert.ok((status.models[0]?.capabilities?.optionDescriptors?.length ?? 0) > 0);

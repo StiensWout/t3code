@@ -59,7 +59,6 @@ When Claude Code cannot return a model list, T3 Code falls back to its model man
 installed Claude Code version. Models configured manually on the provider remain available in
 either case.
 
-
 ## Usage limits
 
 If your Claude subscription runs out of usage mid-turn, the thread shows which

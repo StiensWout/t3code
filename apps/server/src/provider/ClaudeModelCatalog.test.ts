@@ -147,7 +147,9 @@ describe("Claude model catalog", () => {
     const availability = resolveClaudeModelAvailability(catalog, "3.1.9", [
       { value: "default", displayName: "Default" },
       { value: "synthetic[large]", displayName: "Synthetic" },
-      { value: "claude-runtime-only", displayName: "Claude Runtime Only" },
+      { value: "  claude-runtime-only  ", displayName: "  Claude Runtime Only  " },
+      { value: "claude-runtime-only", displayName: "Duplicate Runtime Model" },
+      { value: " ", displayName: "Empty Model" },
       { value: "synthetic", displayName: "Duplicate Synthetic" },
     ]);
 

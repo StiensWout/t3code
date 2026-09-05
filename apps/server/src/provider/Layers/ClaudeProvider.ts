@@ -15,7 +15,6 @@ import { createModelCapabilities } from "@t3tools/shared/model";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import {
   query as claudeQuery,
-  type ModelInfo as ClaudeModelInfo,
   type Options as ClaudeQueryOptions,
   type SlashCommand as ClaudeSlashCommand,
   type SDKControlGetUsageResponse,
@@ -48,6 +47,7 @@ import {
   type ClaudeRuntimeModel,
   formatClaudeVersionUpgradeMessage,
   resolveClaudeModelAvailability,
+  scopeClaudeModelCatalog,
 } from "../ClaudeModelCatalog.ts";
 
 const DEFAULT_CLAUDE_MODEL_CAPABILITIES: ModelCapabilities = createModelCapabilities({
@@ -245,23 +245,6 @@ type ClaudeCapabilitiesProbe = {
   readonly models: ReadonlyArray<ClaudeRuntimeModel>;
 };
 
-function parseClaudeInitializationModels(
-  models: ReadonlyArray<ClaudeModelInfo> | undefined,
-): ReadonlyArray<ClaudeRuntimeModel> {
-  const seen = new Set<string>();
-  return (models ?? []).flatMap((model) => {
-    const value = nonEmptyProbeString(model.value);
-    if (!value || seen.has(value)) return [];
-    seen.add(value);
-    return [
-      {
-        value,
-        displayName: nonEmptyProbeString(model.displayName) ?? value,
-      },
-    ];
-  });
-}
-
 function parseClaudeInitializationCommands(
   commands: ReadonlyArray<ClaudeSlashCommand> | undefined,
 ): ReadonlyArray<ServerProviderSlashCommand> {
@@ -405,7 +388,7 @@ const probeClaudeCapabilities = (
           tokenSource: account?.tokenSource,
           apiProvider: account?.apiProvider,
           slashCommands: parseClaudeInitializationCommands(init.commands),
-          models: parseClaudeInitializationModels(init.models),
+          models: init.models ?? [],
           ...(usage ? { usage } : {}),
         } satisfies ClaudeCapabilitiesProbe;
       }),
@@ -547,7 +530,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     ? yield* resolveCapabilities(claudeSettings).pipe(Effect.orElseSucceed(() => undefined))
     : undefined;
   const modelAvailability = resolveClaudeModelAvailability(
-    modelCatalog,
+    scopeClaudeModelCatalog(modelCatalog, claudeSettings.customModels),
     parsedVersion,
     capabilities?.models,
   );
