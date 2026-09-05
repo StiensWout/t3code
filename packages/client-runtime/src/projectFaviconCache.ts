@@ -11,6 +11,8 @@ import * as Schema from "effect/Schema";
 
 export const PROJECT_FAVICON_THUMBNAIL_SIZE = 96;
 export const PROJECT_FAVICON_MAX_DATA_URL_LENGTH = 32 * 1024;
+/** Larger sources are not worth decoding for an icon and are left to the remote URL. */
+export const PROJECT_FAVICON_MAX_SOURCE_BYTES = 4 * 1024 * 1024;
 export const PROJECT_FAVICON_CACHE_MAX_BYTES = 1024 * 1024;
 export const PROJECT_FAVICON_CACHE_MAX_ENTRIES = 128;
 
@@ -48,6 +50,37 @@ export interface ProjectFaviconStorage {
   readonly remove: (key: string, entry: ProjectFaviconEntry) => Promise<void>;
 }
 
+async function readBounded(response: Response, maxBytes: number) {
+  const declared = Number(response.headers.get("content-length"));
+  if (declared > maxBytes) throw new Error("Project icon is too large to decode.");
+  if (!response.body) {
+    const bytes = new Uint8Array<ArrayBuffer>(await response.arrayBuffer());
+    if (bytes.byteLength > maxBytes) throw new Error("Project icon is too large to decode.");
+    return bytes;
+  }
+  const reader = response.body.getReader();
+  const chunks: Array<Uint8Array> = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) throw new Error("Project icon is too large to decode.");
+      chunks.push(value);
+    }
+  } finally {
+    reader.cancel().catch(() => {});
+  }
+  const bytes = new Uint8Array<ArrayBuffer>(new ArrayBuffer(total));
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
 /**
  * Fetches an icon and inlines its bytes when they fit the cache limit, so SVGs
  * and small bitmaps are stored exactly as served. Larger bitmaps go through the
@@ -76,7 +109,7 @@ export function createProjectFaviconImageLoader(input: {
       .toLowerCase();
     const mimeType = contentType?.startsWith("image/") ? contentType : mediaMimeType(url);
     if (!mimeType) throw new Error("Project icon has no image type.");
-    const bytes = new Uint8Array<ArrayBuffer>(await response.arrayBuffer());
+    const bytes = await readBounded(response, PROJECT_FAVICON_MAX_SOURCE_BYTES);
     signal.throwIfAborted();
     const dataUrl = `data:${mimeType};base64,${Encoding.encodeBase64(bytes)}`;
     if (isImageDataUrl(dataUrl)) return dataUrl;

@@ -7,6 +7,7 @@ import {
   PROJECT_FAVICON_CACHE_MAX_BYTES,
   PROJECT_FAVICON_CACHE_MAX_ENTRIES,
   PROJECT_FAVICON_MAX_DATA_URL_LENGTH,
+  PROJECT_FAVICON_MAX_SOURCE_BYTES,
   type ProjectFaviconEntry,
   type ProjectFaviconStorage,
 } from "./projectFaviconCache.ts";
@@ -257,6 +258,29 @@ describe("project favicon image loader", () => {
     const vector = loader(new Response(bytes, { headers: { "content-type": "image/svg+xml" } }));
     await expect(vector.load(url, signal())).rejects.toThrow("exceeds the cache limit");
     expect(vector.downscale).not.toHaveBeenCalled();
+  });
+
+  it("stops reading a response that exceeds the source limit", async () => {
+    let pulled = 0;
+    const chunk = new Uint8Array(1024 * 1024);
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled += 1;
+        controller.enqueue(chunk);
+      },
+    });
+    const { load, downscale } = loader(
+      new Response(stream, { headers: { "content-type": "image/png" } }),
+    );
+    await expect(load(url, signal())).rejects.toThrow("too large");
+    expect(pulled).toBeLessThan(PROJECT_FAVICON_MAX_SOURCE_BYTES / chunk.byteLength + 3);
+    expect(downscale).not.toHaveBeenCalled();
+    const declared = loader(
+      new Response("x", {
+        headers: { "content-type": "image/png", "content-length": String(2 ** 40) },
+      }),
+    );
+    await expect(declared.load(url, signal())).rejects.toThrow("too large");
   });
 
   it("rejects failed responses and non-image payloads", async () => {

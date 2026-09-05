@@ -12,14 +12,23 @@ import * as MobileDatabase from "../persistence/mobile-database";
 const CACHE_KIND = "project-favicon";
 const CACHE_SCHEMA_VERSION = 1;
 
-// The runtime's persistence layer owns the cache store that hydrates this module, so
-// it is loaded on first use rather than at import time.
-const runDatabase = async <A, E>(
+let database: MobileDatabase.MobileDatabase["Service"] | undefined;
+
+/**
+ * The cache is a module singleton because the favicon atom family holds it outside
+ * any Effect runtime. Its rows live in `client_cache`, so the environment cache store
+ * hands over the database it already owns instead of the cache re-entering the runtime.
+ */
+export function attachProjectFaviconDatabase(service: MobileDatabase.MobileDatabase["Service"]) {
+  database = service;
+}
+
+const runDatabase = <A, E>(
   use: (database: MobileDatabase.MobileDatabase["Service"]) => Effect.Effect<A, E>,
-) => {
-  const { runtime } = await import("./runtime");
-  return runtime.runPromise(MobileDatabase.MobileDatabase.pipe(Effect.flatMap(use)));
-};
+) =>
+  database
+    ? Effect.runPromise(use(database))
+    : Promise.reject(new Error("Project icon storage is not attached."));
 
 /**
  * Rasterizes a bitmap that is too large to inline. The native decoder writes the
