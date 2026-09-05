@@ -31,15 +31,19 @@ export function MarkdownCodeHighlight({
     };
   }, []);
 
-  useEffect(() => {
-    if (cached === null) subscription.current?.highlight({ code, language, themeName });
-  }, [code, language, themeName, cached]);
-
   const compatible =
     result !== null &&
     result.language === language &&
     result.themeName === themeName &&
     code.startsWith(result.code);
+  const complete = compatible && result.code === code && result.html !== null;
+
+  useEffect(() => {
+    if ((isStreaming || cached === null) && !complete) {
+      subscription.current?.highlight({ code, language, themeName });
+    }
+  }, [code, language, themeName, cached, isStreaming, complete]);
+
   const html = cached ?? (compatible ? result.html : null);
 
   useEffect(() => {
