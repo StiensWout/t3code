@@ -1,3 +1,4 @@
+import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { useAtomValue } from "@effect/atom-react";
 import {
   USAGE_CONTRACT_VERSION,
@@ -8,7 +9,6 @@ import {
   CircleAlertIcon,
   ChevronDownIcon,
   CircleDashedIcon,
-  RefreshCwIcon,
   SlidersHorizontalIcon,
 } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
@@ -245,7 +245,7 @@ export function UsagePage() {
           size="icon-sm"
           variant="ghost"
         >
-          <RefreshCwIcon className={cn("size-3.5", isRefreshing && "animate-spin")} />
+          <RefreshIcon className="size-3.5" refreshing={isRefreshing} />
         </Button>
       </div>
       <div className="col-span-2 ms-auto flex min-w-0 items-center justify-end gap-1 xl:hidden">
@@ -304,7 +304,7 @@ export function UsagePage() {
           size="icon-sm"
           variant="ghost"
         >
-          <RefreshCwIcon className={cn("size-3.5", isRefreshing && "animate-spin")} />
+          <RefreshIcon className="size-3.5" refreshing={isRefreshing} />
         </Button>
       </div>
     </div>

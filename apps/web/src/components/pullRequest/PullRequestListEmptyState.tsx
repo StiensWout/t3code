@@ -1,3 +1,4 @@
+import { RefreshIcon } from "~/components/ui/refresh-icon";
 /**
  * What the list shows when it has no rows to show.
  *
@@ -11,10 +12,9 @@
  * with no project to read from — leave the button out, since pressing it could only repeat what
  * is already happening or ask nobody.
  */
-import { PlusIcon, RefreshCwIcon, SearchIcon } from "lucide-react";
+import { PlusIcon, SearchIcon } from "lucide-react";
 
 import { openCommandPalette } from "../../commandPaletteBus";
-import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { PullRequestListGhost } from "./PullRequestGhosts";
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from "../ui/empty";
@@ -150,7 +150,7 @@ export function PullRequestListEmptyState({
           {/* The hosts answered this query once; a pull request opened since then would answer
               differently, and nothing on screen says which of the two the reader is looking at. */}
           <Button size="sm" variant="outline" disabled={refreshing} onClick={onRefresh}>
-            <RefreshCwIcon className={cn("size-3.5", refreshing && "animate-spin")} />
+            <RefreshIcon className="size-3.5" refreshing={refreshing} />
             {refreshing ? "Checking..." : "Check again"}
           </Button>
         </EmptyContent>
@@ -176,7 +176,7 @@ export function PullRequestListEmptyState({
           </Button>
         ) : null}
         <Button size="sm" variant="outline" disabled={refreshing} onClick={onRefresh}>
-          <RefreshCwIcon className={cn("size-3.5", refreshing && "animate-spin")} />
+          <RefreshIcon className="size-3.5" refreshing={refreshing} />
           {refreshing ? "Checking..." : "Check again"}
         </Button>
       </EmptyContent>

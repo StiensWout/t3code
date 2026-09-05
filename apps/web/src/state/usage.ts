@@ -13,14 +13,8 @@ import {
   type UsageSummary,
   type UsageSummaryInput,
 } from "@t3tools/contracts";
-import { EnvironmentRpcUnavailableError } from "@t3tools/client-runtime/rpc";
-import {
-  executeAtomQuery,
-  runAtomCommand,
-  squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
+import { refreshUsage } from "@t3tools/client-runtime/state/usage";
 import * as Option from "effect/Option";
-import * as Schema from "effect/Schema";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { useCallback, useMemo } from "react";
 
@@ -28,8 +22,6 @@ import { mergeUsage, type EnvironmentUsage, type MergedUsage } from "@t3tools/sh
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentPresentations } from "./presentation";
 import { serverEnvironment } from "./server";
-
-const isEnvironmentRpcUnavailable = Schema.is(EnvironmentRpcUnavailableError);
 
 export interface EnvironmentUsageStatus {
   readonly environmentId: EnvironmentId;
@@ -116,54 +108,15 @@ export function useUsage(
     [environments, selectedEnvironmentIds],
   );
 
-  // Refreshing only the derived atom would re-read the per-environment SWR
-  // queries within their stale window and change nothing. Refresh each
-  // environment's query so the button always rescans.
-  //
-  // Each environment refetches model pricing first, so a model released since
-  // its last daily fetch gets priced by the rescan. The rescan runs whether or
-  // not the refetch succeeds: an offline environment still recounts tokens.
   const refresh = useCallback(
-    async (nextInput?: UsageSummaryInput) => {
-      const input = nextInput ?? (JSON.parse(windowKey) as UsageSummaryInput);
-      await Promise.all(
-        selectedEnvironments.map(async ({ environmentId }) => {
-          const query = serverEnvironment.usageSummary({ environmentId, input });
-          const presentationAtom = environmentPresentations.presentationAtom(environmentId);
-          const controller = new AbortController();
-          const abortWhenDisconnected = () => {
-            if (appAtomRegistry.get(presentationAtom)?.connection.phase !== "connected") {
-              controller.abort();
-            }
-          };
-          const unsubscribe = appAtomRegistry.subscribe(presentationAtom, abortWhenDisconnected);
-          abortWhenDisconnected();
-
-          try {
-            const ratesResult = await runAtomCommand(
-              appAtomRegistry,
-              serverEnvironment.refreshUsageRates,
-              { environmentId, input: {} },
-              { reportFailure: false },
-            );
-            const sessionUnavailable =
-              ratesResult._tag === "Failure" &&
-              isEnvironmentRpcUnavailable(squashAtomCommandFailure(ratesResult));
-            if (sessionUnavailable || controller.signal.aborted) {
-              appAtomRegistry.refresh(query);
-              return;
-            }
-            await executeAtomQuery(appAtomRegistry, query, {
-              refresh: true,
-              reportFailure: false,
-              signal: controller.signal,
-            });
-          } finally {
-            unsubscribe();
-          }
-        }),
-      );
-    },
+    (nextInput?: UsageSummaryInput) =>
+      refreshUsage({
+        registry: appAtomRegistry,
+        server: serverEnvironment,
+        presentations: environmentPresentations,
+        environmentIds: selectedEnvironments.map(({ environmentId }) => environmentId),
+        input: nextInput ?? (JSON.parse(windowKey) as UsageSummaryInput),
+      }),
     [selectedEnvironments, windowKey],
   );
 

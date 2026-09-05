@@ -1,3 +1,4 @@
+import { RefreshIcon } from "~/components/ui/refresh-icon";
 import type {
   ApprovalRequestId,
   AssistantCitation,
@@ -788,7 +789,6 @@ import {
   LockIcon,
   LockOpenIcon,
   PenLineIcon,
-  RotateCcwIcon,
   SparklesIcon,
   XIcon,
 } from "lucide-react";
@@ -5257,7 +5257,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                                     />
                                   }
                                 >
-                                  <RotateCcwIcon />
+                                  <RefreshIcon />
                                 </TooltipTrigger>
                                 <TooltipPopup
                                   side="top"
@@ -5336,7 +5336,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                                   />
                                 }
                               >
-                                <RotateCcwIcon />
+                                <RefreshIcon />
                               </TooltipTrigger>
                               <TooltipPopup
                                 side="top"
@@ -5409,7 +5409,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                                   />
                                 }
                               >
-                                <RotateCcwIcon />
+                                <RefreshIcon />
                               </TooltipTrigger>
                               <TooltipPopup
                                 side="top"
