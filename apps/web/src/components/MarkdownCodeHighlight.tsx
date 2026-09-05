@@ -41,18 +41,20 @@ export const MarkdownCodeHighlight = memo(function MarkdownCodeHighlight({
   );
   return (
     <DiffWorkerPoolProvider fallback={fallback}>
-      <File
-        file={file}
-        options={{
-          theme: themeName,
-          themeType: themeName === "pierre-dark" ? "dark" : "light",
-          preferredHighlighter: PREFERRED_HIGHLIGHTER,
-          disableFileHeader: true,
-          disableLineNumbers: true,
-          overflow: wrapped ? "wrap" : "scroll",
-          unsafeCSS: CODE_BLOCK_CSS,
-        }}
-      />
+      <div data-markdown-code={code} data-language={language}>
+        <File
+          file={file}
+          options={{
+            theme: themeName,
+            themeType: themeName === "pierre-dark" ? "dark" : "light",
+            preferredHighlighter: PREFERRED_HIGHLIGHTER,
+            disableFileHeader: true,
+            disableLineNumbers: true,
+            overflow: wrapped ? "wrap" : "scroll",
+            unsafeCSS: CODE_BLOCK_CSS,
+          }}
+        />
+      </div>
     </DiffWorkerPoolProvider>
   );
 });
