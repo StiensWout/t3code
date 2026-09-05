@@ -922,7 +922,6 @@ function MarkdownCodeBlock({
     <div
       className="chat-markdown-codeblock my-[0.65rem] overflow-hidden rounded-[var(--radius)] border border-border/70 bg-secondary leading-snug dark:border-transparent dark:bg-input/32"
       data-language={language}
-      data-markdown-code={code}
       data-wrap={wrapped ? "true" : "false"}
     >
       <div className="chat-markdown-codeblock-header flex items-center justify-between gap-2 pt-1.5 pr-1.5 pb-0 pl-3 select-none">
