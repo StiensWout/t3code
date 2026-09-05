@@ -74,6 +74,7 @@ export function SidebarVirtualList<T extends { key: string }>({
   return (
     <LegendList
       ref={listRef}
+      data-slot="scroll-area-viewport"
       id={id}
       role={role}
       aria-label={label}
