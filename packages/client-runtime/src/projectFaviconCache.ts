@@ -127,6 +127,7 @@ export function createProjectFaviconCache(input: {
   const environmentRevisions = new Map<EnvironmentId, number>();
   let generation = 0;
   let hydration: Promise<void> | undefined;
+  let clearing: Promise<void> | undefined;
   const pending = new Set<Promise<void>>();
 
   const persist = (operation: () => Promise<void>) => {
@@ -179,6 +180,7 @@ export function createProjectFaviconCache(input: {
     url: string | null,
     signal: AbortSignal,
   ): Promise<string | null> => {
+    await clearing;
     const startGeneration = generation;
     const startRevision = environmentRevisions.get(target.environmentId) ?? 0;
     await hydrate();
@@ -227,15 +229,25 @@ export function createProjectFaviconCache(input: {
     await Promise.all(pending);
   };
 
+  // A download that started before the clear sees the revision change and is discarded;
+  // one that starts during the clear waits for it, so it cannot repopulate storage.
   const clear = async (environmentId?: EnvironmentId) => {
     if (environmentId === undefined) generation += 1;
     else
       environmentRevisions.set(environmentId, (environmentRevisions.get(environmentId) ?? 0) + 1);
-    await hydrate();
-    for (const [key, entry] of entries) {
-      if (environmentId === undefined || entry.environmentId === environmentId) remove(key);
-    }
-    await flush();
+    const previous = clearing;
+    const task = (async () => {
+      await previous;
+      await hydrate();
+      for (const [key, entry] of entries) {
+        if (environmentId === undefined || entry.environmentId === environmentId) remove(key);
+      }
+      await flush();
+    })().finally(() => {
+      if (clearing === task) clearing = undefined;
+    });
+    clearing = task;
+    await task;
   };
 
   return {

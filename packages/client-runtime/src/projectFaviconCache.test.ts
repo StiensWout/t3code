@@ -156,6 +156,35 @@ describe("persistent project favicon cache", () => {
     },
   );
 
+  it("discards a download that starts while the environment is being cleared", async () => {
+    const records = new Map<string, ProjectFaviconEntry>();
+    const removal = deferred<void>();
+    const load = vi.fn(async () => image);
+    const storage: ProjectFaviconStorage = {
+      list: async () => [...records.values()],
+      put: async (key, entry) => {
+        records.set(key, entry);
+      },
+      remove: async (key) => {
+        await removal.promise;
+        records.delete(key);
+      },
+    };
+    const cache = createProjectFaviconCache({ storage, load });
+    await cache.resolve(target, url, signal());
+    await cache.flush();
+    const clearing = cache.clearEnvironment(target.environmentId);
+    await Promise.resolve();
+    const late = cache.resolve(target, url.replace("vabc", "vdef"), signal());
+    removal.resolve();
+    await clearing;
+    expect(records.size).toBe(0);
+    expect(cache.peek(target)).toBeNull();
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(await late).toBe(image);
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
   it("bounds individual images, total bytes, and entry count in storage", async () => {
     const { cache, load, records } = fixture();
     load.mockResolvedValueOnce(
