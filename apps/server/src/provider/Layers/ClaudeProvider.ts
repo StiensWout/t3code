@@ -530,7 +530,11 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     ? yield* resolveCapabilities(claudeSettings).pipe(Effect.orElseSucceed(() => undefined))
     : undefined;
   const modelAvailability = resolveClaudeModelAvailability(
-    scopeClaudeModelCatalog(modelCatalog, claudeSettings.customModels),
+    scopeClaudeModelCatalog(
+      modelCatalog,
+      claudeSettings.customModels,
+      DEFAULT_CLAUDE_MODEL_CAPABILITIES,
+    ),
     parsedVersion,
     capabilities?.models,
   );

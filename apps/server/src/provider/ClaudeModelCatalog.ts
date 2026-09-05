@@ -86,12 +86,14 @@ export const BUNDLED_CLAUDE_MODEL_CATALOG = resolveClaudeModelCatalog(BUNDLED_MO
  * (a built-in alias they shadow is dropped, canonical slugs and capabilities
  * are preserved), and custom entries that declare their own capabilities are
  * appended so the adapter resolves effort / fast mode / thinking against the
- * user's descriptors instead of the empty default. Custom entries carry no
+ * user's descriptors instead of the empty default. A supplied fallback includes
+ * bare custom entries when building a provider snapshot. Custom entries carry no
  * runtime profile, so option values pass through to Claude Code verbatim.
  */
 export function scopeClaudeModelCatalog(
   catalog: ClaudeModelCatalog,
   customModels: ReadonlyArray<CustomModelSetting>,
+  defaultCustomCapabilities?: ModelCapabilities,
 ): ClaudeModelCatalog {
   const customEntries = readCustomModelEntries(customModels);
   if (customEntries.length === 0) return catalog;
@@ -112,13 +114,14 @@ export function scopeClaudeModelCatalog(
   const builtInSlugs = new Set(builtInModels.map((entry) => entry.model.slug));
   const customCatalogModels: Array<ClaudeCatalogModel> = [];
   for (const entry of customEntries) {
-    if (!entry.capabilities || builtInSlugs.has(entry.slug)) continue;
+    const capabilities = entry.capabilities ?? defaultCustomCapabilities;
+    if (!capabilities || builtInSlugs.has(entry.slug)) continue;
     customCatalogModels.push({
       model: {
         slug: entry.slug,
         name: entry.name,
         isCustom: true,
-        capabilities: entry.capabilities,
+        capabilities,
       },
       runtime: {},
       compatibility: {},

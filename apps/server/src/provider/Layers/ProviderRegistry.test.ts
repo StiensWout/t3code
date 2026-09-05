@@ -2789,10 +2789,11 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             capabilities: SYNTHETIC_CLAUDE_MODEL_CATALOG.models[0]!.model.capabilities!,
           };
           const status = yield* checkClaudeProviderStatus(
-            { ...defaultClaudeSettings, customModels: [customModel] },
+            { ...defaultClaudeSettings, customModels: [customModel, "bare-runtime-custom"] },
             claudeCapabilities({
               models: [
                 { value: customModel.slug, displayName: "Runtime Name" },
+                { value: "bare-runtime-custom", displayName: "Bare Runtime Name" },
                 {
                   value: `${SYNTHETIC_CLAUDE_COLLIDING_ALIAS}[expanded]`,
                   displayName: "Synthetic Capable",
@@ -2806,13 +2807,22 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
 
           assert.deepStrictEqual(
             status.models.filter((model) => !model.isLegacy).map((model) => model.slug),
-            [SYNTHETIC_CLAUDE_CAPABLE_MODEL, customModel.slug],
+            [SYNTHETIC_CLAUDE_CAPABLE_MODEL, customModel.slug, "bare-runtime-custom"],
           );
           assert.deepStrictEqual(
             status.models.find((model) => model.slug === customModel.slug),
             {
               ...customModel,
               isCustom: true,
+            },
+          );
+          assert.deepStrictEqual(
+            status.models.find((model) => model.slug === "bare-runtime-custom"),
+            {
+              slug: "bare-runtime-custom",
+              name: "bare-runtime-custom",
+              isCustom: true,
+              capabilities: { optionDescriptors: [] },
             },
           );
           assert.strictEqual(status.modelInventory, "authoritative");
