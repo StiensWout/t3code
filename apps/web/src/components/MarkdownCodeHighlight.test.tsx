@@ -158,3 +158,14 @@ it("retries a failed final chunk when streaming completes without re-highlightin
   expect(html()).toBe("<pre>final chunk</pre>");
   expect(transport.workers[1]!.requests).toHaveLength(0);
 });
+
+it("shows the complete source while a completed fence edit is being highlighted", async () => {
+  await render({ code: "completed source", isStreaming: false });
+  const worker = transport.workers[0]!;
+  await act(async () => worker.reply("<pre>completed source</pre>"));
+  await render({ code: "completed source with an edit", isStreaming: false });
+  expect(html()).toBeUndefined();
+  expect(renderer!.root.findByType("pre").children).toEqual(["completed source with an edit"]);
+  await act(async () => worker.reply("<pre>completed source with an edit</pre>"));
+  expect(html()).toBe("<pre>completed source with an edit</pre>");
+});
