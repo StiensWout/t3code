@@ -520,7 +520,7 @@ describe("ChatMarkdown file option chips", () => {
       />,
     );
 
-    expect(html.replace(/<[^>]*>/g, "").match(/:codex-file-citation/g)).toHaveLength(2);
+    expect(html.match(/:codex-file-citation/g)).toHaveLength(2);
     expect(html).not.toContain("chat-markdown-file-link");
   });
 
@@ -667,7 +667,7 @@ describe("ChatMarkdown artifact-template cards", () => {
       />,
     );
 
-    expect(html.replace(/<[^>]*>/g, "").match(/::artifact-template/g)).toHaveLength(2);
+    expect(html.match(/::artifact-template/g)).toHaveLength(2);
     expect(html).not.toContain("chat-markdown-artifact-template");
   });
 });
