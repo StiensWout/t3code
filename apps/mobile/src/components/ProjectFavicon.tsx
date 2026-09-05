@@ -4,6 +4,7 @@ import { useLayoutEffect, useMemo, useState } from "react";
 import { View } from "react-native";
 import type { EnvironmentId } from "@t3tools/contracts";
 import {
+  getProjectFaviconCacheKey,
   getProjectFaviconResourceKey,
   isProjectFaviconFallbackUrl,
 } from "@t3tools/shared/projectFavicon";
@@ -41,9 +42,13 @@ export function ProjectFavicon(props: {
         }),
   );
   const renderableFaviconUrl = isProjectFaviconFallbackUrl(faviconUrl) ? null : faviconUrl;
+  // Inline images are self-contained; remote URLs key on their revision so signed-token
+  // rotation reuses the disk cache while a changed icon starts from the loading state.
   const cacheKey =
     renderableFaviconUrl && props.workspaceRoot
-      ? getProjectFaviconResourceKey(props.environmentId, props.workspaceRoot, props.faviconPath)
+      ? renderableFaviconUrl.startsWith("data:")
+        ? getProjectFaviconResourceKey(props.environmentId, props.workspaceRoot, props.faviconPath)
+        : getProjectFaviconCacheKey(props.environmentId, props.workspaceRoot, renderableFaviconUrl)
       : null;
 
   return (
@@ -79,7 +84,7 @@ function ProjectFaviconImage(props: {
   }, [faviconRequest]);
 
   const [status, setStatus] = useState<"loading" | "loaded" | "error">(() =>
-    props.faviconUrl?.startsWith("data:image/") || hasLoadedProjectFavicon(props.cacheKey)
+    props.faviconUrl?.startsWith("data:") || hasLoadedProjectFavicon(props.cacheKey)
       ? "loaded"
       : "loading",
   );
@@ -110,12 +115,12 @@ function ProjectFaviconImage(props: {
       {requestIsActive ? (
         <Image
           key={faviconRequest.faviconUrl}
-          source={{
-            uri: faviconRequest.faviconUrl,
-          }}
-          cachePolicy={
-            faviconRequest.faviconUrl.startsWith("data:image/") ? "memory" : "memory-disk"
+          source={
+            faviconRequest.faviconUrl.startsWith("data:")
+              ? { uri: faviconRequest.faviconUrl }
+              : { uri: faviconRequest.faviconUrl, cacheKey: faviconRequest.cacheKey }
           }
+          cachePolicy={faviconRequest.faviconUrl.startsWith("data:") ? "memory" : "memory-disk"}
           recyclingKey={faviconRequest.cacheKey}
           accessibilityLabel={`${props.projectTitle} favicon`}
           style={{

@@ -1,9 +1,12 @@
 import { EnvironmentId } from "@t3tools/contracts";
+import { mediaMimeType } from "@t3tools/shared/filePreview";
 import {
   getProjectFaviconCacheKey,
   getProjectFaviconResourceKey,
   isProjectFaviconFallbackUrl,
 } from "@t3tools/shared/projectFavicon";
+import * as Encoding from "effect/Encoding";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 export const PROJECT_FAVICON_THUMBNAIL_SIZE = 96;
@@ -17,35 +20,97 @@ export interface ProjectFaviconTarget {
   readonly faviconPath?: string | null | undefined;
 }
 
-const Thumbnail = Schema.String.check(
+const ImageDataUrl = Schema.String.check(
   Schema.isMaxLength(PROJECT_FAVICON_MAX_DATA_URL_LENGTH),
-  Schema.isPattern(/^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$/),
+  Schema.isPattern(
+    /^data:image\/(?:png|jpeg|gif|webp|avif|svg\+xml|x-icon|vnd\.microsoft\.icon);base64,[A-Za-z0-9+/]+={0,2}$/,
+  ),
 );
 const Entry = Schema.Struct({
   environmentId: EnvironmentId,
   cwd: Schema.String,
   faviconPath: Schema.NullOr(Schema.String),
   revision: Schema.String,
-  dataUrl: Thumbnail,
+  dataUrl: ImageDataUrl,
 });
-const decodeEntries = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Array(Entry)));
-const isThumbnail = Schema.is(Thumbnail);
+export type ProjectFaviconEntry = typeof Entry.Type;
+const decodeEntry = Schema.decodeUnknownOption(Entry);
+const isImageDataUrl = Schema.is(ImageDataUrl);
 
 function keyFor(target: ProjectFaviconTarget) {
   return getProjectFaviconResourceKey(target.environmentId, target.cwd, target.faviconPath);
 }
 
+export interface ProjectFaviconStorage {
+  /** Every persisted record; entries that fail validation are ignored. */
+  readonly list: () => Promise<ReadonlyArray<unknown>>;
+  readonly put: (key: string, entry: ProjectFaviconEntry) => Promise<void>;
+  readonly remove: (key: string, entry: ProjectFaviconEntry) => Promise<void>;
+}
+
+/**
+ * Fetches an icon and inlines its bytes when they fit the cache limit, so SVGs
+ * and small bitmaps are stored exactly as served. Larger bitmaps go through the
+ * platform downscaler; larger SVGs stay remote because rasterizing them without
+ * intrinsic dimensions is unreliable.
+ */
+export function createProjectFaviconImageLoader(input: {
+  readonly fetch?: typeof fetch;
+  readonly downscale: (
+    image: {
+      readonly url: string;
+      readonly mimeType: string;
+      readonly bytes: Uint8Array<ArrayBuffer>;
+    },
+    signal: AbortSignal,
+  ) => Promise<string>;
+}) {
+  const fetchImpl = input.fetch ?? globalThis.fetch;
+  return async (url: string, signal: AbortSignal): Promise<string> => {
+    const response = await fetchImpl(url, { signal });
+    if (!response.ok) throw new Error(`Project icon request failed with ${response.status}.`);
+    const contentType = response.headers
+      .get("content-type")
+      ?.split(";", 1)[0]
+      ?.trim()
+      .toLowerCase();
+    const mimeType = contentType?.startsWith("image/") ? contentType : mediaMimeType(url);
+    if (!mimeType) throw new Error("Project icon has no image type.");
+    const bytes = new Uint8Array<ArrayBuffer>(await response.arrayBuffer());
+    signal.throwIfAborted();
+    const dataUrl = `data:${mimeType};base64,${Encoding.encodeBase64(bytes)}`;
+    if (isImageDataUrl(dataUrl)) return dataUrl;
+    if (mimeType === "image/svg+xml") throw new Error("Project icon exceeds the cache limit.");
+    return input.downscale({ url, mimeType, bytes }, signal);
+  };
+}
+
 /** Stores small, self-contained images so startup never needs an old signed URL. */
 export function createProjectFaviconCache(input: {
-  readonly read: () => Promise<string | null>;
-  readonly write: (json: string) => Promise<void>;
-  readonly thumbnail: (url: string, signal: AbortSignal) => Promise<string>;
+  readonly storage: ProjectFaviconStorage;
+  readonly load: (url: string, signal: AbortSignal) => Promise<string>;
 }) {
-  const entries = new Map<string, typeof Entry.Type>();
+  const entries = new Map<string, ProjectFaviconEntry>();
   const environmentRevisions = new Map<EnvironmentId, number>();
+  let generation = 0;
   let hydration: Promise<void> | undefined;
-  let writer: Promise<void> | undefined;
-  let dirty = false;
+  const pending = new Set<Promise<void>>();
+
+  const persist = (operation: () => Promise<void>) => {
+    const task: Promise<void> = operation()
+      .catch(() => {
+        // Keep the in-memory image if local storage is full or unavailable.
+      })
+      .finally(() => pending.delete(task));
+    pending.add(task);
+  };
+
+  const remove = (key: string) => {
+    const entry = entries.get(key);
+    if (!entry) return;
+    entries.delete(key);
+    persist(() => input.storage.remove(key, entry));
+  };
 
   const trim = () => {
     let bytes = 0;
@@ -57,38 +122,22 @@ export function createProjectFaviconCache(input: {
       const oldest = entries.entries().next().value;
       if (!oldest) break;
       bytes -= oldest[1].dataUrl.length;
-      entries.delete(oldest[0]);
+      remove(oldest[0]);
     }
   };
 
   const hydrate = () =>
     (hydration ??= (async () => {
       try {
-        const json = await input.read();
-        if (json === null) return;
-        for (const entry of decodeEntries(json)) entries.set(keyFor(entry), entry);
+        for (const record of await input.storage.list()) {
+          const entry = decodeEntry(record);
+          if (Option.isSome(entry)) entries.set(keyFor(entry.value), entry.value);
+        }
         trim();
       } catch {
         // A missing, corrupt, or unavailable cache must not prevent startup.
       }
     })());
-
-  const persist = () => {
-    dirty = true;
-    return (writer ??= (async () => {
-      while (dirty) {
-        dirty = false;
-        try {
-          await input.write(JSON.stringify([...entries.values()]));
-        } catch {
-          // Keep the in-memory thumbnail if local storage is full or unavailable.
-        }
-      }
-    })().finally(() => {
-      writer = undefined;
-      if (dirty) void persist();
-    }));
-  };
 
   const peek = (target: ProjectFaviconTarget) => entries.get(keyFor(target))?.dataUrl ?? null;
 
@@ -97,12 +146,13 @@ export function createProjectFaviconCache(input: {
     url: string | null,
     signal: AbortSignal,
   ): Promise<string | null> => {
-    const environmentRevision = environmentRevisions.get(target.environmentId) ?? 0;
+    const startGeneration = generation;
+    const startRevision = environmentRevisions.get(target.environmentId) ?? 0;
     await hydrate();
     if (signal.aborted || url === null) return peek(target);
     const key = keyFor(target);
     if (isProjectFaviconFallbackUrl(url)) {
-      if (entries.delete(key)) void persist();
+      remove(key);
       return null;
     }
     const revision = getProjectFaviconCacheKey(target.environmentId, target.cwd, url);
@@ -113,22 +163,25 @@ export function createProjectFaviconCache(input: {
       if (cached.revision === revision) return cached.dataUrl;
     }
     try {
-      const dataUrl = await input.thumbnail(url, signal);
+      const dataUrl = await input.load(url, signal);
       if (
         signal.aborted ||
-        environmentRevision !== (environmentRevisions.get(target.environmentId) ?? 0)
-      )
+        startGeneration !== generation ||
+        startRevision !== (environmentRevisions.get(target.environmentId) ?? 0)
+      ) {
         return peek(target);
-      if (isThumbnail(dataUrl)) {
-        entries.set(key, {
+      }
+      if (isImageDataUrl(dataUrl)) {
+        const entry = {
           environmentId: target.environmentId,
           cwd: target.cwd,
           faviconPath: target.faviconPath || null,
           revision,
           dataUrl,
-        });
+        };
+        entries.set(key, entry);
+        persist(() => input.storage.put(key, entry));
         trim();
-        void persist();
         return dataUrl;
       }
     } catch {
@@ -137,21 +190,28 @@ export function createProjectFaviconCache(input: {
     return peek(target) ?? url;
   };
 
+  const flush = async () => {
+    await Promise.all(pending);
+  };
+
+  const clear = async (environmentId?: EnvironmentId) => {
+    if (environmentId === undefined) generation += 1;
+    else
+      environmentRevisions.set(environmentId, (environmentRevisions.get(environmentId) ?? 0) + 1);
+    await hydrate();
+    for (const [key, entry] of entries) {
+      if (environmentId === undefined || entry.environmentId === environmentId) remove(key);
+    }
+    await flush();
+  };
+
   return {
     hydrate,
     peek,
     resolve,
-    async clearEnvironment(environmentId: EnvironmentId) {
-      environmentRevisions.set(environmentId, (environmentRevisions.get(environmentId) ?? 0) + 1);
-      await hydrate();
-      for (const [key, entry] of entries) {
-        if (entry.environmentId === environmentId) entries.delete(key);
-      }
-      await persist();
-    },
-    async flush() {
-      await writer;
-    },
+    clearEnvironment: (environmentId: EnvironmentId) => clear(environmentId),
+    clearAll: () => clear(),
+    flush,
   };
 }
 

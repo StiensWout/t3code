@@ -27,9 +27,10 @@ vi.mock("expo-file-system", () => ({
   },
 }));
 
-import { createProjectFaviconThumbnail } from "./projectFaviconCache";
+import { downscaleProjectFavicon } from "./projectFaviconCache";
 
 const png = "iVBORw0KGgoAAAAA";
+const image = { url: "https://remote/icon.png" };
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -46,10 +47,7 @@ describe("mobile project icon thumbnails", () => {
     native.read.mockResolvedValueOnce(
       `iVBORw0KGgo${"a".repeat(PROJECT_FAVICON_MAX_DATA_URL_LENGTH)}`,
     );
-    const thumbnail = await createProjectFaviconThumbnail(
-      "https://remote/icon.png",
-      new AbortController().signal,
-    );
+    const thumbnail = await downscaleProjectFavicon(image, new AbortController().signal);
     expect(thumbnail).toBe(`data:image/png;base64,${png}`);
     expect(native.load.mock.calls.map(([, options]) => options.maxWidth)).toEqual([96, 48]);
     expect(native.remove).toHaveBeenCalledTimes(2);
@@ -64,9 +62,7 @@ describe("mobile project icon thumbnails", () => {
       controller.abort();
       return { width: 96, height: 96, release };
     });
-    await expect(
-      createProjectFaviconThumbnail("https://remote/icon.png", controller.signal),
-    ).rejects.toThrow();
+    await expect(downscaleProjectFavicon(image, controller.signal)).rejects.toThrow();
     expect(release).toHaveBeenCalledOnce();
     expect(native.write).not.toHaveBeenCalled();
   });
@@ -74,9 +70,9 @@ describe("mobile project icon thumbnails", () => {
   it("rejects an image the native decoder did not downsize", async () => {
     const release = vi.fn();
     native.load.mockResolvedValueOnce({ width: 4000, height: 3000, release });
-    await expect(
-      createProjectFaviconThumbnail("https://remote/icon.png", new AbortController().signal),
-    ).rejects.toThrow("not resized");
+    await expect(downscaleProjectFavicon(image, new AbortController().signal)).rejects.toThrow(
+      "not resized",
+    );
     expect(native.write).not.toHaveBeenCalled();
     expect(release).toHaveBeenCalledOnce();
   });

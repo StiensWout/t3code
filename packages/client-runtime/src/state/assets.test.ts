@@ -127,23 +127,25 @@ describe("project favicon URL cache", () => {
   it("renders a persisted thumbnail immediately in a fresh registry and refreshes it remotely", async () => {
     const image = "data:image/png;base64,aWNvbg==";
     const replacement = "data:image/png;base64,bmV3";
-    let stored: string | null = null;
+    const records = new Map<string, unknown>();
     const storage = {
-      read: async () => stored,
-      write: async (json: string) => {
-        stored = json;
+      list: async () => [...records.values()],
+      put: async (key: string, entry: unknown) => {
+        records.set(key, entry);
       },
-      thumbnail: async () => image,
+      remove: async (key: string) => {
+        records.delete(key);
+      },
     };
     const target = { environmentId: EnvironmentId.make("remote"), cwd: "/workspace" };
-    const previousCache = createProjectFaviconCache(storage);
+    const previousCache = createProjectFaviconCache({ storage, load: async () => image });
     await previousCache.resolve(
       target,
       "https://remote.test/api/assets/old/v1-icon.png",
       new AbortController().signal,
     );
     await previousCache.flush();
-    const cache = createProjectFaviconCache({ ...storage, thumbnail: async () => replacement });
+    const cache = createProjectFaviconCache({ storage, load: async () => replacement });
     await cache.hydrate();
     const registry = AtomRegistry.make();
     const result = Atom.make<AsyncResult.AsyncResult<AssetCreateUrlResult, unknown>>(

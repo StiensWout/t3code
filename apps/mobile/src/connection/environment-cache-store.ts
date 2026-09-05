@@ -238,9 +238,9 @@ export const make = Effect.fn("MobileEnvironmentCacheStore.make")(function* () {
         .pipe(Effect.mapError(mapDatabaseError("clear-vcs-refs"))),
     ),
     clear: Effect.fn("MobileEnvironmentCache.clear")((environmentId) =>
-      database.clearEnvironmentCache(environmentId).pipe(
+      Effect.promise(() => projectFaviconCache.clearEnvironment(environmentId)).pipe(
+        Effect.andThen(database.clearEnvironmentCache(environmentId)),
         Effect.mapError(mapDatabaseError("clear-environment")),
-        Effect.tap(() => Effect.promise(() => projectFaviconCache.clearEnvironment(environmentId))),
       ),
     ),
   });
