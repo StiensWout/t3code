@@ -8,6 +8,24 @@ import { getSyntaxHighlighterPromise } from "../lib/syntaxHighlighting";
 import { Button } from "./ui/button";
 import { setMarkdownTaskChecked } from "./files/filePreviewMode";
 
+// Exercise markdown and its controls with the real highlighter over an async transport.
+vi.mock("../lib/markdownHighlighting.worker?worker", () => ({
+  default: class extends EventTarget {
+    async postMessage(request: import("../lib/markdownHighlighting").MarkdownHighlightRequest) {
+      let html: string | null = null;
+      try {
+        const highlighter = await getSyntaxHighlighterPromise(request.language);
+        html = highlighter.codeToHtml(request.code, {
+          lang: request.language,
+          theme: request.themeName,
+        });
+      } catch {}
+      this.dispatchEvent(new MessageEvent("message", { data: { id: request.id, html } }));
+    }
+    terminate() {}
+  },
+}));
+
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => null }));
 vi.mock("../hooks/useTheme", () => ({ useTheme: () => ({ resolvedTheme: "dark" }) }));
 vi.mock("../hooks/useSettings", async (importOriginal) => {
