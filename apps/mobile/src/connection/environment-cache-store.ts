@@ -15,6 +15,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import * as MobileDatabase from "../persistence/mobile-database";
+import { projectFaviconCache } from "../lib/projectFaviconCache";
 
 const SHELL_SNAPSHOT_CACHE_SCHEMA_VERSION = 1;
 // v3 adds windowed (paginated) snapshots carrying `page` metadata; the bump
@@ -126,7 +127,7 @@ export const make = Effect.fn("MobileEnvironmentCacheStore.make")(function* () {
         decode: decodeStoredShellSnapshot,
         select: (stored) =>
           stored.environmentId === environmentId ? Option.some(stored.snapshot) : Option.none(),
-      }),
+      }).pipe(Effect.tap(() => Effect.promise(() => projectFaviconCache.hydrate()))),
     ),
     saveShell: Effect.fn("MobileEnvironmentCache.saveShell")(function* (environmentId, snapshot) {
       const payload = yield* encodeStoredShellSnapshot({
@@ -237,9 +238,10 @@ export const make = Effect.fn("MobileEnvironmentCacheStore.make")(function* () {
         .pipe(Effect.mapError(mapDatabaseError("clear-vcs-refs"))),
     ),
     clear: Effect.fn("MobileEnvironmentCache.clear")((environmentId) =>
-      database
-        .clearEnvironmentCache(environmentId)
-        .pipe(Effect.mapError(mapDatabaseError("clear-environment"))),
+      database.clearEnvironmentCache(environmentId).pipe(
+        Effect.mapError(mapDatabaseError("clear-environment")),
+        Effect.tap(() => Effect.promise(() => projectFaviconCache.clearEnvironment(environmentId))),
+      ),
     ),
   });
 });

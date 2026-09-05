@@ -4,7 +4,7 @@ import { useLayoutEffect, useMemo, useState } from "react";
 import { View } from "react-native";
 import type { EnvironmentId } from "@t3tools/contracts";
 import {
-  getProjectFaviconCacheKey,
+  getProjectFaviconResourceKey,
   isProjectFaviconFallbackUrl,
 } from "@t3tools/shared/projectFavicon";
 import { useAtomValue } from "@effect/atom-react";
@@ -43,7 +43,7 @@ export function ProjectFavicon(props: {
   const renderableFaviconUrl = isProjectFaviconFallbackUrl(faviconUrl) ? null : faviconUrl;
   const cacheKey =
     renderableFaviconUrl && props.workspaceRoot
-      ? getProjectFaviconCacheKey(props.environmentId, props.workspaceRoot, renderableFaviconUrl)
+      ? getProjectFaviconResourceKey(props.environmentId, props.workspaceRoot, props.faviconPath)
       : null;
 
   return (
@@ -79,7 +79,9 @@ function ProjectFaviconImage(props: {
   }, [faviconRequest]);
 
   const [status, setStatus] = useState<"loading" | "loaded" | "error">(() =>
-    hasLoadedProjectFavicon(props.cacheKey) ? "loaded" : "loading",
+    props.faviconUrl?.startsWith("data:image/") || hasLoadedProjectFavicon(props.cacheKey)
+      ? "loaded"
+      : "loading",
   );
 
   const requestIsActive = faviconRequest !== null && activeFaviconRequest === faviconRequest;
@@ -110,9 +112,10 @@ function ProjectFaviconImage(props: {
           key={faviconRequest.faviconUrl}
           source={{
             uri: faviconRequest.faviconUrl,
-            cacheKey: faviconRequest.cacheKey,
           }}
-          cachePolicy="memory-disk"
+          cachePolicy={
+            faviconRequest.faviconUrl.startsWith("data:image/") ? "memory" : "memory-disk"
+          }
           recyclingKey={faviconRequest.cacheKey}
           accessibilityLabel={`${props.projectTitle} favicon`}
           style={{

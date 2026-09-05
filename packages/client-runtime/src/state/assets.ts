@@ -4,11 +4,17 @@ import {
   EnvironmentId,
   WS_METHODS,
 } from "@t3tools/contracts";
+import {
+  getProjectFaviconResourceKey,
+  isProjectFaviconFallbackUrl,
+} from "@t3tools/shared/projectFavicon";
+import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 
 import type { EnvironmentRegistry } from "../connection/registry.ts";
+import type { ProjectFaviconCache, ProjectFaviconTarget } from "../projectFaviconCache.ts";
 import { createEnvironmentRpcQueryAtomFamily } from "./runtime.ts";
 
 const ASSET_URL_REFRESH_INTERVAL_MS = 30 * 60_000;
@@ -119,6 +125,7 @@ export function createAssetEnvironmentAtoms<R, E>(
  * owns its last resolved URL, including a confirmed missing-icon response.
  */
 export function createProjectFaviconUrlAtomFamily(input: {
+  readonly imageCache?: ProjectFaviconCache;
   readonly createUrl: (target: {
     readonly environmentId: EnvironmentId;
     readonly input: { readonly resource: AssetResource };
@@ -133,8 +140,9 @@ export function createProjectFaviconUrlAtomFamily(input: {
   const family = Atom.family((key: string) => {
     const [environmentId, cwd, path] = decodeKey(JSON.parse(key));
     const resource = { _tag: "project-favicon" as const, cwd, ...(path ? { path } : {}) };
-    return Atom.make((get): string | null => {
-      const result = get(input.createUrl({ environmentId, input: { resource } }));
+    const request = input.createUrl({ environmentId, input: { resource } });
+    const resolvedUrl = Atom.make((get): string | null => {
+      const result = get(request);
       const connection = get(input.preparedConnection(environmentId));
       const state = assetUrlStateFromResult(
         result,
@@ -142,10 +150,22 @@ export function createProjectFaviconUrlAtomFamily(input: {
       );
       return state._tag === "Success" ? state.url : Option.getOrNull(get.self<string | null>());
     }).pipe(Atom.setIdleTTL(ASSET_URL_IDLE_TTL_MS));
+    const cache = input.imageCache;
+    if (!cache) return resolvedUrl;
+
+    const target = { environmentId, cwd, faviconPath: path };
+    const image = Atom.make((get) => {
+      get(request);
+      const url = get(resolvedUrl);
+      return Effect.promise((signal) => cache.resolve(target, url, signal));
+    }).pipe(Atom.setIdleTTL(ASSET_URL_IDLE_TTL_MS));
+
+    return Atom.make((get): string | null => {
+      const result = get(image);
+      if (isProjectFaviconFallbackUrl(get(resolvedUrl))) return null;
+      return Option.getOrElse(AsyncResult.value(result), () => cache.peek(target));
+    }).pipe(Atom.setIdleTTL(ASSET_URL_IDLE_TTL_MS));
   });
-  return (target: {
-    readonly environmentId: EnvironmentId;
-    readonly cwd: string;
-    readonly faviconPath?: string | null | undefined;
-  }) => family(JSON.stringify([target.environmentId, target.cwd, target.faviconPath || null]));
+  return (target: ProjectFaviconTarget) =>
+    family(getProjectFaviconResourceKey(target.environmentId, target.cwd, target.faviconPath));
 }

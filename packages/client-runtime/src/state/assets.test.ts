@@ -6,6 +6,7 @@ import * as Layer from "effect/Layer";
 import { AsyncResult, Atom, AtomRegistry } from "effect/unstable/reactivity";
 
 import type { EnvironmentRegistry } from "../connection/registry.ts";
+import { createProjectFaviconCache } from "../projectFaviconCache.ts";
 import {
   createAssetEnvironmentAtoms,
   createProjectFaviconUrlAtomFamily,
@@ -123,6 +124,67 @@ describe("createAssetEnvironmentAtoms", () => {
 });
 
 describe("project favicon URL cache", () => {
+  it("renders a persisted thumbnail immediately in a fresh registry and refreshes it remotely", async () => {
+    const image = "data:image/png;base64,aWNvbg==";
+    const replacement = "data:image/png;base64,bmV3";
+    let stored: string | null = null;
+    const storage = {
+      read: async () => stored,
+      write: async (json: string) => {
+        stored = json;
+      },
+      thumbnail: async () => image,
+    };
+    const target = { environmentId: EnvironmentId.make("remote"), cwd: "/workspace" };
+    const previousCache = createProjectFaviconCache(storage);
+    await previousCache.resolve(
+      target,
+      "https://remote.test/api/assets/old/v1-icon.png",
+      new AbortController().signal,
+    );
+    await previousCache.flush();
+    const cache = createProjectFaviconCache({ ...storage, thumbnail: async () => replacement });
+    await cache.hydrate();
+    const registry = AtomRegistry.make();
+    const result = Atom.make<AsyncResult.AsyncResult<AssetCreateUrlResult, unknown>>(
+      AsyncResult.initial(),
+    );
+    const connection = Atom.make<Option.Option<{ httpBaseUrl: string }>>(Option.none());
+    const favicon = createProjectFaviconUrlAtomFamily({
+      createUrl: () => result,
+      preparedConnection: () => connection,
+      imageCache: cache,
+    })(target);
+    const unmount = registry.mount(favicon);
+    try {
+      expect(registry.get(favicon)).toBe(image);
+      let unsubscribe = () => {};
+      const refreshed = new Promise<void>((resolve) => {
+        unsubscribe = registry.subscribe(favicon, (value) => {
+          if (value === replacement) resolve();
+        });
+      });
+      registry.set(connection, Option.some({ httpBaseUrl: "https://remote.test" }));
+      registry.set(
+        result,
+        AsyncResult.success({
+          relativeUrl: "/api/assets/new/v2-icon.png",
+          expiresAt: 4_000_000_000_000,
+        }),
+      );
+      expect(registry.get(favicon)).toBe(image);
+      await refreshed;
+      unsubscribe();
+      expect(registry.get(favicon)).toBe(replacement);
+      registry.set(connection, Option.none());
+      registry.set(result, AsyncResult.failure(Cause.die("offline")));
+      expect(registry.get(favicon)).toBe(replacement);
+    } finally {
+      unmount();
+      registry.dispose();
+    }
+  });
+
   it("retains icons across outages and remounts, then accepts refreshed and missing icons", () => {
     const registry = AtomRegistry.make();
     const result = Atom.make<AsyncResult.AsyncResult<AssetCreateUrlResult, unknown>>(
