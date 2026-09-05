@@ -1,5 +1,6 @@
+"use client";
+
 import { Spinner } from "~/components/ui/spinner";
-("use client");
 
 import {
   ArrowUpCircleIcon,
