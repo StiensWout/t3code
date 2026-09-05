@@ -4,26 +4,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { getSyntaxHighlighterPromise } from "../lib/syntaxHighlighting";
 import { Button } from "./ui/button";
 import { setMarkdownTaskChecked } from "./files/filePreviewMode";
 
-// Exercise markdown and its controls with the real highlighter over an async transport.
-vi.mock("../lib/markdownHighlighting.worker?worker", () => ({
-  default: class extends EventTarget {
-    async postMessage(request: import("../lib/markdownHighlighting").MarkdownHighlightRequest) {
-      let html: string | null = null;
-      try {
-        const highlighter = await getSyntaxHighlighterPromise(request.language);
-        html = highlighter.codeToHtml(request.code, {
-          lang: request.language,
-          theme: request.themeName,
-        });
-      } catch {}
-      this.dispatchEvent(new MessageEvent("message", { data: { id: request.id, html } }));
-    }
-    terminate() {}
-  },
+// This suite exercises markdown controls. Browser verification covers Pierre's DOM renderer.
+vi.mock("./DiffWorkerPoolProvider", () => ({
+  DiffWorkerPoolProvider: ({ fallback }: { fallback: ReactNode }) => <>{fallback}</>,
 }));
 
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => null }));
@@ -122,53 +108,7 @@ describe("ChatMarkdown favicon privacy", () => {
 });
 
 describe("ChatMarkdown streaming", () => {
-  it("recovers highlighting after a failed fence changes without resetting its controls", async () => {
-    const highlighter = await getSyntaxHighlighterPromise("text");
-    const codeToHtml = highlighter.codeToHtml.bind(highlighter);
-    let fail = true;
-    vi.spyOn(highlighter, "codeToHtml").mockImplementation((...args) => {
-      if (fail) throw new Error("Temporary highlighter failure");
-      return codeToHtml(...args);
-    });
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    vi.spyOn(console, "warn").mockImplementation(() => {});
-    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-    let renderer: ReactTestRenderer | undefined;
-
-    try {
-      await act(async () => {
-        renderer = create(
-          <ChatMarkdown cwd="/tmp/project" text={"```text\ninitial\n```"} isStreaming />,
-        );
-      });
-      const mounted = renderer!;
-      const codeBlock = mounted.root.findByProps({ "data-language": "text" });
-      const initialWrap = codeBlock.props["data-wrap"] === "true";
-      const wrap = codeButton(mounted, initialWrap ? "Disable line wrap" : "Wrap lines");
-      await act(async () => {
-        wrap.onClick?.({} as Parameters<NonNullable<typeof wrap.onClick>>[0]);
-      });
-      expect(mounted.root.findAllByProps({ className: "chat-markdown-shiki" })).toHaveLength(0);
-
-      fail = false;
-      await act(async () => {
-        mounted.update(
-          <ChatMarkdown cwd="/tmp/project" text={"```text\nrecovered\n```"} isStreaming />,
-        );
-      });
-      expect(mounted.root.findAllByProps({ className: "chat-markdown-shiki" })).toHaveLength(1);
-      expect(mounted.root.findByProps({ "data-language": "text" })).toBe(codeBlock);
-      expect(codeBlock.props["data-wrap"]).toBe(String(!initialWrap));
-    } finally {
-      await act(async () => renderer?.unmount());
-      vi.unstubAllGlobals();
-      vi.restoreAllMocks();
-    }
-  });
-
-  it("preserves code controls and details without highlighting an unchanged fence again", async () => {
-    const highlighter = await getSyntaxHighlighterPromise("text");
-    const highlight = vi.spyOn(highlighter, "codeToHtml");
+  it("preserves code controls and details while the response streams", async () => {
     const writeText = vi.fn(async (_text: string) => {});
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -212,7 +152,6 @@ describe("ChatMarkdown streaming", () => {
       const details = mounted.root.findByProps({ "data-markdown-details": "" });
       expect(details.props["data-markdown-details-open"]).toBe("true");
       expect(writeText).toHaveBeenCalledWith("First code block\n");
-      expect(highlight).toHaveBeenCalledTimes(1);
 
       for (let index = 0; index < 10; index += 1) {
         await act(async () => {
@@ -220,7 +159,6 @@ describe("ChatMarkdown streaming", () => {
         });
       }
 
-      expect(highlight).toHaveBeenCalledTimes(1);
       expect(mounted.root.findByProps({ "data-language": "text" })).toBe(codeBlock);
       expect(codeBlock.props["data-wrap"]).toBe(String(!initialWrap));
       expect(mounted.root.findByProps({ "data-markdown-details": "" })).toBe(details);
@@ -239,7 +177,6 @@ describe("ChatMarkdown streaming", () => {
         copyUpdated.onClick?.({} as Parameters<NonNullable<typeof copyUpdated.onClick>>[0]);
       });
       expect(writeText).toHaveBeenLastCalledWith("Updated code block\n");
-      expect(highlight).toHaveBeenCalledTimes(2);
     } finally {
       await act(async () => renderer?.unmount());
       vi.useRealTimers();
@@ -463,7 +400,7 @@ describe("ChatMarkdown file option chips", () => {
       />,
     );
 
-    expect(html.match(/:codex-file-citation/g)).toHaveLength(2);
+    expect(html.replace(/<[^>]*>/g, "").match(/:codex-file-citation/g)).toHaveLength(2);
     expect(html).not.toContain("chat-markdown-file-link");
   });
 
@@ -610,7 +547,7 @@ describe("ChatMarkdown artifact-template cards", () => {
       />,
     );
 
-    expect(html.match(/::artifact-template/g)).toHaveLength(2);
+    expect(html.replace(/<[^>]*>/g, "").match(/::artifact-template/g)).toHaveLength(2);
     expect(html).not.toContain("chat-markdown-artifact-template");
   });
 });
