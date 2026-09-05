@@ -7,7 +7,10 @@ import {
   getProjectFaviconCacheKey,
   isProjectFaviconFallbackUrl,
 } from "@t3tools/shared/projectFavicon";
-import { useAssetUrl } from "../state/assets";
+import { useAtomValue } from "@effect/atom-react";
+import { Atom } from "effect/unstable/reactivity";
+import { projectFaviconUrlAtom } from "../state/assets";
+
 import {
   beginProjectFaviconRequest,
   createProjectFaviconRequest,
@@ -15,6 +18,8 @@ import {
   markProjectFaviconFailed,
   markProjectFaviconLoaded,
 } from "./projectFaviconCache";
+
+const EMPTY_FAVICON_URL = Atom.make<string | null>(null);
 
 /* ─── Component ──────────────────────────────────────────────────────── */
 export function ProjectFavicon(props: {
@@ -26,15 +31,14 @@ export function ProjectFavicon(props: {
   readonly faviconPath?: string | null;
 }) {
   const size = props.size ?? 42;
-  const faviconUrl = useAssetUrl(
-    props.environmentId,
-    props.workspaceRoot === null || props.workspaceRoot === undefined
-      ? null
-      : {
-          _tag: "project-favicon",
+  const faviconUrl = useAtomValue(
+    props.workspaceRoot == null
+      ? EMPTY_FAVICON_URL
+      : projectFaviconUrlAtom({
+          environmentId: props.environmentId,
           cwd: props.workspaceRoot,
-          ...(props.faviconPath ? { path: props.faviconPath } : {}),
-        },
+          faviconPath: props.faviconPath,
+        }),
   );
   const renderableFaviconUrl = isProjectFaviconFallbackUrl(faviconUrl) ? null : faviconUrl;
   const cacheKey =

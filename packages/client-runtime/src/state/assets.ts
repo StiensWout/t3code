@@ -4,6 +4,7 @@ import {
   EnvironmentId,
   WS_METHODS,
 } from "@t3tools/contracts";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 
@@ -111,4 +112,40 @@ export function createAssetEnvironmentAtoms<R, E>(
       readonly resources: ReadonlyArray<AssetResource>;
     }) => createUrlsFamily(JSON.stringify([target.environmentId, target.resources])),
   };
+}
+
+/**
+ * Keeps project icons visible while their environment reconnects. Each resource
+ * owns its last resolved URL, including a confirmed missing-icon response.
+ */
+export function createProjectFaviconUrlAtomFamily(input: {
+  readonly createUrl: (target: {
+    readonly environmentId: EnvironmentId;
+    readonly input: { readonly resource: AssetResource };
+  }) => Atom.Atom<AsyncResult.AsyncResult<AssetCreateUrlResult, unknown>>;
+  readonly preparedConnection: (
+    environmentId: EnvironmentId,
+  ) => Atom.Atom<Option.Option<{ readonly httpBaseUrl: string }>>;
+}) {
+  const decodeKey = Schema.decodeUnknownSync(
+    Schema.Tuple([EnvironmentId, Schema.String, Schema.NullOr(Schema.String)]),
+  );
+  const family = Atom.family((key: string) => {
+    const [environmentId, cwd, path] = decodeKey(JSON.parse(key));
+    const resource = { _tag: "project-favicon" as const, cwd, ...(path ? { path } : {}) };
+    return Atom.make((get): string | null => {
+      const result = get(input.createUrl({ environmentId, input: { resource } }));
+      const connection = get(input.preparedConnection(environmentId));
+      const state = assetUrlStateFromResult(
+        result,
+        Option.isSome(connection) ? connection.value.httpBaseUrl : null,
+      );
+      return state._tag === "Success" ? state.url : Option.getOrNull(get.self<string | null>());
+    }).pipe(Atom.setIdleTTL(ASSET_URL_IDLE_TTL_MS));
+  });
+  return (target: {
+    readonly environmentId: EnvironmentId;
+    readonly cwd: string;
+    readonly faviconPath?: string | null | undefined;
+  }) => family(JSON.stringify([target.environmentId, target.cwd, target.faviconPath || null]));
 }

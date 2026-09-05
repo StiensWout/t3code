@@ -6,6 +6,7 @@ import {
 import {
   assetUrlStateFromResult,
   createAssetEnvironmentAtoms,
+  createProjectFaviconUrlAtomFamily,
   EMPTY_ASSET_URL_ATOM,
 } from "@t3tools/client-runtime/state/assets";
 import type { AssetResource, EnvironmentId } from "@t3tools/contracts";
@@ -16,12 +17,17 @@ import { useCallback } from "react";
 import { environmentCatalog } from "../connection/catalog";
 import { connectionAtomRuntime } from "../connection/runtime";
 import { type AssetUrlState, deriveAssetUrlState } from "./asset-url-state";
-import { usePreparedConnection } from "./session";
+import { environmentSession, usePreparedConnection } from "./session";
 import { useAtomQueryRunner } from "./use-atom-query-runner";
 
 export type { AssetUrlFailureReason, AssetUrlState } from "./asset-url-state";
 
 export const assetEnvironment = createAssetEnvironmentAtoms(connectionAtomRuntime);
+
+export const projectFaviconUrlAtom = createProjectFaviconUrlAtomFamily({
+  createUrl: assetEnvironment.createUrl,
+  preparedConnection: environmentSession.preparedConnectionValueAtom,
+});
 
 const EMPTY_CONNECTION_STATE_ATOM = Atom.make(AsyncResult.initial<never, never>(false)).pipe(
   Atom.withLabel("mobile-asset-connection-state:empty"),
