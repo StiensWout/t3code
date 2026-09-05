@@ -53,22 +53,29 @@ export function SidebarVirtualList<T extends { key: string }>({
       revealed.current = null;
       return;
     }
-    if (revealed.current?.key === activeKey && revealed.current.version === revealVersion) return;
     const index = data.findIndex((item) => item.key === activeKey);
-    if (index < 0) return;
-    revealed.current = { key: activeKey, version: revealVersion };
+    if (index < 0) {
+      revealed.current = null;
+      return;
+    }
+    if (revealed.current?.key === activeKey && revealed.current.version === revealVersion) return;
     const list = listRef.current;
     if (!list) return;
-    const viewport = list.getScrollableNode();
-    const row = Array.from(viewport.querySelectorAll<HTMLElement>("[data-sidebar-list-key]")).find(
-      (element) => element.dataset.sidebarListKey === activeKey,
-    );
-    if (row) {
-      const rect = row.getBoundingClientRect();
-      const bounds = viewport.getBoundingClientRect();
-      if (rect.top >= bounds.top && rect.bottom <= bounds.bottom) return;
-    }
-    void list.scrollToIndex({ index, animated: false, viewPosition: 0.5 });
+    // Wait for the new data's layout and scroll anchoring before revealing its target.
+    const frame = requestAnimationFrame(() => {
+      revealed.current = { key: activeKey, version: revealVersion };
+      const viewport = list.getScrollableNode();
+      const row = Array.from(
+        viewport.querySelectorAll<HTMLElement>("[data-sidebar-list-key]"),
+      ).find((element) => element.dataset.sidebarListKey === activeKey);
+      if (row) {
+        const rect = row.getBoundingClientRect();
+        const bounds = viewport.getBoundingClientRect();
+        if (rect.top >= bounds.top && rect.bottom <= bounds.bottom) return;
+      }
+      void list.scrollToIndex({ index, animated: false, viewPosition: 0.5 });
+    });
+    return () => cancelAnimationFrame(frame);
   }, [activeKey, data, loaded, revealVersion]);
 
   return (
@@ -94,12 +101,11 @@ export function SidebarVirtualList<T extends { key: string }>({
       recycleItems={false}
       maintainVisibleContentPosition
       className={cn(
-        "min-h-0 flex-1 overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+        "h-0 min-h-0 flex-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
         // Sortable cards translate past their measured row boxes while dragging.
         "[&_:has(>[data-sidebar-list-key])]:[contain:layout_style]!",
         getVirtualizedScrollFadeClassName(fade),
       )}
-      style={{ height: 0, flex: "1 1 auto" }}
       onLoad={() => {
         setLoaded(true);
         updateFade();
