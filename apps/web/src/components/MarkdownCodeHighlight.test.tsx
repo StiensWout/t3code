@@ -148,3 +148,13 @@ it("shares work fairly across blocks and cancels removed blocks", async () => {
   renderer = undefined;
   expect(transport.workers.every((worker) => worker.terminated)).toBe(true);
 });
+
+it("retries a failed final chunk when streaming completes without re-highlighting success", async () => {
+  await render({ code: "final chunk" });
+  await act(async () => transport.workers[0]!.reply(null));
+  expect(html()).toBeUndefined();
+  await render({ code: "final chunk", isStreaming: false });
+  await act(async () => transport.workers[1]!.reply("<pre>final chunk</pre>"));
+  expect(html()).toBe("<pre>final chunk</pre>");
+  expect(transport.workers[1]!.requests).toHaveLength(0);
+});
