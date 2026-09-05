@@ -875,7 +875,7 @@ function MarkdownCodeBlock({
   language: string;
   fenceTitle: string | null;
   theme: "light" | "dark";
-  children: ReactNode;
+  children: (wrapped: boolean) => ReactNode;
 }) {
   const [copied, setCopied] = useState(false);
   const [wrapped, setWrapped] = useState(readInitialWordWrapSetting);
@@ -925,6 +925,7 @@ function MarkdownCodeBlock({
     <div
       className="chat-markdown-codeblock my-[0.65rem] overflow-hidden rounded-[var(--radius)] border border-border/70 bg-secondary leading-snug dark:border-transparent dark:bg-input/32"
       data-language={language}
+      data-markdown-code={code}
       data-wrap={wrapped ? "true" : "false"}
     >
       <div className="chat-markdown-codeblock-header flex items-center justify-between gap-2 pt-1.5 pr-1.5 pb-0 pl-3 select-none">
@@ -973,7 +974,7 @@ function MarkdownCodeBlock({
           </Tooltip>
         </span>
       </div>
-      {children}
+      {children(wrapped)}
     </div>
   );
 }
@@ -2970,18 +2971,21 @@ const CHAT_MARKDOWN_COMPONENTS = {
         fenceTitle={fenceTitle}
         theme={resolvedTheme}
       >
-        <RenderErrorBoundary
-          resetKeys={[codeBlock.code, language, diffThemeName, isStreaming]}
-          fallback={<pre {...props}>{children}</pre>}
-        >
-          <MarkdownCodeHighlight
-            language={language}
+        {(wrapped) => (
+          <RenderErrorBoundary
+            resetKeys={[codeBlock.code, language, diffThemeName, isStreaming]}
             fallback={<pre {...props}>{children}</pre>}
-            code={codeBlock.code}
-            themeName={diffThemeName}
-            isStreaming={isStreaming}
-          />
-        </RenderErrorBoundary>
+          >
+            <MarkdownCodeHighlight
+              language={language}
+              fallback={<pre {...props}>{children}</pre>}
+              code={codeBlock.code}
+              themeName={diffThemeName}
+              wrapped={wrapped}
+              isStreaming={isStreaming}
+            />
+          </RenderErrorBoundary>
+        )}
       </MarkdownCodeBlock>
     );
   },
