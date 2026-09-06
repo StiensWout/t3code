@@ -26,13 +26,19 @@ class T3AppIconModule : Module() {
         val changes = aliases.filter { isEnabled(it) != (it.name == target.name) }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
           if (changes.isNotEmpty()) {
-            manager.setComponentEnabledSettings(changes.map {
-              PackageManager.ComponentEnabledSetting(
-                ComponentName(context, it.name),
-                if (it.name == target.name) PackageManager.COMPONENT_ENABLED_STATE_ENABLED else PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
-                PackageManager.DONT_KILL_APP,
-              )
-            })
+            manager.setComponentEnabledSettings(
+              changes.map {
+                PackageManager.ComponentEnabledSetting(
+                  ComponentName(context, it.name),
+                  if (it.name == target.name) {
+                    PackageManager.COMPONENT_ENABLED_STATE_ENABLED
+                  } else {
+                    PackageManager.COMPONENT_ENABLED_STATE_DISABLED
+                  },
+                  PackageManager.DONT_KILL_APP,
+                )
+              }
+            )
           }
         } else {
           // Always enable the destination before removing the previous launcher entry.
@@ -40,23 +46,30 @@ class T3AppIconModule : Module() {
           val previous = changes.associateWith {
             manager.getComponentEnabledSetting(ComponentName(context, it.name))
           }
-          try {
+          runCatching {
             for (activity in changes.sortedBy { it.name != target.name }) {
               manager.setComponentEnabledSetting(
                 ComponentName(context, activity.name),
-                if (activity.name == target.name) PackageManager.COMPONENT_ENABLED_STATE_ENABLED else PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+                if (activity.name == target.name) {
+                  PackageManager.COMPONENT_ENABLED_STATE_ENABLED
+                } else {
+                  PackageManager.COMPONENT_ENABLED_STATE_DISABLED
+                },
                 PackageManager.DONT_KILL_APP,
               )
             }
-          } catch (error: Exception) {
+          }.onFailure {
             // Restore previously enabled entries first, so a partial failure cannot hide the app.
             for (activity in changes.sortedBy { it.name == target.name }) {
               runCatching {
-                manager.setComponentEnabledSetting(ComponentName(context, activity.name), previous.getValue(activity), PackageManager.DONT_KILL_APP)
+                manager.setComponentEnabledSetting(
+                  ComponentName(context, activity.name),
+                  previous.getValue(activity),
+                  PackageManager.DONT_KILL_APP
+                )
               }
             }
-            throw error
-          }
+          }.getOrThrow()
         }
         iconState()
       }
@@ -68,13 +81,21 @@ class T3AppIconModule : Module() {
     val context = appContext.reactContext ?: throw CodedException("App context unavailable.")
     return context.packageManager.getPackageInfo(
       context.packageName,
-      PackageManager.GET_ACTIVITIES or PackageManager.GET_META_DATA or PackageManager.MATCH_DISABLED_COMPONENTS,
-    ).activities.orEmpty().filter { it.targetActivity != null && it.metaData?.containsKey("t3.appIcon") == true }
+      PackageManager.GET_ACTIVITIES or PackageManager.GET_META_DATA or
+        PackageManager.MATCH_DISABLED_COMPONENTS,
+    ).activities.orEmpty().filter {
+      it.targetActivity != null &&
+        it.metaData?.containsKey("t3.appIcon") == true
+    }
   }
 
   private fun isEnabled(activity: ActivityInfo): Boolean {
     val context = appContext.reactContext ?: throw CodedException("App context unavailable.")
-    return when (context.packageManager.getComponentEnabledSetting(ComponentName(context, activity.name))) {
+    return when (
+      context.packageManager.getComponentEnabledSetting(
+        ComponentName(context, activity.name)
+      )
+    ) {
       PackageManager.COMPONENT_ENABLED_STATE_DEFAULT -> activity.enabled
       PackageManager.COMPONENT_ENABLED_STATE_ENABLED -> true
       else -> false
@@ -85,7 +106,8 @@ class T3AppIconModule : Module() {
     val aliases = iconActivities()
     return mapOf(
       "icons" to aliases.map { it.metaData.getString("t3.appIcon")!! },
-      "selected" to (aliases.singleOrNull { isEnabled(it) }?.metaData?.getString("t3.appIcon") ?: ""),
+      "selected" to
+        (aliases.singleOrNull { isEnabled(it) }?.metaData?.getString("t3.appIcon") ?: ""),
     )
   }
 }
