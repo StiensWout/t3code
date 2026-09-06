@@ -640,3 +640,17 @@ describe("ServerSettings environment icon", () => {
     expect(encodeServerSettings(linuxSettings).environmentIcon).toBe("linux");
   });
 });
+
+describe("ClientSettings ignored files", () => {
+  it("defaults off and persists both toggle states", () => {
+    expect(decodeClientSettings({}).showGitignoredFiles).toBe(false);
+    for (const showGitignoredFiles of [true, false]) {
+      expect(
+        encodeClientSettings(decodeClientSettings({ showGitignoredFiles })).showGitignoredFiles,
+      ).toBe(showGitignoredFiles);
+      expect(decodeClientSettingsPatch({ showGitignoredFiles }).showGitignoredFiles).toBe(
+        showGitignoredFiles,
+      );
+    }
+  });
+});

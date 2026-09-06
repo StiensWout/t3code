@@ -61,6 +61,7 @@ const clientSettings: ClientSettings = {
   loadBalancingEnabled: false,
   loadBalancingWeights: { "environment-1": 75, "environment-2": 0 },
   timestampFormat: "24-hour",
+  showGitignoredFiles: true,
   wordWrap: true,
 };
 
