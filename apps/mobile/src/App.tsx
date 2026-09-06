@@ -2,7 +2,7 @@ import { BlurTargetView } from "expo-blur";
 import * as Linking from "expo-linking";
 import * as SplashScreen from "expo-splash-screen";
 import { useEffect } from "react";
-import { StatusBar } from "react-native";
+import { Platform, StatusBar } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -10,6 +10,7 @@ import { createStaticNavigation } from "@react-navigation/native";
 
 import { RegistryContext } from "@effect/atom-react";
 import { ConfirmDialogHost } from "./components/ConfirmDialogHost";
+import { AgentActivityWidgetCoordinator } from "./features/agent-awareness/AgentActivityWidgetCoordinator";
 import { CloudAuthProvider } from "./features/cloud/CloudAuthProvider";
 import { prepareNativeShowcaseCapture } from "./features/showcase/nativeShowcaseScene";
 import { IncomingShareProvider } from "./features/sharing/IncomingShareProvider";
@@ -61,6 +62,7 @@ export default function App() {
   return (
     <RegistryContext.Provider value={appAtomRegistry}>
       <CloudAuthProvider>
+        {Platform.OS === "ios" ? <AgentActivityWidgetCoordinator /> : null}
         <AppearancePreferencesProvider>
           <AppContent />
         </AppearancePreferencesProvider>

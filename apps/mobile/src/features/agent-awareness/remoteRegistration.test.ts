@@ -38,6 +38,7 @@ import {
   registerLiveActivityPushToken,
   releaseAgentAwarenessRelayTokenProvider,
   setAgentAwarenessRelayTokenProvider,
+  setConnectedAgentActivityWidgetActivities,
   shouldRegisterAgentAwarenessDeviceForProvider,
   unregisterAgentAwarenessConnection,
 } from "./remoteRegistration";
@@ -822,6 +823,35 @@ describe("makeRelayDeviceRegistrationRequest", () => {
     }).pipe(Effect.provide(relayTestLayer));
   });
 
+  it("publishes connected activity without sign-in and retains it across cloud sign-out", () => {
+    const row = {
+      environmentId: "direct",
+      threadId: "thread",
+      projectTitle: "T3",
+      threadTitle: "Fix widget",
+      modelTitle: "gpt-6",
+      phase: "running" as const,
+      status: "Agent is working",
+      updatedAt: "2026-09-06T12:00:00.000Z",
+      deepLink: "/threads/direct/thread",
+    };
+    setConnectedAgentActivityWidgetActivities(new Map([["direct", [row]]]));
+    expect(widgetMocks.updateSnapshot).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        activeCount: 1,
+        activities: [row],
+      }),
+    );
+    const publications = widgetMocks.updateSnapshot.mock.calls.length;
+    setConnectedAgentActivityWidgetActivities(
+      new Map([["direct", [{ ...row, updatedAt: "2026-09-06T12:01:00.000Z" }]]]),
+    );
+    setAgentAwarenessRelayTokenProvider(null);
+    expect(widgetMocks.updateSnapshot).toHaveBeenCalledTimes(publications);
+    setConnectedAgentActivityWidgetActivities(new Map());
+    expect(widgetMocks.updateSnapshot).toHaveBeenLastCalledWith({});
+  });
+
   it.effect(
     "publishes widget snapshots with Live Activities disabled and clears an idle snapshot",
     () => {
@@ -861,7 +891,17 @@ describe("makeRelayDeviceRegistrationRequest", () => {
       let fail = false;
       mockWidgetSnapshotFetch(() =>
         Promise.resolve(
-          fail ? new Response("unavailable", { status: 503 }) : Response.json({ aggregate: null }),
+          fail
+            ? new Response("unavailable", { status: 503 })
+            : Response.json({
+                aggregate: {
+                  title: "T3 Code",
+                  subtitle: "Working",
+                  activeCount: 1,
+                  updatedAt: "2026-09-06T12:00:00.000Z",
+                  activities: [],
+                },
+              }),
         ),
       );
       setAgentAwarenessRelayTokenProvider(() => Promise.resolve("clerk-token"), "user-a");

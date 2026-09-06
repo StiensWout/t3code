@@ -31,11 +31,15 @@ import {
   loadPreferences,
   saveAgentAwarenessRegistrationRecord,
 } from "../../persistence/imperative";
-import AgentActivity, { type AgentActivityProps } from "../../widgets/AgentActivity";
+import AgentActivity, {
+  type AgentActivityProps,
+  type AgentActivityRowProps,
+} from "../../widgets/AgentActivity";
 import AgentActivityWidget from "../../widgets/AgentActivityWidget";
 import { resolveCloudPublicConfig } from "../cloud/publicConfig";
 import { supportsAgentAwarenessPush } from "./capabilities";
 import { makeRelayDeviceRegistrationRequest, resolveApsEnvironment } from "./registrationPayload";
+import { mergeWidgetActivities } from "./widgetSnapshot";
 
 const REMOTE_ACTIVITY_REGISTRATION_RETRY_MS = 15_000;
 
@@ -118,10 +122,33 @@ let relayTokenProviderIdentity: string | null = null;
 let deviceRegistrationGeneration = 0;
 let widgetRefreshGeneration = 0;
 
+let relayWidgetSnapshot: Partial<AgentActivityProps> = {};
+let connectedWidgetRows: ReadonlyMap<string, ReadonlyArray<AgentActivityRowProps>> = new Map();
+let publishedWidgetIdentity: string | null = null;
+
+export function setConnectedAgentActivityWidgetActivities(
+  activities: ReadonlyMap<string, ReadonlyArray<AgentActivityRowProps>>,
+): void {
+  connectedWidgetRows = activities;
+  publishMergedAgentActivityWidget();
+}
+
 function publishAgentActivityWidget(props: Partial<AgentActivityProps>): void {
+  relayWidgetSnapshot = props;
+  publishMergedAgentActivityWidget();
+}
+
+function publishMergedAgentActivityWidget(): void {
   if (!canRegisterRemoteLiveActivities()) return;
+  const props = mergeWidgetActivities(relayWidgetSnapshot, connectedWidgetRows);
+  // Token streaming changes timestamps without changing what the widget shows.
+  const identity = JSON.stringify(props, (key, value: unknown) =>
+    key === "updatedAt" ? undefined : value,
+  );
+  if (identity === publishedWidgetIdentity) return;
   try {
     AgentActivityWidget.updateSnapshot(props);
+    publishedWidgetIdentity = identity;
   } catch (error) {
     logRegistrationError("home-screen widget publication failed", error);
   }
@@ -867,6 +894,9 @@ export function updateAgentAwarenessRegistrationPreferences(
 }
 
 export function __resetAgentAwarenessRemoteRegistrationForTest(): void {
+  relayWidgetSnapshot = {};
+  connectedWidgetRows = new Map();
+  publishedWidgetIdentity = null;
   environmentConnections.clear();
   pushTokenSubscription?.remove();
   pushTokenSubscription = null;
