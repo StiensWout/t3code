@@ -530,6 +530,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.sidebarAutoSettleOnMerge !== DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge
         ? ["Auto-settle merged threads"]
         : []),
+      ...(settings.showGitignoredFiles !== DEFAULT_UNIFIED_SETTINGS.showGitignoredFiles
+        ? ["Show gitignored files"]
+        : []),
       ...(settings.wordWrap !== DEFAULT_UNIFIED_SETTINGS.wordWrap ? ["Word wrap"] : []),
       ...getChangedTypographySettingLabels(settings),
       ...(settings.diffIgnoreWhitespace !== DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace
@@ -630,6 +633,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.sidebarThreadPreviewCount,
       settings.showSkillsInSlashMenu,
       settings.timestampFormat,
+      settings.showGitignoredFiles,
       settings.wordWrap,
       followSystem,
       theme,
@@ -702,6 +706,7 @@ export function useSettingsRestore(onRestored?: () => void) {
     updateSettings({
       appearanceContrast: DEFAULT_UNIFIED_SETTINGS.appearanceContrast,
       timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,
+      showGitignoredFiles: DEFAULT_UNIFIED_SETTINGS.showGitignoredFiles,
       wordWrap: DEFAULT_UNIFIED_SETTINGS.wordWrap,
       diffIgnoreWhitespace: DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace,
       diffLayout: DEFAULT_UNIFIED_SETTINGS.diffLayout,
@@ -2190,6 +2195,31 @@ export function GeneralSettingsPanel() {
       </SettingsSection>
 
       <SettingsSection id="behavior" title="Behavior">
+        <SettingsRow
+          {...searchableSetting("show-gitignored-files")}
+          description="Include gitignored files in the file explorer."
+          resetAction={
+            settings.showGitignoredFiles !== DEFAULT_UNIFIED_SETTINGS.showGitignoredFiles ? (
+              <SettingResetButton
+                label="show gitignored files"
+                onClick={() =>
+                  updateSettings({
+                    showGitignoredFiles: DEFAULT_UNIFIED_SETTINGS.showGitignoredFiles,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.showGitignoredFiles}
+              onCheckedChange={(checked) =>
+                updateSettings({ showGitignoredFiles: Boolean(checked) })
+              }
+              aria-label="Show gitignored files"
+            />
+          }
+        />
         <SettingsRow
           {...searchableSetting("time-format")}
           description="System default follows your browser or OS clock preference."
