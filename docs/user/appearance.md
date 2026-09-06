@@ -7,6 +7,10 @@ within each theme. Appearance preferences are saved separately on each device or
 Mobile has its own themes and text, code, and terminal preferences. It does not follow environment
 themes or defaults.
 
+On mobile, choose **App icon** in **Settings → Appearance** to change the home-screen icon.
+The selection stays independent of your theme. Select **T3 Code** to return to the default.
+Your phone's home-screen tint settings may change the displayed colors.
+
 ## Motion
 
 The main sidebar, right panel, and terminal drawer open and close immediately by default. Move the

@@ -55,8 +55,8 @@ const PREVIEW_ASSETS = {
 } as const;
 
 const RELEASE_ASSETS = {
-  appIcon: fromRepoRoot(BRAND_ASSET_PATHS.productionIosIconPng),
-  iosIcon: fromRepoRoot(BRAND_ASSET_PATHS.productionIconComposerProject),
+  appIcon: "./assets/app-icons/primary.png",
+  iosIcon: "./assets/app-icons/primary.png",
   splashIcon: fromRepoRoot(BRAND_ASSET_PATHS.productionIosIconPng),
   androidAdaptiveForeground,
   androidAdaptiveBackgroundColor: "#000000",
@@ -230,7 +230,12 @@ const config: ExpoConfig = {
     package: variant.androidPackage,
     adaptiveIcon: {
       backgroundColor: variant.assets.androidAdaptiveBackgroundColor,
-      foregroundImage: variant.assets.androidAdaptiveForeground,
+      backgroundImage:
+        APP_VARIANT === "production" ? "./assets/app-icons/primary-background.png" : undefined,
+      foregroundImage:
+        APP_VARIANT === "production"
+          ? "./assets/app-icons/primary-foreground.png"
+          : variant.assets.androidAdaptiveForeground,
       monochromeImage: variant.assets.androidMonochromeIcon,
     },
     // Opts into OnBackInvokedCallback-based back dispatch (Android 13+).
@@ -343,6 +348,7 @@ const config: ExpoConfig = {
       },
     ],
     "./plugins/withIosCocoaPodsUuidCache.cjs",
+    "./plugins/withAppIcons.cjs",
     // Must be listed BEFORE expo-widgets: same-type mods run last-registered-
     // first, so registering earlier makes this plugin's mods run AFTER
     // expo-widgets' — its dangerous mod wipes ios/ExpoWidgetsTarget/ (which
