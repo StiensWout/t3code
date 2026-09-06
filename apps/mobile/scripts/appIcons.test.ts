@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import type { AndroidConfig } from "expo/config-plugins";
 import { configureLauncherAliases } from "../plugins/withAppIcons.cjs";
-import { writeIconPng } from "../plugins/lib/appIconAssets.cjs";
+import { writeIconPng, writeIosIconProject } from "../plugins/lib/appIconAssets.cjs";
 import catalog from "../assets/app-icons/catalog.json";
 import sharp from "sharp";
 import * as NodeURL from "node:url";
@@ -46,7 +46,7 @@ describe("bundled app icons", () => {
     expect(application["activity-alias"]).toHaveLength(6);
   });
 
-  it("exports opaque iOS icons and transparent Android foregrounds from the approved artwork", async () => {
+  it("exports opaque launcher images and transparent Android foregrounds from the approved artwork", async () => {
     const root = NodeURL.fileURLToPath(new URL("../", import.meta.url));
     const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-app-icons-"));
     try {
@@ -59,6 +59,32 @@ describe("bundled app icons", () => {
         const foreground = await sharp(foregroundPath).stats();
         expect(foreground.isOpaque).toBe(false);
         expect(foreground.channels[3]?.max).toBeGreaterThan(0);
+      }
+    } finally {
+      await NodeFSP.rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves the production Icon Composer layers and effects in every iOS variant", async () => {
+    const root = NodeURL.fileURLToPath(new URL("../", import.meta.url));
+    const source = NodePath.resolve(root, "../../assets/prod/app-icon.icon");
+    const original = JSON.parse(await NodeFSP.readFile(NodePath.join(source, "icon.json"), "utf8"));
+    const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-composer-icons-"));
+    try {
+      for (const id of Object.keys(catalog)) {
+        const destination = NodePath.join(directory, `${id}.icon`);
+        await writeIosIconProject(root, id, destination);
+        const document = JSON.parse(
+          await NodeFSP.readFile(NodePath.join(destination, "icon.json"), "utf8"),
+        );
+        expect({ ...document, fill: original.fill }).toEqual(original);
+        if (id === "t3-code") expect(document).toEqual(original);
+        else expect(document.fill).not.toEqual(original.fill);
+        for (const asset of await NodeFSP.readdir(NodePath.join(source, "Assets"))) {
+          expect(await NodeFSP.readFile(NodePath.join(destination, "Assets", asset))).toEqual(
+            await NodeFSP.readFile(NodePath.join(source, "Assets", asset)),
+          );
+        }
       }
     } finally {
       await NodeFSP.rm(directory, { recursive: true, force: true });

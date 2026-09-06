@@ -7,7 +7,7 @@ const {
   withXcodeProject,
   withAndroidManifest,
 } = require("expo/config-plugins");
-const { catalog, iconName, writeIconPng } = require("./lib/appIconAssets.cjs");
+const { catalog, iconName, writeIconPng, writeIosIconProject } = require("./lib/appIconAssets.cjs");
 
 const ids = Object.keys(catalog);
 const alternates = ids.filter((id) => id !== "t3-code");
@@ -71,6 +71,14 @@ module.exports = function withAppIcons(config) {
       settings.ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES = `"${alternates.map(iconName).join(" ")}"`;
       settings.ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = "YES";
     }
+    for (const id of alternates) {
+      IOSConfig.XcodeUtils.addResourceFileToGroup({
+        filepath: `${cfg.modRequest.projectName}/${iconName(id)}.icon`,
+        groupName: cfg.modRequest.projectName,
+        project,
+        isBuildFile: true,
+      });
+    }
     return cfg;
   });
   config = withDangerousMod(config, [
@@ -81,18 +89,18 @@ module.exports = function withAppIcons(config) {
         const directory = path.join(
           cfg.modRequest.platformProjectRoot,
           name,
-          "Images.xcassets",
-          `${iconName(id)}.appiconset`,
+          `${iconName(id)}.icon`,
         );
-        await writeIconPng(cfg.modRequest.projectRoot, id, path.join(directory, "icon.png"), 1024);
-        await fs.writeFile(
-          path.join(directory, "Contents.json"),
-          JSON.stringify({
-            images: [
-              { filename: "icon.png", idiom: "universal", platform: "ios", size: "1024x1024" },
-            ],
-            info: { author: "xcode", version: 1 },
-          }),
+        await writeIosIconProject(cfg.modRequest.projectRoot, id, directory);
+        // Remove this plugin's old flattened sets when reusing a generated project.
+        await fs.rm(
+          path.join(
+            cfg.modRequest.platformProjectRoot,
+            name,
+            "Images.xcassets",
+            `${iconName(id)}.appiconset`,
+          ),
+          { recursive: true, force: true },
         );
       }
       return cfg;
