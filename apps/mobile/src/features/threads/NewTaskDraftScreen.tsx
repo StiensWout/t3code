@@ -81,6 +81,7 @@ import {
   getComposerDraftSnapshot,
   mergeComposerDraftContent,
   restoreComposerDraftSnapshot,
+  updateComposerDraftSettings,
   scheduleUnusedComposerAttachmentCleanup,
   type ComposerDraft,
 } from "../../state/use-composer-drafts";
@@ -147,6 +148,8 @@ export function NewTaskDraftScreen(props: {
   readonly initialProjectRef?: {
     readonly environmentId?: string;
     readonly projectId?: string;
+    readonly branch?: string | null;
+    readonly worktreePath?: string | null;
   };
   /** Queued outbox message id when editing an existing pending task. */
   readonly pendingTaskId?: string;
@@ -483,6 +486,18 @@ export function NewTaskDraftScreen(props: {
           return;
         }
         appliedInitialProjectKeyRef.current = directProjectKey;
+        if (props.initialProjectRef?.branch) {
+          // Mobile's local mode also reuses an existing worktree. Worktree mode
+          // creates a new one, which would lose the source thread's workspace.
+          updateComposerDraftSettings(`new-task:${directProjectKey}`, {
+            workspaceSelection: {
+              mode: "local",
+              branch: props.initialProjectRef.branch,
+              worktreePath: props.initialProjectRef.worktreePath ?? null,
+              startFromOrigin: false,
+            },
+          });
+        }
         if (
           selectedProject?.environmentId === directProject.environmentId &&
           selectedProject.id === directProject.id

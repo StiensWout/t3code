@@ -121,6 +121,7 @@ interface HomeScreenProps {
   readonly onRegenerateThreadTitle: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly onSelectPendingTask: (pendingTask: PendingNewTask) => void;
   readonly onDeletePendingTask: (pendingTask: PendingNewTask) => void;
+  readonly onNewThreadOnBranch: (thread: EnvironmentThreadShell) => void;
   readonly onNewThreadInProject: (project: EnvironmentProject) => void;
 }
 
@@ -786,6 +787,7 @@ export function HomeScreen(props: HomeScreenProps) {
       const thread = item.item.thread;
       return (
         <ThreadListV2Row
+          onNewThreadOnBranch={props.onNewThreadOnBranch}
           thread={thread}
           variant={item.item.variant}
           snoozed={item.item.snoozed}
@@ -868,6 +870,7 @@ export function HomeScreen(props: HomeScreenProps) {
       props.onDeletePendingTask,
       props.onSelectPendingTask,
       props.onSelectThread,
+      props.onNewThreadOnBranch,
       props.savedConnectionsById,
       serverConfigs,
       shelfPreferencesLoaded,
@@ -961,6 +964,7 @@ export function HomeScreen(props: HomeScreenProps) {
           const thread = item.thread;
           return (
             <ThreadListRow
+              onNewThreadOnBranch={props.onNewThreadOnBranch}
               variant="compact"
               thread={thread}
               environmentLabel={
@@ -1008,6 +1012,7 @@ export function HomeScreen(props: HomeScreenProps) {
       props.onNewThreadInProject,
       props.onSelectPendingTask,
       props.onSelectThread,
+      props.onNewThreadOnBranch,
       props.searchQuery,
       props.savedConnectionsById,
       threadSearchMatchByKey,
