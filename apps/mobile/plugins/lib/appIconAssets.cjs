@@ -5,6 +5,24 @@ const catalog = require("../../assets/app-icons/catalog.json");
 
 const iconName = (id) => `T3Icon_${id.replaceAll("-", "_")}`;
 
+/** Derive iOS variants from the production Icon Composer project, preserving its layers and effects. */
+async function writeIosIconProject(projectRoot, id, destination) {
+  const icon = catalog[id];
+  if (!icon) throw new Error(`Unknown app icon: ${id}`);
+  const source = path.resolve(projectRoot, "../../assets/prod/app-icon.icon");
+  await fs.cp(source, destination, { recursive: true });
+  if (id === "t3-code") return;
+  const documentPath = path.join(destination, "icon.json");
+  const document = JSON.parse(await fs.readFile(documentPath, "utf8"));
+  const color = icon.top
+    .slice(1)
+    .match(/../g)
+    .map((channel) => (parseInt(channel, 16) / 255).toFixed(5))
+    .join(",");
+  document.fill = { "automatic-gradient": `srgb:${color},1.00000` };
+  await fs.writeFile(documentPath, `${JSON.stringify(document, null, 2)}\n`);
+}
+
 // The approved Field artwork uses the existing T3 vector, never a font approximation.
 async function renderAppIcon(projectRoot, id, layer = "complete") {
   const icon = catalog[id];
@@ -42,4 +60,4 @@ async function writeIconPng(projectRoot, id, destination, size, layer = "complet
   await output.png().toFile(destination);
 }
 
-module.exports = { catalog, iconName, renderAppIcon, writeIconPng };
+module.exports = { catalog, iconName, renderAppIcon, writeIconPng, writeIosIconProject };
