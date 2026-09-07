@@ -5,6 +5,7 @@ import {
   mapAtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
 import type { VcsSwitchRefInput, VcsSwitchRefResult } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/unstable/reactivity";
 
 import { shouldCheckoutNewTaskBranch } from "./new-task-context-presentation";
@@ -13,13 +14,18 @@ import { shouldCheckoutNewTaskBranch } from "./new-task-context-presentation";
  * and new-worktree base selections already identify a separate workspace. */
 export async function checkoutNewTaskBranch<E>(input: {
   readonly branch: VcsRef;
-  readonly project: Pick<EnvironmentProject, "environmentId" | "workspaceRoot">;
+  readonly project: Pick<EnvironmentProject, "environmentId" | "workspaceRoot"> | null;
   readonly workspaceMode: "local" | "worktree";
   readonly switchRef: (request: {
     readonly environmentId: EnvironmentProject["environmentId"];
     readonly input: VcsSwitchRefInput;
   }) => Promise<AtomCommandResult<VcsSwitchRefResult, E>>;
-}): Promise<AtomCommandResult<VcsRef, E>> {
+}): Promise<AtomCommandResult<VcsRef, E | Error>> {
+  if (!input.project) {
+    return AsyncResult.failure(
+      Cause.fail(new Error("The selected project is unavailable. Reconnect and try again.")),
+    );
+  }
   if (
     !shouldCheckoutNewTaskBranch({
       branchIsCurrent: input.branch.current,

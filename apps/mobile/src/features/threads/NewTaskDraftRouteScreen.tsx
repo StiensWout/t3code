@@ -27,6 +27,10 @@ type NewTaskDraftRouteParams = {
 
 export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraftRouteParams>) {
   const params = useMemo(() => route.params ?? {}, [route.params]);
+  const pendingTaskId = Array.isArray(params.pendingTaskId)
+    ? params.pendingTaskId[0]
+    : params.pendingTaskId;
+  const draftId = Array.isArray(params.draftId) ? params.draftId[0] : params.draftId;
   const projects = useProjects();
   const navigation = useNavigation();
   const switchRef = useAtomCommand(vcsEnvironment.switchRef, { reportFailure: false });
@@ -49,7 +53,7 @@ export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraf
   const [preparedProject, setPreparedProject] = useState<{
     request: typeof initialProjectRef;
     projectRef: typeof initialProjectRef;
-    workspaceRoot: string;
+    workspaceRoot: string | undefined;
   } | null>(null);
   const project = projects.find(
     (candidate) =>
@@ -58,12 +62,10 @@ export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraf
   );
   const environmentId = project?.environmentId;
   const workspaceRoot = project?.workspaceRoot;
-  const needsPreparation = Boolean(
-    initialProjectRef.branch && !params.pendingTaskId && !params.draftId,
-  );
+  const needsPreparation = Boolean(initialProjectRef.branch && !pendingTaskId && !draftId);
 
   useEffect(() => {
-    if (!needsPreparation || !initialProjectRef.branch || !environmentId || !workspaceRoot) return;
+    if (!needsPreparation || !initialProjectRef.branch) return;
     let active = true;
     void checkoutNewTaskBranch({
       // A thread's branch is historical; only switchRef can establish that
@@ -74,7 +76,7 @@ export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraf
         isDefault: false,
         worktreePath: initialProjectRef.worktreePath ?? null,
       },
-      project: { environmentId, workspaceRoot },
+      project: environmentId && workspaceRoot ? { environmentId, workspaceRoot } : null,
       workspaceMode: "local",
       switchRef,
     }).then((result) => {
@@ -127,10 +129,8 @@ export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraf
               ? params.incomingShareId[0]
               : params.incomingShareId
           }
-          pendingTaskId={
-            Array.isArray(params.pendingTaskId) ? params.pendingTaskId[0] : params.pendingTaskId
-          }
-          draftId={Array.isArray(params.draftId) ? params.draftId[0] : params.draftId}
+          pendingTaskId={pendingTaskId}
+          draftId={draftId}
         />
       )}
     </>
