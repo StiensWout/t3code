@@ -3,7 +3,8 @@ import type { EnvironmentId } from "@t3tools/contracts";
 import { projectThreadAwareness } from "@t3tools/shared/agentAwareness";
 import * as Option from "effect/Option";
 
-import type { AgentActivityProps, AgentActivityRowProps } from "../../widgets/AgentActivity";
+import type { AgentActivityRowProps } from "../../widgets/AgentActivity";
+import type { AgentActivityWidgetProps } from "../../widgets/AgentActivityWidget";
 
 export function connectedWidgetActivities(
   states: ReadonlyMap<EnvironmentId, EnvironmentShellState>,
@@ -39,28 +40,29 @@ export function connectedWidgetActivities(
 }
 
 export function mergeWidgetActivities(
-  relay: Partial<AgentActivityProps>,
+  relay: AgentActivityWidgetProps,
   connected: ReadonlyMap<string, ReadonlyArray<AgentActivityRowProps>>,
-): Partial<AgentActivityProps> {
+): AgentActivityWidgetProps {
   if (connected.size === 0) return relay;
   const activities = [
     ...(relay.activities ?? []).filter((row) => !connected.has(row.environmentId)),
     ...Array.from(connected.values()).flat(),
   ];
-  if (activities.length === 0) return {};
   const isActive = (row: AgentActivityRowProps) =>
     row.phase !== "stale" && row.phase !== "completed" && row.phase !== "failed";
   // A relay aggregate may omit rows. Its total cannot be deduplicated against
   // connected environments without knowing which environments those rows belong to.
   const relayHasHiddenRows =
+    relay.activeCount === null ||
     (relay.activeCount ?? 0) > (relay.activities ?? []).filter(isActive).length;
+  if (activities.length === 0 && !relayHasHiddenRows) return {};
   return {
     title: "T3 Code",
     subtitle: "Agent activity",
-    ...(relayHasHiddenRows ? {} : { activeCount: activities.filter(isActive).length }),
+    activeCount: relayHasHiddenRows ? null : activities.filter(isActive).length,
     updatedAt: activities.reduce(
       (latest, row) => (row.updatedAt > latest ? row.updatedAt : latest),
-      "",
+      relay.updatedAt ?? "",
     ),
     activities,
   };

@@ -116,7 +116,25 @@ describe("connected widget activity", () => {
     const relay = mergeWidgetActivities({}, connected([thread]));
     const merged = mergeWidgetActivities({ ...relay, activeCount: 5 }, connected([thread]));
     expect(merged.activities).toHaveLength(1);
-    expect(merged.activeCount).toBeUndefined();
+    expect(merged.activeCount).toBeNull();
+  });
+
+  it("preserves unknown activity when all five displayed relay rows are locally removed", () => {
+    const row = mergeWidgetActivities({}, connected([thread])).activities![0]!;
+    const relay = {
+      activeCount: 6,
+      updatedAt: now,
+      activities: Array.from({ length: 5 }, (_, index) => ({
+        ...row,
+        threadId: `thread-${index}`,
+      })),
+    };
+    expect(mergeWidgetActivities(relay, connected([]))).toMatchObject({
+      activities: [],
+      activeCount: null,
+      updatedAt: now,
+    });
+    expect(mergeWidgetActivities({ ...relay, activeCount: 5 }, connected([]))).toEqual({});
   });
 
   it("deduplicates connected environments while retaining other relay environments", () => {

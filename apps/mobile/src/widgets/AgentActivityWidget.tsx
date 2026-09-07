@@ -10,10 +10,15 @@ import { createWidget, type WidgetEnvironment } from "expo-widgets";
 
 import type { AgentActivityProps } from "./AgentActivity";
 
+export type AgentActivityWidgetProps = Omit<Partial<AgentActivityProps>, "activeCount"> & {
+  // Null means aggregation cannot establish a total; absent props are first paint.
+  readonly activeCount?: number | null;
+};
+
 // WidgetKit can render before the app has published its first snapshot. Keep
 // this serialized layout self-contained and accept the initial empty props.
 export function AgentActivityWidget(
-  props: Partial<AgentActivityProps>,
+  props: AgentActivityWidgetProps,
   environment: WidgetEnvironment,
 ) {
   "widget";
@@ -75,7 +80,9 @@ export function AgentActivityWidget(
         ) : null}
       </HStack>
       {rows.length === 0 ? (
-        <Text modifiers={[font({ size: 14 }), lineLimit(2)]}>No active agents</Text>
+        <Text modifiers={[font({ size: 14 }), lineLimit(2)]}>
+          {props.activeCount === null ? "Activity count unavailable" : "No active agents"}
+        </Text>
       ) : (
         rows.map((row) =>
           small ? (
@@ -106,4 +113,4 @@ export function AgentActivityWidget(
   );
 }
 
-export default createWidget<Partial<AgentActivityProps>>("AgentActivity", AgentActivityWidget);
+export default createWidget<AgentActivityWidgetProps>("AgentActivity", AgentActivityWidget);
