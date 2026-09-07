@@ -1,4 +1,4 @@
-import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
+import { useNavigation, usePreventRemove, type StaticScreenProps } from "@react-navigation/native";
 import { useEffect, useMemo, useState } from "react";
 import { Alert, View } from "react-native";
 import {
@@ -50,9 +50,9 @@ export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraf
     [params],
   );
 
-  const [preparedProject, setPreparedProject] = useState<{
+  const [preparation, setPreparation] = useState<{
     request: typeof initialProjectRef;
-    projectRef: typeof initialProjectRef;
+    result: Awaited<ReturnType<typeof checkoutNewTaskBranch>>;
     workspaceRoot: string | undefined;
   } | null>(null);
   const project = projects.find(
@@ -64,9 +64,12 @@ export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraf
   const workspaceRoot = project?.workspaceRoot;
   const needsPreparation = Boolean(initialProjectRef.branch && !pendingTaskId && !draftId);
 
+  const [pendingCheckouts, setPendingCheckouts] = useState(0);
+
   useEffect(() => {
     if (!needsPreparation || !initialProjectRef.branch) return;
     let active = true;
+    setPendingCheckouts((count) => count + 1);
     void checkoutNewTaskBranch({
       // A thread's branch is historical; only switchRef can establish that
       // the shared project checkout now matches it.
@@ -80,35 +83,43 @@ export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraf
       workspaceMode: "local",
       switchRef,
     }).then((result) => {
-      if (!active) return;
-      if (result._tag === "Failure") {
-        if (!isAtomCommandInterrupted(result)) {
-          const error = squashAtomCommandFailure(result);
-          Alert.alert(
-            "Could not switch branch",
-            error instanceof Error ? error.message : "The branch could not be checked out.",
-          );
-        }
-        navigation.goBack();
-        return;
-      }
-      setPreparedProject({
-        request: initialProjectRef,
-        projectRef: { ...initialProjectRef, branch: result.value.name },
-        workspaceRoot,
-      });
+      setPendingCheckouts((count) => count - 1);
+      if (active) setPreparation({ request: initialProjectRef, result, workspaceRoot });
     });
     return () => {
       active = false;
     };
-  }, [environmentId, workspaceRoot, initialProjectRef, needsPreparation, navigation, switchRef]);
+  }, [environmentId, workspaceRoot, initialProjectRef, needsPreparation, switchRef]);
 
-  // Do not mount the composer, restore its draft, or expose send/queue actions
-  // until this exact navigation's checkout has succeeded.
-  const prepared =
-    preparedProject?.request === initialProjectRef &&
-    preparedProject.workspaceRoot === workspaceRoot;
-  const preparingBranch = needsPreparation && !prepared;
+  const result =
+    preparation?.request === initialProjectRef && preparation.workspaceRoot === workspaceRoot
+      ? preparation.result
+      : null;
+  // The native-stack guard covers iOS swipe dismissal as well as back actions.
+  // A replaced request must settle too before the shared checkout is left behind.
+  const checkoutPending = pendingCheckouts > 0 || (needsPreparation && result === null);
+  usePreventRemove(checkoutPending, () => undefined);
+  useEffect(() => {
+    if (checkoutPending || result?._tag !== "Failure") return;
+    if (!isAtomCommandInterrupted(result)) {
+      const error = squashAtomCommandFailure(result);
+      Alert.alert(
+        "Could not switch branch",
+        error instanceof Error ? error.message : "The branch could not be checked out.",
+      );
+    }
+    navigation.goBack();
+  }, [checkoutPending, result, navigation]);
+
+  const preparedProjectRef = useMemo(
+    () =>
+      result?._tag === "Success"
+        ? { ...initialProjectRef, branch: result.value.name }
+        : initialProjectRef,
+    [initialProjectRef, result],
+  );
+  // Send/queue remain unavailable on failure while the unlocked route closes.
+  const preparingBranch = checkoutPending || (needsPreparation && result?._tag !== "Success");
 
   return (
     <>
@@ -123,7 +134,7 @@ export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraf
         </View>
       ) : (
         <NewTaskDraftScreen
-          initialProjectRef={prepared ? preparedProject.projectRef : initialProjectRef}
+          initialProjectRef={preparedProjectRef}
           incomingShareId={
             Array.isArray(params.incomingShareId)
               ? params.incomingShareId[0]
