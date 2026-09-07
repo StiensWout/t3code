@@ -58,13 +58,15 @@ import {
   ProviderUnsupportedError,
   ProviderValidationError,
   ProviderWorkspaceMissingError,
+  ProviderSessionDirectoryPersistenceError,
   type ProviderAdapterError,
 } from "../Errors.ts";
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "../Services/ProviderAdapterRegistry.ts";
 import * as ProviderService from "../Services/ProviderService.ts";
 import * as ProviderSessionDirectory from "../Services/ProviderSessionDirectory.ts";
-import { makeProviderServiceLive } from "./ProviderService.ts";
+import { makeProviderServiceLive, type ProviderServiceLiveOptions } from "./ProviderService.ts";
+import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import * as ProviderEventLoggers from "./ProviderEventLoggers.ts";
 import { ProviderSessionDirectoryLive } from "./ProviderSessionDirectory.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -416,6 +418,7 @@ const hasMetricSnapshot = (
 function makeProviderServiceLayer(
   input: {
     readonly directory?: ProviderSessionDirectory.ProviderSessionDirectory["Service"];
+    readonly liveOptions?: ProviderServiceLiveOptions;
     readonly supportsConversationRollback?: boolean;
     readonly analyticsLayer?: Layer.Layer<AnalyticsService.AnalyticsService>;
     readonly registry?: ProviderAdapterRegistry.ProviderAdapterRegistry["Service"];
@@ -446,7 +449,7 @@ function makeProviderServiceLayer(
 
   const layer = it.layer(
     Layer.mergeAll(
-      makeProviderServiceLive().pipe(
+      makeProviderServiceLive(input.liveOptions).pipe(
         Layer.provide(NodeServices.layer),
         Layer.provide(providerAdapterLayer),
         Layer.provide(directoryLayer),
@@ -1179,6 +1182,102 @@ antigravityInstanceRouting.layer("ProviderServiceLive instance-owned conversatio
       }),
   );
 });
+
+for (const failure of ["persistence", "provider mismatch", "stop"] as const) {
+  const threadId = asThreadId(`thread-recovery-${failure}`);
+  const revoked: ThreadId[] = [];
+  const issued: ThreadId[] = [];
+  const recovery = makeProviderServiceLayer({
+    directory: {
+      getBinding: () =>
+        Effect.succeed(
+          Option.some({
+            threadId,
+            provider: CODEX_DRIVER,
+            providerInstanceId: codexInstanceId,
+            resumeCursor: { threadId },
+            runtimePayload: { cwd: fixtureCwd("recovery-cleanup") },
+          }),
+        ),
+      upsert: () =>
+        failure !== "provider mismatch"
+          ? Effect.fail(
+              new ProviderSessionDirectoryPersistenceError({
+                operation: "upsert",
+                detail: "Cannot save recovered binding.",
+              }),
+            )
+          : Effect.void,
+      getProvider: () => Effect.succeed(CODEX_DRIVER),
+      listThreadIds: () => Effect.succeed([]),
+      listBindings: () => Effect.succeed([]),
+      recordImportedTranscript: () => Effect.die("unused"),
+    },
+    liveOptions: {
+      issueMcpCredential: ({ threadId, providerInstanceId }) =>
+        Effect.sync(() => {
+          issued.push(threadId);
+          return {
+            config: {
+              environmentId: EnvironmentId.make("test"),
+              threadId,
+              providerInstanceId,
+              providerSessionId: "test-session",
+              endpoint: "http://localhost/mcp",
+              authorizationHeader: "Bearer test-credential",
+            },
+          };
+        }),
+      revokeMcpCredential: (threadId) =>
+        Effect.sync(() => {
+          revoked.push(threadId);
+        }),
+    },
+  });
+  recovery.layer(`ProviderServiceLive recovery cleanup after ${failure}`, (it) => {
+    it.effect("stops the failed recovery and revokes its MCP credential", () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService.ProviderService;
+        if (failure === "provider mismatch") {
+          const startSession = recovery.codex.startSession.getMockImplementation()!;
+          recovery.codex.startSession.mockImplementationOnce((input) =>
+            startSession(input).pipe(
+              Effect.map((session) => ({ ...session, provider: CLAUDE_AGENT_DRIVER })),
+            ),
+          );
+        }
+        if (failure === "stop") {
+          const stopSession = recovery.codex.stopSession.getMockImplementation()!;
+          recovery.codex.stopSession.mockImplementationOnce((threadId) =>
+            stopSession(threadId).pipe(
+              Effect.andThen(
+                Effect.fail(
+                  new ProviderAdapterRequestError({
+                    provider: CODEX_DRIVER,
+                    method: "stopSession",
+                    detail: "Stop acknowledgement failed.",
+                  }),
+                ),
+              ),
+            ),
+          );
+        }
+        const error = yield* Effect.flip(provider.prepareConversationRollback(threadId));
+        assert.include(
+          error.message,
+          failure === "provider mismatch"
+            ? "Adapter/provider mismatch"
+            : "Cannot save recovered binding",
+        );
+        assert.deepEqual(issued, [threadId]);
+        assert.equal(yield* recovery.codex.hasSession(threadId), false);
+        assert.deepEqual(revoked, [threadId]);
+        assert.equal(McpProviderSession.readMcpProviderSession(threadId), undefined);
+        assert.equal(recovery.codex.rollbackThread.mock.calls.length, 0);
+      }),
+    );
+  });
+}
 
 const unsupportedRollback = makeProviderServiceLayer({ supportsConversationRollback: false });
 unsupportedRollback.layer("ProviderServiceLive unsupported rewind", (it) => {
