@@ -699,26 +699,6 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    const sessionRuntime = yield* resolveSessionRuntimeForThread(event.payload.threadId);
-    if (Option.isNone(sessionRuntime)) {
-      yield* appendRevertFailureActivity({
-        threadId: event.payload.threadId,
-        turnCount: event.payload.turnCount,
-        detail: "No active provider session with workspace cwd is bound to this thread.",
-        createdAt: now,
-      }).pipe(Effect.catch(() => Effect.void));
-      return;
-    }
-    if (!(yield* checkpointStore.isGitRepository(sessionRuntime.value.cwd))) {
-      yield* appendRevertFailureActivity({
-        threadId: event.payload.threadId,
-        turnCount: event.payload.turnCount,
-        detail: "Checkpoints are unavailable because this project is not a git repository.",
-        createdAt: now,
-      }).pipe(Effect.catch(() => Effect.void));
-      return;
-    }
-
     const currentTurnCount = thread.checkpoints.reduce(
       (maxTurnCount, checkpoint) => Math.max(maxTurnCount, checkpoint.checkpointTurnCount),
       0,
@@ -751,7 +731,27 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    yield* providerService.assertConversationRollbackSupported(event.payload.threadId);
+    yield* providerService.prepareConversationRollback(event.payload.threadId);
+
+    const sessionRuntime = yield* resolveSessionRuntimeForThread(event.payload.threadId);
+    if (Option.isNone(sessionRuntime)) {
+      yield* appendRevertFailureActivity({
+        threadId: event.payload.threadId,
+        turnCount: event.payload.turnCount,
+        detail: "No active provider session with workspace cwd is bound to this thread.",
+        createdAt: now,
+      }).pipe(Effect.catch(() => Effect.void));
+      return;
+    }
+    if (!(yield* checkpointStore.isGitRepository(sessionRuntime.value.cwd))) {
+      yield* appendRevertFailureActivity({
+        threadId: event.payload.threadId,
+        turnCount: event.payload.turnCount,
+        detail: "Checkpoints are unavailable because this project is not a git repository.",
+        createdAt: now,
+      }).pipe(Effect.catch(() => Effect.void));
+      return;
+    }
 
     const restored = yield* checkpointStore.restoreCheckpoint({
       cwd: sessionRuntime.value.cwd,

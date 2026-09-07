@@ -107,9 +107,9 @@ export interface ProviderServiceShape {
   ) => Effect.Effect<ProviderInstanceRoutingInfo, ProviderServiceError>;
 
   /**
-   * Reject unsupported rewind before files change, without resuming the session.
+   * Reject unsupported rewind, then recover its persisted session before files change.
    */
-  readonly assertConversationRollbackSupported: (
+  readonly prepareConversationRollback: (
     threadId: ThreadId,
   ) => Effect.Effect<void, ProviderServiceError>;
 

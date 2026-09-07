@@ -1202,9 +1202,7 @@ unsupportedRollback.layer("ProviderServiceLive unsupported rewind", (it) => {
         unsupportedRollback.codex.startSession.mockClear();
         unsupportedRollback.codex.rollbackThread.mockClear();
 
-        const preflightError = yield* Effect.flip(
-          provider.assertConversationRollbackSupported(threadId),
-        );
+        const preflightError = yield* Effect.flip(provider.prepareConversationRollback(threadId));
         const rollbackError = yield* Effect.flip(
           provider.rollbackConversation({ threadId, numTurns: 1 }),
         );
@@ -1515,6 +1513,13 @@ it.effect(
 
       yield* Effect.gen(function* () {
         const provider = yield* ProviderService.ProviderService;
+        yield* provider.prepareConversationRollback(startedSession.threadId);
+        const sessions = yield* provider.listSessions();
+        assert.equal(
+          sessions.find((session) => session.threadId === startedSession.threadId)?.cwd,
+          fixtureCwd("project"),
+        );
+        assert.equal(secondCodex.rollbackThread.mock.calls.length, 0);
         yield* provider.rollbackConversation({
           threadId: startedSession.threadId,
           numTurns: 1,
@@ -2514,8 +2519,14 @@ routing.layer("ProviderServiceLive routing", (it) => {
       routing.codex.startSession.mockClear();
       routing.codex.rollbackThread.mockClear();
 
-      yield* provider.assertConversationRollbackSupported(initial.threadId);
-      assert.equal(routing.codex.startSession.mock.calls.length, 0);
+      yield* provider.prepareConversationRollback(initial.threadId);
+      assert.equal(routing.codex.startSession.mock.calls.length, 1);
+      assert.equal(routing.codex.rollbackThread.mock.calls.length, 0);
+      const preparedSessions = yield* provider.listSessions();
+      assert.equal(
+        preparedSessions.find((session) => session.threadId === initial.threadId)?.cwd,
+        fixtureCwd("project"),
+      );
 
       yield* provider.rollbackConversation({
         threadId: initial.threadId,

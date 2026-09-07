@@ -363,7 +363,7 @@ describe("ProviderCommandReactor", () => {
         Effect.succeed({
           sessionModelSwitch: input?.sessionModelSwitch ?? "in-session",
         }),
-      assertConversationRollbackSupported: () => unsupported(),
+      prepareConversationRollback: () => unsupported(),
       getInstanceInfo: (instanceId) => {
         const raw = String(instanceId);
         const driverKind = ProviderDriverKind.make(

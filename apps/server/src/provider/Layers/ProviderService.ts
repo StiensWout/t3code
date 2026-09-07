@@ -2075,18 +2075,25 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   const getInstanceInfo: ProviderServiceMethod<"getInstanceInfo"> = (instanceId) =>
     registry.getInstanceInfo(instanceId);
 
-  const assertConversationRollbackSupported: ProviderServiceMethod<"assertConversationRollbackSupported"> =
-    Effect.fn("assertConversationRollbackSupported")(function* (threadId) {
+  const prepareConversationRollback: ProviderServiceMethod<"prepareConversationRollback"> =
+    Effect.fn("prepareConversationRollback")(function* (threadId) {
       const routed = yield* resolveRoutableSession({
         threadId,
-        operation: "ProviderService.assertConversationRollbackSupported",
+        operation: "ProviderService.prepareConversationRollback",
         allowRecovery: false,
       });
       if (routed.adapter.capabilities.supportsConversationRollback === false) {
         return yield* toValidationError(
-          "ProviderService.assertConversationRollbackSupported",
+          "ProviderService.prepareConversationRollback",
           `Provider '${routed.adapter.provider}' does not support conversation rewind.`,
         );
+      }
+      if (!routed.isActive) {
+        yield* resolveRoutableSession({
+          threadId,
+          operation: "ProviderService.prepareConversationRollback",
+          allowRecovery: true,
+        });
       }
     });
 
@@ -2103,7 +2110,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     }
     let metricProvider = "unknown";
     return yield* Effect.gen(function* () {
-      yield* assertConversationRollbackSupported(input.threadId);
+      yield* prepareConversationRollback(input.threadId);
       const routed = yield* resolveRoutableSession({
         threadId: input.threadId,
         operation: "ProviderService.rollbackConversation",
@@ -2263,7 +2270,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     listSessions,
     getCapabilities,
     getInstanceInfo,
-    assertConversationRollbackSupported,
+    prepareConversationRollback,
     rollbackConversation,
     uploadFeedback,
     // Each access creates a fresh PubSub subscription so that multiple
