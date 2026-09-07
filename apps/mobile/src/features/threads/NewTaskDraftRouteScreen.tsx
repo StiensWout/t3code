@@ -1,5 +1,15 @@
-import type { StaticScreenProps } from "@react-navigation/native";
-import { useMemo } from "react";
+import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
+import { useEffect, useMemo, useState } from "react";
+import { Alert, View } from "react-native";
+import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
+import { AppText as Text } from "../../components/AppText";
+import { useProjects } from "../../state/entities";
+import { useAtomCommand } from "../../state/use-atom-command";
+import { vcsEnvironment } from "../../state/vcs";
+import { checkoutNewTaskBranch } from "./checkout-new-task-branch";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 
 import { NewTaskDraftScreen } from "./NewTaskDraftScreen";
@@ -16,7 +26,10 @@ type NewTaskDraftRouteParams = {
 };
 
 export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraftRouteParams>) {
-  const params = route.params ?? {};
+  const params = useMemo(() => route.params ?? {}, [route.params]);
+  const projects = useProjects();
+  const navigation = useNavigation();
+  const switchRef = useAtomCommand(vcsEnvironment.switchRef, { reportFailure: false });
 
   // Keyed on the params object so a fresh navigation to this (already
   // mounted) screen produces a new reference, letting the draft screen
@@ -30,8 +43,70 @@ export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraf
       branch: params.branch,
       worktreePath: params.worktreePath,
     }),
-    [route.params],
+    [params],
   );
+
+  const [preparedProject, setPreparedProject] = useState<{
+    request: typeof initialProjectRef;
+    projectRef: typeof initialProjectRef;
+    workspaceRoot: string;
+  } | null>(null);
+  const project = projects.find(
+    (candidate) =>
+      candidate.environmentId === initialProjectRef.environmentId &&
+      candidate.id === initialProjectRef.projectId,
+  );
+  const environmentId = project?.environmentId;
+  const workspaceRoot = project?.workspaceRoot;
+  const needsPreparation = Boolean(
+    initialProjectRef.branch && !params.pendingTaskId && !params.draftId,
+  );
+
+  useEffect(() => {
+    if (!needsPreparation || !initialProjectRef.branch || !environmentId || !workspaceRoot) return;
+    let active = true;
+    void checkoutNewTaskBranch({
+      // A thread's branch is historical; only switchRef can establish that
+      // the shared project checkout now matches it.
+      branch: {
+        name: initialProjectRef.branch,
+        current: false,
+        isDefault: false,
+        worktreePath: initialProjectRef.worktreePath ?? null,
+      },
+      project: { environmentId, workspaceRoot },
+      workspaceMode: "local",
+      switchRef,
+    }).then((result) => {
+      if (!active) return;
+      if (result._tag === "Failure") {
+        if (!isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          Alert.alert(
+            "Could not switch branch",
+            error instanceof Error ? error.message : "The branch could not be checked out.",
+          );
+        }
+        navigation.goBack();
+        return;
+      }
+      setPreparedProject({
+        request: initialProjectRef,
+        projectRef: { ...initialProjectRef, branch: result.value.name },
+        workspaceRoot,
+      });
+    });
+    return () => {
+      active = false;
+    };
+  }, [environmentId, workspaceRoot, initialProjectRef, needsPreparation, navigation, switchRef]);
+
+  // Do not mount the composer, restore its draft, or expose send/queue actions
+  // until this exact navigation's checkout has succeeded.
+  const prepared =
+    preparedProject?.request === initialProjectRef &&
+    preparedProject.workspaceRoot === workspaceRoot;
+  const preparingBranch = needsPreparation && !prepared;
 
   return (
     <>
@@ -40,16 +115,24 @@ export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraf
           title: Array.isArray(params.title) ? params.title[0] : (params.title ?? "New task"),
         }}
       />
-      <NewTaskDraftScreen
-        initialProjectRef={initialProjectRef}
-        incomingShareId={
-          Array.isArray(params.incomingShareId) ? params.incomingShareId[0] : params.incomingShareId
-        }
-        pendingTaskId={
-          Array.isArray(params.pendingTaskId) ? params.pendingTaskId[0] : params.pendingTaskId
-        }
-        draftId={Array.isArray(params.draftId) ? params.draftId[0] : params.draftId}
-      />
+      {preparingBranch ? (
+        <View className="flex-1 items-center justify-center bg-screen">
+          <Text className="text-foreground">Switching branch...</Text>
+        </View>
+      ) : (
+        <NewTaskDraftScreen
+          initialProjectRef={prepared ? preparedProject.projectRef : initialProjectRef}
+          incomingShareId={
+            Array.isArray(params.incomingShareId)
+              ? params.incomingShareId[0]
+              : params.incomingShareId
+          }
+          pendingTaskId={
+            Array.isArray(params.pendingTaskId) ? params.pendingTaskId[0] : params.pendingTaskId
+          }
+          draftId={Array.isArray(params.draftId) ? params.draftId[0] : params.draftId}
+        />
+      )}
     </>
   );
 }

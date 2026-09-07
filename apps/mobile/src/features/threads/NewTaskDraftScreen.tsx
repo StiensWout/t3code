@@ -539,11 +539,18 @@ export function NewTaskDraftScreen(props: {
         if (appliedInitialProjectKeyRef.current === directProjectKey) {
           return;
         }
-        appliedInitialProjectKeyRef.current = directProjectKey;
         if (props.initialProjectRef?.branch) {
-          // Mobile's local mode also reuses an existing worktree. Worktree mode
-          // creates a new one, which would lose the source thread's workspace.
-          updateComposerDraftSettings(`new-task:${directProjectKey}`, {
+          if (
+            selectedProject?.environmentId !== directProject.environmentId ||
+            selectedProject.id !== directProject.id
+          ) {
+            setProject(directProject);
+            return;
+          }
+          if (!flow.draftKey) return;
+          // The route completes checkout before mounting this composer. Local
+          // mode reuses an existing worktree; worktree mode would create another.
+          updateComposerDraftSettings(flow.draftKey, {
             workspaceSelection: {
               mode: "local",
               branch: props.initialProjectRef.branch,
@@ -552,6 +559,7 @@ export function NewTaskDraftScreen(props: {
             },
           });
         }
+        appliedInitialProjectKeyRef.current = directProjectKey;
         if (
           selectedProject?.environmentId === directProject.environmentId &&
           selectedProject.id === directProject.id
@@ -584,6 +592,7 @@ export function NewTaskDraftScreen(props: {
   }, [
     projectScopes,
     projects,
+    flow.draftKey,
     props.initialProjectRef,
     props.incomingShareId,
     props.pendingTaskId,
