@@ -37,7 +37,6 @@ import { expandAssistantCitationsForProvider } from "@t3tools/shared/assistantCi
 import { causeErrorTag } from "@t3tools/shared/observability";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { resolveProjectAgentBrowserAccess } from "@t3tools/shared/serverSettings";
-import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -1220,7 +1219,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             Effect.catchCause((cause) =>
               Effect.logWarning("Failed to stop a session after recovery failed", {
                 threadId: input.binding.threadId,
-                cause: Cause.pretty(cause),
+                errorTag: causeErrorTag(cause),
               }),
             ),
             Effect.ensuring(clearMcpSession(input.binding.threadId)),
