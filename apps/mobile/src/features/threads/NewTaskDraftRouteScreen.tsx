@@ -1,5 +1,5 @@
 import { useNavigation, usePreventRemove, type StaticScreenProps } from "@react-navigation/native";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, View } from "react-native";
 import {
   isAtomCommandInterrupted,
@@ -8,6 +8,7 @@ import {
 import { AppText as Text } from "../../components/AppText";
 import { useProjects } from "../../state/entities";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { useWorkspaceState } from "../../state/workspace";
 import { vcsEnvironment } from "../../state/vcs";
 import { checkoutNewTaskBranch } from "./checkout-new-task-branch";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
@@ -32,6 +33,7 @@ export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraf
     : params.pendingTaskId;
   const draftId = Array.isArray(params.draftId) ? params.draftId[0] : params.draftId;
   const projects = useProjects();
+  const { state: catalogState } = useWorkspaceState();
   const navigation = useNavigation();
   const switchRef = useAtomCommand(vcsEnvironment.switchRef, { reportFailure: false });
 
@@ -65,31 +67,52 @@ export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraf
   const needsPreparation = Boolean(initialProjectRef.branch && !pendingTaskId && !draftId);
 
   const [pendingCheckouts, setPendingCheckouts] = useState(0);
+  const checkoutTail = useRef(Promise.resolve());
+  const waitingForProject =
+    !project &&
+    (catalogState.isLoadingConnections ||
+      (!catalogState.hasLoadedShellSnapshot &&
+        catalogState.hasConnectingEnvironment &&
+        catalogState.connectionError === null));
 
   useEffect(() => {
-    if (!needsPreparation || !initialProjectRef.branch) return;
+    if (!needsPreparation || !initialProjectRef.branch || waitingForProject) return;
+    const branchName = initialProjectRef.branch;
     let active = true;
     setPendingCheckouts((count) => count + 1);
-    void checkoutNewTaskBranch({
-      // A thread's branch is historical; only switchRef can establish that
-      // the shared project checkout now matches it.
-      branch: {
-        name: initialProjectRef.branch,
-        current: false,
-        isDefault: false,
-        worktreePath: initialProjectRef.worktreePath ?? null,
-      },
-      project: environmentId && workspaceRoot ? { environmentId, workspaceRoot } : null,
-      workspaceMode: "local",
-      switchRef,
-    }).then((result) => {
+    // Serialize replacements: ignoring a stale result cannot undo its Git mutation.
+    checkoutTail.current = checkoutTail.current.then(async () => {
+      if (!active) {
+        setPendingCheckouts((count) => count - 1);
+        return;
+      }
+      const result = await checkoutNewTaskBranch({
+        // A thread's branch is historical; only switchRef can establish that
+        // the shared project checkout now matches it.
+        branch: {
+          name: branchName,
+          current: false,
+          isDefault: false,
+          worktreePath: initialProjectRef.worktreePath ?? null,
+        },
+        project: environmentId && workspaceRoot ? { environmentId, workspaceRoot } : null,
+        workspaceMode: "local",
+        switchRef,
+      });
       setPendingCheckouts((count) => count - 1);
       if (active) setPreparation({ request: initialProjectRef, result, workspaceRoot });
     });
     return () => {
       active = false;
     };
-  }, [environmentId, workspaceRoot, initialProjectRef, needsPreparation, switchRef]);
+  }, [
+    environmentId,
+    workspaceRoot,
+    initialProjectRef,
+    needsPreparation,
+    switchRef,
+    waitingForProject,
+  ]);
 
   const result =
     preparation?.request === initialProjectRef && preparation.workspaceRoot === workspaceRoot
