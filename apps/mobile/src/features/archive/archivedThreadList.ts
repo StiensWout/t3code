@@ -58,7 +58,7 @@ export function buildArchivedThreadGroups(input: {
       .filter(
         (thread) =>
           query.length === 0 ||
-          matchesQuery("Quick chats", query) ||
+          query === "quick chats" ||
           matchesQuery(thread.title, query) ||
           matchesQuery(environmentLabel, query),
       )

@@ -29,7 +29,8 @@ function QuickChatRow({ thread, selected }: { thread: EnvironmentThreadShell; se
       {renaming ? (
         <Input
           aria-label="Chat title"
-          className="w-full bg-background px-2 py-1 text-sm"
+          size="compact"
+          className="w-full"
           value={title}
           onChange={(event) => setTitle(event.target.value)}
           onKeyDown={(event) => {

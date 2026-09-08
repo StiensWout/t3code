@@ -23,7 +23,14 @@ export function quickChatModelSelection(config: {
       provider.auth.status !== "unauthenticated",
   );
   const preferred = config.settings.defaultModelSelection;
-  if (preferred && providers.some((provider) => provider.instanceId === preferred.instanceId)) {
+  if (
+    preferred &&
+    providers.some(
+      (provider) =>
+        provider.instanceId === preferred.instanceId &&
+        provider.models.some((model) => model.slug === preferred.model),
+    )
+  ) {
     return preferred;
   }
   for (const provider of providers) {

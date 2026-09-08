@@ -1,5 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import { quickChatModelSelection } from "@t3tools/client-runtime/operations/quickChats";
+import { isAtomCommandInterrupted } from "@t3tools/client-runtime/state/runtime";
 import { DEFAULT_RUNTIME_MODE, type EnvironmentId } from "@t3tools/contracts";
 import { useRouter } from "@tanstack/react-router";
 import { useCallback, useRef } from "react";
@@ -43,7 +44,11 @@ export function useNewQuickChat() {
             createdAt: new Date().toISOString(),
           },
         });
-        if (result._tag !== "Success") return;
+        if (result._tag !== "Success") {
+          if (!isAtomCommandInterrupted(result))
+            toastManager.add({ type: "error", title: "Could not create quick chat" });
+          return;
+        }
         await waitForThreadShell({ environmentId, threadId });
         if (router.state.location.href === href) {
           await router.navigate({

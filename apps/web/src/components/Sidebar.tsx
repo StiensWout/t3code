@@ -2527,6 +2527,12 @@ export default function Sidebar() {
     const activeReorderable = new Set<string>();
     for (const thread of visible) {
       if (thread.projectId === null) {
+        if (
+          serverConfigs.get(thread.environmentId)?.environment.capabilities.threadActiveReorder ===
+          true
+        ) {
+          activeReorderable.add(scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)));
+        }
         active.push(thread);
         continue;
       }

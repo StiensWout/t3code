@@ -73,7 +73,7 @@ export function QuickChatProjectAttachment({ threadRef }: { threadRef: ScopedThr
           projectId: project.id,
           workspaceRoot: project.workspaceRoot,
           baseBranch: baseBranch.trim(),
-          branch: `t3/quick-chat-${uuidv4().slice(0, 8)}`,
+          branch: `t3/quick-chat-${uuidv4()}`,
         };
         await quickChatAttachmentStorage.save(threadRef, attachment);
         setPrepared(attachment);
@@ -157,12 +157,7 @@ export function QuickChatProjectAttachment({ threadRef }: { threadRef: ScopedThr
   }
   return (
     <>
-      <Pressable
-        accessibilityRole="button"
-        disabled={unavailable}
-        onPress={() => setOpen(true)}
-        className="px-4 py-2"
-      >
+      <Pressable accessibilityRole="button" onPress={() => setOpen(true)} className="px-4 py-2">
         <Text className="text-sm text-foreground">Attach to project</Text>
       </Pressable>
       <Modal
@@ -277,7 +272,8 @@ export function QuickChatProjectAttachment({ threadRef }: { threadRef: ScopedThr
             )}
             {unavailable && (
               <Text style={{ color: "#fff" }}>
-                Finish the current turn and background work before attaching.
+                Finish the current turn and background work, and resolve pending requests before
+                attaching.
               </Text>
             )}
             {prepared && !busy && (

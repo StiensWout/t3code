@@ -40,6 +40,12 @@ it("skips an errored preferred provider and selects an available agent", () => {
     model: "model",
   });
   expect(quickChatModelSelection({ providers: [failed], settings })).toBeNull();
+  expect(
+    quickChatModelSelection({
+      providers: [ready],
+      settings: { defaultModelSelection: { instanceId: ready.instanceId, model: "removed" } },
+    }),
+  ).toEqual({ instanceId: ready.instanceId, model: "model" });
 });
 
 it("recovers the same worktree after losing its creation response and reloading storage", async () => {

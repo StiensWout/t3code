@@ -75,7 +75,7 @@ function AttachmentForm({ threadRef }: { threadRef: ScopedThreadRef }) {
           projectId: project.id,
           workspaceRoot: project.workspaceRoot,
           baseBranch: baseBranch.trim(),
-          branch: `t3/quick-chat-${randomHex(4)}`,
+          branch: `t3/quick-chat-${randomHex(16)}`,
         };
         await quickChatAttachmentStorage.save(threadRef, pending);
         setPrepared(pending);

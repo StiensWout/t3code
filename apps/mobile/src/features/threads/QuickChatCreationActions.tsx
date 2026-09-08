@@ -3,6 +3,7 @@ import { Alert, Pressable, Text, View } from "react-native";
 import { StackActions, useNavigation } from "@react-navigation/native";
 import { DEFAULT_RUNTIME_MODE, ThreadId, type EnvironmentId } from "@t3tools/contracts";
 import { quickChatModelSelection } from "@t3tools/client-runtime/operations/quickChats";
+import { isAtomCommandInterrupted } from "@t3tools/client-runtime/state/runtime";
 import { useServerConfigs } from "../../state/entities";
 import { useEnvironments } from "../../state/environments";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -53,7 +54,11 @@ export function QuickChatCreationActions({
           createdAt: new Date().toISOString(),
         },
       });
-      if (result._tag === "Success" && navigation.getState()?.routes.at(-1)?.key === routeKey)
+      if (result._tag !== "Success") {
+        if (!isAtomCommandInterrupted(result)) Alert.alert("Could not create quick chat");
+        return;
+      }
+      if (navigation.getState()?.routes.at(-1)?.key === routeKey)
         (navigation.getParent() ?? navigation).dispatch(
           StackActions.replace("Thread", { environmentId, threadId }),
         );

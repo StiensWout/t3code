@@ -1,4 +1,3 @@
-import { AttachQuickChatDialog } from "../components/AttachQuickChatDialog";
 import { Outlet, createFileRoute, redirect } from "@tanstack/react-router";
 import { useAtomValue } from "@effect/atom-react";
 import { useEffect } from "react";
@@ -146,7 +145,6 @@ function ChatRouteLayout() {
   return (
     <>
       <ChatRouteGlobalShortcuts />
-      <AttachQuickChatDialog />
       <Outlet />
     </>
   );
