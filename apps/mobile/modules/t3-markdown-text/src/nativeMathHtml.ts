@@ -99,9 +99,10 @@ export function nativeMathRunHtml(
   }
   if (run.href) {
     const href = escapeHtml(run.href);
-    const actions = menu
-      ? `<button class="file-actions" aria-label="File actions" data-menu="${escapeHtml(JSON.stringify(menu))}" data-href="${href}">⋯</button>`
-      : "";
+    const actions =
+      run.fileIcon && menu
+        ? `<button class="file-actions" aria-label="File actions" data-menu="${escapeHtml(JSON.stringify(menu))}" data-href="${href}">⋯</button>`
+        : "";
     return `<a style="${escapeHtml(css)}" href="${href}">${content}</a>${actions}`;
   }
   return `<span style="${escapeHtml(css)}">${content}</span>`;
