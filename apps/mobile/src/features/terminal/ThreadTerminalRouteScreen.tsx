@@ -1,3 +1,4 @@
+import { BlurTargetView } from "expo-blur";
 import {
   DEFAULT_TERMINAL_ID,
   EXTENDED_TERMINAL_REPLAY_BYTES,
@@ -163,6 +164,7 @@ type ThreadTerminalRouteScreenProps = StaticScreenProps<{
 }>;
 
 export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps) {
+  const terminalBlurTarget = useRef<View>(null);
   const navigation = useNavigation();
   const writeTerminal = useAtomCommand(terminalEnvironment.write, "terminal write");
   const resizeTerminal = useAtomCommand(terminalEnvironment.resize, "terminal resize");
@@ -1272,7 +1274,21 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
           />
         ) : (
           <>
-            <View className="flex-1" style={{ paddingBottom: terminalBottomInset }}>
+            <BlurTargetView
+              ref={terminalBlurTarget}
+              style={{
+                flex: 1,
+                paddingBottom: terminalBottomInset,
+              }}
+            >
+              <View
+                pointerEvents="none"
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  backgroundColor: terminalTheme.background,
+                }}
+              />
               <TerminalSurface
                 autoFocus={!SHOWCASE_ENABLED}
                 fontSize={fontSize}
@@ -1292,7 +1308,7 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
                 terminalKey={terminalKey}
                 theme={terminalTheme}
               />
-            </View>
+            </BlurTargetView>
 
             {isAccessoryVisible ? (
               <KeyboardStickyView
@@ -1359,6 +1375,8 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
               >
                 <GlassSurface
                   chrome="none"
+                  blurTarget={terminalBlurTarget}
+                  fallbackColor={terminalTheme.background}
                   glassEffectStyle="regular"
                   tintColor="transparent"
                   style={{
