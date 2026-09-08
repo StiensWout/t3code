@@ -3147,6 +3147,38 @@ it.layer(
       }),
   );
 
+  it.effect("delivers a startup failure message after the attach snapshot", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager({
+        shellResolver: () => "/bin/sh",
+        env: {},
+      });
+      ptyAdapter.spawnFailures.push(
+        ...Array.from({ length: 10 }, () => new Error("spawn unavailable")),
+      );
+      const received: TerminalAttachStreamEvent[] = [];
+      const stop = yield* manager.attachStream(
+        { ...openInput(), replayBytes: DEFAULT_TERMINAL_REPLAY_BYTES },
+        (event) =>
+          Effect.sync(() => {
+            received.push(event);
+          }),
+      );
+      yield* Effect.addFinalizer(() => Effect.sync(stop));
+      const snapshotIndex = received.findIndex((event) => event.type === "snapshot");
+      const errorIndex = received.findIndex((event) => event.type === "error");
+      expect(received[snapshotIndex]).toMatchObject({
+        type: "snapshot",
+        snapshot: { status: "error" },
+      });
+      expect(errorIndex).toBeGreaterThan(snapshotIndex);
+      expect(received[errorIndex]).toMatchObject({
+        type: "error",
+        message: expect.stringContaining("Failed to spawn PTY process"),
+      });
+    }),
+  );
+
   it.effect("streams extended persisted history before live terminal output", () =>
     Effect.gen(function* () {
       const { manager, logsDir } = yield* createManager();
