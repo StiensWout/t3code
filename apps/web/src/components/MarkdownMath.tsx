@@ -1,6 +1,7 @@
 import { lazy, memo, Suspense, useState } from "react";
 import { markdownMath } from "@t3tools/client-runtime/markdown-math";
 import { RenderErrorBoundary } from "./RenderErrorBoundary";
+import { Button } from "./ui/button";
 import { toastManager } from "./ui/toast";
 
 // The renderer and its fonts are loaded only when a message contains math.
@@ -13,13 +14,19 @@ export const MarkdownMath = memo(function MarkdownMath({ source }: { source: str
   const fallback = <span className="whitespace-pre-wrap font-mono text-xs">{source}</span>;
   return (
     <span
-      className={math.display ? "markdown-math markdown-math-display" : "markdown-math"}
+      className={
+        math.display
+          ? "markdown-math markdown-math-display group/math relative my-[1.25em] block min-w-0 text-inherit"
+          : "markdown-math text-inherit"
+      }
       data-markdown-math=""
       data-markdown-copy={source}
     >
       {math.display ? (
-        <span className="markdown-math-actions select-none">
-          <button
+        <span className="markdown-math-actions flex justify-end gap-[0.9em] text-xs opacity-0 select-none group-hover/math:opacity-100 group-focus-within/math:opacity-100 [@media(hover:none)]:opacity-100">
+          <Button
+            variant="link"
+            size="xs"
             type="button"
             onClick={() => {
               if (!navigator.clipboard) {
@@ -33,18 +40,24 @@ export const MarkdownMath = memo(function MarkdownMath({ source }: { source: str
             }}
           >
             Copy TeX
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="link"
+            size="xs"
             type="button"
             aria-expanded={showSource}
             onClick={() => setShowSource(!showSource)}
           >
             {showSource ? "Hide source" : "TeX source"}
-          </button>
+          </Button>
         </span>
       ) : null}
       <span
-        className="markdown-math-viewport"
+        className={
+          math.display
+            ? "markdown-math-viewport block overflow-x-auto py-[0.5em]"
+            : "markdown-math-viewport"
+        }
         tabIndex={math.display ? 0 : undefined}
         role={math.display ? "region" : undefined}
         aria-label={math.display ? "Equation" : undefined}
@@ -55,7 +68,11 @@ export const MarkdownMath = memo(function MarkdownMath({ source }: { source: str
           </Suspense>
         </RenderErrorBoundary>
       </span>
-      {showSource && math.display ? <span className="markdown-math-source">{source}</span> : null}
+      {showSource && math.display ? (
+        <span className="markdown-math-source mt-[0.5em] block font-mono text-xs wrap-anywhere whitespace-pre-wrap">
+          {source}
+        </span>
+      ) : null}
     </span>
   );
 });
