@@ -7,8 +7,8 @@ connected environments. It shows token use, cache savings, model breakdowns, and
 API-equivalent cost. These estimates are not your subscription bill.
 
 Totals depend on the history available on each server. Grok turns without a saved completed-turn
-record are missing from the totals. Antigravity totals cover T3 Code threads plus Antigravity
-conversations stored under that machine's Gemini home, such as standalone CLI sessions.
+record are missing from the totals. Antigravity totals cover threads run through T3 Code, not
+sessions from the standalone Antigravity CLI.
 
 On web and desktop, use the environment dropdown to filter costs, tokens, and limits. All
 environments are selected by default. The dropdown shows which environments are still scanning;
