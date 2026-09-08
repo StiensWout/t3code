@@ -1,3 +1,4 @@
+// Node cp preserves relative symlink targets; Effect FileSystem.copy cannot do that.
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFSP from "node:fs/promises";
 import type { ThreadId } from "@t3tools/contracts";
@@ -6,7 +7,7 @@ import * as Cause from "effect/Cause";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import { ServerConfig } from "../config.ts";
+import * as ServerConfig from "../config.ts";
 
 class QuickChatWorkspaceError extends Schema.TaggedError<QuickChatWorkspaceError>()(
   "QuickChatWorkspaceError",
@@ -25,7 +26,7 @@ const quotePath = Schema.encodeSync(Schema.fromJsonString(Schema.String));
 export const makeQuickChatWorkspace = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const config = yield* ServerConfig;
+  const config = yield* ServerConfig.ServerConfig;
   const key = (threadId: ThreadId) => Buffer.from(threadId).toString("base64url");
   const directory = (threadId: ThreadId) =>
     path.join(config.stateDir, "quick-chats", key(threadId));
@@ -53,7 +54,19 @@ export const makeQuickChatWorkspace = Effect.gen(function* () {
     }
     if (yield* fs.exists(source)) {
       const expected = path.join(yield* fs.realPath(path.dirname(source)), key(threadId));
-      if ((yield* fs.realPath(source)) !== expected)
+      const resolvedSource = yield* fs.realPath(source);
+      const relativeTarget = path.relative(resolvedSource, yield* fs.realPath(cwd));
+      if (
+        relativeTarget === "" ||
+        (!path.isAbsolute(relativeTarget) &&
+          relativeTarget !== ".." &&
+          !relativeTarget.startsWith(`..${path.sep}`))
+      ) {
+        return yield* new QuickChatWorkspaceError({
+          detail: "The project workspace must be outside the quick-chat workspace.",
+        });
+      }
+      if (resolvedSource !== expected)
         return yield* new QuickChatWorkspaceError({
           detail: "Quick-chat workspace must not be a symbolic link.",
         });
@@ -82,7 +95,6 @@ export const makeQuickChatWorkspace = Effect.gen(function* () {
         // Reserve a new directory. Never merge into or overwrite project files.
         yield* fs.makeDirectory(filesPath);
         ownsDestination = true;
-        // FileSystem.copy cannot preserve relative symlink targets verbatim.
         yield* Effect.tryPromise({
           try: async () => {
             for (const entry of entries)

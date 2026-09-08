@@ -49,7 +49,7 @@ import {
   OrchestrationEngineService,
   type OrchestrationEngineShape,
 } from "../Services/OrchestrationEngine.ts";
-import { ProviderService } from "../../provider/Services/ProviderService.ts";
+import * as ProviderService from "../../provider/Services/ProviderService.ts";
 import { makeQuickChatWorkspace } from "../quickChatWorkspace.ts";
 
 const isOrchestrationCommandPreviouslyRejectedError = Schema.is(
@@ -93,7 +93,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   const threadBackgroundLiveness = yield* ThreadBackgroundLivenessService;
   const crypto = yield* Crypto.Crypto;
   // Offline CLI engines have no provider processes; server composition supplies this service.
-  const providers = yield* Effect.serviceOption(ProviderService);
+  const providers = yield* Effect.serviceOption(ProviderService.ProviderService);
   const quickChatWorkspace = yield* makeQuickChatWorkspace;
 
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);

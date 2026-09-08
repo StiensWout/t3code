@@ -59,7 +59,7 @@ const make = Effect.gen(function* () {
     let stopped = false;
     yield* logCleanupCauseUnlessInterrupted({
       effect: providerService.stopSession({ threadId }).pipe(
-        Effect.catchTag("ProviderSessionNotFoundError", () => Effect.void),
+        Effect.catchTags({ ProviderSessionNotFoundError: () => Effect.void }),
         Effect.tap(() => {
           stopped = true;
           return Effect.void;

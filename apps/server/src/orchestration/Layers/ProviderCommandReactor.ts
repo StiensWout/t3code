@@ -23,6 +23,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
 import * as FileSystem from "effect/FileSystem";
+import * as FiberSet from "effect/FiberSet";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
@@ -327,6 +328,7 @@ const make = Effect.gen(function* () {
   const gitWorkflow = yield* GitWorkflowService;
   const fileSystem = yield* FileSystem.FileSystem;
   const quickChatWorkspace = yield* makeQuickChatWorkspace;
+  const pendingTurnStarts = yield* FiberSet.make<void, never>();
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
   const textGeneration = yield* TextGeneration;
   const serverSettingsService = yield* ServerSettingsService;
@@ -1471,7 +1473,7 @@ const make = Effect.gen(function* () {
       ),
       Effect.asVoid,
       Effect.catchCause(recoverTurnStartFailure),
-      Effect.forkScoped,
+      FiberSet.run(pendingTurnStarts),
     );
   });
 
@@ -1865,6 +1867,7 @@ const make = Effect.gen(function* () {
     start,
     drain: Effect.gen(function* () {
       yield* worker.drain;
+      yield* FiberSet.awaitEmpty(pendingTurnStarts);
       yield* threadTitleRegenerationWorker.drain;
     }),
   } satisfies ProviderCommandReactorShape;

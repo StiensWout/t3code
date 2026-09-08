@@ -110,3 +110,17 @@ it.effect("cleans an empty workspace without creating a project folder", () =>
     expect(yield* workspaces.pendingNote(threadId, cwd)).toContain("contained no files");
   }).pipe(Effect.scoped, Effect.provide(layer)),
 );
+
+it.effect("rejects attachment into the scratch directory without deleting its files", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const workspace = yield* makeQuickChatWorkspace;
+    const source = workspace.directory(threadId);
+    yield* fs.makeDirectory(`${source}/nested`, { recursive: true });
+    yield* fs.writeFileString(`${source}/script.sh`, "echo keep");
+    for (const cwd of [source, `${source}/nested`]) {
+      expect((yield* Effect.result(workspace.prepare(threadId, cwd)))._tag).toBe("Failure");
+      expect(yield* fs.readFileString(`${source}/script.sh`)).toBe("echo keep");
+    }
+  }).pipe(Effect.scoped, Effect.provide(layer)),
+);
