@@ -109,7 +109,7 @@ export function terminalOutputRetentionBytes(replayBytes?: number): number {
   return Math.max(DEFAULT_MAX_TERMINAL_BUFFER_BYTES, replayBytes ?? 0);
 }
 
-export function terminalBufferStateFromSnapshot(
+function terminalBufferStateFromSnapshot(
   snapshot: TerminalSessionSnapshot,
   maxBufferBytes: number,
   current: TerminalBufferState = EMPTY_TERMINAL_BUFFER_STATE,
