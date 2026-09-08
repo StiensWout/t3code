@@ -242,6 +242,24 @@ function ThreadRouteContent(
   const threadId = firstRouteParam(params.threadId);
   const routeThreadIdentity =
     environmentIdRaw !== null && threadId !== null ? `${environmentIdRaw}:${threadId}` : null;
+  const [attachmentThreadIdentity, setAttachmentThreadIdentity] = useState<string | null>(null);
+  const handleOpenQuickChatAttachment = useCallback(() => {
+    setAttachmentThreadIdentity(routeThreadIdentity);
+  }, [routeThreadIdentity]);
+  const isQuickChat = selectedThread?.projectId === null;
+  const quickChatHeaderItems = useMemo<NativeHeaderItems>(
+    () => [
+      withNativeGlassHeaderItem({
+        accessibilityLabel: "Attach to project",
+        icon: { name: "folder.badge.plus", type: "sfSymbol" as const },
+        identifier: "thread-attach-project",
+        label: "Attach to project",
+        onPress: handleOpenQuickChatAttachment,
+        type: "button" as const,
+      }),
+    ],
+    [handleOpenQuickChatAttachment],
+  );
   const [inspectorSelection, setInspectorSelection] = useState<ThreadInspectorSelection | null>(
     () => (props.renderInspector ? { routeThreadIdentity, mode: "route" } : null),
   );
@@ -709,6 +727,13 @@ function ThreadRouteContent(
     if (Platform.OS !== "android") return [];
 
     const actions: AndroidHeaderAction[] = [];
+    if (isQuickChat) {
+      actions.push({
+        accessibilityLabel: "Attach to project",
+        icon: "folder",
+        onPress: handleOpenQuickChatAttachment,
+      });
+    }
     if (props.onReturnToThread) {
       actions.push({
         accessibilityLabel: "Return to chat",
@@ -749,6 +774,8 @@ function ThreadRouteContent(
     }
     return actions;
   }, [
+    isQuickChat,
+    handleOpenQuickChatAttachment,
     fileInspector.supported,
     handleOpenFilesInspector,
     handleOpenTerminal,
@@ -864,10 +891,11 @@ function ThreadRouteContent(
             : undefined
         }
       >
-        {selectedThread?.projectId === null && (
+        {isQuickChat && attachmentThreadIdentity === routeThreadIdentity && (
           <QuickChatProjectAttachment
             key={`${selectedThread.environmentId}:${selectedThread.id}`}
             threadRef={{ environmentId: selectedThread.environmentId, threadId: selectedThread.id }}
+            onClose={() => setAttachmentThreadIdentity(null)}
           />
         )}
         <ThreadDetailScreen
@@ -928,7 +956,7 @@ function ThreadRouteContent(
     <>
       {activeInspectorRenderer ? <InspectorPaneRoleActivation /> : null}
       <NativeStackScreenOptions
-        optionsVersion={threadGitControlProps.projectScripts}
+        optionsVersion={{ projectScripts: threadGitControlProps.projectScripts, isQuickChat }}
         options={{
           // Android draws its own in-flow header (AndroidScreenHeader below);
           // the native stack header stays iOS-only.
@@ -963,7 +991,9 @@ function ThreadRouteContent(
                     ? layout.usesSplitView
                       ? threadCenterHeaderItems
                       : compactRightHeaderItems
-                    : []
+                    : isQuickChat
+                      ? quickChatHeaderItems
+                      : []
               : undefined,
           unstable_headerSubtitle: usesNativeHeaderGlass ? headerSubtitle : undefined,
           contentStyle:

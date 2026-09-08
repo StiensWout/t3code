@@ -15,9 +15,14 @@ import { usePaginatedBranches } from "../../state/queries";
 import { BranchSelectionRow } from "./NewTaskContextPickerScreens";
 import { uuidv4 } from "../../lib/uuid";
 
-export function QuickChatProjectAttachment({ threadRef }: { threadRef: ScopedThreadRef }) {
-  const [open, setOpen] = useState(false);
-  const [saved, setSaved] = useState(() => {
+export function QuickChatProjectAttachment({
+  threadRef,
+  onClose,
+}: {
+  threadRef: ScopedThreadRef;
+  onClose: () => void;
+}) {
+  const [saved] = useState(() => {
     try {
       return { pending: quickChatAttachmentStorage.load(threadRef), error: null };
     } catch {
@@ -48,7 +53,7 @@ export function QuickChatProjectAttachment({ threadRef }: { threadRef: ScopedThr
   const project = projectId ? projects.find((project) => project.id === projectId) : projects[0];
   const branchState = usePaginatedBranches({
     environmentId: threadRef.environmentId,
-    cwd: open && workspaceMode !== "local" ? (project?.workspaceRoot ?? null) : null,
+    cwd: workspaceMode !== "local" ? (project?.workspaceRoot ?? null) : null,
     query: branchQuery,
   });
   const unavailable =
@@ -144,7 +149,7 @@ export function QuickChatProjectAttachment({ threadRef }: { threadRef: ScopedThr
         return;
       }
       quickChatAttachmentStorage.clear(threadRef);
-      setOpen(false);
+      onClose();
     } catch (cause) {
       Alert.alert(
         "Could not prepare attachment",
@@ -156,191 +161,164 @@ export function QuickChatProjectAttachment({ threadRef }: { threadRef: ScopedThr
     }
   }
   return (
-    <>
-      <Pressable
-        accessibilityRole="button"
-        onPress={() => {
-          if (saved.error !== null) {
-            try {
-              const attachment = quickChatAttachmentStorage.load(threadRef);
-              setSaved({ pending: attachment, error: null });
-              setPrepared(attachment);
-              setProjectId(attachment?.projectId ?? "");
-              setWorkspaceMode(attachment ? "new" : "local");
-              setBaseBranch(attachment?.baseBranch ?? "");
-              setExistingRef(null);
-            } catch {
-              Alert.alert("Could not load attachment", "Check device storage and retry.");
-              return;
-            }
-          }
-          setOpen(true);
-        }}
-        className="px-4 py-2"
-      >
-        <Text className="text-sm text-foreground">Attach to project</Text>
-      </Pressable>
-      <Modal
-        visible={open}
-        animationType="none"
-        onRequestClose={() => {
-          if (!pending.current) setOpen(false);
+    <Modal
+      visible
+      animationType="none"
+      onRequestClose={() => {
+        if (!pending.current) onClose();
+      }}
+    >
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: "#000",
+          paddingTop: 64,
+          paddingHorizontal: 24,
+          paddingBottom: 32,
         }}
       >
-        <View
-          style={{
-            flex: 1,
-            backgroundColor: "#000",
-            paddingTop: 64,
-            paddingHorizontal: 24,
-            paddingBottom: 32,
-          }}
-        >
-          <Text style={{ color: "#fff", fontSize: 20, marginBottom: 24 }}>Attach to project</Text>
-          <ScrollView>
-            {saved.error && <Text style={{ color: "#fff" }}>{saved.error}</Text>}
-            {projects.map((candidate) => (
-              <Pressable
-                key={candidate.id}
-                disabled={busy || prepared !== null}
-                onPress={() => {
-                  setProjectId(candidate.id);
+        <Text style={{ color: "#fff", fontSize: 20, marginBottom: 24 }}>Attach to project</Text>
+        <ScrollView>
+          {saved.error && <Text style={{ color: "#fff" }}>{saved.error}</Text>}
+          {projects.map((candidate) => (
+            <Pressable
+              key={candidate.id}
+              disabled={busy || prepared !== null}
+              onPress={() => {
+                setProjectId(candidate.id);
+                setBaseBranch("");
+                setExistingRef(null);
+              }}
+              style={{ paddingVertical: 14 }}
+            >
+              <Text style={{ color: "#fff" }}>
+                {candidate.id === project?.id ? "● " : "○ "}
+                {candidate.title}
+              </Text>
+            </Pressable>
+          ))}
+          {projects.length === 0 && (
+            <Text style={{ color: "#fff" }}>Add a project on this environment first.</Text>
+          )}
+          <Text style={{ color: "#fff", marginTop: 20 }}>Workspace</Text>
+          {(["local", "existing", "new"] as const).map((mode) => (
+            <Pressable
+              key={mode}
+              accessibilityRole="radio"
+              accessibilityState={{ checked: workspaceMode === mode }}
+              disabled={busy || prepared !== null}
+              onPress={() => setWorkspaceMode(mode)}
+              style={{ paddingVertical: 12 }}
+            >
+              <Text style={{ color: "#fff" }}>
+                {workspaceMode === mode ? "● " : "○ "}
+                {mode === "local"
+                  ? "Local checkout"
+                  : mode === "existing"
+                    ? "Existing worktree"
+                    : "New worktree"}
+              </Text>
+            </Pressable>
+          ))}
+          {workspaceMode !== "local" && (
+            <>
+              <Text style={{ color: "#fff", marginTop: 16 }}>
+                {newWorktree ? "Base branch" : "Worktree"}
+              </Text>
+              <TextInput
+                accessibilityLabel="Search branches"
+                placeholder="Search branches…"
+                value={branchQuery}
+                onChangeText={setBranchQuery}
+                autoCapitalize="none"
+                style={{ color: "#fff", padding: 12 }}
+              />
+              {branchState.refs.map((ref, index) => (
+                <BranchSelectionRow
+                  key={ref.name}
+                  branch={ref}
+                  isFirst={index === 0}
+                  isLast={index === branchState.refs.length - 1}
+                  badge={
+                    ref.worktreePath && ref.worktreePath !== project?.workspaceRoot
+                      ? "worktree"
+                      : ref.current
+                        ? "current"
+                        : ref.isRemote
+                          ? "remote"
+                          : null
+                  }
+                  disabled={
+                    busy ||
+                    prepared !== null ||
+                    (workspaceMode === "existing" &&
+                      (!ref.worktreePath || ref.worktreePath === project?.workspaceRoot))
+                  }
+                  selected={newWorktree ? baseBranch === ref.name : existingRef?.name === ref.name}
+                  onSelect={(ref) => {
+                    if (newWorktree) setBaseBranch(ref.name);
+                    else setExistingRef(ref);
+                  }}
+                />
+              ))}
+              {branchState.isPending && <Text style={{ color: "#fff" }}>Loading branches…</Text>}
+              {branchState.data?.nextCursor != null && (
+                <Pressable onPress={() => branchState.loadNext()}>
+                  <Text style={{ color: "#fff", padding: 12 }}>Load more branches</Text>
+                </Pressable>
+              )}
+            </>
+          )}
+          {unavailable && (
+            <Text style={{ color: "#fff" }}>
+              Finish the current turn and background work, and resolve pending requests before
+              attaching.
+            </Text>
+          )}
+          {prepared && !busy && (
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => {
+                try {
+                  quickChatAttachmentStorage.clear(threadRef);
+                  setPrepared(null);
+                  setProjectId("");
+                  setWorkspaceMode("local");
                   setBaseBranch("");
                   setExistingRef(null);
-                }}
-                style={{ paddingVertical: 14 }}
-              >
-                <Text style={{ color: "#fff" }}>
-                  {candidate.id === project?.id ? "● " : "○ "}
-                  {candidate.title}
-                </Text>
-              </Pressable>
-            ))}
-            {projects.length === 0 && (
-              <Text style={{ color: "#fff" }}>Add a project on this environment first.</Text>
-            )}
-            <Text style={{ color: "#fff", marginTop: 20 }}>Workspace</Text>
-            {(["local", "existing", "new"] as const).map((mode) => (
-              <Pressable
-                key={mode}
-                accessibilityRole="radio"
-                accessibilityState={{ checked: workspaceMode === mode }}
-                disabled={busy || prepared !== null}
-                onPress={() => setWorkspaceMode(mode)}
-                style={{ paddingVertical: 12 }}
-              >
-                <Text style={{ color: "#fff" }}>
-                  {workspaceMode === mode ? "● " : "○ "}
-                  {mode === "local"
-                    ? "Local checkout"
-                    : mode === "existing"
-                      ? "Existing worktree"
-                      : "New worktree"}
-                </Text>
-              </Pressable>
-            ))}
-            {workspaceMode !== "local" && (
-              <>
-                <Text style={{ color: "#fff", marginTop: 16 }}>
-                  {newWorktree ? "Base branch" : "Worktree"}
-                </Text>
-                <TextInput
-                  accessibilityLabel="Search branches"
-                  placeholder="Search branches…"
-                  value={branchQuery}
-                  onChangeText={setBranchQuery}
-                  autoCapitalize="none"
-                  style={{ color: "#fff", padding: 12 }}
-                />
-                {branchState.refs.map((ref, index) => (
-                  <BranchSelectionRow
-                    key={ref.name}
-                    branch={ref}
-                    isFirst={index === 0}
-                    isLast={index === branchState.refs.length - 1}
-                    badge={
-                      ref.worktreePath && ref.worktreePath !== project?.workspaceRoot
-                        ? "worktree"
-                        : ref.current
-                          ? "current"
-                          : ref.isRemote
-                            ? "remote"
-                            : null
-                    }
-                    disabled={
-                      busy ||
-                      prepared !== null ||
-                      (workspaceMode === "existing" &&
-                        (!ref.worktreePath || ref.worktreePath === project?.workspaceRoot))
-                    }
-                    selected={
-                      newWorktree ? baseBranch === ref.name : existingRef?.name === ref.name
-                    }
-                    onSelect={(ref) => {
-                      if (newWorktree) setBaseBranch(ref.name);
-                      else setExistingRef(ref);
-                    }}
-                  />
-                ))}
-                {branchState.isPending && <Text style={{ color: "#fff" }}>Loading branches…</Text>}
-                {branchState.data?.nextCursor != null && (
-                  <Pressable onPress={() => branchState.loadNext()}>
-                    <Text style={{ color: "#fff", padding: 12 }}>Load more branches</Text>
-                  </Pressable>
-                )}
-              </>
-            )}
-            {unavailable && (
-              <Text style={{ color: "#fff" }}>
-                Finish the current turn and background work, and resolve pending requests before
-                attaching.
-              </Text>
-            )}
-            {prepared && !busy && (
-              <Pressable
-                accessibilityRole="button"
-                onPress={() => {
-                  try {
-                    quickChatAttachmentStorage.clear(threadRef);
-                    setPrepared(null);
-                    setProjectId("");
-                    setWorkspaceMode("local");
-                    setBaseBranch("");
-                    setExistingRef(null);
-                  } catch {
-                    Alert.alert("Could not reset attachment", "Check device storage and retry.");
-                  }
-                }}
-                style={{ paddingVertical: 16 }}
-              >
-                <Text style={{ color: "#fff" }}>Change attachment target</Text>
-                <Text style={{ color: "#fff", marginTop: 8 }}>
-                  Any created worktree remains available under Existing worktree.
-                </Text>
-              </Pressable>
-            )}
-          </ScrollView>
-          <View style={{ flexDirection: "row", justifyContent: "flex-end", gap: 24 }}>
-            <Pressable disabled={busy} onPress={() => setOpen(false)}>
-              <Text style={{ color: "#fff", padding: 12 }}>Cancel</Text>
-            </Pressable>
-            <Pressable
-              disabled={
-                busy ||
-                unavailable ||
-                !project ||
-                (newWorktree && !baseBranch.trim()) ||
-                (workspaceMode === "existing" && !existingRef)
-              }
-              onPress={() => void attach()}
+                } catch {
+                  Alert.alert("Could not reset attachment", "Check device storage and retry.");
+                }
+              }}
+              style={{ paddingVertical: 16 }}
             >
-              <Text style={{ color: "#000", backgroundColor: "#fff", padding: 12 }}>
-                {busy ? "Attaching…" : "Attach"}
+              <Text style={{ color: "#fff" }}>Change attachment target</Text>
+              <Text style={{ color: "#fff", marginTop: 8 }}>
+                Any created worktree remains available under Existing worktree.
               </Text>
             </Pressable>
-          </View>
+          )}
+        </ScrollView>
+        <View style={{ flexDirection: "row", justifyContent: "flex-end", gap: 24 }}>
+          <Pressable disabled={busy} onPress={onClose}>
+            <Text style={{ color: "#fff", padding: 12 }}>Cancel</Text>
+          </Pressable>
+          <Pressable
+            disabled={
+              busy ||
+              unavailable ||
+              !project ||
+              (newWorktree && !baseBranch.trim()) ||
+              (workspaceMode === "existing" && !existingRef)
+            }
+            onPress={() => void attach()}
+          >
+            <Text style={{ color: "#000", backgroundColor: "#fff", padding: 12 }}>
+              {busy ? "Attaching…" : "Attach"}
+            </Text>
+          </Pressable>
         </View>
-      </Modal>
-    </>
+      </View>
+    </Modal>
   );
 }
