@@ -186,7 +186,7 @@ export class TerminalManager extends Context.Service<
       ) => Effect.Effect<void>,
     ) => Effect.Effect<() => void, TerminalError>;
 
-    /** Read the current bounded snapshot for a slow-subscriber resync. */
+    /** Read the current bounded terminal snapshot. */
     readonly readSnapshot: (
       input: TerminalClearInput,
     ) => Effect.Effect<Option.Option<TerminalSessionSnapshot>>;
@@ -3297,6 +3297,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         DEFAULT_ATTACH_BUFFERED_EVENT_LIMIT,
       );
       let capturedSnapshot = false;
+      let bootstrapError: Extract<TerminalEvent, { type: "error" }> | null = null;
       let deliverLive = false;
       return yield* Effect.gen(function* () {
         // Old clients decode the attach stream against a union without the
@@ -3308,7 +3309,11 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             return Effect.void;
           }
 
-          if (!capturedSnapshot) return Effect.void;
+          if (!capturedSnapshot) {
+            // The snapshot carries status but no startup failure message.
+            if (event.type === "error") bootstrapError = event;
+            return Effect.void;
+          }
           if (!deliverLive) return Queue.offer(bufferedEvents, event).pipe(Effect.asVoid);
 
           const attachEvent = terminalEventToAttachEvent(event);
@@ -3340,6 +3345,11 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
           },
           "replay",
         );
+
+        if (bootstrap.snapshot.status === "error" && bootstrapError !== null) {
+          yield* listener(bootstrapError, "replay");
+        }
+        bootstrapError = null;
 
         if (bootstrap.replayHistory !== null && bootstrap.replayHistory.length > 0) {
           for (const { data } of splitStringByUtf8Bytes(

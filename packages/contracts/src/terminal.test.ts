@@ -7,6 +7,7 @@ import {
   EXTENDED_TERMINAL_REPLAY_BYTES,
   MAX_TERMINAL_REPLAY_BYTES,
   TerminalAttachInput,
+  TerminalAttachTimeoutError,
   TerminalAttachStreamEvent,
   TerminalClearInput,
   TerminalCloseInput,
@@ -392,5 +393,17 @@ describe("TerminalEvent", () => {
         },
       }),
     ).toBe(true);
+  });
+});
+
+describe("TerminalAttachTimeoutError", () => {
+  it("round-trips a stalled subscription failure", () => {
+    const error = new TerminalAttachTimeoutError({
+      threadId: "thread-1",
+      terminalId: DEFAULT_TERMINAL_ID,
+    });
+    const decoded = decodeTerminalError(encodeTerminalError(error));
+    expect(decoded).toEqual(error);
+    expect(decoded.message).toBe("Terminal output subscription stalled. Reattach to resume.");
   });
 });

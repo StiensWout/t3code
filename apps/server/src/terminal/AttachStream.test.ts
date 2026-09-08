@@ -6,9 +6,11 @@ import {
   type TerminalAttachStreamEvent,
 } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as TerminalManager from "./Manager.ts";
 import * as Layer from "effect/Layer";
@@ -233,4 +235,64 @@ it.effect("interrupts an attach that is still replaying when the consumer discon
     yield* Fiber.interrupt(consumer);
     expect(replayInterrupted).toBe(true);
   }),
+);
+
+it.effect.each(["replay", "live"] as const)(
+  "disconnects a stalled %s consumer and releases its subscription",
+  (phase) =>
+    Effect.gen(function* () {
+      const subscribed =
+        yield* Deferred.make<
+          Parameters<TerminalManager.TerminalManager["Service"]["attachStream"]>[1]
+        >();
+      const consumerStarted = yield* Deferred.make<void>();
+      const resumeConsumer = yield* Deferred.make<void>();
+      const detached = yield* Deferred.make<void>();
+      const clock = yield* Clock.clockWith(Effect.succeed);
+      const consumer = yield* terminalAttachStream(input).pipe(
+        Stream.provideService(Clock.Clock, clock),
+        Stream.provide(
+          Layer.mock(TerminalManager.TerminalManager)({
+            attachStream: (_input, listener) =>
+              Effect.gen(function* () {
+                yield* Deferred.succeed(subscribed, listener);
+                if (phase === "replay") {
+                  for (let index = 0; index < 100; index += 1) {
+                    yield* listener({ type: "output", ...target, data: "history" }, "replay");
+                  }
+                }
+                return () => {
+                  Deferred.doneUnsafe(detached, Effect.void);
+                };
+              }).pipe(Effect.onInterrupt(() => Deferred.succeed(detached, undefined))),
+          }),
+        ),
+        Stream.runForEach(() =>
+          Deferred.succeed(consumerStarted, undefined).pipe(
+            Effect.andThen(Deferred.await(resumeConsumer)),
+          ),
+        ),
+        Effect.flip,
+        Effect.forkChild,
+      );
+      const publish = yield* Deferred.await(subscribed);
+      if (phase === "live") yield* publish({ type: "replay-complete", ...target }, "replay");
+      yield* Deferred.await(consumerStarted);
+      const producer =
+        phase === "live"
+          ? yield* Effect.gen(function* () {
+              for (let index = 0; index < 33; index += 1) {
+                yield* publish({ type: "output", ...target, data: "live" }, "live");
+              }
+            }).pipe(Effect.forkChild({ startImmediately: true }))
+          : null;
+      yield* TestClock.adjust("30 seconds");
+      yield* Deferred.await(detached);
+      if (producer) yield* Fiber.join(producer);
+      yield* Deferred.succeed(resumeConsumer, undefined);
+      expect(yield* Fiber.join(consumer)).toMatchObject({
+        _tag: "TerminalAttachTimeoutError",
+        ...target,
+      });
+    }),
 );
