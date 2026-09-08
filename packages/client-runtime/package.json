@@ -302,6 +302,10 @@
     "./device/duo-control": {
       "types": "./src/device/duoControl.ts",
       "default": "./src/device/duoControl.ts"
+    },
+    "./markdown-math": {
+      "types": "./src/markdownMath.ts",
+      "default": "./src/markdownMath.ts"
     }
   },
   "scripts": {
@@ -321,6 +325,7 @@
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
+    "@types/mdast": "^4.0.4",
     "@types/three": "0.180.0",
     "micromark-util-types": "^2.0.2",
     "vite-plus": "catalog:"

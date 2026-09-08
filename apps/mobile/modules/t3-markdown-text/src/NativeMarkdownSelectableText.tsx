@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useMemo } from "react";
 import { decodeComposerContextFragment } from "@t3tools/shared/composerContextClipboard";
+import { NativeMathText } from "./NativeMathText";
 import {
   findNodeHandle,
   Image,
@@ -325,6 +326,10 @@ export function NativeMarkdownSelectableText(props: {
     props.textStyle.dividerColor,
     props.textStyle.contextChipBorderColor,
   ].join(":");
+
+  if (props.runs.some((run) => run.mathSource !== undefined)) {
+    return <NativeMathText {...props} {...(menu ?? {})} />;
+  }
 
   return (
     <MarkdownTextPrimitive
