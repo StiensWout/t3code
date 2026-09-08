@@ -115,10 +115,10 @@ function decodeMessage(buffer: Uint8Array): WireMessage | null {
 const utf8 = new TextDecoder();
 
 /**
- * Largest `Timestamp.seconds` that still fits a JavaScript `Date`. A negative
- * int64 arrives as `2^64 - n` and lands well past this, so the bound rejects
- * both pre-1970 and out-of-range instants before they can produce an invalid
- * `Date` in the aggregator.
+ * `Timestamp.seconds` at the edge of what a JavaScript `Date` holds; anything
+ * from here up is rejected. A negative int64 arrives as `2^64 - n` and lands
+ * well past this, so the bound rejects both pre-1970 and out-of-range instants
+ * before they can produce an invalid `Date` in the aggregator.
  */
 const MAX_TIMESTAMP_SECONDS = 8_640_000_000_000n;
 const NANOS_PER_SECOND = 1_000_000_000n;
@@ -165,7 +165,7 @@ export function parseAntigravityGeneration(
   if (timestamp === null) return null;
   const seconds = timestamp.varints.get(1);
   const nanos = timestamp.varints.get(2) ?? 0n;
-  if (seconds === undefined || seconds > MAX_TIMESTAMP_SECONDS || nanos >= NANOS_PER_SECOND) {
+  if (seconds === undefined || seconds >= MAX_TIMESTAMP_SECONDS || nanos >= NANOS_PER_SECOND) {
     return null;
   }
   const timestampMs = Number(seconds) * 1000 + Number(nanos / 1_000_000n);
