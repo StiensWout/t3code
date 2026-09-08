@@ -898,6 +898,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         const attachmentAt = yield* nowIso;
         if (
           thread.projectId !== null ||
+          thread.deletedAt !== null ||
           thread.archivedAt !== null ||
           thread.session?.status === "running" ||
           thread.session?.status === "starting" ||

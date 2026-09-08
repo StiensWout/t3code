@@ -17,7 +17,7 @@ import { uuidv4 } from "../../lib/uuid";
 
 export function QuickChatProjectAttachment({ threadRef }: { threadRef: ScopedThreadRef }) {
   const [open, setOpen] = useState(false);
-  const [saved] = useState(() => {
+  const [saved, setSaved] = useState(() => {
     try {
       return { pending: quickChatAttachmentStorage.load(threadRef), error: null };
     } catch {
@@ -157,7 +157,27 @@ export function QuickChatProjectAttachment({ threadRef }: { threadRef: ScopedThr
   }
   return (
     <>
-      <Pressable accessibilityRole="button" onPress={() => setOpen(true)} className="px-4 py-2">
+      <Pressable
+        accessibilityRole="button"
+        onPress={() => {
+          if (saved.error !== null) {
+            try {
+              const attachment = quickChatAttachmentStorage.load(threadRef);
+              setSaved({ pending: attachment, error: null });
+              setPrepared(attachment);
+              setProjectId(attachment?.projectId ?? "");
+              setWorkspaceMode(attachment ? "new" : "local");
+              setBaseBranch(attachment?.baseBranch ?? "");
+              setExistingRef(null);
+            } catch {
+              Alert.alert("Could not load attachment", "Check device storage and retry.");
+              return;
+            }
+          }
+          setOpen(true);
+        }}
+        className="px-4 py-2"
+      >
         <Text className="text-sm text-foreground">Attach to project</Text>
       </Pressable>
       <Modal

@@ -730,7 +730,10 @@ function ThreadRouteContent(
         onPress: () => handleOpenTerminal(null),
       });
     }
-    if (selectedThreadProject?.workspaceRoot) {
+    if (
+      selectedThreadProject?.workspaceRoot &&
+      (!fileInspector.supported || selectedThreadCwd !== null)
+    ) {
       actions.push({
         accessibilityLabel: "Open git controls",
         icon: "point.topleft.down.curvedto.point.bottomright.up",
