@@ -112,14 +112,29 @@ function writeSystemMessage(terminal: GhosttyTerminalSurface, message: string): 
 }
 
 export function writeTerminalOutputUpdate(
-  terminal: Pick<GhosttyTerminalSurface, "resetAndWrite" | "write">,
+  terminal: Pick<
+    GhosttyTerminalSurface,
+    "beginStreamingReplay" | "appendStreamingReplay" | "completeStreamingReplay" | "write"
+  >,
   update: TerminalOutputUpdate,
-): void {
+  replayState: TerminalReplayRendererState = "idle",
+  onReplayComplete: () => void = () => {},
+): { replayState: TerminalReplayRendererState; didWrite: boolean } {
+  if (update.type === "none") return { replayState, didWrite: false };
   if (update.type === "reset") {
-    terminal.resetAndWrite(update.data);
-  } else if (update.type === "append") {
-    terminal.write(update.data);
+    terminal.beginStreamingReplay("");
   }
+  const result = writeTerminalOutputSegments({
+    terminal,
+    segments: update.segments,
+    replayState: update.type === "reset" ? "replaying" : replayState,
+    onReplayComplete,
+  });
+  if (replayState === "idle" && result.replayState !== "idle") {
+    terminal.completeStreamingReplay();
+    result.replayState = "idle";
+  }
+  return { ...result, didWrite: update.type === "reset" || result.didWrite };
 }
 
 type TerminalReplayRendererState = "idle" | "waiting" | "replaying";
@@ -260,28 +275,6 @@ export function terminalThemeFromApp(mountElement?: HTMLElement | null): Ghostty
     "--terminal-selection-background",
     isDark ? "rgba(180, 203, 255, 0.25)" : "rgba(37, 63, 99, 0.2)",
   );
-  const colorProbe = document.createElement("span");
-  colorProbe.ariaHidden = "true";
-  colorProbe.style.cssText = "position:fixed;width:0;height:0;overflow:hidden;pointer-events:none";
-  drawerSurface.append(colorProbe);
-  const readResolvedThemeColor = (variable: string, fallback: string) => {
-    colorProbe.style.color = `var(${variable}, ${fallback})`;
-    return normalizeComputedColor(getComputedStyle(colorProbe).color, fallback);
-  };
-  const alternateBackground = readResolvedThemeColor(
-    "--terminal-alt-screen-background",
-    terminalBackground,
-  );
-  const alternateForeground = readResolvedThemeColor(
-    "--terminal-alt-screen-foreground",
-    terminalForeground,
-  );
-  const alternateCursor = readResolvedThemeColor("--terminal-alt-screen-cursor", terminalCursor);
-  const alternateSelection = readResolvedThemeColor(
-    "--terminal-alt-screen-selection-background",
-    terminalSelection,
-  );
-  colorProbe.remove();
   const backgroundColor = parseTerminalColor(
     terminalBackground,
     isDark ? { r: 14, g: 18, b: 24 } : { r: 255, g: 255, b: 255 },
@@ -299,12 +292,6 @@ export function terminalThemeFromApp(mountElement?: HTMLElement | null): Ghostty
     foreground: foregroundColor,
     cursor: cursorColor,
     selectionBackground: terminalSelection,
-    alternateScreen: {
-      background: parseTerminalColor(alternateBackground, backgroundColor),
-      foreground: parseTerminalColor(alternateForeground, foregroundColor),
-      cursor: parseTerminalColor(alternateCursor, cursorColor),
-      selectionBackground: alternateSelection,
-    },
   };
 }
 
@@ -642,12 +629,18 @@ export function TerminalViewport({
       }
       const latestSession = latestSessionRef.current;
       previousSessionRef.current = latestSession;
+      scrollbackReplayRendererStateRef.current =
+        latestSession.replayStartVersion > latestSession.replayCompleteVersion ? "waiting" : "idle";
       const initialOutput = readTerminalOutputUpdate(
         latestSession.output,
         INITIAL_TERMINAL_OUTPUT_CURSOR,
       );
       if (initialOutput.type === "reset" && initialOutput.data.length > 0) {
-        writeTerminalOutputUpdate(terminal, initialOutput);
+        scrollbackReplayRendererStateRef.current = writeTerminalOutputUpdate(
+          terminal,
+          initialOutput,
+          scrollbackReplayRendererStateRef.current,
+        ).replayState;
       }
       outputCursorRef.current = initialOutput.cursor;
       if (latestSession.error !== null) writeSystemMessage(terminal, latestSession.error);
@@ -1098,32 +1091,23 @@ export function TerminalViewport({
       terminal.scrollToTopAfterWrites();
     };
     let didWriteOutput = false;
-    if (outputUpdate.type === "append") {
-      const result = writeTerminalOutputSegments({
+    if (outputUpdate.type === "reset" && outputUpdate.data.length === 0 && current.version === 0) {
+      // A restarted attach stream emits its pristine seed state before the
+      // server replies. Keep the current screen until real content arrives;
+      // the cursor above already adopted the new stream's epoch.
+    } else if (outputUpdate.type === "reset" && streamingReplay && outputUpdate.data.length === 0) {
+      // The extended attach begins with an empty snapshot. Keep the current
+      // screen visible until its first retained-history chunk arrives.
+      scrollbackReplayRendererStateRef.current = "waiting";
+    } else {
+      const result = writeTerminalOutputUpdate(
         terminal,
-        segments: outputUpdate.segments,
-        replayState: scrollbackReplayRendererStateRef.current,
-        onReplayComplete: completePendingScrollbackReplay,
-      });
+        outputUpdate,
+        scrollbackReplayRendererStateRef.current,
+        completePendingScrollbackReplay,
+      );
       scrollbackReplayRendererStateRef.current = result.replayState;
       didWriteOutput = result.didWrite;
-    } else if (outputUpdate.type === "reset") {
-      if (outputUpdate.data.length === 0 && current.version === 0) {
-        // A restarted attach stream emits its pristine seed state before the
-        // server replies. Keep the current screen until real content arrives;
-        // the cursor above already adopted the new stream's epoch.
-      } else if (streamingReplay && outputUpdate.data.length === 0) {
-        // The extended attach begins with an empty snapshot. Keep the current
-        // screen visible until its first retained-history chunk arrives.
-        scrollbackReplayRendererStateRef.current = "waiting";
-      } else if (streamingReplay) {
-        terminal.beginStreamingReplay(outputUpdate.data);
-        scrollbackReplayRendererStateRef.current = "replaying";
-        didWriteOutput = true;
-      } else {
-        terminal.resetAndWrite(outputUpdate.data);
-        didWriteOutput = true;
-      }
     }
     if (didWriteOutput) terminal.clearSelection();
 

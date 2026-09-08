@@ -3410,7 +3410,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
           if (overflowResyncCount > 3) {
             // A consumer this far behind keeps overflowing while the resync
             // itself is being delivered. Drain unrecoverable lifecycle events
-            // before going live; the transport resynchronizes snapshot state.
+            // before going live with the most recently delivered snapshot.
             discardBufferedSnapshotEvents();
             overflowResyncCount = 0;
             continue;
