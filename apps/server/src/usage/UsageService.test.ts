@@ -136,7 +136,6 @@ const serviceLayers = (input: {
     Layer.provideMerge(
       Layer.succeed(HostProcessEnvironment, {
         GROK_HOME: NodePath.join(input.home, "grok"),
-        GEMINI_HOME: NodePath.join(input.home, "gemini"),
         ...input.environment,
       }),
     ),
