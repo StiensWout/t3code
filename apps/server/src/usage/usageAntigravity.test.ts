@@ -48,7 +48,7 @@ const CREATED_AT_SECONDS = 1_785_578_400;
 
 interface GenerationInput {
   readonly model?: string;
-  readonly seconds?: number | null;
+  readonly seconds?: number | bigint | null;
   readonly nanos?: number;
   readonly inputTokens?: number;
   /** `null` omits `output_tokens`, as older records do. */
@@ -156,6 +156,11 @@ describe("parseAntigravityGeneration", () => {
 
   it("drops records without a timestamp or model, and rejects non-protobuf bytes", () => {
     expect(parseAntigravityGeneration(generationRecord({ seconds: null }), "x")).toBeNull();
+    // A negative int64 is encoded as 2^64 - n; a Date built from it would be
+    // invalid and throw inside the day formatter, failing the whole scan.
+    expect(
+      parseAntigravityGeneration(generationRecord({ seconds: 2n ** 64n - 1n }), "x"),
+    ).toBeNull();
     expect(parseAntigravityGeneration(generationRecord({ model: "" }), "x")).toBeNull();
     expect(parseAntigravityGeneration(new TextEncoder().encode("not a proto"), "x")).toBeNull();
   });
