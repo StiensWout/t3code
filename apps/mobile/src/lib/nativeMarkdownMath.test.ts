@@ -100,6 +100,10 @@ it("keeps heading size, skill labels, file icons and links in math text", () => 
       icon,
     ),
     nativeMathRunHtml({ text: "Email", href: "mailto:hi@example.com" }, textStyle),
+    nativeMathRunHtml({ text: "Docs", href: "https://example.com" }, textStyle, {
+      title: "File",
+      actions: [{ id: "open", title: "Open" }],
+    }),
   ].join("");
   const dom = new JSDOM(html);
   try {
@@ -112,7 +116,9 @@ it("keeps heading size, skill labels, file icons and links in math text", () => 
     );
     expect(document.querySelector("[data-copy-source]")?.textContent).toBe("Deploy");
     expect(document.querySelector("img")?.getAttribute("src")).toBe(icon);
-    expect(document.querySelector("[data-menu]")).not.toBeNull();
+    expect(document.querySelectorAll("[data-menu]")).toHaveLength(1);
+    expect(document.querySelector("[data-menu]")?.getAttribute("data-href")).toBe("file:///app.ts");
+    expect(document.querySelector('a[href="https://example.com"]')?.textContent).toBe("Docs");
     expect(document.querySelector('a[href="mailto:hi@example.com"]')?.textContent).toBe("Email");
   } finally {
     dom.window.close();
