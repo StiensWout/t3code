@@ -1,4 +1,5 @@
 import { GitPullRequestIcon } from "lucide-react";
+import { renderAssistantInsightsAsMarkdown } from "@t3tools/client-runtime/assistant-insights";
 import {
   type AssistantCitation,
   type EnvironmentId,
@@ -149,7 +150,6 @@ import {
   resolveTimelineMinimapTopPercent,
   resolveWorkGroupScrollIndex,
   shouldFollowWorkGroupAppend,
-  shouldPreserveAssistantLineBreaks,
   toolGroupAction,
   workEntryDisplayLabel,
   workEntryIsVisibleInGroup,
@@ -1666,11 +1666,10 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
           listRef={ctx.listRef}
         >
           <ChatMarkdown
-            text={messageText}
+            text={renderAssistantInsightsAsMarkdown(messageText)}
             cwd={ctx.markdownCwd}
             threadRef={ctx.threadRef ?? undefined}
             isStreaming={Boolean(row.message.streaming)}
-            lineBreaks={shouldPreserveAssistantLineBreaks(messageText)}
             skills={ctx.skills}
             onUseArtifactTemplate={ctx.onUseArtifactTemplate}
             onImageExpand={ctx.onImageExpand}
