@@ -7,9 +7,12 @@ import { useThreadShells } from "../state/entities";
 import { useThreadActionMenu } from "../hooks/useThreadActionMenu";
 import { useAtomCommand } from "../state/use-atom-command";
 import { threadEnvironment } from "../state/threads";
+import { Input } from "./ui/input";
+import { useSidebar } from "./ui/sidebar";
 
 function QuickChatRow({ thread, selected }: { thread: EnvironmentThreadShell; selected: boolean }) {
   const navigate = useNavigate();
+  const { isMobile, setOpenMobile } = useSidebar();
   const [renaming, setRenaming] = useState(false);
   const [title, setTitle] = useState(thread.title);
   const update = useAtomCommand(threadEnvironment.updateMetadata, "Rename quick chat");
@@ -24,7 +27,7 @@ function QuickChatRow({ thread, selected }: { thread: EnvironmentThreadShell; se
   return (
     <li>
       {renaming ? (
-        <input
+        <Input
           aria-label="Chat title"
           className="w-full bg-background px-2 py-1 text-sm"
           value={title}
@@ -48,12 +51,13 @@ function QuickChatRow({ thread, selected }: { thread: EnvironmentThreadShell; se
             "w-full truncate px-2 py-1.5 text-left text-sm hover:bg-sidebar-row-hover",
             selected && "bg-sidebar-row-hover text-white",
           )}
-          onClick={() =>
+          onClick={() => {
+            if (isMobile) setOpenMobile(false);
             void navigate({
               to: "/$environmentId/$threadId",
               params: { environmentId: thread.environmentId, threadId: thread.id },
-            })
-          }
+            });
+          }}
           onContextMenu={(event) => {
             event.preventDefault();
             openMenu({ x: event.clientX, y: event.clientY });

@@ -1,6 +1,12 @@
 import { randomHex } from "../lib/utils";
 import { useEffect, useState } from "react";
-import { type ScopedThreadRef, type VcsCreateWorktreeResult } from "@t3tools/contracts";
+import { type ScopedThreadRef, type VcsRef } from "@t3tools/contracts";
+import {
+  prepareQuickChatWorktree,
+  type PendingQuickChatAttachment,
+} from "@t3tools/client-runtime/operations/quickChats";
+import { quickChatAttachmentStorage } from "../quickChatAttachmentStorage";
+import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { useQuickChatAttachmentStore } from "../quickChatAttachmentStore";
 import { useProjects, useThreadShell } from "../state/entities";
 import { useAtomCommand } from "../state/use-atom-command";
@@ -8,23 +14,40 @@ import { threadEnvironment } from "../state/threads";
 import { vcsEnvironment } from "../state/vcs";
 import { Dialog, DialogPopup, DialogHeader, DialogTitle, DialogFooter } from "./ui/dialog";
 import { Button } from "./ui/button";
-import { Input } from "./ui/input";
+import { BranchToolbarBranchSelector } from "./BranchToolbarBranchSelector";
+import { Select, SelectTrigger, SelectValue, SelectPopup, SelectItem } from "./ui/select";
 
 function AttachmentForm({ threadRef }: { threadRef: ScopedThreadRef }) {
   const projects = useProjects().filter(
     (project) => project.environmentId === threadRef.environmentId,
   );
   const thread = useThreadShell(threadRef);
-  const [projectId, setProjectId] = useState(projects[0]?.id ?? "");
-  const [newWorktree, setNewWorktree] = useState(false);
-  const [baseBranch, setBaseBranch] = useState("HEAD");
-  const [error, setError] = useState<string | null>(null);
-  const [prepared, setPrepared] = useState<VcsCreateWorktreeResult["worktree"] | null>(null);
+  const [saved] = useState(() => {
+    try {
+      return { pending: quickChatAttachmentStorage.load(threadRef), error: null };
+    } catch {
+      return {
+        pending: null,
+        error: "Could not load the pending attachment. Check browser storage before retrying.",
+      };
+    }
+  });
+  const [projectId, setProjectId] = useState(saved.pending?.projectId ?? projects[0]?.id ?? "");
+  const [workspaceMode, setWorkspaceMode] = useState<"local" | "existing" | "new">(
+    saved.pending ? "new" : "local",
+  );
+  const newWorktree = workspaceMode === "new";
+  const [existingRef, setExistingRef] = useState<VcsRef | null>(null);
+  const [baseBranch, setBaseBranch] = useState(saved.pending?.baseBranch ?? "");
+  const [error, setError] = useState<string | null>(saved.error);
+  const [prepared, setPrepared] = useState<PendingQuickChatAttachment | null>(saved.pending);
   const busy = useQuickChatAttachmentStore((state) => state.busy);
   const update = useAtomCommand(threadEnvironment.updateMetadata, "Attach quick chat");
   const createWorktree = useAtomCommand(vcsEnvironment.createWorktree, "Create worktree");
+  const listRefs = useAtomQueryRunner(vcsEnvironment.readRefs, { refresh: true });
   const project = projects.find((candidate) => candidate.id === projectId);
   const unavailable =
+    saved.error !== null ||
     !thread ||
     thread.projectId !== null ||
     thread.archivedAt !== null ||
@@ -44,23 +67,63 @@ function AttachmentForm({ threadRef }: { threadRef: ScopedThreadRef }) {
     useQuickChatAttachmentStore.setState({ busy: true });
     setError(null);
     try {
-      let worktree = prepared;
-      if (newWorktree && !worktree) {
-        const result = await createWorktree({
+      let worktree = null;
+      if (newWorktree) {
+        const pending = prepared ?? {
+          projectId: project.id,
+          workspaceRoot: project.workspaceRoot,
+          baseBranch: baseBranch.trim(),
+          branch: `t3/quick-chat-${randomHex(4)}`,
+        };
+        await quickChatAttachmentStorage.save(threadRef, pending);
+        setPrepared(pending);
+        worktree = await prepareQuickChatWorktree({
+          pending,
+          listRefs: async () => {
+            const result = await listRefs({
+              environmentId: threadRef.environmentId,
+              input: {
+                cwd: pending.workspaceRoot,
+                query: pending.branch,
+                refKind: "local",
+                refresh: true,
+              },
+            });
+            if (result._tag === "Failure")
+              throw new Error(
+                "Could not check the prepared worktree. Check the connection and retry.",
+              );
+            return result.value;
+          },
+          createWorktree: async (input) => {
+            const result = await createWorktree({ environmentId: threadRef.environmentId, input });
+            if (result._tag === "Failure")
+              throw new Error(
+                "Could not confirm worktree creation. Retry to recover the same branch.",
+              );
+            return result.value;
+          },
+        });
+      }
+      if (workspaceMode === "existing") {
+        if (!existingRef) return;
+        const result = await listRefs({
           environmentId: threadRef.environmentId,
           input: {
             cwd: project.workspaceRoot,
-            refName: baseBranch.trim(),
-            newRefName: `t3/quick-chat-${randomHex(4)}`,
-            path: null,
+            query: existingRef.name,
+            refKind: "local",
+            refresh: true,
           },
         });
-        if (result._tag === "Failure") {
-          setError("Could not create the worktree. The chat is still unattached.");
-          return;
-        }
-        worktree = result.value.worktree;
-        setPrepared(worktree);
+        if (result._tag === "Failure")
+          throw new Error("Could not check the selected worktree. Retry when connected.");
+        const ref = result.value.refs.find(
+          (candidate) => candidate.name === existingRef.name && !candidate.isRemote,
+        );
+        if (!ref?.worktreePath || ref.worktreePath === project.workspaceRoot)
+          throw new Error("This worktree is no longer available. Select another worktree.");
+        worktree = { refName: ref.name, path: ref.worktreePath };
       }
       const result = await update({
         environmentId: threadRef.environmentId,
@@ -79,7 +142,14 @@ function AttachmentForm({ threadRef }: { threadRef: ScopedThreadRef }) {
         );
         return;
       }
+      quickChatAttachmentStorage.clear(threadRef);
       useQuickChatAttachmentStore.setState({ threadRef: null });
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Could not prepare the attachment. Check storage and retry.",
+      );
     } finally {
       useQuickChatAttachmentStore.setState({ busy: false });
     }
@@ -93,37 +163,76 @@ function AttachmentForm({ threadRef }: { threadRef: ScopedThreadRef }) {
       <div className="flex flex-col gap-4 px-6 py-4">
         <label className="flex flex-col gap-2 text-sm">
           Project
-          <select
-            className="h-9 border border-border bg-background px-2 text-foreground"
+          <Select
+            items={projects.map((project) => ({ value: project.id, label: project.title }))}
             value={projectId}
             disabled={busy || prepared !== null}
-            onChange={(event) => setProjectId(event.target.value)}
+            onValueChange={(value) => {
+              if (value !== null) {
+                setProjectId(value);
+                setBaseBranch("");
+                setExistingRef(null);
+              }
+            }}
           >
-            {projects.map((project) => (
-              <option key={project.id} value={project.id}>
-                {project.title}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger aria-label="Project">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectPopup>
+              {projects.map((project) => (
+                <SelectItem key={project.id} value={project.id}>
+                  {project.title}
+                </SelectItem>
+              ))}
+            </SelectPopup>
+          </Select>
         </label>
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={newWorktree}
+        <label className="flex flex-col gap-2 text-sm">
+          Workspace
+          <Select
+            value={workspaceMode}
             disabled={busy || prepared !== null}
-            onChange={(event) => setNewWorktree(event.target.checked)}
-          />
-          Create a new worktree
+            items={[
+              { value: "local", label: "Local checkout" },
+              { value: "existing", label: "Existing worktree" },
+              { value: "new", label: "New worktree" },
+            ]}
+            onValueChange={(value) => {
+              if (value === "local" || value === "existing" || value === "new")
+                setWorkspaceMode(value);
+            }}
+          >
+            <SelectTrigger aria-label="Workspace">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectPopup>
+              <SelectItem value="local">Local checkout</SelectItem>
+              <SelectItem value="existing">Existing worktree</SelectItem>
+              <SelectItem value="new">New worktree</SelectItem>
+            </SelectPopup>
+          </Select>
         </label>
-        {newWorktree && (
-          <label className="flex flex-col gap-2 text-sm">
-            Base branch
-            <Input
-              value={baseBranch}
-              disabled={busy || prepared !== null}
-              onChange={(event) => setBaseBranch(event.target.value)}
+        {project && workspaceMode !== "local" && (
+          <div className="flex flex-col gap-2 text-sm">
+            <span>{newWorktree ? "Base branch" : "Worktree"}</span>
+            <BranchToolbarBranchSelector
+              environmentId={threadRef.environmentId}
+              threadId={threadRef.threadId}
+              envLocked
+              startFromOrigin={false}
+              onStartFromOriginChange={() => {}}
+              selection={{
+                projectId: project.id,
+                mode: newWorktree ? "base" : "worktree",
+                value: newWorktree ? baseBranch || null : (existingRef?.name ?? null),
+                disabled: busy || prepared !== null,
+                onSelect: (ref) => {
+                  if (newWorktree) setBaseBranch(ref.name);
+                  else setExistingRef(ref);
+                },
+              }}
             />
-          </label>
+          </div>
         )}
         {projects.length === 0 && (
           <p className="text-sm">Add a project on this environment first.</p>
@@ -146,7 +255,13 @@ function AttachmentForm({ threadRef }: { threadRef: ScopedThreadRef }) {
           Cancel
         </Button>
         <Button
-          disabled={busy || unavailable || !project || (newWorktree && !baseBranch.trim())}
+          disabled={
+            busy ||
+            unavailable ||
+            !project ||
+            (newWorktree && !baseBranch.trim()) ||
+            (workspaceMode === "existing" && !existingRef)
+          }
           onClick={() => void attach()}
         >
           {busy ? "Attaching…" : "Attach"}

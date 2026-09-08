@@ -910,7 +910,13 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             detail: "Only an idle, unarchived quick chat can be attached to a project.",
           });
         }
-        yield* requireProject({ readModel, command, projectId: command.projectId });
+        const project = yield* requireProject({ readModel, command, projectId: command.projectId });
+        if (project.deletedAt !== null) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: "A quick chat cannot be attached to a deleted project.",
+          });
+        }
       }
       if (
         thread.projectId === null &&

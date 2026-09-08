@@ -23,9 +23,14 @@ In the New thread picker, press **Ctrl+0** to start a quick chat, or **Cmd+0** o
 
 To turn a quick chat into project work, finish the current turn and choose
 **Attach to project** from its menu on web or desktop, or above the conversation
-on mobile. Select a project in the same environment. Enable **Create a new
-worktree** and choose its base branch if you want a separate workspace. The chat
-keeps its history and subsequent turns use the selected workspace.
+on mobile. Select a project in the same environment, then choose its local
+checkout, an existing worktree, or a new worktree. Use the branch picker to
+select an existing worktree or the base for a new one. The chat keeps its history
+and subsequent turns use the selected workspace. If attachment fails, reopening
+the dialog restores the prepared worktree for retry.
+
+Project tools such as the file browser, terminal, and Git controls become
+available after attachment.
 
 Quick chats use the agent's normal permission settings.
 

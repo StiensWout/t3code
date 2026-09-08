@@ -111,7 +111,7 @@ function ToggleRow(props: {
   );
 }
 
-function BranchSelectionRow(props: {
+export function BranchSelectionRow(props: {
   readonly badge: string | null;
   readonly branch: VcsRef;
   readonly disabled: boolean;

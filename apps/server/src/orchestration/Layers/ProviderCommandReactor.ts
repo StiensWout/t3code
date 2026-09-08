@@ -1,5 +1,5 @@
 import * as Path from "effect/Path";
-import { ServerConfig } from "../../config.ts";
+import * as ServerConfig from "../../config.ts";
 import {
   type ChatAttachment,
   CommandId,
@@ -327,7 +327,7 @@ const make = Effect.gen(function* () {
   const providerRegistry = yield* ProviderRegistry;
   const gitWorkflow = yield* GitWorkflowService;
   const fileSystem = yield* FileSystem.FileSystem;
-  const serverConfig = yield* ServerConfig;
+  const serverConfig = yield* ServerConfig.ServerConfig;
   const path = yield* Path.Path;
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
   const textGeneration = yield* TextGeneration;
@@ -507,7 +507,8 @@ const make = Effect.gen(function* () {
             new ProviderAdapterRequestError({
               provider: "unknown",
               method: "thread.turn.start",
-              detail: `Could not prepare quick chat directory: ${cause.message}`,
+              detail: "Could not prepare the quick chat directory.",
+              cause,
             }),
         ),
       );

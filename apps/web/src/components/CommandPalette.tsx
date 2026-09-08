@@ -71,6 +71,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
 import { useDesktopLocalBootstraps } from "../connection/useDesktopLocalBootstraps";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
+import { useActiveProjectTarget } from "../hooks/useActiveProjectTarget";
 import { useOpenPanelPullRequestUrl } from "../hooks/useOpenPanelPullRequestUrl";
 import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
 import { useClientSettings } from "../hooks/useSettings";
@@ -398,6 +399,7 @@ function overlayModeForCommand(command: string | null): SearchOverlayMode | null
 }
 
 export function CommandPalette({ children }: { children: ReactNode }) {
+  const hasActiveProject = useActiveProjectTarget() !== null;
   const [state, dispatch] = useReducer(reduceCommandPaletteUiState, {
     open: false,
     mode: "command",
@@ -405,8 +407,11 @@ export function CommandPalette({ children }: { children: ReactNode }) {
   });
   const setOpen = useCallback((open: boolean) => dispatch({ _tag: "SetOpen", open }), []);
   const toggleMode = useCallback(
-    (mode: SearchOverlayMode) => dispatch({ _tag: "ToggleMode", mode }),
-    [],
+    (mode: SearchOverlayMode) => {
+      if ((mode === "files" || mode === "content") && !hasActiveProject) return;
+      dispatch({ _tag: "ToggleMode", mode });
+    },
+    [hasActiveProject],
   );
   const openAddProject = useCallback(() => dispatch({ _tag: "OpenAddProject" }), []);
   const openNewThreadIn = useCallback(() => dispatch({ _tag: "OpenNewThreadIn" }), []);
@@ -1558,7 +1563,10 @@ function OpenCommandPaletteDialog(props: {
   }, [clearOpenIntent, openAddProjectFlow, openIntent]);
 
   useLayoutEffect(() => {
-    if (openIntent?.kind !== "new-thread-in") {
+    if (
+      openIntent?.kind !== "new-thread-in" ||
+      (projectThreadItems.length === 0 && quickChatItems.length === 0)
+    ) {
       return;
     }
     clearOpenIntent();
@@ -1690,6 +1698,7 @@ function OpenCommandPaletteDialog(props: {
   actionItems.push({
     kind: "action",
     value: "action:open-file-picker",
+    disabled: currentProjectId === null,
     searchTerms: ["go to file", "open file", "file picker", "find file", "quick open"],
     title: "Go to file",
     icon: <FileSearchIcon className={ITEM_ICON_CLASS} />,
@@ -1703,6 +1712,7 @@ function OpenCommandPaletteDialog(props: {
   actionItems.push({
     kind: "action",
     value: "action:search-project-contents",
+    disabled: currentProjectId === null,
     searchTerms: ["search project", "find in files", "grep", "content search", "text search"],
     title: "Search project contents",
     icon: <TextSearchIcon className={ITEM_ICON_CLASS} />,

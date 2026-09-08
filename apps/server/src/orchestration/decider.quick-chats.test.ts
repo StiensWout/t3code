@@ -173,6 +173,39 @@ it.layer(NodeServices.layer)("quick chats", (it) => {
       expect(result._tag).toBe("Failure");
     }),
   );
+  it.effect("rejects attachment to a deleted project", () =>
+    Effect.gen(function* () {
+      let model = yield* createChat;
+      for (const command of [
+        {
+          type: "project.create",
+          commandId: CommandId.make("create-project"),
+          projectId,
+          title: "Project",
+          workspaceRoot: "/tmp/project",
+          createdAt: now,
+        },
+        { type: "project.delete", commandId: CommandId.make("delete-project"), projectId },
+      ] as const) {
+        const events = yield* decideOrchestrationCommand({ readModel: model, command });
+        for (const event of Array.isArray(events) ? events : [events])
+          model = yield* projectEvent(model, { ...event, sequence: model.snapshotSequence + 1 });
+      }
+      const result = yield* Effect.result(
+        decideOrchestrationCommand({
+          readModel: model,
+          command: {
+            type: "thread.meta.update",
+            commandId: CommandId.make("attach-deleted"),
+            threadId,
+            projectId,
+          },
+        }),
+      );
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure") expect(String(result.failure)).toContain("deleted project");
+    }),
+  );
   it.effect("rejects attachment while a turn is queued", () =>
     Effect.gen(function* () {
       const model = yield* createChat;
