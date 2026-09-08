@@ -53,7 +53,7 @@ export function createQuickChatAttachmentStorage(storage: {
   removeItem: (key: string) => void;
 }) {
   const key = (ref: ScopedThreadRef) =>
-    `t3-quick-chat-attachment-${encodeURIComponent(ref.environmentId)}-${encodeURIComponent(ref.threadId)}`;
+    `t3-quick-chat-attachment-${encodeURIComponent(ref.environmentId)}/${encodeURIComponent(ref.threadId)}`;
   return {
     load(ref: ScopedThreadRef) {
       const raw = storage.getItem(key(ref));
@@ -81,8 +81,8 @@ export async function prepareQuickChatWorktree(input: {
   }
   const result = await input.createWorktree({
     cwd: input.pending.workspaceRoot,
-    refName: input.pending.baseBranch,
-    newRefName: input.pending.branch,
+    refName: existing?.name ?? input.pending.baseBranch,
+    ...(existing ? {} : { newRefName: input.pending.branch }),
     path: null,
   });
   return result.worktree;

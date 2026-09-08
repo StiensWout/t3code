@@ -63,6 +63,7 @@ const asCheckpointRef = (value: string): CheckpointRef => CheckpointRef.make(val
 function makeOrchestrationLayer(
   databasePath?: string,
   repositoryIdentityResolver?: RepositoryIdentityResolver.RepositoryIdentityResolver["Service"],
+  onProjected?: (event: OrchestrationEvent) => void,
 ) {
   const persistence = databasePath
     ? makeSqlitePersistenceLive(databasePath)
@@ -73,7 +74,23 @@ function makeOrchestrationLayer(
   return Layer.mergeAll(
     OrchestrationEngineLive.pipe(
       Layer.provide(OrchestrationProjectionSnapshotQueryLive),
-      Layer.provide(OrchestrationProjectionPipelineLive),
+      Layer.provide(
+        onProjected
+          ? Layer.effect(
+              OrchestrationProjectionPipeline,
+              Effect.gen(function* () {
+                const pipeline = yield* OrchestrationProjectionPipeline;
+                return {
+                  ...pipeline,
+                  projectEventDeferred: (event: OrchestrationEvent) =>
+                    pipeline
+                      .projectEventDeferred(event)
+                      .pipe(Effect.tap(() => Effect.sync(() => onProjected(event)))),
+                };
+              }),
+            ).pipe(Layer.provide(OrchestrationProjectionPipelineLive))
+          : OrchestrationProjectionPipelineLive,
+      ),
     ),
     OrchestrationProjectionSnapshotQueryLive,
   ).pipe(
@@ -636,13 +653,22 @@ describe("OrchestrationEngine", () => {
     }
   });
 
-  effectIt.effect("attaches quick chats only after background work finishes", () =>
-    Effect.gen(function* () {
+  effectIt.effect("attaches quick chats only after background work finishes", () => {
+    let reportBackgroundWork = () => {};
+    return Effect.gen(function* () {
       const engine = yield* OrchestrationEngineService;
       const snapshots = yield* ProjectionSnapshotQuery;
       const liveness = yield* ThreadBackgroundLiveness.ThreadBackgroundLivenessService;
       const threadId = ThreadId.make("quick-chat-background");
       const projectId = ProjectId.make("quick-chat-project");
+      reportBackgroundWork = () =>
+        liveness.recordTaskLiveness({
+          threadId,
+          taskId: "racing-task",
+          taskType: "subagent",
+          status: undefined,
+          kind: "started",
+        });
       yield* engine.dispatch({
         type: "project.create",
         commandId: CommandId.make("quick-project-create"),
@@ -687,6 +713,24 @@ describe("OrchestrationEngine", () => {
         ).toBeNull();
         liveness.clearThreadLiveness(threadId);
       }
+      const raced = yield* engine
+        .dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.make("quick-attach-race"),
+          threadId,
+          projectId,
+        })
+        .pipe(Effect.result);
+      expect(raced._tag).toBe("Failure");
+      expect(
+        (yield* snapshots.getSnapshot()).threads.find((thread) => thread.id === threadId)
+          ?.projectId,
+      ).toBeNull();
+      const events = yield* Stream.runCollect(engine.readEvents(0));
+      expect(events.some((event) => event.commandId === CommandId.make("quick-attach-race"))).toBe(
+        false,
+      );
+      liveness.clearThreadLiveness(threadId);
       yield* engine.dispatch({
         type: "thread.meta.update",
         commandId: CommandId.make("quick-attach-idle"),
@@ -697,8 +741,14 @@ describe("OrchestrationEngine", () => {
         (yield* snapshots.getSnapshot()).threads.find((thread) => thread.id === threadId)
           ?.projectId,
       ).toBe(projectId);
-    }).pipe(Effect.provide(makeOrchestrationLayer())),
-  );
+    }).pipe(
+      Effect.provide(
+        makeOrchestrationLayer(undefined, undefined, (event) => {
+          if (event.commandId === CommandId.make("quick-attach-race")) reportBackgroundWork();
+        }),
+      ),
+    );
+  });
 
   effectIt.effect(
     "rejects persisted changes and live background work without blocking unrelated threads",

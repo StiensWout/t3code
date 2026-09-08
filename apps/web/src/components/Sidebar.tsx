@@ -3335,7 +3335,14 @@ export default function Sidebar() {
     items.push({ kind: "marker", marker: "pinned-divider" });
     const activeRows = rowsOf(activeThreads, "active");
     items.push({ kind: "marker", marker: "active-placeholder" });
-    items.push(...activeRows);
+    const firstQuickChatIndex = activeThreads.findIndex((thread) => thread.projectId === null);
+    if (firstQuickChatIndex >= 0) {
+      items.push(...activeRows.slice(0, firstQuickChatIndex));
+      items.push({ kind: "marker", marker: "quick-chats-header" });
+      items.push(...activeRows.slice(firstQuickChatIndex));
+    } else {
+      items.push(...activeRows);
+    }
     if (snoozedThreads.length > 0) {
       items.push({ kind: "marker", marker: "snoozed-header" });
       items.push(...rowsOf(visibleSnoozedThreads, "snoozed"));
@@ -3748,6 +3755,9 @@ export default function Sidebar() {
         const thread = threadByKeyRef.current.get(threadKey);
         return thread ? [thread] : [];
       });
+      const settleableThreads = selectedThreads.filter(
+        (thread) => thread.projectId !== null && thread.settledOverride !== "settled",
+      );
       const canSnoozeSelection = selectedThreads.every(
         (thread) =>
           serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSnooze === true &&
@@ -3781,7 +3791,9 @@ export default function Sidebar() {
         api.contextMenu.show(
           [
             ...(unpinMenuItem ? [unpinMenuItem] : []),
-            { id: "settle", label: `Settle (${count})` },
+            ...(settleableThreads.length > 0
+              ? [{ id: "settle", label: `Settle (${settleableThreads.length})` }]
+              : []),
             ...(canSnoozeSelection
               ? [
                   {
@@ -3898,10 +3910,12 @@ export default function Sidebar() {
         // are already explicitly settled are skipped: nothing to do on a
         // valid mixed selection. Pinned rows ARE included: the decider
         // clears the pin as part of settling, so they park like the rest.
-        const coSettlingKeys = new Set(threadKeys);
-        for (const threadKey of threadKeys) {
-          const thread = threadByKeyRef.current.get(threadKey);
-          if (!thread || thread.settledOverride === "settled") continue;
+        const coSettlingKeys = new Set(
+          settleableThreads.map((thread) =>
+            scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+          ),
+        );
+        for (const thread of settleableThreads) {
           attemptSettle(scopeThreadRef(thread.environmentId, thread.id), { coSettlingKeys });
         }
         clearSelection();
@@ -4809,25 +4823,24 @@ export default function Sidebar() {
                           onNavigateToDraft={navigateToDraft}
                         />,
                       ];
-                      let quickChatsRendered = false;
                       for (const item of sidebarListItems) {
                         if (item.kind === "thread") {
                           const thread = threadByKey.get(item.key)!;
-                          if (thread.projectId === null && !quickChatsRendered) {
-                            items.push(
-                              <li
-                                key="quick-chat-heading"
-                                className="px-2 pt-4 pb-1 text-xs font-medium"
-                              >
-                                Quick chats
-                              </li>,
-                            );
-                            quickChatsRendered = true;
-                          }
                           items.push(renderThreadRow(thread, item.section));
                           continue;
                         }
                         switch (item.marker) {
+                          case "quick-chats-header":
+                            items.push(
+                              <SortableSidebarMarker
+                                key="quick-chats-header"
+                                marker="quick-chats-header"
+                                className="px-2 pt-4 pb-1 text-xs font-medium"
+                              >
+                                Quick chats
+                              </SortableSidebarMarker>,
+                            );
+                            break;
                           case "pinned-header":
                             items.push(
                               <SidebarDragBoundary

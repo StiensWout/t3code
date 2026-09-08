@@ -21,7 +21,8 @@ their conversation history. You can rename, archive, restore, and delete them.
 
 In the New thread picker, press **Ctrl+0** to start a quick chat, or **Cmd+0** on macOS.
 
-To turn a quick chat into project work, finish the current turn and choose
+To turn a quick chat into project work, finish the current turn, wait for background
+work to finish, and resolve pending approvals or input. Then choose
 **Attach to project** from its menu on web or desktop, or above the conversation
 on mobile. Select a project in the same environment, then choose its local
 checkout, an existing worktree, or a new worktree. Use the branch picker to

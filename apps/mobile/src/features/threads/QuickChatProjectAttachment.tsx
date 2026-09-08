@@ -280,6 +280,29 @@ export function QuickChatProjectAttachment({ threadRef }: { threadRef: ScopedThr
                 Finish the current turn and background work before attaching.
               </Text>
             )}
+            {prepared && !busy && (
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => {
+                  try {
+                    quickChatAttachmentStorage.clear(threadRef);
+                    setPrepared(null);
+                    setProjectId("");
+                    setWorkspaceMode("local");
+                    setBaseBranch("");
+                    setExistingRef(null);
+                  } catch {
+                    Alert.alert("Could not reset attachment", "Check device storage and retry.");
+                  }
+                }}
+                style={{ paddingVertical: 16 }}
+              >
+                <Text style={{ color: "#fff" }}>Change attachment target</Text>
+                <Text style={{ color: "#fff", marginTop: 8 }}>
+                  Any created worktree remains available under Existing worktree.
+                </Text>
+              </Pressable>
+            )}
           </ScrollView>
           <View style={{ flexDirection: "row", justifyContent: "flex-end", gap: 24 }}>
             <Pressable disabled={busy} onPress={() => setOpen(false)}>

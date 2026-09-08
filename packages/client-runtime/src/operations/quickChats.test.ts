@@ -12,7 +12,7 @@ import {
   createQuickChatAttachmentStorage,
   prepareQuickChatWorktree,
   quickChatModelSelection,
-} from "./quickChats";
+} from "./quickChats.ts";
 
 const ready: ServerProvider = {
   instanceId: ProviderInstanceId.make("ready"),
@@ -90,6 +90,44 @@ it("recovers the same worktree after losing its creation response and reloading 
   );
   expect(creations).toBe(1);
   expect(reloaded.load({ ...ref, environmentId: EnvironmentId.make("other") })).toBeNull();
+  const collidingRef = {
+    environmentId: EnvironmentId.make("environment-chat"),
+    threadId: ThreadId.make("other"),
+  };
+  const distinctRef = {
+    environmentId: EnvironmentId.make("environment"),
+    threadId: ThreadId.make("chat-other"),
+  };
+  await first.save(collidingRef, pending);
+  expect(reloaded.load(distinctRef)).toBeNull();
+  reloaded.clear(distinctRef);
+  expect(first.load(collidingRef)).toEqual(pending);
   reloaded.clear(ref);
   expect(first.load(ref)).toBeNull();
+});
+
+it("reattaches a saved branch whose worktree was removed without recreating the branch", async () => {
+  const pending = {
+    projectId: ProjectId.make("project"),
+    workspaceRoot: "/project",
+    baseBranch: "main",
+    branch: "t3/quick-chat-retry",
+  };
+  const worktree = { path: "/worktree", refName: pending.branch };
+  const result = await prepareQuickChatWorktree({
+    pending,
+    listRefs: async () => ({
+      refs: [{ name: pending.branch, current: false, isDefault: false, worktreePath: null }],
+      isRepo: true,
+      hasPrimaryRemote: false,
+      nextCursor: null,
+      totalCount: 1,
+    }),
+    createWorktree: async (input) => {
+      if (input.newRefName) throw new Error("Branch already exists");
+      if (input.refName !== pending.branch) throw new Error("Wrong branch");
+      return { worktree };
+    },
+  });
+  expect(result).toEqual(worktree);
 });

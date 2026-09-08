@@ -108,6 +108,7 @@ export type SidebarListMarker =
   /** The boundary between pinned and active rows. */
   | "pinned-divider"
   | "snoozed-header"
+  | "quick-chats-header"
   | "settled-header";
 
 export function sidebarMarkerId(marker: SidebarListMarker): string {

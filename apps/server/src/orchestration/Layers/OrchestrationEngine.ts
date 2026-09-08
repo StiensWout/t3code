@@ -301,6 +301,20 @@ const makeOrchestrationEngine = Effect.gen(function* () {
                 error: null,
               });
 
+              // Provider ingestion can report new background work while SQL yields.
+              // Reject before committing so neither the event nor projection moves it.
+              if (
+                envelope.command.type === "thread.meta.update" &&
+                envelope.command.projectId !== undefined &&
+                threadBackgroundLiveness.getThreadBackgroundLiveness(envelope.command.threadId) !==
+                  null
+              ) {
+                return yield* new OrchestrationCommandInvariantError({
+                  commandType: envelope.command.type,
+                  detail: `thread ${envelope.command.threadId} has live background work`,
+                });
+              }
+
               return {
                 committedEvents,
                 attachmentCleanups,

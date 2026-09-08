@@ -5,7 +5,7 @@ import { writeFileAtomically } from "../lib/atomic-file";
 function attachmentFile(key: string) {
   const directory = new Directory(Paths.document, "quick-chat-attachments");
   directory.create({ idempotent: true, intermediates: true });
-  return new File(directory, `${key}.json`);
+  return new File(directory, `${encodeURIComponent(key)}.json`);
 }
 
 export const quickChatAttachmentStorage = createQuickChatAttachmentStorage({

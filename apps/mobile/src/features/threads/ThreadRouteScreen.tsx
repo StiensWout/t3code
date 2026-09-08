@@ -247,7 +247,7 @@ function ThreadRouteContent(
   );
   const inspectorMode = (() => {
     if (inspectorSelection?.routeThreadIdentity === routeThreadIdentity) {
-      if (inspectorSelection.mode === "files" && selectedThreadCwd === null) {
+      if (inspectorSelection.mode !== "route" && selectedThreadCwd === null) {
         return null;
       }
       return inspectorSelection.mode;
@@ -274,7 +274,7 @@ function ThreadRouteContent(
   useEffect(() => {
     setInspectorSelection((current) => {
       if (props.renderInspector === undefined) {
-        if (current === null || current.mode === "route") {
+        if (selectedThreadCwd === null || current === null || current.mode === "route") {
           return null;
         }
         return { ...current, routeThreadIdentity };
@@ -286,7 +286,7 @@ function ThreadRouteContent(
 
       return { ...current, routeThreadIdentity };
     });
-  }, [props.renderInspector, routeThreadIdentity]);
+  }, [props.renderInspector, routeThreadIdentity, selectedThreadCwd]);
 
   useFocusEffect(
     useCallback(() => {

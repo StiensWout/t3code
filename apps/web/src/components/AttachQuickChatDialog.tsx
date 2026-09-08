@@ -45,7 +45,9 @@ function AttachmentForm({ threadRef }: { threadRef: ScopedThreadRef }) {
   const update = useAtomCommand(threadEnvironment.updateMetadata, "Attach quick chat");
   const createWorktree = useAtomCommand(vcsEnvironment.createWorktree, "Create worktree");
   const listRefs = useAtomQueryRunner(vcsEnvironment.readRefs, { refresh: true });
-  const project = projects.find((candidate) => candidate.id === projectId);
+  const project = projectId
+    ? projects.find((candidate) => candidate.id === projectId)
+    : projects[0];
   const unavailable =
     saved.error !== null ||
     !thread ||
@@ -165,7 +167,7 @@ function AttachmentForm({ threadRef }: { threadRef: ScopedThreadRef }) {
           Project
           <Select
             items={projects.map((project) => ({ value: project.id, label: project.title }))}
-            value={projectId}
+            value={project?.id ?? null}
             disabled={busy || prepared !== null}
             onValueChange={(value) => {
               if (value !== null) {
@@ -244,6 +246,29 @@ function AttachmentForm({ threadRef }: { threadRef: ScopedThreadRef }) {
           <p role="alert" className="text-sm">
             {error}
           </p>
+        )}
+        {prepared && !busy && (
+          <div className="flex flex-col items-start gap-2 text-sm">
+            <Button
+              variant="outline"
+              onClick={() => {
+                try {
+                  quickChatAttachmentStorage.clear(threadRef);
+                  setPrepared(null);
+                  setProjectId("");
+                  setWorkspaceMode("local");
+                  setBaseBranch("");
+                  setExistingRef(null);
+                  setError(null);
+                } catch {
+                  setError("Could not reset the attachment. Check browser storage and retry.");
+                }
+              }}
+            >
+              Change attachment target
+            </Button>
+            <p>Any created worktree remains available under Existing worktree.</p>
+          </div>
         )}
       </div>
       <DialogFooter>
