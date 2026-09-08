@@ -2908,9 +2908,6 @@ export function ArchivedThreadsPanel() {
                 id: null,
                 environmentId,
                 title: "Quick chats",
-                cwd: null,
-                faviconPath: null,
-                projectIcon: null,
               },
               threads: quickChats,
             },
@@ -3002,7 +2999,13 @@ export function ArchivedThreadsPanel() {
             key={`${project.environmentId}:${project.id}`}
             id={index === 0 ? searchableSetting("archive").id : undefined}
             title={project.title}
-            icon={project.id === null ? <MessageSquareIcon className="size-4" /> : <ProjectFavicon project={project} />}
+            icon={
+              project.id === null ? (
+                <MessageSquareIcon className="size-4" />
+              ) : (
+                <ProjectFavicon project={project} />
+              )
+            }
           >
             {projectThreads.map((thread) => (
               <SettingsRow
