@@ -137,4 +137,43 @@ describe("renderAssistantInsightsAsMarkdown", () => {
       children: [{ value: "After." }],
     });
   });
+
+  it.each(["- ", "1. ", "10. "])("keeps insights inside a %slist item", (marker) => {
+    const indent = " ".repeat(marker.length);
+    const tree = parse(
+      [
+        `${marker}Parent`,
+        "",
+        `${indent}★ Insight ─────`,
+        `${indent}First.`,
+        `${indent}Second.`,
+        `${indent}─────`,
+        `${indent}Still inside the list.`,
+      ].join("\n"),
+    );
+    expect(tree.children).toMatchObject([
+      {
+        type: "list",
+        children: [
+          {
+            type: "listItem",
+            children: [
+              { type: "paragraph", children: [{ value: "Parent" }] },
+              {
+                type: "blockquote",
+                children: [
+                  { type: "paragraph" },
+                  {
+                    type: "paragraph",
+                    children: [{ value: "First." }, { type: "break" }, { value: "Second." }],
+                  },
+                ],
+              },
+              { type: "paragraph", children: [{ value: "Still inside the list." }] },
+            ],
+          },
+        ],
+      },
+    ]);
+  });
 });
