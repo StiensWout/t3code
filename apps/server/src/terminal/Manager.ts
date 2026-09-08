@@ -54,6 +54,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
@@ -104,12 +105,9 @@ const DEFAULT_OUTPUT_BATCH_MAX_BYTES = 64 * 1024;
 // rather than allowing an unbounded server heap queue.
 const DEFAULT_PENDING_PROCESS_EVENT_MAX_BYTES = 4 * 1024 * 1024;
 const DEFAULT_HISTORY_STREAM_CHUNK_BYTES = 64 * 1024;
-// Events published while an attach is still replaying buffer until the replay
-// finishes. The budget must comfortably cover live output produced during a
-// multi-second extended replay over a slow link; overflowing it degrades the
-// subscriber to a bounded resync snapshot, which discards streamed scrollback.
-const DEFAULT_ATTACH_BUFFERED_EVENT_LIMIT = 1_024;
-const DEFAULT_ATTACH_BUFFERED_MAX_BYTES = 4 * 1024 * 1024;
+// Hold at most 4 MiB of bounded output events while replay is being sent.
+// Backpressure reaches the PTY instead of discarding live bytes or scrollback.
+const DEFAULT_ATTACH_BUFFERED_EVENT_LIMIT = 64;
 const DEFAULT_PERSIST_DEBOUNCE_MS = 40;
 const DEFAULT_PERSIST_CHUNK_BYTES = 64 * 1024;
 const DEFAULT_SUBPROCESS_POLL_INTERVAL_MS = 1_000;
@@ -472,18 +470,6 @@ function terminalEventToAttachEvent(event: TerminalEvent): TerminalAttachStreamE
     case "activity":
       return event;
   }
-}
-
-function isDuplicateAttachSnapshotEvent(
-  event: TerminalEvent,
-  initialSnapshot: TerminalSessionSnapshot,
-) {
-  return typeof event.sequence === "number" && typeof initialSnapshot.sequence === "number"
-    ? event.sequence <= initialSnapshot.sequence
-    : event.type === "started" &&
-        event.snapshot.threadId === initialSnapshot.threadId &&
-        event.snapshot.terminalId === initialSnapshot.terminalId &&
-        event.snapshot.updatedAt <= initialSnapshot.updatedAt;
 }
 
 function advanceEventSequence(session: TerminalSessionState): {
@@ -2783,7 +2769,6 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   ) {
     const key = toSessionKey(threadId, terminalId);
     const session = yield* getSession(threadId, terminalId);
-    const closedEventSequence = Option.isSome(session) ? session.value.eventSequence + 1 : 0;
 
     if (Option.isSome(session)) {
       yield* stopProcess(session.value);
@@ -2806,7 +2791,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         type: "closed",
         threadId,
         terminalId,
-        sequence: closedEventSequence,
+        sequence: Option.isSome(session) ? session.value.eventSequence + 1 : 0,
       });
     }
 
@@ -3145,7 +3130,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       resolveLaunchInputEnvironment(input).pipe(Effect.flatMap(openLocked)),
     );
 
-  const openOrAttachForStream = (input: TerminalAttachInput) =>
+  const openOrAttachForStream = (input: TerminalAttachInput, onSnapshot: () => void) =>
     withThreadLock(
       input.threadId,
       Effect.gen(function* () {
@@ -3225,6 +3210,11 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
           } as const;
         })();
 
+        // Start buffering synchronously with the captured history. Earlier
+        // events are already in the snapshot; buffering them could block the
+        // bootstrap's own process drain before the replay consumer can start.
+        onSnapshot();
+
         // A full-screen app repaints only dirty cells, so the capped replay
         // cannot reconstruct its whole screen. Wiggle the PTY size so the
         // SIGWINCH makes the app repaint everything; its output lands after
@@ -3303,150 +3293,106 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     let unsubscribe: (() => void) | null = null;
 
     return Effect.gen(function* () {
-      const bufferedEvents: Array<{ event: TerminalEvent; bytes: number }> = [];
-      let bufferedEventBytes = 0;
-      let bufferedOverflow = false;
-      let deliverLive = false;
-      // Snapshots cannot recover a removed session or transient errors. Keep
-      // the latest of each in order without letting lifecycle events grow unbounded.
-      const discardBufferedSnapshotEvents = () => {
-        const closed = bufferedEvents.findLast(({ event }) => event.type === "closed");
-        const error = bufferedEvents.findLast(({ event }) => event.type === "error");
-        const retained = bufferedEvents.filter((entry) => entry === closed || entry === error);
-        bufferedEvents.splice(0, bufferedEvents.length, ...retained);
-        bufferedEventBytes = 0;
-      };
-      // Old clients decode the attach stream against a union without the
-      // replay markers. Sending replayBytes proves the client understands them.
-      const emitReplayMarkers = input.replayBytes !== undefined;
-
-      unsubscribe = yield* subscribe((event) => {
-        if (event.threadId !== input.threadId || event.terminalId !== input.terminalId) {
-          return Effect.void;
-        }
-
-        if (!deliverLive) {
-          const eventBytes = event.type === "output" ? Buffer.byteLength(event.data) : 0;
-          if (
-            bufferedEvents.length >= DEFAULT_ATTACH_BUFFERED_EVENT_LIMIT ||
-            bufferedEventBytes + eventBytes > DEFAULT_ATTACH_BUFFERED_MAX_BYTES
-          ) {
-            discardBufferedSnapshotEvents();
-            bufferedOverflow = true;
-          }
-          bufferedEvents.push({ event, bytes: eventBytes });
-          bufferedEventBytes += eventBytes;
-          return Effect.void;
-        }
-
-        const attachEvent = terminalEventToAttachEvent(event);
-        return attachEvent ? listener(attachEvent, "live") : Effect.void;
-      });
-
-      const bootstrap = yield* openOrAttachForStream(input);
-      let synchronizedSnapshot = bootstrap.snapshot;
-
-      if (emitReplayMarkers) {
-        yield* listener(
-          {
-            type: "replay-start",
-            threadId: input.threadId,
-            terminalId: input.terminalId,
-            ...(typeof bootstrap.snapshot.sequence === "number"
-              ? { sequence: bootstrap.snapshot.sequence }
-              : {}),
-          },
-          "replay",
-        );
-      }
-
-      yield* listener(
-        {
-          type: "snapshot",
-          snapshot: bootstrap.snapshot,
-        },
-        "replay",
+      const bufferedEvents = yield* Queue.bounded<TerminalEvent>(
+        DEFAULT_ATTACH_BUFFERED_EVENT_LIMIT,
       );
+      let capturedSnapshot = false;
+      let deliverLive = false;
+      return yield* Effect.gen(function* () {
+        // Old clients decode the attach stream against a union without the
+        // replay markers. Sending replayBytes proves the client understands them.
+        const emitReplayMarkers = input.replayBytes !== undefined;
 
-      if (bootstrap.replayHistory !== null && bootstrap.replayHistory.length > 0) {
-        for (const { data } of splitStringByUtf8Bytes(
-          bootstrap.replayHistory,
-          DEFAULT_HISTORY_STREAM_CHUNK_BYTES,
-        )) {
+        unsubscribe = yield* subscribe((event) => {
+          if (event.threadId !== input.threadId || event.terminalId !== input.terminalId) {
+            return Effect.void;
+          }
+
+          if (!capturedSnapshot) return Effect.void;
+          if (!deliverLive) return Queue.offer(bufferedEvents, event).pipe(Effect.asVoid);
+
+          const attachEvent = terminalEventToAttachEvent(event);
+          return attachEvent ? listener(attachEvent, "live") : Effect.void;
+        });
+
+        const bootstrap = yield* openOrAttachForStream(input, () => {
+          capturedSnapshot = true;
+        });
+
+        if (emitReplayMarkers) {
           yield* listener(
             {
-              type: "output",
+              type: "replay-start",
               threadId: input.threadId,
               terminalId: input.terminalId,
               ...(typeof bootstrap.snapshot.sequence === "number"
                 ? { sequence: bootstrap.snapshot.sequence }
                 : {}),
-              data,
             },
             "replay",
           );
         }
-      }
 
-      if (emitReplayMarkers) {
         yield* listener(
           {
-            type: "replay-complete",
-            threadId: input.threadId,
-            terminalId: input.terminalId,
-            ...(typeof bootstrap.snapshot.sequence === "number"
-              ? { sequence: bootstrap.snapshot.sequence }
-              : {}),
+            type: "snapshot",
+            snapshot: bootstrap.snapshot,
           },
           "replay",
         );
-      }
 
-      let overflowResyncCount = 0;
-      while (true) {
-        if (bufferedOverflow) {
-          bufferedOverflow = false;
-          overflowResyncCount += 1;
-          if (overflowResyncCount > 3) {
-            // A consumer this far behind keeps overflowing while the resync
-            // itself is being delivered. Drain unrecoverable lifecycle events
-            // before going live with the most recently delivered snapshot.
-            discardBufferedSnapshotEvents();
-            overflowResyncCount = 0;
-            continue;
-          }
-          const latest = yield* readSnapshot(input);
-          if (Option.isSome(latest)) {
-            synchronizedSnapshot = latest.value;
+        if (bootstrap.replayHistory !== null && bootstrap.replayHistory.length > 0) {
+          for (const { data } of splitStringByUtf8Bytes(
+            bootstrap.replayHistory,
+            DEFAULT_HISTORY_STREAM_CHUNK_BYTES,
+          )) {
             yield* listener(
               {
-                type: "snapshot",
-                snapshot: latest.value,
+                type: "output",
+                threadId: input.threadId,
+                terminalId: input.terminalId,
+                ...(typeof bootstrap.snapshot.sequence === "number"
+                  ? { sequence: bootstrap.snapshot.sequence }
+                  : {}),
+                data,
               },
               "replay",
             );
           }
-          continue;
         }
 
-        const buffered = bufferedEvents.shift();
-        if (!buffered) {
-          deliverLive = true;
-          break;
+        if (emitReplayMarkers) {
+          yield* listener(
+            {
+              type: "replay-complete",
+              threadId: input.threadId,
+              terminalId: input.terminalId,
+              ...(typeof bootstrap.snapshot.sequence === "number"
+                ? { sequence: bootstrap.snapshot.sequence }
+                : {}),
+            },
+            "replay",
+          );
         }
-        bufferedEventBytes -= buffered.bytes;
-        if (isDuplicateAttachSnapshotEvent(buffered.event, synchronizedSnapshot)) continue;
 
-        const attachEvent = terminalEventToAttachEvent(buffered.event);
-        if (attachEvent) {
-          yield* listener(attachEvent, "replay");
+        while (true) {
+          const buffered = yield* Effect.sync(() => {
+            const next = Queue.takeUnsafe(bufferedEvents);
+            // Switch delivery in the same turn as the empty check, before a
+            // yielding consumer can allow another event into the old queue.
+            if (next === undefined) deliverLive = true;
+            return next;
+          });
+          if (buffered === undefined) break;
+          const attachEvent = terminalEventToAttachEvent(yield* buffered);
+          if (attachEvent) yield* listener(attachEvent, "live");
         }
-      }
 
-      return () => {
-        unsubscribe?.();
-        unsubscribe = null;
-      };
+        return () => {
+          unsubscribe?.();
+          unsubscribe = null;
+        };
+      }).pipe(Effect.ensuring(Queue.shutdown(bufferedEvents)));
     }).pipe(
       Effect.catchCause((cause) =>
         Effect.flatMap(

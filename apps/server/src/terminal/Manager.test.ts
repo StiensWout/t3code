@@ -43,6 +43,7 @@ import * as ProcessRunner from "../processRunner.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as TerminalManager from "./Manager.ts";
 import * as PtyAdapter from "./PtyAdapter.ts";
+import { terminalAttachStream } from "./AttachStream.ts";
 
 class WaitForConditionError extends Data.TaggedError("WaitForConditionError")<{
   readonly message: string;
@@ -3186,40 +3187,131 @@ it.layer(
     }),
   );
 
-  it.effect("delivers terminal close after repeated attach-buffer overflows", () =>
+  it.effect(
+    "preserves extended replay and final output when attach backpressure reaches the PTY",
+    () =>
+      Effect.gen(function* () {
+        const { manager, ptyAdapter, logsDir } = yield* createManager({ outputBatchWindowMs: 0 });
+        const history = "history\n".repeat(EXTENDED_TERMINAL_REPLAY_BYTES / 8);
+        yield* historyLogPath(logsDir).pipe(
+          Effect.flatMap((filePath) => writeFileString(filePath, history)),
+        );
+        yield* manager.open(openInput());
+        const process = ptyAdapter.processes[0]!;
+        const consumerStarted = yield* Deferred.make<void>();
+        const resumeConsumer = yield* Deferred.make<void>();
+        const bufferFilled = yield* Deferred.make<void>();
+        let liveOutputCount = 0;
+        const stopObserving = yield* manager.subscribe((event) => {
+          if (event.type !== "output" || ++liveOutputCount !== 65) return Effect.void;
+          return Deferred.succeed(bufferFilled, undefined).pipe(Effect.asVoid);
+        });
+        yield* Effect.addFinalizer(() => Effect.sync(stopObserving));
+        const received: TerminalAttachStreamEvent[] = [];
+        const attach = yield* manager
+          .attachStream(
+            {
+              ...openInput(),
+              replayBytes: EXTENDED_TERMINAL_REPLAY_BYTES,
+            },
+            (event) =>
+              Effect.gen(function* () {
+                received.push(event);
+                if (event.type === "replay-start") {
+                  yield* Deferred.succeed(consumerStarted, undefined);
+                  yield* Deferred.await(resumeConsumer);
+                }
+              }),
+          )
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(consumerStarted);
+        for (let index = 0; index < 130; index += 1) process.emitData("x".repeat(64 * 1024));
+        process.emitData("final-output");
+        expect(process.pauseCalls).toBeGreaterThan(0);
+        yield* Deferred.await(bufferFilled);
+        const close = yield* manager
+          .close({ threadId: "thread-1", terminalId: DEFAULT_TERMINAL_ID })
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Deferred.succeed(resumeConsumer, undefined);
+        yield* Fiber.join(close);
+        const stop = yield* Fiber.join(attach);
+        yield* Effect.addFinalizer(() => Effect.sync(stop));
+        expect(received.filter((event) => event.type === "snapshot")).toHaveLength(1);
+        const output = received
+          .filter((event) => event.type === "output")
+          .map((event) => event.data)
+          .join("");
+        const expectedOutput = history + "x".repeat(130 * 64 * 1024) + "final-output";
+        expect(output.length).toBe(expectedOutput.length);
+        expect(output === expectedOutput, "replay and live bytes stay in order").toBe(true);
+        expect(received.at(-1)?.type).toBe("closed");
+      }),
+  );
+
+  it.effect("streams a full extended replay through the bounded transport", () =>
+    Effect.gen(function* () {
+      const { manager, logsDir } = yield* createManager();
+      const history = "history\n".repeat(EXTENDED_TERMINAL_REPLAY_BYTES / 8);
+      yield* historyLogPath(logsDir).pipe(
+        Effect.flatMap((filePath) => writeFileString(filePath, history)),
+      );
+      const events = yield* terminalAttachStream({
+        ...openInput(),
+        replayBytes: EXTENDED_TERMINAL_REPLAY_BYTES,
+      }).pipe(
+        Stream.provideService(TerminalManager.TerminalManager, manager),
+        Stream.takeUntil((event) => event.type === "replay-complete"),
+        Stream.runCollect,
+      );
+      expect(
+        events
+          .filter((event) => event.type === "output")
+          .map((event) => event.data)
+          .join(""),
+      ).toBe(history);
+    }),
+  );
+
+  it.effect("cancels a replay with a full live buffer without blocking terminal close", () =>
     Effect.gen(function* () {
       const { manager, ptyAdapter } = yield* createManager({ outputBatchWindowMs: 0 });
       yield* manager.open(openInput());
       const process = ptyAdapter.processes[0]!;
-      let burstDrained = yield* Deferred.make<void>();
-      const stopObserving = yield* manager.subscribe((event) =>
-        event.type === "output" && event.data.endsWith("burst-end")
-          ? Deferred.succeed(burstDrained, undefined).pipe(Effect.asVoid)
-          : Effect.void,
-      );
+      const replayStarted = yield* Deferred.make<void>();
+      const bufferFilled = yield* Deferred.make<void>();
+      let outputCount = 0;
+      const stopObserving = yield* manager.subscribe((event) => {
+        if (event.type !== "output" || ++outputCount !== 65) return Effect.void;
+        return Deferred.succeed(bufferFilled, undefined).pipe(Effect.asVoid);
+      });
       yield* Effect.addFinalizer(() => Effect.sync(stopObserving));
-      const received: TerminalAttachStreamEvent[] = [];
-      let snapshotCount = 0;
-      const stop = yield* manager.attachStream(openInput(), (event) =>
-        Effect.gen(function* () {
-          received.push(event);
-          if (event.type !== "snapshot") return;
-          snapshotCount += 1;
-          burstDrained = yield* Deferred.make<void>();
-          for (let index = 0; index < 65; index += 1) process.emitData("x".repeat(64 * 1024));
-          process.emitData("burst-end");
-          yield* Deferred.await(burstDrained);
-          if (snapshotCount === 4) {
-            yield* manager
-              .close({ threadId: "thread-1", terminalId: DEFAULT_TERMINAL_ID })
-              .pipe(Effect.orDie);
-          }
-        }),
-      );
-      yield* Effect.addFinalizer(() => Effect.sync(stop));
-      expect(snapshotCount).toBe(4);
-      expect(received.at(-1)?.type).toBe("closed");
+      const attach = yield* manager
+        .attachStream(openInput(), () =>
+          Deferred.succeed(replayStarted, undefined).pipe(Effect.andThen(Effect.never)),
+        )
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(replayStarted);
+      for (let index = 0; index < 65; index += 1) process.emitData("x".repeat(64 * 1024));
+      yield* Deferred.await(bufferFilled);
+      yield* Fiber.interrupt(attach);
+      yield* manager.close({ threadId: "thread-1", terminalId: DEFAULT_TERMINAL_ID });
       expect(Option.isNone(yield* manager.readSnapshot(openInput()))).toBe(true);
+    }),
+  );
+
+  it.effect("assigns close a sequence after the output it drains", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter, getEvents } = yield* createManager();
+      yield* manager.open(openInput());
+      ptyAdapter.processes[0]!.emitData("final output");
+      yield* manager.close({ threadId: "thread-1", terminalId: DEFAULT_TERMINAL_ID });
+      const events = (yield* getEvents).filter(
+        (event) => event.type === "output" || event.type === "closed",
+      );
+      expect(events).toEqual([
+        expect.objectContaining({ type: "output", data: "final output", sequence: 2 }),
+        expect.objectContaining({ type: "closed", sequence: 3 }),
+      ]);
     }),
   );
 
