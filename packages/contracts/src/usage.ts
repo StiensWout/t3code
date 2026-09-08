@@ -27,9 +27,10 @@ export const USAGE_CONTRACT_VERSION = 6 as const;
 /**
  * Oldest {@link UsageSummary} version a current client will still merge.
  *
- * v5 added `grok` and v6 `antigravity` to {@link UsageProviderKind}; v4
- * Claude/Codex buckets remain valid, so mixed-version environments keep those
- * totals instead of treating every older server as stale.
+ * v5 added `grok`; v6 added `antigravity` to {@link UsageProviderKind} and the
+ * optional `source` index on {@link UsageBucket}. v4 Claude/Codex buckets
+ * remain valid, so mixed-version environments keep those totals instead of
+ * treating every older server as stale.
  */
 export const USAGE_MERGE_COMPATIBLE_SINCE = 4 as const;
 
@@ -108,6 +109,13 @@ export const UsageBucket = Schema.Struct({
   unpricedRecords: NonNegativeInt,
   /** Distinct transcript sessions that contributed to this cell. */
   sessions: NonNegativeInt,
+  /**
+   * Index into {@link UsageSummary.sources} of the directory these records were
+   * read from. Lets the client drop exactly the directory another environment
+   * already owns when one provider has several. Absent from servers that
+   * aggregated per provider (before v6), which the client treats as one source.
+   */
+  source: Schema.optional(NonNegativeInt),
 });
 export type UsageBucket = typeof UsageBucket.Type;
 
