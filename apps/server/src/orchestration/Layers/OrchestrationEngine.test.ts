@@ -564,6 +564,142 @@ describe("OrchestrationEngine", () => {
     }).pipe(Effect.provide(makeOrchestrationLayer())),
   );
 
+  it("keeps a quick chat unattached while a question is pending after restart", async () => {
+    const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-quick-attachment-"));
+    const databasePath = NodePath.join(directory, "state.sqlite");
+    let system = await createOrchestrationSystem(databasePath);
+    const threadId = ThreadId.make("quick-pending");
+    const projectId = ProjectId.make("quick-project");
+    try {
+      await system.run(
+        system.engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.make("project"),
+          projectId,
+          title: "Project",
+          workspaceRoot: directory,
+          createdAt: now(),
+        }),
+      );
+      await system.run(
+        system.engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make("chat"),
+          threadId,
+          projectId: null,
+          title: "Quick chat",
+          modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5-codex" },
+          runtimeMode: "full-access",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          branch: null,
+          worktreePath: null,
+          createdAt: now(),
+        }),
+      );
+      await system.run(
+        system.engine.dispatch({
+          type: "thread.activity.append",
+          commandId: CommandId.make("question"),
+          threadId,
+          createdAt: now(),
+          activity: {
+            id: EventId.make("question"),
+            kind: "user-input.requested",
+            summary: "Question",
+            tone: "info",
+            turnId: null,
+            createdAt: now(),
+            payload: { requestId: "pending-question", responseMode: "message", questions: [] },
+          },
+        }),
+      );
+      await system.dispose();
+      system = await createOrchestrationSystem(databasePath);
+      const error = await system.run(
+        system.engine
+          .dispatch({
+            type: "thread.meta.update",
+            commandId: CommandId.make("attach"),
+            threadId,
+            projectId,
+          })
+          .pipe(Effect.flip),
+      );
+      expect(error._tag).toBe("OrchestrationCommandInvariantError");
+      expect(String(error)).toContain("Resolve pending requests");
+      expect(
+        (await system.readModel()).threads.find((thread) => thread.id === threadId)?.projectId,
+      ).toBeNull();
+    } finally {
+      await system.dispose();
+      await NodeFSP.rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  effectIt.effect("attaches quick chats only after background work finishes", () =>
+    Effect.gen(function* () {
+      const engine = yield* OrchestrationEngineService;
+      const snapshots = yield* ProjectionSnapshotQuery;
+      const liveness = yield* ThreadBackgroundLiveness.ThreadBackgroundLivenessService;
+      const threadId = ThreadId.make("quick-chat-background");
+      const projectId = ProjectId.make("quick-chat-project");
+      yield* engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("quick-project-create"),
+        projectId,
+        title: "Project",
+        workspaceRoot: "/tmp/quick-chat-project",
+        createdAt: now(),
+      });
+      yield* engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("quick-chat-create"),
+        threadId,
+        projectId: null,
+        title: "Quick chat",
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5-codex" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "full-access",
+        branch: null,
+        worktreePath: null,
+        createdAt: now(),
+      });
+      for (const taskType of ["subagent", "local_bash"]) {
+        liveness.recordTaskLiveness({
+          threadId,
+          taskId: taskType,
+          taskType,
+          status: undefined,
+          kind: "started",
+        });
+        const result = yield* engine
+          .dispatch({
+            type: "thread.meta.update",
+            commandId: CommandId.make(`quick-attach-${taskType}`),
+            threadId,
+            projectId,
+          })
+          .pipe(Effect.result);
+        expect(result._tag).toBe("Failure");
+        expect(
+          (yield* snapshots.getSnapshot()).threads.find((thread) => thread.id === threadId)
+            ?.projectId,
+        ).toBeNull();
+        liveness.clearThreadLiveness(threadId);
+      }
+      yield* engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.make("quick-attach-idle"),
+        threadId,
+        projectId,
+      });
+      expect(
+        (yield* snapshots.getSnapshot()).threads.find((thread) => thread.id === threadId)
+          ?.projectId,
+      ).toBe(projectId);
+    }).pipe(Effect.provide(makeOrchestrationLayer())),
+  );
+
   effectIt.effect(
     "rejects persisted changes and live background work without blocking unrelated threads",
     () =>

@@ -1,3 +1,4 @@
+import { QuickChatProjectAttachment } from "./QuickChatProjectAttachment";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import {
   StackActions,
@@ -728,11 +729,13 @@ function ThreadRouteContent(
         onPress: () => handleOpenTerminal(null),
       });
     }
-    actions.push({
-      accessibilityLabel: "Open git controls",
-      icon: "point.topleft.down.curvedto.point.bottomright.up",
-      onPress: handleOpenGitInspector,
-    });
+    if (selectedThreadProject?.workspaceRoot) {
+      actions.push({
+        accessibilityLabel: "Open git controls",
+        icon: "point.topleft.down.curvedto.point.bottomright.up",
+        onPress: handleOpenGitInspector,
+      });
+    }
     if (fileInspector.supported && selectedThreadCwd !== null) {
       actions.push({
         accessibilityLabel: "Toggle inspector",
@@ -838,7 +841,9 @@ function ThreadRouteContent(
   const serverConfig = routeEnvironmentRuntime?.serverConfig ?? null;
   const renderThreadRouteBody = (showActionControls: boolean) => (
     <>
-      <ThreadGitControls {...threadGitControlProps} showActionControls={showActionControls} />
+      {selectedThreadProject && (
+        <ThreadGitControls {...threadGitControlProps} showActionControls={showActionControls} />
+      )}
 
       <GitActionProgressOverlay progress={gitActionProgress} onDismiss={dismissGitActionResult} />
 
@@ -855,6 +860,12 @@ function ThreadRouteContent(
             : undefined
         }
       >
+        {selectedThread?.projectId === null && (
+          <QuickChatProjectAttachment
+            key={`${selectedThread.environmentId}:${selectedThread.id}`}
+            threadRef={{ environmentId: selectedThread.environmentId, threadId: selectedThread.id }}
+          />
+        )}
         <ThreadDetailScreen
           selectedThread={selectedThreadWithDraftSettings ?? selectedThread}
           contentPresentation={contentPresentation}
@@ -943,7 +954,12 @@ function ThreadRouteContent(
           // reserved for future breadcrumbs/status).
           unstable_headerRightItems:
             Platform.OS === "ios"
-              ? () => (layout.usesSplitView ? threadCenterHeaderItems : compactRightHeaderItems)
+              ? () =>
+                  selectedThreadProject
+                    ? layout.usesSplitView
+                      ? threadCenterHeaderItems
+                      : compactRightHeaderItems
+                    : []
               : undefined,
           unstable_headerSubtitle: usesNativeHeaderGlass ? headerSubtitle : undefined,
           contentStyle:

@@ -121,7 +121,7 @@ describe("buildArchivedThreadGroups", () => {
     });
 
     expect(result).toHaveLength(1);
-    expect(result[0]?.project.environmentId).toBe(environmentId);
+    expect(result[0]?.project?.environmentId).toBe(environmentId);
     expect(result[0]?.threads.map((thread) => thread.id)).toEqual(["thread-1"]);
   });
 
@@ -144,4 +144,18 @@ describe("buildArchivedThreadGroups", () => {
 
     expect(result).toEqual([]);
   });
+});
+
+it("shows archived quick chats in an environment without projects", () => {
+  const quick = makeThread({ id: ThreadId.make("quick"), projectId: null, title: "Passkeys" });
+  const groups = buildArchivedThreadGroups({
+    snapshots: [makeSnapshot([], [quick])],
+    environmentLabels: {},
+    environmentId,
+    searchQuery: "passkeys",
+    sortOrder: "newest",
+  });
+  expect(groups).toHaveLength(1);
+  expect(groups[0]?.project).toBeNull();
+  expect(groups[0]?.threads[0]).toMatchObject({ id: quick.id, environmentId, projectId: null });
 });

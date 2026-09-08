@@ -1,3 +1,5 @@
+import * as Path from "effect/Path";
+import { ServerConfig } from "../../config.ts";
 import {
   type ChatAttachment,
   CommandId,
@@ -325,6 +327,8 @@ const make = Effect.gen(function* () {
   const providerRegistry = yield* ProviderRegistry;
   const gitWorkflow = yield* GitWorkflowService;
   const fileSystem = yield* FileSystem.FileSystem;
+  const serverConfig = yield* ServerConfig;
+  const path = yield* Path.Path;
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
   const textGeneration = yield* TextGeneration;
   const serverSettingsService = yield* ServerSettingsService;
@@ -478,10 +482,39 @@ const make = Effect.gen(function* () {
     });
   });
 
-  const resolveProject = Effect.fnUntraced(function* (projectId: ProjectId) {
+  const resolveProject = Effect.fnUntraced(function* (projectId: ProjectId | null) {
+    if (projectId === null) return undefined;
     return yield* projectionSnapshotQuery
       .getProjectShellById(projectId)
       .pipe(Effect.map(Option.getOrUndefined));
+  });
+
+  // Quick chats own a stable directory without inheriting a project's workspace.
+  const resolveSessionCwd = Effect.fn("resolveSessionCwd")(function* (thread: {
+    readonly id: ThreadId;
+    readonly projectId: ProjectId | null;
+    readonly worktreePath: string | null;
+  }) {
+    if (thread.projectId === null) {
+      const cwd = path.join(
+        serverConfig.stateDir,
+        "quick-chats",
+        Buffer.from(thread.id).toString("base64url"),
+      );
+      yield* fileSystem.makeDirectory(cwd, { recursive: true }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ProviderAdapterRequestError({
+              provider: "unknown",
+              method: "thread.turn.start",
+              detail: `Could not prepare quick chat directory: ${cause.message}`,
+            }),
+        ),
+      );
+      return cwd;
+    }
+    const project = yield* resolveProject(thread.projectId);
+    return resolveThreadWorkspaceCwd({ thread, projects: project ? [project] : [] });
   });
 
   /**
@@ -492,7 +525,7 @@ const make = Effect.gen(function* () {
    */
   const ensureThreadWorktree = Effect.fnUntraced(function* (thread: {
     readonly id: ThreadId;
-    readonly projectId: ProjectId;
+    readonly projectId: ProjectId | null;
     readonly branch: string | null;
     readonly worktreePath: string | null;
   }) {
@@ -707,11 +740,7 @@ const make = Effect.gen(function* () {
         });
       }
     }
-    const project = yield* resolveProject(thread.projectId);
-    const effectiveCwd = resolveThreadWorkspaceCwd({
-      thread,
-      projects: project ? [project] : [],
-    });
+    const effectiveCwd = yield* resolveSessionCwd(thread);
     const refreshWorkspaceSnapshot = effectiveCwd
       ? providerRegistry
           .refreshWorkspaceSnapshot({ instanceId: desiredInstanceId, cwd: effectiveCwd })
@@ -1032,12 +1061,7 @@ const make = Effect.gen(function* () {
     if (thread.title !== previousTitle) {
       return { _tag: "Superseded" } as const;
     }
-    const project = yield* resolveProject(thread.projectId);
-    const cwd =
-      resolveThreadWorkspaceCwd({
-        thread,
-        projects: project ? [project] : [],
-      }) ?? process.cwd();
+    const cwd = (yield* resolveSessionCwd(thread)) ?? process.cwd();
     const { textGenerationModelSelection: modelSelection } =
       yield* serverSettingsService.getSettings;
     const generated = yield* textGeneration.generateThreadTitle({
@@ -1302,12 +1326,7 @@ const make = Effect.gen(function* () {
 
     const isCompactCommand = isCompactCommandMessage(message);
     if (!hasOtherUserMessages && !isCompactCommand) {
-      const project = yield* resolveProject(thread.projectId);
-      const generationCwd =
-        resolveThreadWorkspaceCwd({
-          thread,
-          projects: project ? [project] : [],
-        }) ?? process.cwd();
+      const generationCwd = (yield* resolveSessionCwd(thread)) ?? process.cwd();
       const generationInput = {
         messageText: assistantCitationsToPlainText(message.text),
         ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),

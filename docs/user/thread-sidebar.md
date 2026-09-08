@@ -5,13 +5,27 @@ need a separate branch and working directory.
 
 ## Start a thread
 
-On web and desktop, a new thread keeps the current project and carries your model
+Choose **New thread**, then select a project. The new thread carries your model
 and mode selections, unless the destination project has its own model default.
 Its branch and workspace mode come from your configured defaults. To continue in
 an existing worktree, use **New thread in this worktree** from the branch toolbar.
 
 When you change a new thread's project, T3 Code stays in the current environment
 if that project exists there. Otherwise it selects an environment that has it.
+
+### Quick chats
+
+Choose **New thread → Quick chat** to ask an agent a question without adding or
+selecting a project. Quick chats appear below active project threads and keep
+their conversation history. You can rename, archive, restore, and delete them.
+
+To turn a quick chat into project work, finish the current turn and choose
+**Attach to project** from its menu on web or desktop, or above the conversation
+on mobile. Select a project in the same environment. Enable **Create a new
+worktree** and choose its base branch if you want a separate workspace. The chat
+keeps its history and subsequent turns use the selected workspace.
+
+Quick chats use the agent's normal permission settings.
 
 ### Start in the background
 

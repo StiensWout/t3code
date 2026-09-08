@@ -4,6 +4,7 @@ import {
   resolveThreadCurrentPullRequestLink,
   visibleThreadPullRequests,
 } from "@t3tools/shared/threadPullRequests";
+import { useQuickChatAttachmentStore } from "../quickChatAttachmentStore";
 import { useAtomValue } from "@effect/atom-react";
 import * as Schema from "effect/Schema";
 import {
@@ -167,7 +168,6 @@ import {
   type SidebarDropVerb,
   resolveSidebarThreadStatus,
   searchSidebarThreads,
-  shouldCreateNewThreadInCurrentProject,
   shouldRecedeSidebarThread,
   resolveWorkingStartedAt,
   sidebarListItemId,
@@ -2515,7 +2515,8 @@ export default function Sidebar() {
     const visible = threads.filter(
       (thread) =>
         thread.archivedAt === null &&
-        (scopedProjectKeys === null ||
+        (thread.projectId === null ||
+          scopedProjectKeys === null ||
           scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)),
     );
     const pinned: EnvironmentThreadShell[] = [];
@@ -2525,6 +2526,10 @@ export default function Sidebar() {
     const draggable = new Set<string>();
     const activeReorderable = new Set<string>();
     for (const thread of visible) {
+      if (thread.projectId === null) {
+        active.push(thread);
+        continue;
+      }
       const capabilities = serverConfigs.get(thread.environmentId)?.environment.capabilities;
       // Threads on servers without the settlement capability (old server,
       // or descriptor not loaded yet) never classify as settled: the user
@@ -2573,7 +2578,9 @@ export default function Sidebar() {
     // sort, or mixed-version fleets would render different pinned orders on
     // web and mobile from the same data.
     const sortedPinned = sortPinnedThreadsForSidebar(pinned);
-    const sortedActive = sortThreadsForSidebar(active);
+    const sortedActive = sortThreadsForSidebar(active).toSorted(
+      (left, right) => Number(left.projectId === null) - Number(right.projectId === null),
+    );
     return {
       pinnedThreads:
         optimisticDrop?.section !== "pinned" || optimisticDrop.order === null
@@ -3010,9 +3017,11 @@ export default function Sidebar() {
       const nextThread = nextCardKey ? threadByKeyRef.current.get(nextCardKey) : null;
       return nextThread
         ? () => navigateToThread(scopeThreadRef(nextThread.environmentId, nextThread.id))
-        : shell
-          ? () =>
-              void handleNewThreadRef.current(scopeProjectRef(shell.environmentId, shell.projectId))
+        : shell && shell.projectId !== null
+          ? (() => {
+              const projectRef = scopeProjectRef(shell.environmentId, shell.projectId);
+              return () => void handleNewThreadRef.current(projectRef);
+            })()
           : () => void router.navigate({ to: "/" });
     },
     [navigateToThread, router],
@@ -4002,6 +4011,7 @@ export default function Sidebar() {
         const clicked = await settlePromise(() =>
           api.contextMenu.show(
             buildThreadActionMenuItems({
+              isQuickChat: thread.projectId === null,
               branch: thread.branch ?? null,
               isPinned,
               isSettled,
@@ -4041,11 +4051,17 @@ export default function Sidebar() {
             if (projectGroup) openProjectSettings(projectGroup);
             return;
           }
+          case "attach-to-project": {
+            useQuickChatAttachmentStore.getState().open(threadRef);
+            return;
+          }
           case "new-thread-on-branch": {
+            const projectRef = scopeProjectRef(thread.environmentId, thread.projectId);
+            if (!projectRef) return;
             // Explicit branch carry-over: reuse the thread's worktree when it
             // has one, otherwise its branch on the local checkout.
             const result = await settlePromise(() =>
-              handleNewThreadRef.current(scopeProjectRef(thread.environmentId, thread.projectId), {
+              handleNewThreadRef.current(projectRef, {
                 branch: thread.branch,
                 worktreePath: thread.worktreePath,
                 envMode: thread.worktreePath ? "worktree" : "local",
@@ -4291,10 +4307,8 @@ export default function Sidebar() {
   // for multi-project setups.
   const handleNewThreadClick = useCallback(
     (event?: ReactMouseEvent) => {
-      // One project: nothing to pick, create immediately. Shift+click creates
-      // directly in the current project even with several projects, skipping
-      // the palette picker.
-      if (shouldCreateNewThreadInCurrentProject(event?.shiftKey ?? false, projectGroups.length)) {
+      // Shift-click creates directly in the current project.
+      if (event?.shiftKey === true && projectGroups.length > 0) {
         if (isMobile) setOpenMobile(false);
         void startNewThreadFromContext({
           activeDraftThread: newThreadContext.activeDraftThread,
@@ -4310,17 +4324,8 @@ export default function Sidebar() {
     [isMobile, newThreadContext, projectGroups.length, setOpenMobile],
   );
 
-  // The button mirrors chat.new: in multi-project setups both route through
-  // the command palette's "New thread in..." picker, and in single-project
-  // setups both create immediately. In multi-project setups the label is only
-  // the picker's shortcut: falling back to chat.newLocal would advertise the
-  // same shortcut for both the picker and direct create. In single-project
-  // setups both commands create directly, so chat.newLocal is a valid
-  // fallback. The second tooltip line (multi-project only) advertises
-  // shift+click and its keyboard twin chat.newLocal for direct create.
-  const newThreadShortcutLabel =
-    shortcutLabelForCommand(keybindings, "chat.new") ??
-    (projectGroups.length <= 1 ? shortcutLabelForCommand(keybindings, "chat.newLocal") : undefined);
+  // New thread opens the picker; shift-click keeps the current-project shortcut.
+  const newThreadShortcutLabel = shortcutLabelForCommand(keybindings, "chat.new");
   const newThreadInProjectShortcutLabel = shortcutLabelForCommand(keybindings, "chat.newLocal");
   return (
     <>
@@ -4387,7 +4392,12 @@ export default function Sidebar() {
                         type="button"
                         className="relative focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
                         onClick={handleNewThreadClick}
-                        disabled={projects.length === 0}
+                        disabled={
+                          projects.length === 0 &&
+                          ![...serverConfigs.values()].some(
+                            (config) => config.environment.capabilities.quickChats,
+                          )
+                        }
                         aria-label="New thread"
                       />
                     }
@@ -4595,9 +4605,11 @@ export default function Sidebar() {
                           projectByKey.get(`${thread.environmentId}:${thread.projectId}`) ?? null
                         }
                         projectDisplayName={
-                          projectDisplayNameByKey.get(
-                            `${thread.environmentId}:${thread.projectId}`,
-                          ) ?? null
+                          (thread.projectId === null
+                            ? "Quick chat"
+                            : projectDisplayNameByKey.get(
+                                `${thread.environmentId}:${thread.projectId}`,
+                              )) ?? null
                         }
                         environmentLabel={environmentLabelById.get(thread.environmentId) ?? null}
                         environmentMachine={
@@ -4684,14 +4696,17 @@ export default function Sidebar() {
                                   : "settle"
                             }
                             settlementSupported={
+                              thread.projectId !== null &&
                               serverConfigs.get(thread.environmentId)?.environment.capabilities
                                 .threadSettlement === true
                             }
                             snoozeSupported={
+                              thread.projectId !== null &&
                               serverConfigs.get(thread.environmentId)?.environment.capabilities
                                 .threadSnooze === true
                             }
                             pinningSupported={
+                              thread.projectId !== null &&
                               serverConfigs.get(thread.environmentId)?.environment.capabilities
                                 .threadPinning === true
                             }
@@ -4734,9 +4749,11 @@ export default function Sidebar() {
                               null
                             }
                             projectDisplayName={
-                              projectDisplayNameByKey.get(
-                                `${thread.environmentId}:${thread.projectId}`,
-                              ) ?? null
+                              (thread.projectId === null
+                                ? "Quick chat"
+                                : projectDisplayNameByKey.get(
+                                    `${thread.environmentId}:${thread.projectId}`,
+                                  )) ?? null
                             }
                             providerEntryByInstanceId={
                               providerEntriesByEnvironment.get(thread.environmentId) ??
@@ -4792,9 +4809,22 @@ export default function Sidebar() {
                           onNavigateToDraft={navigateToDraft}
                         />,
                       ];
+                      let quickChatsRendered = false;
                       for (const item of sidebarListItems) {
                         if (item.kind === "thread") {
-                          items.push(renderThreadRow(threadByKey.get(item.key)!, item.section));
+                          const thread = threadByKey.get(item.key)!;
+                          if (thread.projectId === null && !quickChatsRendered) {
+                            items.push(
+                              <li
+                                key="quick-chat-heading"
+                                className="px-2 pt-4 pb-1 text-xs font-medium"
+                              >
+                                Quick chats
+                              </li>,
+                            );
+                            quickChatsRendered = true;
+                          }
+                          items.push(renderThreadRow(thread, item.section));
                           continue;
                         }
                         switch (item.marker) {

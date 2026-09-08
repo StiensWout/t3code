@@ -203,13 +203,34 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         }
 
         if (
-          envelope.command.type === "thread.auto-settle" &&
+          (envelope.command.type === "thread.auto-settle" ||
+            (envelope.command.type === "thread.meta.update" &&
+              envelope.command.projectId !== undefined)) &&
           threadBackgroundLiveness.getThreadBackgroundLiveness(envelope.command.threadId) !== null
         ) {
           return yield* new OrchestrationCommandInvariantError({
             commandType: envelope.command.type,
             detail: `thread ${envelope.command.threadId} has live background work`,
           });
+        }
+
+        if (
+          envelope.command.type === "thread.meta.update" &&
+          envelope.command.projectId !== undefined
+        ) {
+          // Pending requests survive restarts; the command model's activity window does not.
+          const thread = yield* projectionSnapshotQuery.getThreadShellById(
+            envelope.command.threadId,
+          );
+          if (
+            Option.isSome(thread) &&
+            (thread.value.hasPendingApprovals || thread.value.hasPendingUserInput)
+          ) {
+            return yield* new OrchestrationCommandInvariantError({
+              commandType: envelope.command.type,
+              detail: "Resolve pending requests before attaching the quick chat to a project.",
+            });
+          }
         }
 
         // Command snapshots omit activities at startup and cap them while running.

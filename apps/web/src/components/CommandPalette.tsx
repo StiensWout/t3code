@@ -1,6 +1,7 @@
 "use client";
 
 import { threadPullRequestLinkMode } from "@t3tools/client-runtime/thread-pull-request-compatibility";
+import { useNewQuickChat } from "../hooks/useNewQuickChat";
 
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
@@ -1090,6 +1091,33 @@ function OpenCommandPaletteDialog(props: {
     [openProjectFromSearch, pickerProjects, projectGroupByTargetKey],
   );
 
+  const newQuickChat = useNewQuickChat();
+  const quickChatItems = useMemo<CommandPaletteActionItem[]>(() => {
+    const eligible = environments.filter(
+      (environment) => environment.serverConfig?.environment.capabilities.quickChats === true,
+    );
+    const preferredId =
+      activeThread?.environmentId ?? activeDraftThread?.environmentId ?? primaryEnvironmentId;
+    const preferred = eligible.find((environment) => environment.environmentId === preferredId);
+    return (preferred ? [preferred] : eligible).map((environment) => ({
+      kind: "action",
+      value: `new-quick-chat:${environment.environmentId}`,
+      title: "New quick chat",
+      description: preferred || eligible.length === 1 ? "No project needed" : environment.label,
+      searchTerms: ["quick chat", "question", "no project"],
+      icon: <MessageSquareIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        await newQuickChat(environment.environmentId);
+      },
+    }));
+  }, [
+    environments,
+    activeThread?.environmentId,
+    activeDraftThread?.environmentId,
+    primaryEnvironmentId,
+    newQuickChat,
+  ]);
+
   const projectThreadItems = useMemo(
     () =>
       enumerateCommandPaletteItems(
@@ -1529,7 +1557,7 @@ function OpenCommandPaletteDialog(props: {
   }, [clearOpenIntent, openAddProjectFlow, openIntent]);
 
   useLayoutEffect(() => {
-    if (openIntent?.kind !== "new-thread-in" || projectThreadItems.length === 0) {
+    if (openIntent?.kind !== "new-thread-in") {
       return;
     }
     clearOpenIntent();
@@ -1555,6 +1583,7 @@ function OpenCommandPaletteDialog(props: {
           label: "Projects",
           items: enumerateCommandPaletteItems(prioritized),
         },
+        { value: "quick-chat", label: "Quick chat", items: quickChatItems },
       ],
     });
   }, [
@@ -1564,10 +1593,13 @@ function OpenCommandPaletteDialog(props: {
     currentProjectId,
     openIntent,
     projectThreadItems,
+    quickChatItems,
     pushPaletteView,
   ]);
 
-  const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];
+  const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [
+    ...quickChatItems,
+  ];
 
   if (projects.length > 0) {
     const activeProjectTitle =
@@ -1604,7 +1636,10 @@ function OpenCommandPaletteDialog(props: {
       title: "New thread in...",
       icon: <SquarePenIcon className={ITEM_ICON_CLASS} />,
       addonIcon: <SquarePenIcon className={ADDON_ICON_CLASS} />,
-      groups: [{ value: "projects", label: "Projects", items: projectThreadItems }],
+      groups: [
+        { value: "projects", label: "Projects", items: projectThreadItems },
+        { value: "quick-chat", label: "Quick chat", items: quickChatItems },
+      ],
     });
   }
 
