@@ -10,7 +10,8 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
 
-import type { TerminalManager } from "./Manager.ts";
+import * as TerminalManager from "./Manager.ts";
+import * as Layer from "effect/Layer";
 import { terminalAttachStream } from "./AttachStream.ts";
 
 const input = {
@@ -26,21 +27,24 @@ const target = { threadId: input.threadId, terminalId: input.terminalId };
 it.effect("delivers every queued output before close when the attach consumer stalls", () =>
   Effect.gen(function* () {
     const subscribed =
-      yield* Deferred.make<Parameters<TerminalManager["Service"]["attachStream"]>[1]>();
+      yield* Deferred.make<
+        Parameters<TerminalManager.TerminalManager["Service"]["attachStream"]>[1]
+      >();
     const consumerStarted = yield* Deferred.make<void>();
     const resumeConsumer = yield* Deferred.make<void>();
     let unsubscribed = false;
     const received: TerminalAttachStreamEvent[] = [];
-    const stream = terminalAttachStream(
-      {
-        attachStream: (_input, listener) =>
-          Deferred.succeed(subscribed, listener).pipe(
-            Effect.as(() => {
-              unsubscribed = true;
-            }),
-          ),
-      },
-      input,
+    const stream = terminalAttachStream(input).pipe(
+      Stream.provide(
+        Layer.mock(TerminalManager.TerminalManager)({
+          attachStream: (_input, listener) =>
+            Deferred.succeed(subscribed, listener).pipe(
+              Effect.as(() => {
+                unsubscribed = true;
+              }),
+            ),
+        }),
+      ),
     );
     const consumer = yield* stream.pipe(
       Stream.takeUntil((event) => event.type === "closed"),
@@ -79,7 +83,9 @@ it.effect("delivers every queued output before close when the attach consumer st
 it.effect("retains extended replay and its completion boundary when the consumer stalls", () =>
   Effect.gen(function* () {
     const subscribed =
-      yield* Deferred.make<Parameters<TerminalManager["Service"]["attachStream"]>[1]>();
+      yield* Deferred.make<
+        Parameters<TerminalManager.TerminalManager["Service"]["attachStream"]>[1]
+      >();
     const replayStarted = yield* Deferred.make<void>();
     const resumeConsumer = yield* Deferred.make<void>();
     const queueFilled = yield* Deferred.make<void>();
@@ -87,18 +93,19 @@ it.effect("retains extended replay and its completion boundary when the consumer
     const resumeLive = yield* Deferred.make<void>();
     let unsubscribed = false;
     const received: TerminalAttachStreamEvent[] = [];
-    const stream = terminalAttachStream(
-      {
-        attachStream: (request, listener) => {
-          expect(request.replayBytes).toBe(EXTENDED_TERMINAL_REPLAY_BYTES);
-          return Deferred.succeed(subscribed, listener).pipe(
-            Effect.as(() => {
-              unsubscribed = true;
-            }),
-          );
-        },
-      },
-      input,
+    const stream = terminalAttachStream(input).pipe(
+      Stream.provide(
+        Layer.mock(TerminalManager.TerminalManager)({
+          attachStream: (request, listener) => {
+            expect(request.replayBytes).toBe(EXTENDED_TERMINAL_REPLAY_BYTES);
+            return Deferred.succeed(subscribed, listener).pipe(
+              Effect.as(() => {
+                unsubscribed = true;
+              }),
+            );
+          },
+        }),
+      ),
     );
     const consumer = yield* stream.pipe(
       Stream.takeUntil((event) => event.type === "output" && event.data === "live-end"),
@@ -157,19 +164,22 @@ it.effect("retains extended replay and its completion boundary when the consumer
 it.effect("unsubscribes and releases blocked output when the transport consumer disconnects", () =>
   Effect.gen(function* () {
     const subscribed =
-      yield* Deferred.make<Parameters<TerminalManager["Service"]["attachStream"]>[1]>();
+      yield* Deferred.make<
+        Parameters<TerminalManager.TerminalManager["Service"]["attachStream"]>[1]
+      >();
     const consumerStarted = yield* Deferred.make<void>();
     let unsubscribed = false;
-    const stream = terminalAttachStream(
-      {
-        attachStream: (_input, listener) =>
-          Deferred.succeed(subscribed, listener).pipe(
-            Effect.as(() => {
-              unsubscribed = true;
-            }),
-          ),
-      },
-      input,
+    const stream = terminalAttachStream(input).pipe(
+      Stream.provide(
+        Layer.mock(TerminalManager.TerminalManager)({
+          attachStream: (_input, listener) =>
+            Deferred.succeed(subscribed, listener).pipe(
+              Effect.as(() => {
+                unsubscribed = true;
+              }),
+            ),
+        }),
+      ),
     );
     const consumer = yield* stream.pipe(
       Stream.runForEach(() =>
