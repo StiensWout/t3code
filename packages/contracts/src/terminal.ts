@@ -394,7 +394,20 @@ export class TerminalResizeError extends Schema.TaggedError<TerminalResizeError>
   }
 }
 
+export class TerminalAttachTimeoutError extends Schema.TaggedError<TerminalAttachTimeoutError>()(
+  "TerminalAttachTimeoutError",
+  {
+    threadId: Schema.String,
+    terminalId: Schema.String,
+  },
+) {
+  override get message() {
+    return "Terminal output subscription stalled. Reattach to resume.";
+  }
+}
+
 export const TerminalError = Schema.Union([
+  TerminalAttachTimeoutError,
   TerminalCwdError,
   TerminalHistoryError,
   TerminalSessionLookupError,
