@@ -696,6 +696,62 @@ it.effect("ProviderSessionManagerV2 opens independent sessions concurrently", ()
   }),
 );
 
+it.effect("ProviderSessionManagerV2 closes every live session for a provider instance", () =>
+  Effect.gen(function* () {
+    const state = yield* Ref.make(emptyState);
+    const effect = Effect.gen(function* () {
+      const eventSink = yield* EventSinkV2;
+      const idAllocator = yield* IdAllocatorV2;
+      const manager = yield* ProviderSessionManagerV2;
+      const now = yield* DateTime.now;
+      const firstThreadId = ThreadId.make("thread-provider-session-manager-logout-a");
+      const secondThreadId = ThreadId.make("thread-provider-session-manager-logout-b");
+      const firstProviderSessionId = yield* idAllocator.allocate.providerSession({
+        providerInstanceId: modelSelection.instanceId,
+        threadId: firstThreadId,
+      });
+      const secondProviderSessionId = yield* idAllocator.allocate.providerSession({
+        providerInstanceId: modelSelection.instanceId,
+        threadId: secondThreadId,
+      });
+
+      yield* eventSink.write({
+        events: [
+          yield* makeThreadCreatedEvent({ idAllocator, threadId: firstThreadId, now }),
+          yield* makeThreadCreatedEvent({ idAllocator, threadId: secondThreadId, now }),
+        ],
+      });
+      yield* manager.open({
+        threadId: firstThreadId,
+        providerSessionId: firstProviderSessionId,
+        modelSelection,
+        runtimePolicy,
+      });
+      yield* manager.open({
+        threadId: secondThreadId,
+        providerSessionId: secondProviderSessionId,
+        modelSelection,
+        runtimePolicy,
+      });
+
+      yield* manager.closeInstance(modelSelection.instanceId);
+
+      assert.isTrue(Option.isNone(yield* manager.get(firstProviderSessionId)));
+      assert.isTrue(Option.isNone(yield* manager.get(secondProviderSessionId)));
+      assert.equal((yield* Ref.get(state)).closeCount, 2);
+    });
+
+    yield* effect.pipe(
+      Effect.provide(
+        makeTestLayer({
+          state,
+          idleTimeoutMs: 60_000,
+        }),
+      ),
+    );
+  }),
+);
+
 it.effect("ProviderSessionManagerV2 opens a duplicate session only once", () =>
   Effect.gen(function* () {
     const state = yield* Ref.make(emptyState);

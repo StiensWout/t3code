@@ -1408,6 +1408,38 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       occurredAt: now,
       payload: thread,
     });
+    if (command.importedNativeThread !== undefined) {
+      yield* emitEvent({
+        type: "provider-thread.updated",
+        threadId: command.threadId,
+        driver: command.importedNativeThread.ref.driver,
+        providerInstanceId: command.modelSelection.instanceId,
+        occurredAt: now,
+        payload: {
+          id: idAllocator.derive.providerThread({
+            driver: command.importedNativeThread.ref.driver,
+            providerInstanceId: command.modelSelection.instanceId,
+            nativeThreadId: command.importedNativeThread.ref.nativeId,
+          }),
+          driver: command.importedNativeThread.ref.driver,
+          providerInstanceId: command.modelSelection.instanceId,
+          providerSessionId: null,
+          appThreadId: command.threadId,
+          ownerNodeId: null,
+          nativeThreadRef: command.importedNativeThread.ref,
+          nativeConversationHeadRef: null,
+          status: "not_loaded",
+          firstRunOrdinal: null,
+          lastRunOrdinal: null,
+          handoffIds: [],
+          forkedFrom: null,
+          contextUsage: null,
+          nativeMetadata: command.importedNativeThread.metadata ?? null,
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+    }
   });
 
   const dispatchThreadVisit = Effect.fn("orchestrationV2.dispatch.threadVisit")(function* (
@@ -1509,6 +1541,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         commandId: command.commandId,
         commandType: command.type,
         cause: `Thread ${command.threadId} worktree changed before the metadata update could be applied.`,
+      });
+    }
+    if (
+      command.type === "thread.metadata.update" &&
+      command.expectedEmpty === true &&
+      (projection.messages.length > 0 || projection.runs.length > 0)
+    ) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: `Thread ${command.threadId} is no longer empty.`,
       });
     }
     if (command.type === "thread.archive" && thread.archivedAt !== null) {
@@ -7588,6 +7631,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
 
     const plan = yield* dispatchOnce(command).pipe(
       Effect.flatMap((planned) =>
+        // A Stop can race with terminal provider events. Its empty plan is an
+        // accepted idempotent outcome; every other command must still mutate.
         planned.events.length > 0
           ? Effect.succeed(planned)
           : Effect.fail(

@@ -79,7 +79,6 @@ import {
   ThreadListV2SettledShelfHeader,
   ThreadListV2SnoozedShelfHeader,
 } from "./thread-list-v2-items";
-import { resolveThreadProviderInstance } from "./thread-provider-instance";
 import {
   buildThreadListV2Items,
   getThreadListV2OrderedSection,
@@ -897,6 +896,13 @@ function ThreadNavigationSidebarPane(
             : threadMovePlanners.active;
           const movedId = `${thread.environmentId}:${thread.id}`;
           const scopeKey = scopedProjectKey(thread.environmentId, thread.projectId);
+          const provider = serverConfigs
+            .get(thread.environmentId)
+            ?.providers.find(
+              (candidate) =>
+                candidate.instanceId ===
+                (thread.runtime?.providerInstanceId ?? thread.modelSelection.instanceId),
+            );
           return (
             <ThreadListV2Row
               onNewThreadOnBranch={props.onNewThreadOnBranch}
@@ -914,6 +920,7 @@ function ThreadNavigationSidebarPane(
                 serverConfigs.get(thread.environmentId)?.providers,
               )}
               providerInstance={resolveThreadProviderInstance(serverConfigs, thread)}
+              providerIconUrl={provider?.iconUrl}
               environmentLabel={
                 Object.keys(savedConnectionsById).length > 1
                   ? (savedConnectionsById[thread.environmentId]?.environmentLabel ?? null)
