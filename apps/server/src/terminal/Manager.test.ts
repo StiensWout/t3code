@@ -3186,6 +3186,43 @@ it.layer(
     }),
   );
 
+  it.effect("delivers terminal close after repeated attach-buffer overflows", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager({ outputBatchWindowMs: 0 });
+      yield* manager.open(openInput());
+      const process = ptyAdapter.processes[0]!;
+      let burstDrained = yield* Deferred.make<void>();
+      const stopObserving = yield* manager.subscribe((event) =>
+        event.type === "output" && event.data.endsWith("burst-end")
+          ? Deferred.succeed(burstDrained, undefined).pipe(Effect.asVoid)
+          : Effect.void,
+      );
+      yield* Effect.addFinalizer(() => Effect.sync(stopObserving));
+      const received: TerminalAttachStreamEvent[] = [];
+      let snapshotCount = 0;
+      const stop = yield* manager.attachStream(openInput(), (event) =>
+        Effect.gen(function* () {
+          received.push(event);
+          if (event.type !== "snapshot") return;
+          snapshotCount += 1;
+          burstDrained = yield* Deferred.make<void>();
+          for (let index = 0; index < 65; index += 1) process.emitData("x".repeat(64 * 1024));
+          process.emitData("burst-end");
+          yield* Deferred.await(burstDrained);
+          if (snapshotCount === 4) {
+            yield* manager
+              .close({ threadId: "thread-1", terminalId: DEFAULT_TERMINAL_ID })
+              .pipe(Effect.orDie);
+          }
+        }),
+      );
+      yield* Effect.addFinalizer(() => Effect.sync(stop));
+      expect(snapshotCount).toBe(4);
+      expect(received.at(-1)?.type).toBe("closed");
+      expect(Option.isNone(yield* manager.readSnapshot(openInput()))).toBe(true);
+    }),
+  );
+
   it.effect("cancels extended history replay when its attach scope closes", () =>
     Effect.gen(function* () {
       const { manager, ptyAdapter, logsDir, getEvents } = yield* createManager();

@@ -3307,6 +3307,15 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       let bufferedEventBytes = 0;
       let bufferedOverflow = false;
       let deliverLive = false;
+      // Snapshots cannot recover a removed session or transient errors. Keep
+      // the latest of each in order without letting lifecycle events grow unbounded.
+      const discardBufferedSnapshotEvents = () => {
+        const closed = bufferedEvents.findLast(({ event }) => event.type === "closed");
+        const error = bufferedEvents.findLast(({ event }) => event.type === "error");
+        const retained = bufferedEvents.filter((entry) => entry === closed || entry === error);
+        bufferedEvents.splice(0, bufferedEvents.length, ...retained);
+        bufferedEventBytes = 0;
+      };
       // Old clients decode the attach stream against a union without the
       // replay markers. Sending replayBytes proves the client understands them.
       const emitReplayMarkers = input.replayBytes !== undefined;
@@ -3322,8 +3331,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             bufferedEvents.length >= DEFAULT_ATTACH_BUFFERED_EVENT_LIMIT ||
             bufferedEventBytes + eventBytes > DEFAULT_ATTACH_BUFFERED_MAX_BYTES
           ) {
-            bufferedEvents.splice(0);
-            bufferedEventBytes = 0;
+            discardBufferedSnapshotEvents();
             bufferedOverflow = true;
           }
           bufferedEvents.push({ event, bytes: eventBytes });
@@ -3401,12 +3409,11 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
           overflowResyncCount += 1;
           if (overflowResyncCount > 3) {
             // A consumer this far behind keeps overflowing while the resync
-            // itself is being delivered. Go live anyway; the transport's own
-            // overflow path resynchronizes it from the latest snapshot.
-            bufferedEvents.splice(0);
-            bufferedEventBytes = 0;
-            deliverLive = true;
-            break;
+            // itself is being delivered. Drain unrecoverable lifecycle events
+            // before going live; the transport resynchronizes snapshot state.
+            discardBufferedSnapshotEvents();
+            overflowResyncCount = 0;
+            continue;
           }
           const latest = yield* readSnapshot(input);
           if (Option.isSome(latest)) {
