@@ -57,7 +57,6 @@ interface GenerationInput {
   readonly responseTokens?: number;
   readonly cacheReadTokens?: number;
   readonly cacheWriteTokens?: number;
-  readonly requestId?: string | null;
   readonly executionId?: string;
 }
 
@@ -78,7 +77,6 @@ function generationRecord(input: GenerationInput = {}): Uint8Array {
       ? new Uint8Array()
       : field(4, concat(field(1, seconds), field(2, input.nanos ?? 333_002_940)));
   const chatStart = concat(field(2, 18_446_744_073_709_551_615n), createdAt);
-  const requestId = input.requestId === undefined ? `${CONVERSATION_ID}-1` : input.requestId;
   const model = input.model ?? "gemini-3.8-flash";
   const chatModel = concat(
     field(3, 326),
@@ -86,9 +84,7 @@ function generationRecord(input: GenerationInput = {}): Uint8Array {
     field(9, chatStart),
     model.length === 0 ? new Uint8Array() : field(19, model),
     field(20, concat(field(1, "trajectory_id"), field(2, CONVERSATION_ID))),
-    requestId === null
-      ? new Uint8Array()
-      : field(20, concat(field(1, "request_id"), field(2, requestId))),
+    field(20, concat(field(1, "request_id"), field(2, `${CONVERSATION_ID}-1`))),
   );
   return concat(
     field(1, chatModel),
@@ -115,19 +111,21 @@ describe("parseAntigravityGeneration", () => {
         reasoningTokens: 568,
       },
       reportedCostUsd: null,
-      dedupeKey: `antigravity:${CONVERSATION_ID}-1`,
+      dedupeKey: null,
     });
   });
 
-  it("treats cached and cache-written input as part of the prompt count", () => {
+  it("keeps uncached, cached, and cache-written input as the disjoint counts reported", () => {
+    // Observed on a real cache hit: input_tokens 11121 next to cache_read_tokens
+    // 4070, with the surrounding prompts at ~15.1K, so input excludes the cache.
     const record = parseAntigravityGeneration(
-      generationRecord({ inputTokens: 10000, cacheReadTokens: 8000, cacheWriteTokens: 500 }),
+      generationRecord({ inputTokens: 11121, cacheReadTokens: 4070, cacheWriteTokens: 500 }),
       "fallback",
     );
 
     expect(record?.totals).toEqual({
-      uncachedInputTokens: 1500,
-      cachedInputTokens: 8000,
+      uncachedInputTokens: 11121,
+      cachedInputTokens: 4070,
       cacheCreationTokens: 500,
       outputTokens: 667,
       reasoningTokens: 568,
@@ -144,14 +142,10 @@ describe("parseAntigravityGeneration", () => {
     expect(record?.totals.reasoningTokens).toBe(40);
   });
 
-  it("falls back to the database's conversation id and skips the dedupe key", () => {
-    const record = parseAntigravityGeneration(
-      generationRecord({ executionId: "", requestId: null }),
-      "from-file",
-    );
+  it("falls back to the database's conversation id", () => {
+    const record = parseAntigravityGeneration(generationRecord({ executionId: "" }), "from-file");
 
     expect(record?.sessionId).toBe("from-file");
-    expect(record?.dedupeKey).toBeNull();
   });
 
   it("drops records without a timestamp or model, and rejects non-protobuf bytes", () => {
@@ -161,6 +155,7 @@ describe("parseAntigravityGeneration", () => {
     expect(
       parseAntigravityGeneration(generationRecord({ seconds: 2n ** 64n - 1n }), "x"),
     ).toBeNull();
+    expect(parseAntigravityGeneration(generationRecord({ nanos: 2 ** 40 }), "x")).toBeNull();
     expect(parseAntigravityGeneration(generationRecord({ model: "" }), "x")).toBeNull();
     expect(parseAntigravityGeneration(new TextEncoder().encode("not a proto"), "x")).toBeNull();
   });
@@ -203,12 +198,12 @@ describe("readAntigravityConversation", () => {
     const dir = await conversationDir();
     const filePath = NodePath.join(dir, `${CONVERSATION_ID}.db`);
     const writer = createConversation(filePath);
-    insertGeneration(writer, 0, generationRecord({ requestId: `${CONVERSATION_ID}-0` }));
+    insertGeneration(writer, 0, generationRecord({ outputTokens: 1 }));
     writer.close();
 
-    expect(readAntigravityConversation(filePath)?.map((record) => record.dedupeKey)).toEqual([
-      `antigravity:${CONVERSATION_ID}-0`,
-    ]);
+    const outputs = async () =>
+      (await readAntigravityConversation(filePath))?.map((record) => record.totals.outputTokens);
+    expect(await outputs()).toEqual([1]);
     const [before] = await listTranscriptFiles(dir, 0, {
       extension: ".db",
       companionSuffixes: ["-wal"],
@@ -217,12 +212,9 @@ describe("readAntigravityConversation", () => {
     // The agent keeps its connection open between turns, so the second row
     // lives only in the WAL until the next checkpoint.
     const appender = new NodeSqlite.DatabaseSync(filePath);
-    insertGeneration(appender, 1, generationRecord({ requestId: `${CONVERSATION_ID}-1` }));
+    insertGeneration(appender, 1, generationRecord({ outputTokens: 2 }));
     try {
-      expect(readAntigravityConversation(filePath)?.map((record) => record.dedupeKey)).toEqual([
-        `antigravity:${CONVERSATION_ID}-0`,
-        `antigravity:${CONVERSATION_ID}-1`,
-      ]);
+      expect(await outputs()).toEqual([1, 2]);
       const [after] = await listTranscriptFiles(dir, 0, {
         extension: ".db",
         companionSuffixes: ["-wal"],
@@ -232,16 +224,27 @@ describe("readAntigravityConversation", () => {
     } finally {
       appender.close();
     }
+
+    // Closing checkpoints and leaves an empty `-wal` behind (a read-only open
+    // does the same); that file carries nothing and must not move the key.
+    await NodeFSP.writeFile(`${filePath}-wal`, "");
+    const [settled] = await listTranscriptFiles(dir, 0, {
+      extension: ".db",
+      companionSuffixes: ["-wal"],
+    });
+    const main = await NodeFSP.stat(filePath);
+    expect(settled?.size).toBe(main.size);
+    expect(settled?.mtimeMs).toBe(main.mtimeMs);
   });
 
   it("distinguishes an unreadable file from a database without generations", async () => {
     const dir = await conversationDir();
     const notADatabase = NodePath.join(dir, "garbage.db");
     await NodeFSP.writeFile(notADatabase, "definitely not sqlite");
-    expect(readAntigravityConversation(notADatabase)).toBeNull();
+    expect(await readAntigravityConversation(notADatabase)).toBeNull();
 
     const empty = NodePath.join(dir, "empty.db");
     new NodeSqlite.DatabaseSync(empty).close();
-    expect(readAntigravityConversation(empty)).toEqual([]);
+    expect(await readAntigravityConversation(empty)).toEqual([]);
   });
 });
