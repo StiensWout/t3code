@@ -156,6 +156,12 @@ describe("parseAntigravityGeneration", () => {
       parseAntigravityGeneration(generationRecord({ seconds: 2n ** 64n - 1n }), "x"),
     ).toBeNull();
     expect(parseAntigravityGeneration(generationRecord({ nanos: 2 ** 40 }), "x")).toBeNull();
+    expect(
+      parseAntigravityGeneration(
+        generationRecord({ seconds: 8_640_000_000_000, nanos: 1_000_000 }),
+        "x",
+      ),
+    ).toBeNull();
     expect(parseAntigravityGeneration(generationRecord({ model: "" }), "x")).toBeNull();
     expect(parseAntigravityGeneration(new TextEncoder().encode("not a proto"), "x")).toBeNull();
   });
