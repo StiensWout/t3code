@@ -2763,12 +2763,17 @@ const CHAT_MARKDOWN_COMPONENTS = {
   h5: markdownHeadingRenderer(5),
   h6: markdownHeadingRenderer(6),
   span: ({ node, children, ...props }) => {
+    const { text } = use(ChatMarkdownRendererContext);
     const source = node?.properties.dataMathSource;
-    return typeof source === "string" ? (
-      <MarkdownMath source={source} />
-    ) : (
-      <span {...props}>{children}</span>
-    );
+    const offset = node?.position?.start.offset;
+    // Raw HTML can carry the same attribute. Only a parser-created span starts
+    // at a math delimiter in the original Markdown, rather than at an HTML tag.
+    const isMath =
+      typeof source === "string" &&
+      offset !== undefined &&
+      (source.startsWith("$") || source.startsWith("\\(") || source.startsWith("\\[")) &&
+      text.startsWith(source.slice(0, 2), offset);
+    return isMath ? <MarkdownMath source={source} /> : <span {...props}>{children}</span>;
   },
   div: function MarkdownDiv({ node, children, ...props }) {
     const { onUseArtifactTemplate } = use(ChatMarkdownRendererContext);

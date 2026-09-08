@@ -68,9 +68,10 @@ export function nativeMathRunHtml(
   style: NativeMarkdownTextStyle,
   menu?: MarkdownFileContextMenu,
   iconUri?: string,
+  showExternalIcon = true,
 ): string {
   const resolved = nativeMarkdownRunStyle(run, style, "monospace");
-  const css = `color:${resolved.color};font-size:${resolved.fontSize}px;line-height:${resolved.lineHeight}px;font-weight:${resolved.fontWeight};font-style:${resolved.fontStyle};font-family:${run.code ? "monospace" : "inherit"};text-decoration:${resolved.textDecorationLine}`;
+  const css = `color:${resolved.color};font-size:${resolved.fontSize}px;line-height:${resolved.lineHeight}px;font-weight:${resolved.fontWeight};font-style:${resolved.fontStyle};font-family:${resolved.fontFamily};text-decoration:${resolved.textDecorationLine}`;
   if (run.role === "spacer")
     return `<span style="display:block;height:${resolved.lineHeight}px;font-size:0;line-height:0">${escapeHtml(run.text)}</span>`;
 
@@ -86,13 +87,13 @@ export function nativeMathRunHtml(
     // Match the native skill label while retaining the token for selection copy.
     content = `<span data-copy-source="${escapeHtml(run.text)}"><svg class="inline-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5"><path d="m12 2 9 5v10l-9 5-9-5V7zM3 7l9 5 9-5M12 12v10M7.5 4.5l9 5"/></svg>${escapeHtml(run.skillLabel)}</span>`;
   }
-  if (iconUri) {
+  if (iconUri && (run.fileIcon || showExternalIcon)) {
     const icon =
       run.externalHost && !run.fileIcon
         ? `<span class="inline-icon" aria-hidden="true" style="background:currentColor;mask:url('${escapeHtml(iconUri)}') center/contain no-repeat"></span>`
         : `<img class="inline-icon" alt="" src="${escapeHtml(iconUri)}">`;
     content = icon + content;
-  } else if (run.externalHost || run.fileIcon) {
+  } else if ((run.externalHost && showExternalIcon) || run.fileIcon) {
     content =
       `<span class="inline-icon" aria-hidden="true">${run.fileIcon ? "▤" : "◉"}</span>` + content;
   }
