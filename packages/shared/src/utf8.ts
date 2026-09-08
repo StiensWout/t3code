@@ -16,6 +16,9 @@ export interface Utf8Chunk {
  * small-write path pays one encode and no decode.
  */
 export function splitStringByUtf8Bytes(data: string, maxBytes: number): ReadonlyArray<Utf8Chunk> {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
+    throw new RangeError("maxBytes must be a positive safe integer");
+  }
   if (data.length === 0) return [];
 
   const encoded = textEncoder.encode(data);
