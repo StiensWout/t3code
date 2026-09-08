@@ -3,6 +3,7 @@
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import * as NodeSqlite from "node:sqlite";
 
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -35,6 +36,39 @@ function claudeLine(id: number, outputTokens: number, model = "claude-fable-5"):
       usage: { input_tokens: 10, output_tokens: outputTokens },
     },
   })}\n`;
+}
+
+/**
+ * A minimal Antigravity generation record: `chat_model.usage.output_tokens`,
+ * `chat_model.chat_start_metadata.created_at` (2026-08-01T10:00:00Z) and
+ * `chat_model.response_model`, encoded as protobuf by hand.
+ */
+function antigravityGeneration(outputTokens: number): Uint8Array {
+  const varint = (value: number): number[] => {
+    const out: number[] = [];
+    let remaining = value;
+    do {
+      let byte = remaining & 0x7f;
+      remaining >>>= 7;
+      if (remaining > 0) byte |= 0x80;
+      out.push(byte);
+    } while (remaining > 0);
+    return out;
+  };
+  const bytesField = (number: number, payload: number[]): number[] => [
+    ...varint((number << 3) | 2),
+    ...varint(payload.length),
+    ...payload,
+  ];
+  const usage = [...varint(2 << 3), ...varint(10), ...varint(3 << 3), ...varint(outputTokens)];
+  const createdAt = bytesField(4, [...varint(1 << 3), ...varint(1_785_578_400)]);
+  const model = [...new TextEncoder().encode("gemini-3.8-flash")];
+  const chatModel = [
+    ...bytesField(4, usage),
+    ...bytesField(9, createdAt),
+    ...bytesField(19, model),
+  ];
+  return Uint8Array.from(bytesField(1, chatModel));
 }
 
 const WINDOW: UsageSummaryInput = {
@@ -89,7 +123,10 @@ const serviceLayers = (input: {
       ),
     ),
     Layer.provideMerge(
-      Layer.succeed(HostProcessEnvironment, { GROK_HOME: NodePath.join(input.home, "grok") }),
+      Layer.succeed(HostProcessEnvironment, {
+        GROK_HOME: NodePath.join(input.home, "grok"),
+        GEMINI_HOME: NodePath.join(input.home, "gemini"),
+      }),
     ),
   );
 
@@ -98,6 +135,63 @@ function totalOutputTokens(summary: { buckets: readonly { totals: { outputTokens
 }
 
 describe("UsageService", () => {
+  it.live("counts Antigravity conversations kept under the state directory", () =>
+    Effect.gen(function* () {
+      const { settings, home } = yield* setup;
+
+      yield* Effect.gen(function* () {
+        const config = yield* ServerConfig.ServerConfig;
+        const conversations = NodePath.join(
+          config.stateDir,
+          "providers",
+          "antigravity",
+          "instance-hash",
+          "antigravity-acp",
+          "conversations",
+        );
+        yield* Effect.promise(() => NodeFSP.mkdir(conversations, { recursive: true }));
+        const database = new NodeSqlite.DatabaseSync(
+          NodePath.join(conversations, "conversation.db"),
+        );
+        database.exec("PRAGMA journal_mode = WAL");
+        database.exec("CREATE TABLE gen_metadata (idx integer PRIMARY KEY, data blob)");
+        const insert = database.prepare("INSERT INTO gen_metadata (idx, data) VALUES (?, ?)");
+        insert.run(0, antigravityGeneration(26));
+        database.close();
+
+        const service = yield* UsageService.make;
+        const first = yield* service.readSummary(WINDOW);
+        assert.deepStrictEqual(
+          first.buckets.map((bucket) => [bucket.provider, bucket.model, bucket.records]),
+          [["antigravity", "gemini-3.8-flash", 1]],
+        );
+        assert.strictEqual(totalOutputTokens(first), 26);
+        const managed = first.sources.find(
+          (source) => source.fingerprint.provider === "antigravity" && source.status === "ok",
+        );
+        assert.strictEqual(managed?.distinctSessions, 1);
+
+        // A turn committed while the agent still holds the database lives in
+        // the WAL only; the main file's size and mtime do not move.
+        const appender = new NodeSqlite.DatabaseSync(
+          NodePath.join(conversations, "conversation.db"),
+        );
+        appender
+          .prepare("INSERT INTO gen_metadata (idx, data) VALUES (?, ?)")
+          .run(1, antigravityGeneration(40));
+        try {
+          const second = yield* service.readSummary(WINDOW);
+          assert.strictEqual(second.buckets[0]?.records, 2);
+          assert.strictEqual(totalOutputTokens(second), 66);
+        } finally {
+          appender.close();
+        }
+      }).pipe(
+        Effect.provide(serviceLayers({ prefix: "usage-service-antigravity-test", home, settings })),
+      );
+    }).pipe(Effect.scoped),
+  );
+
   it.live("reprices unchanged transcripts when custom prices are added, edited, or removed", () =>
     Effect.gen(function* () {
       const { transcript, settings, home } = yield* setup;
