@@ -112,6 +112,14 @@ function decodeMessage(buffer: Uint8Array): WireMessage | null {
 
 const utf8 = new TextDecoder();
 
+/**
+ * Largest `Timestamp.seconds` that still fits a JavaScript `Date`. A negative
+ * int64 arrives as `2^64 - n` and lands well past this, so the bound rejects
+ * both pre-1970 and out-of-range instants before they can produce an invalid
+ * `Date` in the aggregator.
+ */
+const MAX_TIMESTAMP_SECONDS = 8_640_000_000_000n;
+
 function firstBytes(message: WireMessage, field: number): Uint8Array | undefined {
   return message.bytes.get(field)?.[0];
 }
@@ -153,7 +161,7 @@ export function parseAntigravityGeneration(
   const timestamp = createdAt === null ? null : firstMessage(createdAt, 4);
   if (timestamp === null) return null;
   const seconds = timestamp.varints.get(1);
-  if (seconds === undefined) return null;
+  if (seconds === undefined || seconds > MAX_TIMESTAMP_SECONDS) return null;
   const timestampMs = Number(seconds) * 1000 + Math.floor(count(timestamp, 2) / 1_000_000);
 
   const model = firstString(chatModel, 19) || firstString(chatModel, 22);
