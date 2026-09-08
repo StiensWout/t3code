@@ -1,5 +1,5 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Linking, Text, useWindowDimensions } from "react-native";
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Alert, Linking, useWindowDimensions } from "react-native";
 import { setStringAsync } from "expo-clipboard";
 import { WebView } from "react-native-webview";
 import type { NativeMarkdownTextRun } from "./nativeMarkdownText";
@@ -22,6 +22,7 @@ function loadRenderer() {
 /** One view per math-containing text chunk preserves inline layout and selection on both OSes. */
 export const NativeMathText = memo(function NativeMathText(props: {
   readonly runs: ReadonlyArray<NativeMarkdownTextRun>;
+  readonly fallback: ReactNode;
   readonly textStyle: NativeMarkdownTextStyle;
   readonly onLinkPress?: (href: string) => void;
   readonly fileContextMenu?: (href: string) => MarkdownFileContextMenu | undefined;
@@ -72,15 +73,19 @@ export const NativeMathText = memo(function NativeMathText(props: {
       lineHeight: props.textStyle.lineHeight * fontScale,
       headingFontSizes: props.textStyle.headingFontSizes?.map((size) => size * fontScale),
     };
+    const prefixedLinks = new Set<string>();
     return {
-      runs: props.runs.map((run) =>
-        renderer.nativeMathRunHtml(
+      runs: props.runs.map((run) => {
+        const showExternalIcon = !run.href || !prefixedLinks.has(run.href);
+        if (run.externalHost && run.href) prefixedLinks.add(run.href);
+        return renderer.nativeMathRunHtml(
           run,
           style,
           run.href ? fileContextMenu?.(run.href) : undefined,
           icons[nativeMathIconKey(run) ?? ""],
-        ),
-      ),
+          showExternalIcon,
+        );
+      }),
       color: style.color,
       fontSize: style.fontSize,
       lineHeight: style.lineHeight,
@@ -98,19 +103,7 @@ export const NativeMathText = memo(function NativeMathText(props: {
     }
   }, [update]);
 
-  if (failed || !renderer)
-    return (
-      <Text
-        selectable
-        style={{
-          color: props.textStyle.color,
-          fontSize: props.textStyle.fontSize,
-          lineHeight: props.textStyle.lineHeight,
-        }}
-      >
-        {props.runs.map((run) => run.text).join("")}
-      </Text>
-    );
+  if (failed || !renderer) return props.fallback;
   return (
     <WebView
       ref={webView}
