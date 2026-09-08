@@ -20,6 +20,8 @@ import {
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it as effectIt } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import { makeQuickChatWorkspace } from "../quickChatWorkspace.ts";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Metric from "effect/Metric";
@@ -486,6 +488,7 @@ describe("OrchestrationEngine", () => {
       Layer.provide(ThreadBackgroundLiveness.layer),
       Layer.provide(OrchestrationCommandReceiptRepositoryLive),
       Layer.provide(SqlitePersistenceMemory),
+      Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-engine-workspace-test-" })),
       Layer.provideMerge(NodeServices.layer),
     );
 
@@ -661,6 +664,12 @@ describe("OrchestrationEngine", () => {
       const liveness = yield* ThreadBackgroundLiveness.ThreadBackgroundLivenessService;
       const threadId = ThreadId.make("quick-chat-background");
       const projectId = ProjectId.make("quick-chat-project");
+      const fs = yield* FileSystem.FileSystem;
+      const workspace = yield* makeQuickChatWorkspace;
+      const cwd = yield* fs.makeTempDirectoryScoped();
+      const source = workspace.directory(threadId);
+      yield* fs.makeDirectory(source, { recursive: true });
+      yield* fs.writeFileString(`${source}/script.sh`, "echo preserved");
       reportBackgroundWork = () =>
         liveness.recordTaskLiveness({
           threadId,
@@ -674,7 +683,7 @@ describe("OrchestrationEngine", () => {
         commandId: CommandId.make("quick-project-create"),
         projectId,
         title: "Project",
-        workspaceRoot: "/tmp/quick-chat-project",
+        workspaceRoot: cwd,
         createdAt: now(),
       });
       yield* engine.dispatch({
@@ -722,6 +731,9 @@ describe("OrchestrationEngine", () => {
         })
         .pipe(Effect.result);
       expect(raced._tag).toBe("Failure");
+      expect(yield* fs.readFileString(`${source}/script.sh`)).toBe("echo preserved");
+      expect(yield* fs.readDirectory(`${cwd}/quick-chat-files`)).toEqual([]);
+      expect(yield* workspace.pendingNote(threadId, cwd)).toBeNull();
       expect(
         (yield* snapshots.getSnapshot()).threads.find((thread) => thread.id === threadId)
           ?.projectId,
@@ -742,6 +754,7 @@ describe("OrchestrationEngine", () => {
           ?.projectId,
       ).toBe(projectId);
     }).pipe(
+      Effect.scoped,
       Effect.provide(
         makeOrchestrationLayer(undefined, undefined, (event) => {
           if (event.commandId === CommandId.make("quick-attach-race")) reportBackgroundWork();
@@ -1804,6 +1817,9 @@ describe("OrchestrationEngine", () => {
         Layer.provide(OrchestrationCommandReceiptRepositoryLive),
         Layer.provide(RepositoryIdentityResolver.layer),
         Layer.provide(SqlitePersistenceMemory),
+        Layer.provide(
+          ServerConfig.layerTest(process.cwd(), { prefix: "t3-engine-workspace-test-" }),
+        ),
         Layer.provide(NodeServices.layer),
       ),
     );
@@ -1953,6 +1969,9 @@ describe("OrchestrationEngine", () => {
         Layer.provide(OrchestrationCommandReceiptRepositoryLive),
         Layer.provide(RepositoryIdentityResolver.layer),
         Layer.provide(SqlitePersistenceMemory),
+        Layer.provide(
+          ServerConfig.layerTest(process.cwd(), { prefix: "t3-engine-workspace-test-" }),
+        ),
         Layer.provide(NodeServices.layer),
       ),
     );

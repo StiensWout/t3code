@@ -1,5 +1,4 @@
-import * as Path from "effect/Path";
-import * as ServerConfig from "../../config.ts";
+import { makeQuickChatWorkspace } from "../quickChatWorkspace.ts";
 import {
   type ChatAttachment,
   CommandId,
@@ -327,8 +326,7 @@ const make = Effect.gen(function* () {
   const providerRegistry = yield* ProviderRegistry;
   const gitWorkflow = yield* GitWorkflowService;
   const fileSystem = yield* FileSystem.FileSystem;
-  const serverConfig = yield* ServerConfig.ServerConfig;
-  const path = yield* Path.Path;
+  const quickChatWorkspace = yield* makeQuickChatWorkspace;
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
   const textGeneration = yield* TextGeneration;
   const serverSettingsService = yield* ServerSettingsService;
@@ -496,11 +494,7 @@ const make = Effect.gen(function* () {
     readonly worktreePath: string | null;
   }) {
     if (thread.projectId === null) {
-      const cwd = path.join(
-        serverConfig.stateDir,
-        "quick-chats",
-        Buffer.from(thread.id).toString("base64url"),
-      );
+      const cwd = quickChatWorkspace.directory(thread.id);
       yield* fileSystem.makeDirectory(cwd, { recursive: true }).pipe(
         Effect.mapError(
           (cause) =>
@@ -888,7 +882,11 @@ const make = Effect.gen(function* () {
     if (input.modelSelection !== undefined) {
       threadModelSelections.set(input.threadId, input.modelSelection);
     }
-    const normalizedInput = toNonEmptyProviderInput(input.messageText);
+    const cwd = thread.projectId === null ? null : yield* resolveSessionCwd(thread);
+    const promotionNote = cwd ? yield* quickChatWorkspace.pendingNote(thread.id, cwd) : null;
+    const normalizedInput = toNonEmptyProviderInput(
+      promotionNote ? `${input.messageText}\n\n${promotionNote}` : input.messageText,
+    );
     const normalizedAttachments = input.attachments ?? [];
     const activeSession = yield* providerService
       .listSessions()
@@ -1460,9 +1458,21 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    yield* providerService
-      .sendTurn(sendTurnRequest.value)
-      .pipe(Effect.asVoid, Effect.catchCause(recoverTurnStartFailure), Effect.forkScoped);
+    yield* providerService.sendTurn(sendTurnRequest.value).pipe(
+      Effect.tap(() =>
+        quickChatWorkspace.clearNote(thread.id).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("Could not acknowledge quick-chat relocation note", {
+              threadId: thread.id,
+              cause: Cause.pretty(cause),
+            }),
+          ),
+        ),
+      ),
+      Effect.asVoid,
+      Effect.catchCause(recoverTurnStartFailure),
+      Effect.forkScoped,
+    );
   });
 
   const processTurnInterruptRequested = Effect.fn("processTurnInterruptRequested")(function* (

@@ -33,7 +33,12 @@ the dialog restores the prepared worktree for retry.
 Project tools such as the file browser, terminal, and Git controls become
 available after attachment.
 
-Quick chats use the agent's normal permission settings.
+Quick chats use the agent's normal permission settings and can run scripts or
+create files in a temporary workspace. Attaching moves those files into
+`quick-chat-files/` in the selected workspace and tells the agent where to find
+them on the next turn. Archiving keeps the temporary files; deleting a quick
+chat removes them. Files already transferred to a project stay there when you
+delete the thread.
 
 ### Start in the background
 

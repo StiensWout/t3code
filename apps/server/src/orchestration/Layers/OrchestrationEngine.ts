@@ -49,6 +49,9 @@ import {
   OrchestrationEngineService,
   type OrchestrationEngineShape,
 } from "../Services/OrchestrationEngine.ts";
+import { ProviderService } from "../../provider/Services/ProviderService.ts";
+import { makeQuickChatWorkspace } from "../quickChatWorkspace.ts";
+
 const isOrchestrationCommandPreviouslyRejectedError = Schema.is(
   OrchestrationCommandPreviouslyRejectedError,
 );
@@ -89,6 +92,9 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const threadBackgroundLiveness = yield* ThreadBackgroundLivenessService;
   const crypto = yield* Crypto.Crypto;
+  // Offline CLI engines have no provider processes; server composition supplies this service.
+  const providers = yield* Effect.serviceOption(ProviderService);
+  const quickChatWorkspace = yield* makeQuickChatWorkspace;
 
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
   let commandReadModel = createEmptyReadModel(yield* nowIso);
@@ -268,6 +274,40 @@ const makeOrchestrationEngine = Effect.gen(function* () {
                 ...planned,
                 metadata: { ...planned.metadata, origin: envelope.origin },
               }));
+        const promotion =
+          envelope.command.type === "thread.meta.update" && envelope.command.projectId !== undefined
+            ? yield* Effect.gen(function* () {
+                const command = envelope.command;
+                if (command.type !== "thread.meta.update" || command.projectId === undefined)
+                  return null;
+                const thread = commandReadModel.threads.find(
+                  (thread) => thread.id === command.threadId,
+                )!;
+                const project = commandReadModel.projects.find(
+                  (project) => project.id === command.projectId,
+                )!;
+                if (Option.isSome(providers)) {
+                  const sessions = yield* providers.value.listSessions();
+                  if (sessions.some((session) => session.threadId === thread.id)) {
+                    yield* providers.value.stopSession({ threadId: thread.id });
+                  }
+                }
+                return yield* quickChatWorkspace.prepare(
+                  thread.id,
+                  command.worktreePath ?? project.workspaceRoot,
+                );
+              }).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new OrchestrationCommandInvariantError({
+                      commandType: envelope.command.type,
+                      detail:
+                        "Could not transfer the quick-chat workspace. Its original files have been kept.",
+                      cause,
+                    }),
+                ),
+              )
+            : null;
         const committedCommand = yield* sql
           .withTransaction(
             Effect.gen(function* () {
@@ -324,6 +364,17 @@ const makeOrchestrationEngine = Effect.gen(function* () {
             }),
           )
           .pipe(
+            Effect.onError(() =>
+              promotion
+                ? promotion.rollback.pipe(
+                    Effect.catchCause((cause) =>
+                      Effect.logWarning("Failed to roll back quick-chat transfer", {
+                        cause: Cause.pretty(cause),
+                      }),
+                    ),
+                  )
+                : Effect.void,
+            ),
             Effect.catchTag("SqlError", (sqlError) =>
               Effect.fail(
                 toPersistenceSqlError("OrchestrationEngine.processEnvelope:transaction")(sqlError),
@@ -332,6 +383,14 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           );
 
         commandReadModel = committedCommand.nextCommandReadModel;
+        if (promotion)
+          yield* promotion.commit.pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("Quick-chat source cleanup will retry on the next turn", {
+                cause: Cause.pretty(cause),
+              }),
+            ),
+          );
         for (const cleanup of committedCommand.attachmentCleanups) {
           yield* cleanup;
         }
