@@ -1,16 +1,16 @@
 // Native Grok's v1 model-selection wire contract, kept independent of the v2 mock.
-import { appendFileSync } from "node:fs";
-import { createInterface } from "node:readline";
+import * as NodeFS from "node:fs";
+import * as NodeReadline from "node:readline";
 
 const sessionId = "grok-text-session";
 let currentModelId = "grok-mock-default";
 const models = ["grok-mock-default", "grok-mock-alt"];
 const write = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
 
-for await (const line of createInterface({ input: process.stdin })) {
+for await (const line of NodeReadline.createInterface({ input: process.stdin })) {
   const request = JSON.parse(line);
   if (process.env.T3_ACP_REQUEST_LOG_PATH) {
-    appendFileSync(process.env.T3_ACP_REQUEST_LOG_PATH, `${line}\n`);
+    NodeFS.appendFileSync(process.env.T3_ACP_REQUEST_LOG_PATH, `${line}\n`);
   }
   if (request.id === undefined) continue;
   let result;
