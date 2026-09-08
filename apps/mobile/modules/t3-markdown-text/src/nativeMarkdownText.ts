@@ -285,6 +285,7 @@ function appendRun(
   runs: NativeMarkdownTextRun[],
   text: string,
   context: RunContext,
+  mathSource?: string,
 ): NativeMarkdownTextRun[] {
   if (text.length === 0) {
     return runs;
@@ -292,6 +293,7 @@ function appendRun(
 
   const run: NativeMarkdownTextRun = {
     text,
+    ...(mathSource ? { mathSource } : {}),
     ...(context.bold ? { bold: true } : {}),
     ...(context.italic ? { italic: true } : {}),
     ...(context.strikethrough ? { strikethrough: true } : {}),
@@ -441,12 +443,7 @@ function appendNode(
   switch (node.type) {
     case "math_inline":
     case "math_block":
-      runs.push({
-        text: nodeTextContent(node),
-        mathSource: nodeTextContent(node),
-        ...(context.href ? { href: context.href } : {}),
-      });
-      return runs;
+      return appendRun(runs, nodeTextContent(node), context, nodeTextContent(node));
     case "text":
       return appendRun(runs, textNodeContent(nodeTextContent(node)), context);
     case "html_inline":
@@ -857,7 +854,18 @@ function appendDocumentBlock(
   }
 }
 
+function containsMath(node: MarkdownNode): boolean {
+  return (
+    node.type === "math_inline" ||
+    node.type === "math_block" ||
+    (node.children ?? []).some(containsMath)
+  );
+}
+
 function containsRichBlock(node: MarkdownNode): boolean {
+  // NativeList already owns nested indentation and hanging markers. Keep that
+  // layout when a list item needs a math text view.
+  if (node.type === "list" && containsMath(node)) return true;
   if (
     node.type === "code_block" ||
     node.type === "blockquote" ||

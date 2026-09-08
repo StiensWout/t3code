@@ -34,6 +34,7 @@
     "expo": "*",
     "expo-asset": "*",
     "expo-clipboard": "*",
+    "expo-file-system": "*",
     "expo-haptics": "*",
     "expo-symbols": "*",
     "mathjax-full": "*",

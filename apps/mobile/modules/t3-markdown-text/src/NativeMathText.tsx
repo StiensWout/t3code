@@ -7,6 +7,7 @@ import type {
   MarkdownFileContextMenu,
   NativeMarkdownTextStyle,
 } from "./SelectableMarkdownText.types";
+import { loadNativeMathIcons, nativeMathIconKey } from "./nativeMathAssets";
 import { NATIVE_MATH_DOCUMENT } from "./nativeMathDocument";
 
 const documentSource = { html: NATIVE_MATH_DOCUMENT };
@@ -31,6 +32,22 @@ export const NativeMathText = memo(function NativeMathText(props: {
   const [height, setHeight] = useState(props.textStyle.lineHeight);
   const [failed, setFailed] = useState(false);
   const [renderer, setRenderer] = useState<typeof import("./nativeMathHtml")>();
+  const [icons, setIcons] = useState<Record<string, string>>({});
+  useEffect(() => {
+    let active = true;
+    void loadNativeMathIcons(props.runs).then((loaded) => {
+      if (active)
+        setIcons((current) =>
+          Object.keys(current).length === Object.keys(loaded).length &&
+          Object.entries(loaded).every(([key, value]) => current[key] === value)
+            ? current
+            : loaded,
+        );
+    });
+    return () => {
+      active = false;
+    };
+  }, [props.runs]);
   const { fontScale } = useWindowDimensions();
   useEffect(() => {
     let active = true;
@@ -57,13 +74,18 @@ export const NativeMathText = memo(function NativeMathText(props: {
     };
     return {
       runs: props.runs.map((run) =>
-        renderer.nativeMathRunHtml(run, style, run.href ? fileContextMenu?.(run.href) : undefined),
+        renderer.nativeMathRunHtml(
+          run,
+          style,
+          run.href ? fileContextMenu?.(run.href) : undefined,
+          icons[nativeMathIconKey(run) ?? ""],
+        ),
       ),
       color: style.color,
       fontSize: style.fontSize,
       lineHeight: style.lineHeight,
     };
-  }, [renderer, props.runs, props.textStyle, fileContextMenu, fontScale]);
+  }, [renderer, props.runs, props.textStyle, fileContextMenu, fontScale, icons]);
   const revision = useRef(0);
   const latest = useRef(update);
   useEffect(() => {
@@ -164,7 +186,7 @@ export const NativeMathText = memo(function NativeMathText(props: {
         }
         if (message.type === "link" && "href" in message && typeof message.href === "string") {
           if (props.onLinkPress) props.onLinkPress(message.href);
-          else if (/^https?:\/\//i.test(message.href)) void Linking.openURL(message.href);
+          else void Linking.openURL(message.href);
         }
       }}
     />

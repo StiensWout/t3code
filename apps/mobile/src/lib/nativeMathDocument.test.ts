@@ -70,6 +70,20 @@ describe("native math text bridge", () => {
     }
   });
 
+  it("copies a selected skill label as its original token", () => {
+    const { dom, update, messages } = fixture();
+    try {
+      update(['<span data-copy-source="$deploy"><svg class="inline-icon"></svg>Deploy</span>'], 1);
+      const range = dom.window.document.createRange();
+      range.selectNodeContents(dom.window.document.querySelector("[data-copy-source]")!.lastChild!);
+      dom.window.getSelection()!.addRange(range);
+      dom.window.document.dispatchEvent(new dom.window.Event("copy", { cancelable: true }));
+      expect(messages).toContainEqual({ type: "copy", revision: 1, text: "$deploy" });
+    } finally {
+      dom.window.close();
+    }
+  });
+
   it("copies a selected equation as TeX and forwards links to the app", () => {
     const { dom, update, messages } = fixture();
     try {

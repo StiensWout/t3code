@@ -8,7 +8,6 @@ import {
   Platform,
   StyleSheet,
   Text as RNText,
-  type TextStyle,
   useColorScheme,
   View,
 } from "react-native";
