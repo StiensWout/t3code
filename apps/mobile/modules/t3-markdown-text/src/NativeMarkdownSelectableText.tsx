@@ -326,11 +326,7 @@ export function NativeMarkdownSelectableText(props: {
     props.textStyle.contextChipBorderColor,
   ].join(":");
 
-  if (props.runs.some((run) => run.mathSource !== undefined)) {
-    return <NativeMathText {...props} {...(menu ?? {})} />;
-  }
-
-  return (
+  const nativeText = (
     <MarkdownTextPrimitive
       key={appearanceKey}
       nativeTextRef={attachAndroidText}
@@ -437,4 +433,7 @@ export function NativeMarkdownSelectableText(props: {
       })}
     </MarkdownTextPrimitive>
   );
+  return props.runs.some((run) => run.mathSource !== undefined) ? (
+    <NativeMathText {...props} {...(menu ?? {})} fallback={nativeText} />
+  ) : nativeText;
 }

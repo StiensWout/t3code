@@ -90,7 +90,7 @@ it("keeps heading size, skill labels, file icons and links in math text", () => 
   const html = [
     nativeMathRunHtml(
       { text: "$x$", mathSource: "$x$", role: "heading", headingLevel: 2 },
-      textStyle,
+      { ...textStyle, headingFontFamily: "serif" },
     ),
     nativeMathRunHtml({ text: "$deploy", skillName: "deploy", skillLabel: "Deploy" }, textStyle),
     nativeMathRunHtml(
@@ -106,6 +106,9 @@ it("keeps heading size, skill labels, file icons and links in math text", () => 
     const { document } = dom.window;
     expect(document.querySelector<HTMLElement>(".equation")?.parentElement?.style.fontSize).toBe(
       "19px",
+    );
+    expect(document.querySelector<HTMLElement>(".equation")?.parentElement?.style.fontFamily).toBe(
+      "serif",
     );
     expect(document.querySelector("[data-copy-source]")?.textContent).toBe("Deploy");
     expect(document.querySelector("img")?.getAttribute("src")).toBe(icon);
