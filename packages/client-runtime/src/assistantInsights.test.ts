@@ -11,6 +11,13 @@ function parse(markdown: string) {
 }
 
 describe("renderAssistantInsightsAsMarkdown", () => {
+  it.each(["\r\n", "\r"])("handles %j line endings", (lineEnding) => {
+    const lines = ["★ Insight ─────", "First.", "Second.", "─────", "After."];
+    expect(renderAssistantInsightsAsMarkdown(lines.join(lineEnding))).toBe(
+      renderAssistantInsightsAsMarkdown(lines.join("\n")),
+    );
+  });
+
   it.each(["", "`"])(
     "renders %s-wrapped fences and preserves breaks only inside insights",
     (wrap) => {
