@@ -19,6 +19,8 @@ Choose **New thread → Quick chat** to ask an agent a question without adding o
 selecting a project. Quick chats appear below active project threads and keep
 their conversation history. You can rename, archive, restore, and delete them.
 
+In the New thread picker, press **Ctrl+0** to start a quick chat, or **Cmd+0** on macOS.
+
 To turn a quick chat into project work, finish the current turn and choose
 **Attach to project** from its menu on web or desktop, or above the conversation
 on mobile. Select a project in the same environment. Enable **Create a new

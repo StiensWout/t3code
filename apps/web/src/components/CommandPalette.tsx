@@ -1099,10 +1099,11 @@ function OpenCommandPaletteDialog(props: {
     const preferredId =
       activeThread?.environmentId ?? activeDraftThread?.environmentId ?? primaryEnvironmentId;
     const preferred = eligible.find((environment) => environment.environmentId === preferredId);
-    return (preferred ? [preferred] : eligible).map((environment) => ({
+    return (preferred ? [preferred] : eligible).map((environment, index) => ({
       kind: "action",
       value: `new-quick-chat:${environment.environmentId}`,
       title: "New quick chat",
+      ...(index === 0 ? { shortcutKey: "0" } : {}),
       description: preferred || eligible.length === 1 ? "No project needed" : environment.label,
       searchTerms: ["quick chat", "question", "no project"],
       icon: <MessageSquareIcon className={ITEM_ICON_CLASS} />,
@@ -2355,6 +2356,26 @@ function OpenCommandPaletteDialog(props: {
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLInputElement>): void {
+    if (
+      isPrimaryModifierPressed(event) &&
+      !event.altKey &&
+      !event.shiftKey &&
+      !event.nativeEvent.isComposing
+    ) {
+      const matchingItem = displayedGroups
+        .flatMap((group) => group.items)
+        .find(
+          (item) =>
+            item.shortcutKey !== undefined &&
+            (event.key === item.shortcutKey || event.code === `Digit${item.shortcutKey}`),
+        );
+      if (matchingItem) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!event.repeat) executeItem(matchingItem);
+        return;
+      }
+    }
     const command = resolveShortcutCommand(event, keybindings, {
       platform: navigator.platform,
       context: { modelPickerOpen: false },
