@@ -1,6 +1,9 @@
+import { splitStringByUtf8Bytes } from "@t3tools/shared/utf8";
+
 export interface TerminalOutputChunk {
   /** UTF-16 string offset within this generation and reset. */
   readonly startOffset: number;
+  readonly delivery: "replay" | "live";
   readonly data: string;
   readonly byteLength: number;
 }
@@ -38,6 +41,10 @@ export type TerminalOutputUpdate =
     }
   | {
       readonly type: "append";
+      readonly segments: ReadonlyArray<{
+        readonly data: string;
+        readonly delivery: "replay" | "live";
+      }>;
       readonly cursor: TerminalOutputCursor;
       readonly data: string;
     };
@@ -56,50 +63,6 @@ export const EMPTY_TERMINAL_OUTPUT_STATE = Object.freeze<TerminalOutputState>({
   resetVersion: 0,
   nextOffset: 0,
 });
-
-interface Utf8Chunk {
-  readonly data: string;
-  readonly byteLength: number;
-}
-
-/**
- * Split a string into chunks of at most `maxBytes` UTF-8 bytes without cutting
- * a code point in half. The retained-output budget always supplies a positive
- * size. Only new output is encoded on live updates.
- *
- * A chunk that fits whole is returned as the original string, so the common
- * small-write path pays one encode and no decode.
- */
-function splitStringByUtf8Bytes(data: string, maxBytes: number): ReadonlyArray<Utf8Chunk> {
-  if (data.length === 0) return [];
-
-  const encoded = textEncoder.encode(data);
-  if (encoded.byteLength <= maxBytes) {
-    return [{ data, byteLength: encoded.byteLength }];
-  }
-
-  const chunks: Utf8Chunk[] = [];
-  let offset = 0;
-  while (offset < encoded.byteLength) {
-    let end = Math.min(offset + maxBytes, encoded.byteLength);
-    while (end < encoded.byteLength && ((encoded[end] ?? 0) & 0xc0) === 0x80) {
-      end -= 1;
-    }
-    // A degenerate budget smaller than one code point still has to advance:
-    // include the whole code point rather than looping forever.
-    if (end === offset) {
-      end = Math.min(offset + maxBytes, encoded.byteLength);
-      while (end < encoded.byteLength && ((encoded[end] ?? 0) & 0xc0) === 0x80) {
-        end += 1;
-      }
-    }
-    const bytes = encoded.subarray(offset, end);
-    chunks.push({ data: textDecoder.decode(bytes), byteLength: bytes.byteLength });
-    offset = end;
-  }
-
-  return chunks;
-}
 
 function trimBufferToBytes(buffer: string, maxBufferBytes: number): string {
   if (maxBufferBytes <= 0) {
@@ -126,6 +89,7 @@ function trimBufferToBytes(buffer: string, maxBufferBytes: number): string {
 function splitOutputChunks(
   data: string,
   firstOffset: number,
+  delivery: "replay" | "live",
   maxChunkBytes = DEFAULT_TERMINAL_CHUNK_BYTES,
 ): {
   readonly chunks: ReadonlyArray<TerminalOutputChunk>;
@@ -141,6 +105,7 @@ function splitOutputChunks(
     nextOffset += chunk.data.length;
     return {
       startOffset,
+      delivery,
       data: chunk.data,
       byteLength: chunk.byteLength,
     };
@@ -163,11 +128,13 @@ function compactRetainedChunks(chunks: ReadonlyArray<TerminalOutputChunk>) {
     const previous = compacted.at(-1);
     if (
       previous !== undefined &&
+      previous.delivery === chunk.delivery &&
       previous.startOffset + previous.data.length === chunk.startOffset &&
       previous.byteLength + chunk.byteLength <= DEFAULT_TERMINAL_CHUNK_BYTES
     ) {
       compacted[compacted.length - 1] = {
         startOffset: previous.startOffset,
+        delivery: previous.delivery,
         data: `${previous.data}${chunk.data}`,
         byteLength: previous.byteLength + chunk.byteLength,
       };
@@ -202,6 +169,7 @@ function appendOutput(
   current: TerminalOutputState,
   data: string,
   maxBufferBytes: number,
+  delivery: "replay" | "live" = "live",
 ): TerminalOutputState {
   if (data.length === 0) return current;
   if (maxBufferBytes <= 0) {
@@ -216,6 +184,7 @@ function appendOutput(
   const appended = splitOutputChunks(
     data,
     current.nextOffset,
+    delivery,
     Math.min(DEFAULT_TERMINAL_CHUNK_BYTES, Math.max(1, maxBufferBytes)),
   );
 
@@ -269,6 +238,7 @@ function resetOutput(
   const reset = splitOutputChunks(
     retained,
     0,
+    "replay",
     Math.min(DEFAULT_TERMINAL_CHUNK_BYTES, Math.max(1, maxBufferBytes)),
   );
   return {
@@ -308,11 +278,17 @@ export function readTerminalOutputUpdate(
   if (appended.length === 0) {
     return { type: "none", cursor: nextCursor };
   }
+  const segments: Array<{ data: string; delivery: "replay" | "live" }> = [];
+  for (const chunk of appended) {
+    const data = chunk.data.slice(Math.max(0, cursor.offset - chunk.startOffset));
+    const previous = segments.at(-1);
+    if (previous?.delivery === chunk.delivery) previous.data += data;
+    else segments.push({ data, delivery: chunk.delivery });
+  }
   return {
     type: "append",
-    data: appended
-      .map((chunk) => chunk.data.slice(Math.max(0, cursor.offset - chunk.startOffset)))
-      .join(""),
+    segments,
+    data: segments.map((segment) => segment.data).join(""),
     cursor: nextCursor,
   };
 }
