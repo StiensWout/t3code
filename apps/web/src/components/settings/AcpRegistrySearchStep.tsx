@@ -53,7 +53,7 @@ interface AcpRegistrySearchStepProps {
   readonly onManualConfiguration: () => void;
 }
 
-export function applyAcpRegistryPrepareResult(
+function applyAcpRegistryPrepareResult(
   agent: AcpRegistrySearchAgent,
   prepared: AcpRegistryPrepareResult,
 ): AcpRegistrySearchAgent {

@@ -165,7 +165,7 @@ const isEffectRpcRequestId = (requestId: AcpError.AcpRequestId): boolean =>
  * agents correctly send the standard `{ code, message, data? }` shape, so
  * restore it to the typed failure channel before handing it to RpcClient.
  */
-export function normalizeAcpJsonRpcError(
+function normalizeAcpJsonRpcError(
   message: RpcMessage.FromClientEncoded | RpcMessage.FromServerEncoded,
 ): RpcMessage.FromClientEncoded | RpcMessage.FromServerEncoded {
   if (message._tag !== "Exit" || message.exit._tag !== "Failure") return message;

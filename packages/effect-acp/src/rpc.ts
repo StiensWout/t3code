@@ -26,19 +26,19 @@ export const V1_CLIENT_METHODS = {
   terminal_kill: "terminal/kill",
 } as const;
 
-export const InitializeRpc = Rpc.make(AGENT_METHODS.initialize, {
+const InitializeRpc = Rpc.make(AGENT_METHODS.initialize, {
   payload: AcpSchema.InitializeRequest,
   success: AcpSchema.InitializeResponse,
   error: AcpSchema.Error,
 });
 
-export const LoginRpc = Rpc.make(AGENT_METHODS.auth_login, {
+const LoginRpc = Rpc.make(AGENT_METHODS.auth_login, {
   payload: AcpSchema.LoginAuthRequest,
   success: AcpSchema.LoginAuthResponse,
   error: AcpSchema.Error,
 });
 
-export const LogoutRpc = Rpc.make(AGENT_METHODS.auth_logout, {
+const LogoutRpc = Rpc.make(AGENT_METHODS.auth_logout, {
   payload: AcpSchema.LogoutAuthRequest,
   success: AcpSchema.LogoutAuthResponse,
   error: AcpSchema.Error,
@@ -50,7 +50,7 @@ const NewSessionRpc = Rpc.make(AGENT_METHODS.session_new, {
   error: AcpSchema.Error,
 });
 
-export const ListSessionsRpc = Rpc.make(AGENT_METHODS.session_list, {
+const ListSessionsRpc = Rpc.make(AGENT_METHODS.session_list, {
   payload: AcpSchema.ListSessionsRequest,
   success: AcpSchema.ListSessionsResponse,
   error: AcpSchema.Error,
@@ -74,37 +74,37 @@ const CloseSessionRpc = Rpc.make(AGENT_METHODS.session_close, {
   error: AcpSchema.Error,
 });
 
-export const DeleteSessionRpc = Rpc.make(AGENT_METHODS.session_delete, {
+const DeleteSessionRpc = Rpc.make(AGENT_METHODS.session_delete, {
   payload: AcpSchema.DeleteSessionRequest,
   success: AcpSchema.DeleteSessionResponse,
   error: AcpSchema.Error,
 });
 
-export const ListProvidersRpc = Rpc.make(AGENT_METHODS.providers_list, {
+const ListProvidersRpc = Rpc.make(AGENT_METHODS.providers_list, {
   payload: AcpSchema.ListProvidersRequest,
   success: AcpSchema.ListProvidersResponse,
   error: AcpSchema.Error,
 });
 
-export const SetProviderRpc = Rpc.make(AGENT_METHODS.providers_set, {
+const SetProviderRpc = Rpc.make(AGENT_METHODS.providers_set, {
   payload: AcpSchema.SetProviderRequest,
   success: AcpSchema.SetProviderResponse,
   error: AcpSchema.Error,
 });
 
-export const DisableProviderRpc = Rpc.make(AGENT_METHODS.providers_disable, {
+const DisableProviderRpc = Rpc.make(AGENT_METHODS.providers_disable, {
   payload: AcpSchema.DisableProviderRequest,
   success: AcpSchema.DisableProviderResponse,
   error: AcpSchema.Error,
 });
 
-export const PromptRpc = Rpc.make(AGENT_METHODS.session_prompt, {
+const PromptRpc = Rpc.make(AGENT_METHODS.session_prompt, {
   payload: AcpSchema.PromptRequest,
   success: AcpSchema.PromptResponse,
   error: AcpSchema.Error,
 });
 
-export const SetSessionConfigOptionRpc = Rpc.make(AGENT_METHODS.session_set_config_option, {
+const SetSessionConfigOptionRpc = Rpc.make(AGENT_METHODS.session_set_config_option, {
   payload: AcpSchema.SetSessionConfigOptionRequest,
   success: AcpSchema.SetSessionConfigOptionResponse,
   error: AcpSchema.Error,
@@ -116,7 +116,7 @@ const RequestPermissionRpc = Rpc.make(CLIENT_METHODS.session_request_permission,
   error: AcpSchema.Error,
 });
 
-export const ElicitationRpc = Rpc.make(CLIENT_METHODS.elicitation_create, {
+const ElicitationRpc = Rpc.make(CLIENT_METHODS.elicitation_create, {
   payload: AcpSchema.CreateElicitationRequest,
   success: AcpSchema.CreateElicitationResponse,
   error: AcpSchema.Error,
