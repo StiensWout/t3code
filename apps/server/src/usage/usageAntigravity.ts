@@ -1,4 +1,5 @@
-// @effect-diagnostics nodeBuiltinImport:off
+// @effect-diagnostics nodeBuiltinImport:off - conversations are SQLite files, and
+// `node:sqlite` is the only in-process reader; Effect has no SQLite file system.
 /**
  * Antigravity conversation databases as a usage source.
  *
