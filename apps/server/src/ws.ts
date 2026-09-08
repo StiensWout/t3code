@@ -2582,11 +2582,9 @@ const makeWsRpcLayer = (
             "rpc.aggregate": "terminal",
           }),
         [WS_METHODS.terminalAttach]: (input) =>
-          observeRpcStream(
-            WS_METHODS.terminalAttach,
-            terminalAttachStream(terminalManager, input),
-            { "rpc.aggregate": "terminal" },
-          ),
+          observeRpcStream(WS_METHODS.terminalAttach, terminalAttachStream(input), {
+            "rpc.aggregate": "terminal",
+          }),
         [WS_METHODS.terminalWrite]: (input) =>
           observeRpcEffect(WS_METHODS.terminalWrite, terminalManager.write(input), {
             "rpc.aggregate": "terminal",
