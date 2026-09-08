@@ -18,6 +18,7 @@ import * as NodeOS from "node:os";
 import {
   USAGE_CONTRACT_VERSION,
   type ServerSettings as ServerSettingsValue,
+  type UsageBucket,
   type UsageProviderKind,
   type UsageSource,
   type UsagePricing,
@@ -271,8 +272,9 @@ export const make = Effect.gen(function* () {
    * Antigravity has several: T3 Code runs the agent against a private profile
    * per provider instance under the state directory, while the standalone CLI
    * and a standalone ACP agent (Zed, for one) keep conversations under the
-   * user's own Gemini home. Each is its own source so the merge fingerprints
-   * them separately.
+   * user's own Gemini home. Each is its own source, and every bucket names
+   * its source, so two servers on one machine can share the Gemini home
+   * without the client counting it twice.
    */
   const resolveTranscriptDirs = Effect.fn("UsageService.resolveTranscriptDirs")(function* (
     settings: ServerSettingsValue,
@@ -508,7 +510,7 @@ export const make = Effect.gen(function* () {
       { concurrency: 2 },
     );
 
-    const aggregator = new UsageAggregator({
+    const aggregateOptions = {
       timeZone: input.timeZone,
       sinceDay: input.sinceDay,
       untilDay: input.untilDay,
@@ -516,9 +518,10 @@ export const make = Effect.gen(function* () {
       ...hourlyWindow,
       rates,
       priceOverrides: createOverrideRateTable(settings.usagePriceOverrides),
-    });
+    };
 
     const sources: UsageSource[] = [];
+    const buckets: UsageBucket[] = [];
     const livePaths = new Set<string>();
     const walkedRoots: string[] = [];
 
@@ -537,6 +540,10 @@ export const make = Effect.gen(function* () {
       }
 
       walkedRoots.push(dir);
+      // One aggregator per directory, so every bucket can name the source it
+      // came from. De-duplication never crossed directories: each provider's
+      // keys are scoped to its own transcript tree.
+      const aggregator = new UsageAggregator(aggregateOptions);
       let scannedFiles = 0;
       let skippedFiles = 0;
       // Distinct per directory. Buckets carry per-cell session counts, but a
@@ -559,6 +566,7 @@ export const make = Effect.gen(function* () {
         }
       }
 
+      const source = sources.length;
       sources.push({
         fingerprint: { hostId, provider, resolvedHomePath: dir, volumeId },
         status: "ok",
@@ -568,6 +576,7 @@ export const make = Effect.gen(function* () {
         distinctSessions: sessionIds.size,
         message: null,
       });
+      for (const bucket of aggregator.finish().buckets) buckets.push({ ...bucket, source });
     }
 
     const pruned = pruneScanCache(fileCache, {
@@ -579,7 +588,6 @@ export const make = Effect.gen(function* () {
     if (pruned > 0) cacheDirty = true;
     yield* persistScanCache();
 
-    const aggregated = aggregator.finish();
     const readAt = yield* DateTime.now;
     const finishedAtMs = yield* Clock.currentTimeMillis;
 
@@ -589,7 +597,7 @@ export const make = Effect.gen(function* () {
       timeZone: input.timeZone,
       sinceDay: input.sinceDay,
       untilDay: input.untilDay,
-      buckets: aggregated.buckets,
+      buckets,
       sources,
       pricing: pricing(),
       scanDurationMs: Math.max(0, finishedAtMs - startedAtMs),

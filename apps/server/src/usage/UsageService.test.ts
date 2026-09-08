@@ -166,10 +166,11 @@ describe("UsageService", () => {
           [["antigravity", "gemini-3.8-flash", 1]],
         );
         assert.strictEqual(totalOutputTokens(first), 26);
-        const managed = first.sources.find(
+        const managed = first.sources.findIndex(
           (source) => source.fingerprint.provider === "antigravity" && source.status === "ok",
         );
-        assert.strictEqual(managed?.distinctSessions, 1);
+        assert.strictEqual(first.sources[managed]?.distinctSessions, 1);
+        assert.strictEqual(first.buckets[0]?.source, managed);
 
         // A turn committed while the agent still holds the database lives in
         // the WAL only; the main file's size and mtime do not move.
