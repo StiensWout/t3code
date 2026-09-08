@@ -2,8 +2,8 @@ import remarkParse from "remark-parse";
 import { unified } from "unified";
 
 const parser = unified().use(remarkParse);
-const insightStart = /^ {0,3}(`?)★ Insight[\t ]+─+\1[\t ]*$/u;
-const insightEnd = /^ {0,3}(`?)─+\1[\t ]*$/u;
+const insightStart = /^([\t ]*)(`?)★ Insight[\t ]+─+\2[\t ]*$/u;
+const insightEnd = /^[\t ]*(`?)─+\1[\t ]*$/u;
 
 type MarkdownNode = {
   type: string;
@@ -40,22 +40,24 @@ export function renderAssistantInsightsAsMarkdown(markdown: string): string {
 
   const lines = markdown.split(/\r\n|\r|\n/u);
   const output: string[] = [];
-  let inInsight = false;
+  let insightIndent: string | undefined;
   let changed = false;
   for (const [index, line] of lines.entries()) {
     const lineNumber = index + 1;
     const literal = literalLines.has(lineNumber);
-    if (!literal && insightStart.test(line)) {
-      output.push("", "> **★ Insight**", ">");
-      inInsight = true;
+    const start = literal ? null : insightStart.exec(line);
+    if (start) {
+      insightIndent = start[1] ?? "";
+      output.push("", `${insightIndent}> **★ Insight**`, `${insightIndent}>`);
       changed = true;
-    } else if (inInsight && !literal && insightEnd.test(line)) {
+    } else if (insightIndent !== undefined && !literal && insightEnd.test(line)) {
       output.push("");
-      inInsight = false;
-    } else if (inInsight) {
+      insightIndent = undefined;
+    } else if (insightIndent !== undefined) {
       // Hard breaks belong only to insight prose; code and surrounding prose stay intact.
       const hardBreak = !literal && line.trim() !== "" && softBreakLines.has(lineNumber);
-      output.push(`> ${line}${hardBreak ? "  " : ""}`);
+      const content = line.startsWith(insightIndent) ? line.slice(insightIndent.length) : line;
+      output.push(`${insightIndent}> ${content}${hardBreak ? "  " : ""}`);
     } else {
       output.push(line);
     }
