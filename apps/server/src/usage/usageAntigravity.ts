@@ -206,10 +206,13 @@ export function parseAntigravityGeneration(
  * Reads every generation in one conversation database.
  *
  * Opened read-only so the scan can never interfere with an agent that is
- * still writing. The query itself is synchronous: finished generations are
- * compacted to a few hundred bytes, only the one in flight is large, and the
- * result is memoised by the caller until the database or its write-ahead log
- * changes.
+ * still writing. The query itself is synchronous, but bounded: finished
+ * generations are compacted to a few hundred bytes and only the one in flight
+ * is large, so even a 2,000-generation conversation reads in about 70 ms, a
+ * typical one in single-digit milliseconds. Each call first yields to the
+ * event loop so a cold scan over many conversations interleaves with other
+ * work, and the result is memoised by the caller until the database or its
+ * write-ahead log changes.
  *
  * Returns `null` when the file could not be opened or queried, which the
  * caller must not cache: a database the agent has locked for a moment is not
@@ -219,6 +222,7 @@ export function parseAntigravityGeneration(
 export async function readAntigravityConversation(
   filePath: string,
 ): Promise<readonly UsageRecord[] | null> {
+  await new Promise<void>((resolve) => setImmediate(resolve));
   let database: NodeSqlite.DatabaseSync;
   try {
     const { DatabaseSync } = await import("node:sqlite");
