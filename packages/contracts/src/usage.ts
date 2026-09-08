@@ -3,10 +3,10 @@
  *
  * Each environment scans the provider CLIs' own on-disk session history
  * (`~/.claude/projects/**\/*.jsonl`, `~/.codex/sessions/**\/*.jsonl`,
- * `~/.grok/sessions/**\/updates.jsonl`, Antigravity's per-conversation SQLite
- * databases) rather than relying on T3 Code's own orchestration projections, so
- * usage stays complete even for turns that were never driven through T3 Code.
- * This mirrors the approach `ccusage` takes.
+ * `~/.grok/sessions/**\/updates.jsonl`, and the Antigravity conversation
+ * databases under T3 Code's own state directory) rather than relying on T3
+ * Code's orchestration projections, so usage stays complete even for turns that
+ * were never driven through T3 Code. This mirrors the approach `ccusage` takes.
  *
  * Environments return pre-aggregated `(day, hourStart?, provider, model)`
  * buckets. Raw transcript records never cross the wire.
