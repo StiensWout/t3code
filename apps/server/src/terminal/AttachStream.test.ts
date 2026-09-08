@@ -201,3 +201,36 @@ it.effect("unsubscribes and releases blocked output when the transport consumer 
     expect(unsubscribed).toBe(true);
   }),
 );
+
+it.effect("interrupts an attach that is still replaying when the consumer disconnects", () =>
+  Effect.gen(function* () {
+    const consumerStarted = yield* Deferred.make<void>();
+    let replayInterrupted = false;
+    const consumer = yield* terminalAttachStream(input).pipe(
+      Stream.provide(
+        Layer.mock(TerminalManager.TerminalManager)({
+          attachStream: (_input, listener) =>
+            Effect.gen(function* () {
+              for (let index = 0; index < 100; index += 1) {
+                yield* listener({ type: "output", ...target, data: "history" }, "replay");
+              }
+              return () => {};
+            }).pipe(
+              Effect.onInterrupt(() =>
+                Effect.sync(() => {
+                  replayInterrupted = true;
+                }),
+              ),
+            ),
+        }),
+      ),
+      Stream.runForEach(() =>
+        Deferred.succeed(consumerStarted, undefined).pipe(Effect.andThen(Effect.never)),
+      ),
+      Effect.forkChild,
+    );
+    yield* Deferred.await(consumerStarted);
+    yield* Fiber.interrupt(consumer);
+    expect(replayInterrupted).toBe(true);
+  }),
+);

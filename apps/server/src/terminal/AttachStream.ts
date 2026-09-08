@@ -16,9 +16,11 @@ export function terminalAttachStream(input: TerminalAttachInput) {
       Effect.gen(function* () {
         const manager = yield* TerminalManager.TerminalManager;
         return yield* Effect.acquireRelease(
-          manager.attachStream(input, (event) =>
-            Queue.offer(queue, event).pipe(Effect.asVoid, Effect.ignore),
-          ),
+          manager
+            .attachStream(input, (event) =>
+              Queue.offer(queue, event).pipe(Effect.asVoid, Effect.ignore),
+            )
+            .pipe(Effect.interruptible),
           (unsubscribe) => Effect.sync(unsubscribe),
         );
       }),
