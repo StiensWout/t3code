@@ -62,7 +62,7 @@ export function buildArchivedThreadGroups(input: {
           matchesQuery(thread.title, query) ||
           matchesQuery(environmentLabel, query),
       )
-      .toSorted(
+      .sort(
         (left, right) =>
           (input.sortOrder === "newest" ? -1 : 1) *
           (archiveTimestamp(left) - archiveTimestamp(right)),

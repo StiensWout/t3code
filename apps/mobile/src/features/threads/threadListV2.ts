@@ -500,7 +500,7 @@ export function buildThreadListV2Items(input: {
       isLast: false,
     });
   }
-  for (const thread of orderedActive.toSorted(
+  for (const thread of [...orderedActive].sort(
     (left, right) => Number(left.projectId === null) - Number(right.projectId === null),
   )) {
     items.push({
