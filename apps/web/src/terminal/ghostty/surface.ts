@@ -4,7 +4,6 @@ import { collectWrappedTerminalLinkLine, extractTerminalLinks } from "../../term
 import {
   GhosttyTerminalCore,
   type GhosttyScrollbar,
-  type GhosttyScreenTheme,
   type GhosttySnapshot,
   type GhosttyTheme,
 } from "./core";
@@ -63,33 +62,6 @@ const TERMINAL_FONT_LOAD_VARIANTS = [
 export interface GhosttyTerminalFont {
   readonly family?: string;
   readonly size?: number;
-}
-
-function linearColorChannel(value: number): number {
-  const channel = value / 255;
-  return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
-}
-
-function terminalColorLuminance(color: GhosttyTheme["background"]): number {
-  return (
-    0.2126 * linearColorChannel(color.r) +
-    0.7152 * linearColorChannel(color.g) +
-    0.0722 * linearColorChannel(color.b)
-  );
-}
-
-/**
- * Full-screen terminal apps often reset cells to the terminal defaults while
- * repainting a dark interface. Give a light host theme coherent dark defaults
- * only while the standard alternate screen is active; explicit app colors
- * still win, and returning to the shell restores the host theme.
- */
-export function terminalThemeForScreen(
-  theme: GhosttyTheme,
-  alternateScreen: boolean,
-): GhosttyScreenTheme {
-  if (!alternateScreen || terminalColorLuminance(theme.background) < 0.5) return theme;
-  return theme.alternateScreen ?? theme;
 }
 
 let symbolsFontLoad: Promise<void> | null = null;
@@ -667,9 +639,7 @@ export class GhosttyTerminalSurface {
     readonly height: number;
     readonly ratio: number;
   } | null = null;
-  private appTheme: GhosttyTheme;
-  private theme: GhosttyScreenTheme;
-  private alternateScreenActive = false;
+  private theme: GhosttyTheme;
   private readonly suppressedKeyCodes = new Set<string>();
   private pasteShortcutToken = 0;
   private pasteShortcutDeliveredToken: number | null = null;
@@ -709,7 +679,6 @@ export class GhosttyTerminalSurface {
     this.metrics = metrics;
     this.options = options;
     this.visible = options.visible ?? true;
-    this.appTheme = options.theme;
     this.theme = options.theme;
     this.fontFamily = fontFamily;
     this.requestedFontFamily = options.font?.family;
@@ -830,7 +799,6 @@ export class GhosttyTerminalSurface {
   }
 
   private didWriteOutput(): void {
-    this.synchronizeScreenTheme();
     this.synchronizeMouseTrackingState();
     this.refreshHoverBaseCursor();
     // Restart the blink cycle from the visible phase so the cursor never sits
@@ -846,7 +814,6 @@ export class GhosttyTerminalSurface {
     this.lastMouseMotionData = "";
     this.core.beginReplay();
     this.replayActive = true;
-    this.synchronizeScreenTheme();
     if (data.length > 0) {
       this.enqueueWrite(data, true);
     } else {
@@ -869,7 +836,6 @@ export class GhosttyTerminalSurface {
     this.core.beginReplay();
     this.replayActive = true;
     this.replayStreamOpen = true;
-    this.synchronizeScreenTheme();
     if (data.length > 0) {
       this.enqueueWrite(data, true);
     }
@@ -1030,19 +996,11 @@ export class GhosttyTerminalSurface {
 
   setTheme(theme: GhosttyTheme): void {
     if (this.disposed) return;
-    this.appTheme = theme;
+    this.theme = theme;
     this.core.setTheme(theme);
-    this.synchronizeScreenTheme(true);
-    this.requestRender();
-  }
-
-  private synchronizeScreenTheme(force = false): void {
-    const alternateScreen = this.core.isAlternateScreen();
-    if (!force && alternateScreen === this.alternateScreenActive) return;
-    this.alternateScreenActive = alternateScreen;
-    this.theme = terminalThemeForScreen(this.appTheme, alternateScreen);
-    this.mount.style.backgroundColor = `rgb(${this.theme.background.r} ${this.theme.background.g} ${this.theme.background.b})`;
+    this.mount.style.backgroundColor = `rgb(${theme.background.r} ${theme.background.g} ${theme.background.b})`;
     this.forceFullRender = true;
+    this.requestRender();
   }
 
   async setFont(font: GhosttyTerminalFont): Promise<void> {
@@ -2185,9 +2143,6 @@ export class GhosttyTerminalSurface {
       previousCursorY: this.renderedCursorY,
       focused: this.focused,
       hoveredLinkRange: this.hoveredLink?.range ?? null,
-      ...(this.alternateScreenActive
-        ? { defaultThemeOverride: { source: this.appTheme, target: this.theme } }
-        : {}),
       ...(this.theme.selectionBackground !== undefined
         ? { selectionBackground: this.theme.selectionBackground }
         : {}),

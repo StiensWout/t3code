@@ -32,6 +32,7 @@ import {
   type TerminalTheme,
 } from "./terminalTheme";
 import { terminalDebugLog } from "./terminalDebugLog";
+import { nativeTerminalOutputCommands } from "./terminalBufferReplay";
 
 interface TerminalInputEvent {
   readonly data: string;
@@ -214,6 +215,9 @@ export const TerminalSurface = memo(function TerminalSurface(props: TerminalSurf
   const nativeRef = useRef<NativeTerminalSurfaceHandle>(null);
   const nativeCommandQueueRef = useRef(Promise.resolve());
   const outputCursorRef = useRef<TerminalOutputCursor>(INITIAL_TERMINAL_OUTPUT_CURSOR);
+  // A replacement can cancel queued commands. Only acknowledged bytes may be
+  // treated as consumed when rebuilding the native surface.
+  const appliedOutputCursorRef = useRef<TerminalOutputCursor>(INITIAL_TERMINAL_OUTPUT_CURSOR);
   const streamIdentityRef = useRef("");
   const deferredEmptyResetRef = useRef(false);
   const surfaceIdentity = `${props.terminalKey}:${fontSize}:${themeAppearance}:${themeConfig}`;
@@ -252,30 +256,26 @@ export const TerminalSurface = memo(function TerminalSurface(props: TerminalSurf
     if (!supportsStreaming) return;
     const streamIdentity = props.replayPaused ? `${resetIdentity}:paused` : resetIdentity;
     const forceReset = streamIdentityRef.current !== streamIdentity;
-    const update =
-      forceReset || props.replayPaused
-        ? {
-            type: "reset" as const,
-            data: props.replayPaused ? "" : terminalOutputText(props.output),
-            cursor: {
-              resetVersion: props.output.resetVersion,
-              generation: props.output.generation,
-              offset: props.output.nextOffset,
-            },
-          }
-        : readTerminalOutputUpdate(props.output, outputCursorRef.current);
+    const update = props.replayPaused
+      ? {
+          type: "reset" as const,
+          data: "",
+          segments: [],
+          cursor: {
+            resetVersion: props.output.resetVersion,
+            generation: props.output.generation,
+            offset: props.output.nextOffset,
+          },
+        }
+      : readTerminalOutputUpdate(
+          props.output,
+          forceReset ? appliedOutputCursorRef.current : outputCursorRef.current,
+          forceReset,
+        );
     streamIdentityRef.current = streamIdentity;
-    outputCursorRef.current = update.cursor;
+    if (!props.replayPaused) outputCursorRef.current = update.cursor;
     if (!forceReset && props.replayPaused) return;
-    let commands: Array<{ type: "reset" | "write" | "writeReplay"; data: string }> =
-      update.type === "reset"
-        ? [{ type: "reset", data: update.data }]
-        : update.type === "append"
-          ? update.segments.map((segment) => ({
-              type: segment.delivery === "replay" ? ("writeReplay" as const) : ("write" as const),
-              data: segment.data,
-            }))
-          : [];
+    let commands = nativeTerminalOutputCommands(update);
     if (
       !forceReset &&
       props.replayPending === true &&
@@ -331,6 +331,9 @@ export const TerminalSurface = memo(function TerminalSurface(props: TerminalSurf
               throw error;
             }
           }
+        }
+        if (!props.replayPaused && streamIdentityRef.current === streamIdentity) {
+          appliedOutputCursorRef.current = update.cursor;
         }
       })
       .catch((error: unknown) => {

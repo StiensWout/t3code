@@ -3,7 +3,6 @@ import {
   ghosttyColorsEqual,
   type GhosttyCell,
   type GhosttyColor,
-  type GhosttyScreenTheme,
   type GhosttySnapshot,
 } from "./core";
 
@@ -201,11 +200,6 @@ export function renderGhosttySnapshot(options: {
   readonly previousCursorY?: number | null;
   readonly focused?: boolean;
   readonly selectionBackground?: string;
-  /** Remap only terminal-default colors; explicit ANSI application colors win. */
-  readonly defaultThemeOverride?: {
-    readonly source: GhosttyScreenTheme;
-    readonly target: GhosttyScreenTheme;
-  };
   readonly hoveredLinkRange?: GhosttyCellRange | null;
   /** Vertical origin of row 0; defaults to the horizontal padding. */
   readonly originY?: number;
@@ -223,37 +217,7 @@ export function renderGhosttySnapshot(options: {
   } = options;
   const focused = options.focused ?? true;
   const selectionBackground = options.selectionBackground ?? DEFAULT_SELECTION_BACKGROUND;
-  const themeOverride = options.defaultThemeOverride;
-  const defaultBackground = themeOverride?.target.background ?? snapshot.background;
-  const defaultForeground = themeOverride?.target.foreground ?? snapshot.foreground;
-  const resolveDefaultColor = (
-    color: GhosttyColor,
-    sourceDefault: GhosttyColor,
-    sourceInverse: GhosttyColor,
-    targetDefault: GhosttyColor,
-    targetInverse: GhosttyColor,
-  ) => {
-    if (!themeOverride) return color;
-    if (ghosttyColorsEqual(color, sourceDefault)) return targetDefault;
-    if (ghosttyColorsEqual(color, sourceInverse)) return targetInverse;
-    return color;
-  };
-  const resolveBackground = (color: GhosttyColor) =>
-    resolveDefaultColor(
-      color,
-      themeOverride?.source.background ?? snapshot.background,
-      themeOverride?.source.foreground ?? snapshot.foreground,
-      defaultBackground,
-      defaultForeground,
-    );
-  const resolveForeground = (color: GhosttyColor) =>
-    resolveDefaultColor(
-      color,
-      themeOverride?.source.foreground ?? snapshot.foreground,
-      themeOverride?.source.background ?? snapshot.background,
-      defaultForeground,
-      defaultBackground,
-    );
+  const defaultBackground = snapshot.background;
   const hoveredLinkRange = options.hoveredLinkRange ?? null;
   const originY = options.originY ?? padding;
   const rowsToDraw = forceFull
@@ -292,14 +256,14 @@ export function renderGhosttySnapshot(options: {
     while (backgroundStart < row.cells.length) {
       const first = row.cells[backgroundStart];
       if (!first) break;
-      const firstBackground = resolveBackground(first.background);
+      const firstBackground = first.background;
       let backgroundEnd = backgroundStart + 1;
       while (backgroundEnd < row.cells.length) {
         const next = row.cells[backgroundEnd];
         if (
           !next ||
           next.selected !== first.selected ||
-          !ghosttyColorsEqual(resolveBackground(next.background), firstBackground)
+          !ghosttyColorsEqual(next.background, firstBackground)
         ) {
           break;
         }
@@ -331,7 +295,7 @@ export function renderGhosttySnapshot(options: {
       const blockRects = terminalBlockRects(first.text);
       if (blockRects !== null) {
         if (!first.invisible) {
-          context.fillStyle = cssColor(resolveForeground(first.foreground));
+          context.fillStyle = cssColor(first.foreground);
           const cellLeft = padding + runStart * metrics.width;
           for (const [x, y, width, height] of blockRects) {
             const [left, right] = blockPixelSpan(cellLeft, x, width, metrics.width);
@@ -362,7 +326,7 @@ export function renderGhosttySnapshot(options: {
         );
         context.clip();
         context.font = fontForCell(first, fontSize, fontFamily);
-        context.fillStyle = cssColor(resolveForeground(first.foreground));
+        context.fillStyle = cssColor(first.foreground);
         context.fillText(
           text,
           padding + runStart * metrics.width,
@@ -385,7 +349,7 @@ export function renderGhosttySnapshot(options: {
       if (!cell || (!cell.underline && !cell.strikethrough && !cell.overline && !hoveredLink)) {
         continue;
       }
-      context.fillStyle = cssColor(resolveForeground(cell.foreground));
+      context.fillStyle = cssColor(cell.foreground);
       const left = padding + column * metrics.width;
       if (cell.underline || hoveredLink) {
         context.fillRect(left, top + metrics.height - 2, metrics.width, 1);
@@ -400,10 +364,7 @@ export function renderGhosttySnapshot(options: {
   if (cursorOn && snapshot.cursorVisible && snapshot.cursorX >= 0 && snapshot.cursorY >= 0) {
     const left = padding + snapshot.cursorX * metrics.width;
     const top = originY + snapshot.cursorY * metrics.height;
-    const cursor =
-      themeOverride && ghosttyColorsEqual(snapshot.cursor, themeOverride.source.cursor)
-        ? themeOverride.target.cursor
-        : snapshot.cursor;
+    const cursor = snapshot.cursor;
     context.fillStyle = cssColor(cursor);
     if (!focused) {
       // An unfocused terminal draws a hollow cursor so the active pane is obvious.

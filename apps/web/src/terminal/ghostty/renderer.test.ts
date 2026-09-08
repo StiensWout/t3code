@@ -71,7 +71,7 @@ describe("ghosttyTextRunEnd", () => {
 });
 
 describe("renderGhosttySnapshot", () => {
-  it("remaps terminal defaults without overriding explicit application colors", () => {
+  it("renders cell colors unchanged, including colors equal to either terminal default", () => {
     const fillRectCalls: Array<{ args: number[]; style: string }> = [];
     const fillTextCalls: Array<{ args: unknown[]; style: string }> = [];
     let fillStyle = "";
@@ -136,27 +136,15 @@ describe("renderGhosttySnapshot", () => {
       padding: 4,
       forceFull: true,
       cursorOn: true,
-      defaultThemeOverride: {
-        source: {
-          background: defaultCell.background,
-          foreground: defaultCell.foreground,
-          cursor: defaultCell.foreground,
-        },
-        target: {
-          background: { r: 1, g: 2, b: 3 },
-          foreground: { r: 250, g: 251, b: 252 },
-          cursor: { r: 200, g: 201, b: 202 },
-        },
-      },
     });
 
     expect(fillRectCalls).toContainEqual({
       args: [0, 0, 200, 40],
-      style: "rgb(1, 2, 3)",
+      style: "rgb(0, 0, 0)",
     });
     expect(fillRectCalls).toContainEqual({
       args: [14, 4, 10, 20],
-      style: "rgb(250, 251, 252)",
+      style: "rgb(255, 255, 255)",
     });
     expect(fillRectCalls).toContainEqual({
       args: [24, 4, 10, 20],
@@ -167,8 +155,8 @@ describe("renderGhosttySnapshot", () => {
       style: "rgb(9, 8, 7)",
     });
     expect(fillTextCalls).toEqual([
-      { args: ["a", 4, 19, 10], style: "rgb(250, 251, 252)" },
-      { args: ["i", 14, 19, 10], style: "rgb(1, 2, 3)" },
+      { args: ["a", 4, 19, 10], style: "rgb(255, 255, 255)" },
+      { args: ["i", 14, 19, 10], style: "rgb(0, 0, 0)" },
       { args: ["b", 24, 19, 10], style: "rgb(10, 20, 30)" },
     ]);
   });

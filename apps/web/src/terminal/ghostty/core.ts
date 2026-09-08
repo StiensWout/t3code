@@ -67,17 +67,12 @@ export interface GhosttyColor {
   readonly b: number;
 }
 
-export interface GhosttyScreenTheme {
+export interface GhosttyTheme {
   readonly foreground: GhosttyColor;
   readonly background: GhosttyColor;
   readonly cursor: GhosttyColor;
   /** CSS color the renderer overlays on selected cells; not sent to Ghostty. */
   readonly selectionBackground?: string;
-}
-
-export interface GhosttyTheme extends GhosttyScreenTheme {
-  /** Theme-owned defaults used while the standard alternate screen is active. */
-  readonly alternateScreen?: GhosttyScreenTheme;
 }
 
 export interface GhosttyCell {
