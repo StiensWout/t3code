@@ -1,3 +1,4 @@
+import { nativeMarkdownRunStyle } from "./nativeMarkdownRunStyle";
 import { markdownMath } from "@t3tools/client-runtime/markdown-math";
 import { mathjax } from "mathjax-full/js/mathjax.js";
 import { TeX } from "mathjax-full/js/input/tex.js";
@@ -66,31 +67,35 @@ export function nativeMathRunHtml(
   run: NativeMarkdownTextRun,
   style: NativeMarkdownTextStyle,
   menu?: MarkdownFileContextMenu,
+  iconUri?: string,
 ): string {
+  const resolved = nativeMarkdownRunStyle(run, style, "monospace");
+  const css = `color:${resolved.color};font-size:${resolved.fontSize}px;line-height:${resolved.lineHeight}px;font-weight:${resolved.fontWeight};font-style:${resolved.fontStyle};font-family:${run.code ? "monospace" : "inherit"};text-decoration:${resolved.textDecorationLine}`;
+  if (run.role === "spacer")
+    return `<span style="display:block;height:${resolved.lineHeight}px;font-size:0;line-height:0">${escapeHtml(run.text)}</span>`;
+
+  let content = escapeHtml(run.text);
   if (run.mathSource) {
     const math = markdownMath(run.mathSource);
     const source = escapeHtml(run.mathSource);
     const svg = nativeMathSvg(run.mathSource);
-    const equation = `<span class="equation" data-source="${source}">${svg ?? source}</span>`;
-    return math?.display
-      ? `<span class="display"><span class="actions"><button data-copy="${source}">Copy TeX</button><button data-toggle="source" aria-expanded="false">TeX source</button></span><span class="viewport" tabindex="0" role="region" aria-label="Equation">${equation}</span><span class="source" hidden>${source}</span></span>`
-      : run.href
-        ? `<a href="${escapeHtml(run.href)}">${equation}</a>`
-        : equation;
+    content = `<span class="equation" data-source="${source}">${svg ?? source}</span>`;
+    if (math?.display)
+      content = `<span class="display"><span class="actions"><button data-copy="${source}">Copy TeX</button><button data-toggle="source" aria-expanded="false">TeX source</button></span><span class="viewport" tabindex="0" role="region" aria-label="Equation">${content}</span><span class="source" hidden>${source}</span></span>`;
+  } else if (run.skillName && run.skillLabel) {
+    // Match the native skill label while retaining the token for selection copy.
+    content = `<span data-copy-source="${escapeHtml(run.text)}"><svg class="inline-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5"><path d="m12 2 9 5v10l-9 5-9-5V7zM3 7l9 5 9-5M12 12v10M7.5 4.5l9 5"/></svg>${escapeHtml(run.skillLabel)}</span>`;
   }
-  const heading = run.role === "heading";
-  const fontSize = heading
-    ? (style.headingFontSizes?.[(run.headingLevel ?? 1) - 1] ?? style.fontSize * 1.3)
-    : style.fontSize;
-  const color = run.href
-    ? style.linkColor
-    : run.code
-      ? style.inlineCodeColor
-      : heading || run.bold
-        ? style.strongColor
-        : style.color;
-  const css = `color:${color};font-size:${fontSize}px;font-weight:${heading || run.bold ? 700 : 400};font-style:${run.italic ? "italic" : "normal"};font-family:${run.code ? "monospace" : "inherit"};text-decoration:${run.strikethrough ? "line-through" : "none"}`;
-  const content = escapeHtml(run.text);
+  if (iconUri) {
+    const icon =
+      run.externalHost && !run.fileIcon
+        ? `<span class="inline-icon" aria-hidden="true" style="background:currentColor;mask:url('${escapeHtml(iconUri)}') center/contain no-repeat"></span>`
+        : `<img class="inline-icon" alt="" src="${escapeHtml(iconUri)}">`;
+    content = icon + content;
+  } else if (run.externalHost || run.fileIcon) {
+    content =
+      `<span class="inline-icon" aria-hidden="true">${run.fileIcon ? "▤" : "◉"}</span>` + content;
+  }
   if (run.href) {
     const href = escapeHtml(run.href);
     const actions = menu
