@@ -60,3 +60,12 @@ describe("Markdown math", () => {
     expect(markdownMathRanges(String.raw`$x + \$5$`)[0]?.math?.tex).toBe(String.raw`x + \$5`);
   });
 });
+
+it("ends unfinished backslash math at a paragraph boundary and preserves following Markdown", () => {
+  const tree = parser.parse("\\(unfinished\n\n## Heading\n\n[link](https://example.com)");
+  expect(tree.children[1]).toMatchObject({ type: "heading", depth: 2 });
+  expect(tree.children[2]).toMatchObject({
+    type: "paragraph",
+    children: [{ type: "link", url: "https://example.com" }],
+  });
+});
