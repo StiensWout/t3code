@@ -131,6 +131,7 @@ import {
 
 export interface NativeMarkdownTextRun {
   readonly text: string;
+  readonly mathSource?: string;
   readonly bold?: boolean;
   readonly italic?: boolean;
   readonly strikethrough?: boolean;
@@ -259,6 +260,8 @@ function inlineHtmlText(value: string): string {
 
 function sameRunStyle(left: NativeMarkdownTextRun, right: NativeMarkdownTextRun): boolean {
   return (
+    left.mathSource === undefined &&
+    right.mathSource === undefined &&
     left.bold === right.bold &&
     left.italic === right.italic &&
     left.strikethrough === right.strikethrough &&
@@ -344,7 +347,7 @@ function decorateSkillRuns(
   const decorated: NativeMarkdownTextRun[] = [];
 
   for (const run of runs) {
-    if (run.code || run.href || run.fileIcon || run.role === "code-block") {
+    if (run.mathSource || run.code || run.href || run.fileIcon || run.role === "code-block") {
       decorated.push(run);
       continue;
     }
@@ -436,8 +439,15 @@ function appendNode(
   context: RunContext,
 ): NativeMarkdownTextRun[] {
   switch (node.type) {
-    case "text":
     case "math_inline":
+    case "math_block":
+      runs.push({
+        text: nodeTextContent(node),
+        mathSource: nodeTextContent(node),
+        ...(context.href ? { href: context.href } : {}),
+      });
+      return runs;
+    case "text":
       return appendRun(runs, textNodeContent(nodeTextContent(node)), context);
     case "html_inline":
       return appendRun(runs, inlineHtmlText(nodeTextContent(node)), context);
@@ -839,7 +849,7 @@ function appendDocumentBlock(
       });
       return appendBlockTerminator(runs, { ...EMPTY_CONTEXT, role: "body", depth });
     case "math_block":
-      appendRun(runs, nodeTextContent(node), { ...EMPTY_CONTEXT, role: "body", depth });
+      appendNode(runs, node, { ...EMPTY_CONTEXT, role: "body", depth });
       return appendBlockTerminator(runs, { ...EMPTY_CONTEXT, role: "body", depth });
     default:
       appendInlineChildren(runs, node, { ...EMPTY_CONTEXT, role: "body", depth });
