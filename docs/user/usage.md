@@ -7,8 +7,8 @@ connected environments. It shows token use, cache savings, model breakdowns, and
 API-equivalent cost. These estimates are not your subscription bill.
 
 Totals depend on the history available on each server. Grok turns without a saved completed-turn
-record are missing from the totals. Antigravity totals cover threads run through T3 Code, not
-sessions from the standalone Antigravity CLI.
+record are missing from the totals. Antigravity totals cover T3 Code threads plus Antigravity
+conversations stored under that machine's Gemini home, such as standalone CLI sessions.
 
 Usage includes each configured account's history, including disabled accounts. Custom homes follow
 the account's home setting or its `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, or `GROK_HOME` environment
