@@ -38,7 +38,7 @@ export function renderAssistantInsightsAsMarkdown(markdown: string): string {
   }
   visit(parser.parse(markdown));
 
-  const lines = markdown.split(/\r?\n/u);
+  const lines = markdown.split(/\r\n|\r|\n/u);
   const output: string[] = [];
   let inInsight = false;
   let changed = false;
