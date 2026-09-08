@@ -151,6 +151,9 @@ export async function listTranscriptFiles(
         for (const suffix of companionSuffixes) {
           try {
             const companion = await NodeFSP.stat(`${child}${suffix}`);
+            // Opening a WAL database, even read-only, recreates an empty `-wal`
+            // beside it; a companion with no content must not move the key.
+            if (companion.size === 0) continue;
             size += companion.size;
             mtimeMs = Math.max(mtimeMs, companion.mtimeMs);
           } catch {
@@ -228,7 +231,7 @@ export async function readTranscriptRecords(
   if (provider === "antigravity") {
     // A SQLite database has no append-only byte stream to resume; the whole
     // conversation is re-read whenever the file or its WAL changes.
-    const records = readAntigravityConversation(filePath);
+    const records = await readAntigravityConversation(filePath);
     if (records === null) return null;
     return {
       records,

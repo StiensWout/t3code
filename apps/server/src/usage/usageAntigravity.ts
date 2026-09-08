@@ -1,5 +1,8 @@
 // @effect-diagnostics nodeBuiltinImport:off - conversations are SQLite files, and
 // `node:sqlite` is the only in-process reader; Effect has no SQLite file system.
+// It is imported lazily: the persistence layer swaps in `bun:sqlite` under Bun,
+// where `node:sqlite` may not resolve, and the usage scan must not take the
+// server down with it.
 /**
  * Antigravity conversation databases as a usage source.
  *
@@ -16,7 +19,7 @@
  * CortexStepGeneratorMetadata
  *   1 chat_model: ChatModelMetadata
  *     4 usage: ModelUsageStats
- *       2 input_tokens          (includes the cached portion, like Gemini's prompt count)
+ *       2 input_tokens          (uncached only; cache reads are reported separately)
  *       3 output_tokens         (thinking + response)
  *       4 cache_write_tokens
  *       5 cache_read_tokens
@@ -25,14 +28,13 @@
  *     9 chat_start_metadata.4 created_at: google.protobuf.Timestamp
  *    19 response_model          ("gemini-3.8-flash")
  *    22 response_model_full
- *    20 custom_metadata {1 key, 2 value}  (`request_id` = `<conversation>-<turn>`)
  *   4 execution_id              (the conversation id)
  * ```
  *
  * @module usageAntigravity
  */
 import * as NodePath from "node:path";
-import * as NodeSqlite from "node:sqlite";
+import type * as NodeSqlite from "node:sqlite";
 
 import type { UsageTokenTotals } from "@t3tools/contracts";
 
@@ -119,6 +121,7 @@ const utf8 = new TextDecoder();
  * `Date` in the aggregator.
  */
 const MAX_TIMESTAMP_SECONDS = 8_640_000_000_000n;
+const NANOS_PER_SECOND = 1_000_000_000n;
 
 function firstBytes(message: WireMessage, field: number): Uint8Array | undefined {
   return message.bytes.get(field)?.[0];
@@ -161,36 +164,30 @@ export function parseAntigravityGeneration(
   const timestamp = createdAt === null ? null : firstMessage(createdAt, 4);
   if (timestamp === null) return null;
   const seconds = timestamp.varints.get(1);
-  if (seconds === undefined || seconds > MAX_TIMESTAMP_SECONDS) return null;
-  const timestampMs = Number(seconds) * 1000 + Math.floor(count(timestamp, 2) / 1_000_000);
+  const nanos = timestamp.varints.get(2) ?? 0n;
+  if (seconds === undefined || seconds > MAX_TIMESTAMP_SECONDS || nanos >= NANOS_PER_SECOND) {
+    return null;
+  }
+  const timestampMs = Number(seconds) * 1000 + Number(nanos / 1_000_000n);
 
   const model = firstString(chatModel, 19) || firstString(chatModel, 22);
   if (model.length === 0) return null;
 
-  const inputTokens = count(usage, 2);
-  const cachedInputTokens = count(usage, 5);
-  const cacheCreationTokens = count(usage, 4);
   const thinkingTokens = count(usage, 9);
   // `output_tokens` already folds thinking in; older records without it only
   // carry the two halves.
   const outputTokens = usage.varints.has(3) ? count(usage, 3) : thinkingTokens + count(usage, 10);
   const totals: UsageTokenTotals = {
-    uncachedInputTokens: Math.max(0, inputTokens - cachedInputTokens - cacheCreationTokens),
-    cachedInputTokens,
-    cacheCreationTokens,
+    // Observed on a cache hit: `input_tokens` dropped by exactly the
+    // `cache_read_tokens` reported beside it, so the three counts are disjoint
+    // and must not be subtracted from one another.
+    uncachedInputTokens: count(usage, 2),
+    cachedInputTokens: count(usage, 5),
+    cacheCreationTokens: count(usage, 4),
     outputTokens,
     reasoningTokens: Math.min(outputTokens, thinkingTokens),
   };
   if (totalTokens(totals) === 0) return null;
-
-  let requestId = "";
-  for (const entry of chatModel.bytes.get(20) ?? []) {
-    const pair = decodeMessage(entry);
-    if (pair !== null && firstString(pair, 1) === "request_id") {
-      requestId = firstString(pair, 2);
-      break;
-    }
-  }
 
   return {
     provider: "antigravity",
@@ -199,9 +196,9 @@ export function parseAntigravityGeneration(
     sessionId: firstString(root, 4) || fallbackSessionId,
     totals,
     reportedCostUsd: null,
-    // Each generation row is unique to its conversation; the request id only
-    // matters when the same database is ever read from two paths.
-    dedupeKey: requestId.length === 0 ? null : `antigravity:${requestId}`,
+    // One row per generation, and a conversation lives in exactly one
+    // database, so nothing is ever seen twice.
+    dedupeKey: null,
   };
 }
 
@@ -209,19 +206,23 @@ export function parseAntigravityGeneration(
  * Reads every generation in one conversation database.
  *
  * Opened read-only so the scan can never interfere with an agent that is
- * still writing. Reading is synchronous: a conversation is at most a few
- * megabytes, and the result is memoised by the caller until the database or
- * its write-ahead log changes.
+ * still writing. The query itself is synchronous: finished generations are
+ * compacted to a few hundred bytes, only the one in flight is large, and the
+ * result is memoised by the caller until the database or its write-ahead log
+ * changes.
  *
  * Returns `null` when the file could not be opened or queried, which the
  * caller must not cache: a database the agent has locked for a moment is not
  * an empty conversation. A file that is valid SQLite but carries no
  * `gen_metadata` table is genuinely empty and returns `[]`.
  */
-export function readAntigravityConversation(filePath: string): readonly UsageRecord[] | null {
+export async function readAntigravityConversation(
+  filePath: string,
+): Promise<readonly UsageRecord[] | null> {
   let database: NodeSqlite.DatabaseSync;
   try {
-    database = new NodeSqlite.DatabaseSync(filePath, { readOnly: true });
+    const { DatabaseSync } = await import("node:sqlite");
+    database = new DatabaseSync(filePath, { readOnly: true });
   } catch {
     return null;
   }
@@ -233,7 +234,7 @@ export function readAntigravityConversation(filePath: string): readonly UsageRec
     const fallbackSessionId = NodePath.basename(filePath, ".db");
     const records: UsageRecord[] = [];
     for (const row of database.prepare("SELECT data FROM gen_metadata ORDER BY idx").iterate()) {
-      const data = (row as { data?: unknown }).data;
+      const data = row["data"];
       if (!(data instanceof Uint8Array)) continue;
       const record = parseAntigravityGeneration(data, fallbackSessionId);
       if (record !== null) records.push(record);
