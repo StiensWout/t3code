@@ -266,13 +266,13 @@ export const make = Effect.gen(function* () {
   };
 
   /**
-   * Resolves the transcript directory for each provider.
+   * Resolves the transcript directories for each provider.
    *
-   * Antigravity is scanned only under this environment's own state directory,
-   * where T3 Code keeps a private profile per provider instance. The user's
-   * `~/.gemini` also holds standalone CLI conversations, but the client merge
-   * de-duplicates per provider, so a shared directory next to a private one
-   * would be double counted by a second server on the same machine.
+   * Antigravity has several: T3 Code runs the agent against a private profile
+   * per provider instance under the state directory, while the standalone CLI
+   * and a standalone ACP agent (Zed, for one) keep conversations under the
+   * user's own Gemini home. Each is its own source so the merge fingerprints
+   * them separately.
    */
   const resolveTranscriptDirs = Effect.fn("UsageService.resolveTranscriptDirs")(function* (
     settings: ServerSettingsValue,
@@ -283,6 +283,8 @@ export const make = Effect.gen(function* () {
     // Grok Settings only expose the binary path; home is `$GROK_HOME` or `~/.grok`.
     // Empty/whitespace GROK_HOME must fall back: coalescing alone would scan cwd.
     const grokHome = resolveEnvHome("GROK_HOME", ".grok");
+    // Antigravity's home is `$GEMINI_HOME` or `~/.gemini`, shared with Gemini CLI.
+    const geminiHome = resolveEnvHome("GEMINI_HOME", ".gemini");
 
     return [
       { provider: "claude" as const, dir: claudeDir },
@@ -295,6 +297,16 @@ export const make = Effect.gen(function* () {
       {
         provider: "antigravity" as const,
         dir: path.join(config.stateDir, "providers", "antigravity"),
+        listOptions: ANTIGRAVITY_LIST_OPTIONS,
+      },
+      {
+        provider: "antigravity" as const,
+        dir: path.join(geminiHome, "antigravity-acp", "conversations"),
+        listOptions: ANTIGRAVITY_LIST_OPTIONS,
+      },
+      {
+        provider: "antigravity" as const,
+        dir: path.join(geminiHome, "antigravity-cli", "conversations"),
         listOptions: ANTIGRAVITY_LIST_OPTIONS,
       },
     ];
