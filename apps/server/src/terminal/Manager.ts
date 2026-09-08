@@ -301,6 +301,7 @@ export interface TerminalSessionState {
   cwd: string;
   worktreePath: string | null;
   status: TerminalSessionStatus;
+  startupError: string | null;
   pid: number | null;
   history: string;
   historyBytes: number;
@@ -311,8 +312,6 @@ export interface TerminalSessionState {
   trackedDecModes: Map<number, boolean>;
   /** Mode state at the first byte of `history`, advanced as caps drop its prefix. */
   historyStartDecModes: Map<number, boolean>;
-  /** Mode state at the first byte of `persistenceHistory`. */
-  persistenceStartDecModes: Map<number, boolean>;
   pendingOutputHighSurrogate: string;
   pendingProcessEvents: Array<PendingProcessEvent>;
   pendingProcessEventIndex: number;
@@ -1808,9 +1807,12 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     }
 
     const capped = capHistoryByBytes(nextHistory, historyTargetBytes);
-    advanceDecModesPastDroppedPrefix(session.persistenceStartDecModes, nextHistory, capped);
-    session.persistenceHistory = capped;
-    session.persistenceHistoryBytes = Buffer.byteLength(capped);
+    const startModes = new Map<number, boolean>();
+    advanceDecModesPastDroppedPrefix(startModes, nextHistory, capped);
+    // Keep durable history self-contained so a manager restart replays the
+    // same modes as an attach before restart, including append recovery.
+    session.persistenceHistory = `${decModeReplayPrefix(startModes)}${capped}`;
+    session.persistenceHistoryBytes = Buffer.byteLength(session.persistenceHistory);
     return {
       visibleText: sanitized.visibleText,
       write: { contents: session.persistenceHistory, mode: "truncate" },
@@ -2684,6 +2686,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
               session.process = ptyProcess;
               session.pid = processPid;
               session.status = "running";
+              session.startupError = null;
               // onExit may replay an exit immediately; accept it before subscribing.
               session.unsubscribeData = spawnResult.process.onData((data) => {
                 if (!session.process || session.status !== "running" || session.pid !== processPid) {
@@ -2745,6 +2748,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       yield* modifyManagerState((state) => {
         cleanupProcessHandles(session);
         session.status = "error";
+        session.startupError = error.message;
         session.pid = null;
         session.process = null;
         session.hasRunningSubprocess = false;
@@ -3016,6 +3020,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         cwd: input.cwd,
         worktreePath: input.worktreePath ?? null,
         status: "starting",
+        startupError: null,
         pid: null,
         history,
         historyBytes: Buffer.byteLength(history),
@@ -3024,7 +3029,6 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         pendingHistoryControlSequence: "",
         trackedDecModes: new Map(),
         historyStartDecModes,
-        persistenceStartDecModes: new Map(),
         pendingOutputHighSurrogate: "",
         pendingProcessEvents: [],
         pendingProcessEventIndex: 0,
@@ -3095,7 +3099,6 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       liveSession.persistenceHistory = "";
       liveSession.persistenceHistoryBytes = 0;
       liveSession.historyStartDecModes = new Map();
-      liveSession.persistenceStartDecModes = new Map();
       liveSession.pendingHistoryControlSequence = "";
       liveSession.pendingOutputHighSurrogate = "";
       resetPendingProcessQueue(liveSession);
@@ -3108,7 +3111,6 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       liveSession.persistenceHistory = "";
       liveSession.persistenceHistoryBytes = 0;
       liveSession.historyStartDecModes = new Map();
-      liveSession.persistenceStartDecModes = new Map();
       liveSession.pendingHistoryControlSequence = "";
       liveSession.pendingOutputHighSurrogate = "";
       resetPendingProcessQueue(liveSession);
@@ -3215,14 +3217,18 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         const bootstrap = (() => {
           const requestedReplayBytes = input.replayBytes ?? DEFAULT_TERMINAL_REPLAY_BYTES;
           if (requestedReplayBytes <= DEFAULT_TERMINAL_REPLAY_BYTES) {
-            return { snapshot: initialSnapshot, replayHistory: null } as const;
+            return {
+              snapshot: initialSnapshot,
+              replayHistory: null,
+              startupError: session.startupError,
+            } as const;
           }
 
           const replayHistory =
             session.persistenceHistoryBytes > requestedReplayBytes
               ? capHistoryByBytes(session.persistenceHistory, requestedReplayBytes)
               : session.persistenceHistory;
-          const replayStartDecModes = new Map(session.persistenceStartDecModes);
+          const replayStartDecModes = new Map<number, boolean>();
           advanceDecModesPastDroppedPrefix(
             replayStartDecModes,
             session.persistenceHistory,
@@ -3230,6 +3236,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
           );
           return {
             snapshot: { ...initialSnapshot, history: "" },
+            startupError: session.startupError,
             replayHistory: `${decModeReplayPrefix(replayStartDecModes)}${replayHistory}`,
           } as const;
         })();
@@ -3321,7 +3328,6 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         DEFAULT_ATTACH_BUFFERED_EVENT_LIMIT,
       );
       let capturedSnapshot = false;
-      let bootstrapError: Extract<TerminalEvent, { type: "error" }> | null = null;
       let deliverLive = false;
       return yield* Effect.gen(function* () {
         // Old clients decode the attach stream against a union without the
@@ -3333,11 +3339,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             return Effect.void;
           }
 
-          if (!capturedSnapshot) {
-            // The snapshot carries status but no startup failure message.
-            if (event.type === "error") bootstrapError = event;
-            return Effect.void;
-          }
+          if (!capturedSnapshot) return Effect.void;
           if (!deliverLive) return Queue.offer(bufferedEvents, event).pipe(Effect.asVoid);
 
           const attachEvent = terminalEventToAttachEvent(event);
@@ -3370,10 +3372,20 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
           "replay",
         );
 
-        if (bootstrap.snapshot.status === "error" && bootstrapError !== null) {
-          yield* listener(bootstrapError, "replay");
+        if (bootstrap.snapshot.status === "error" && bootstrap.startupError !== null) {
+          yield* listener(
+            {
+              type: "error",
+              threadId: input.threadId,
+              terminalId: input.terminalId,
+              ...(typeof bootstrap.snapshot.sequence === "number"
+                ? { sequence: bootstrap.snapshot.sequence }
+                : {}),
+              message: bootstrap.startupError,
+            },
+            "replay",
+          );
         }
-        bootstrapError = null;
 
         if (bootstrap.replayHistory !== null && bootstrap.replayHistory.length > 0) {
           for (const { data } of splitStringByUtf8Bytes(
@@ -3624,7 +3636,6 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         session.persistenceHistory = "";
         session.persistenceHistoryBytes = 0;
         session.historyStartDecModes = new Map();
-        session.persistenceStartDecModes = new Map();
         session.pendingHistoryControlSequence = "";
         session.pendingOutputHighSurrogate = "";
         session.pendingProcessEvents = [];
@@ -3660,6 +3671,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
           cwd: input.cwd,
           worktreePath: input.worktreePath ?? null,
           status: "starting",
+          startupError: null,
           pid: null,
           history: "",
           historyBytes: 0,
@@ -3668,7 +3680,6 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
           pendingHistoryControlSequence: "",
           trackedDecModes: new Map(),
           historyStartDecModes: new Map(),
-          persistenceStartDecModes: new Map(),
           pendingOutputHighSurrogate: "",
           pendingProcessEvents: [],
           pendingProcessEventIndex: 0,
@@ -3714,7 +3725,6 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       session.persistenceHistory = "";
       session.persistenceHistoryBytes = 0;
       session.historyStartDecModes = new Map();
-      session.persistenceStartDecModes = new Map();
       session.pendingHistoryControlSequence = "";
       session.pendingOutputHighSurrogate = "";
       resetPendingProcessQueue(session);
