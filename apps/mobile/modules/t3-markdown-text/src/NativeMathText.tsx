@@ -81,7 +81,7 @@ export const NativeMathText = memo(function NativeMathText(props: {
         return renderer.nativeMathRunHtml(
           run,
           style,
-          run.href ? fileContextMenu?.(run.href) : undefined,
+          run.fileIcon && run.href ? fileContextMenu?.(run.href) : undefined,
           icons[nativeMathIconKey(run) ?? ""],
           showExternalIcon,
         );
@@ -170,7 +170,7 @@ export const NativeMathText = memo(function NativeMathText(props: {
           const href = message.href;
           const actionId = message.action;
           if (
-            props.runs.some((run) => run.href === href) &&
+            props.runs.some((run) => run.fileIcon && run.href === href) &&
             props
               .fileContextMenu?.(href)
               ?.actions.some((action) => action.id === actionId && !action.disabled)
