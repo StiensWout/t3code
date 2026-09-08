@@ -426,7 +426,7 @@ export type ReleaseTerminalRequest = TerminalRequest;
 export interface ReleaseTerminalResponse {}
 
 // Older v1 agents still advertise and select models through this removed unstable API.
-const LegacyMeta = Schema.optionalKey(Schema.NullOr(Schema.Record(Schema.String, Schema.Unknown)));
+const LegacyMeta = Schema.optionalKey(Schema.NullOr(Schema.Record(Schema.String, Schema.Json)));
 export const ModelInfo = Schema.Struct({
   modelId: Schema.String,
   name: Schema.String,

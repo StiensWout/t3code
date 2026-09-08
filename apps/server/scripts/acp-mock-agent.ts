@@ -396,7 +396,7 @@ function modeState(): AcpCompat.SessionModeState {
 }
 
 // Mirrors the real Grok ACP: it advertises versioned model ids, never the CLI's own
-// "grok-build" product name, and it rejects unknown ids in session/set_model.
+// "grok-build" product name. Native helper model switching has its own v1 fixture.
 const grokAcpModels: ReadonlyArray<AcpCompat.ModelInfo> = [
   {
     modelId: "grok-4.6",
@@ -476,6 +476,7 @@ const program = Effect.gen(function* () {
       return {
         protocolVersion: 2,
         info: { name: "t3-acp-mock-agent", version: "0.0.0" },
+        _meta: { modelState: modelState() },
         capabilities: {
           session: {
             ...(supportsSessionLifecycle ? { fork: {}, additionalDirectories: {} } : {}),
