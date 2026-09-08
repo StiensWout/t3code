@@ -1445,6 +1445,38 @@ it.layer(
     }),
   );
 
+  it.effect("restores DEC modes from compacted history in a fresh manager", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter, logsDir } = yield* createManager({
+        historyTargetBytes: 128,
+        historyMaxBytes: 256,
+      });
+      yield* manager.open(openInput());
+      const process = ptyAdapter.processes[0]!;
+      const compacted = yield* Deferred.make<void>();
+      const stop = yield* manager.subscribe((event) =>
+        event.type === "output" && event.data.endsWith("frame-one\r")
+          ? Deferred.succeed(compacted, undefined).pipe(Effect.asVoid)
+          : Effect.void,
+      );
+      yield* Effect.addFinalizer(() => Effect.sync(stop));
+      const modes = "\u001b[?1049h\u001b[?25l\u001b[?1002h";
+      process.emitData(modes + "x".repeat(512) + "\rframe-one\r");
+      yield* Deferred.await(compacted);
+      process.emitData("frame-two\r");
+      yield* manager.close({ threadId: "thread-1", terminalId: DEFAULT_TERMINAL_ID });
+      const persisted = yield* historyLogPath(logsDir).pipe(Effect.flatMap(readFileString));
+      const restored = yield* createManager();
+      yield* historyLogPath(restored.logsDir).pipe(
+        Effect.flatMap((filePath) => writeFileString(filePath, persisted)),
+      );
+      const reopened = yield* restored.manager.open(openInput());
+      expect(reopened.history).toBe(
+        modes + "frame-one\rframe-two\r\u001b[?1049l\u001b[?25h\u001b[?1002l\r\n",
+      );
+    }),
+  );
+
   it.effect("keeps durable history larger than snapshots sent to clients", () =>
     Effect.gen(function* () {
       const { manager, logsDir } = yield* createManager({
@@ -3147,36 +3179,50 @@ it.layer(
       }),
   );
 
-  it.effect("delivers a startup failure message after the attach snapshot", () =>
-    Effect.gen(function* () {
-      const { manager, ptyAdapter } = yield* createManager({
-        shellResolver: () => "/bin/sh",
-        env: {},
-      });
-      ptyAdapter.spawnFailures.push(
-        ...Array.from({ length: 10 }, () => new Error("spawn unavailable")),
-      );
-      const received: TerminalAttachStreamEvent[] = [];
-      const stop = yield* manager.attachStream(
-        { ...openInput(), replayBytes: DEFAULT_TERMINAL_REPLAY_BYTES },
-        (event) =>
+  it.effect.each(["during attach", "before attach"] as const)(
+    "delivers a startup failure message when startup fails %s",
+    (timing) =>
+      Effect.gen(function* () {
+        const { manager, ptyAdapter } = yield* createManager({
+          shellResolver: () => "/bin/sh",
+          env: {},
+        });
+        ptyAdapter.spawnFailures.push(
+          ...Array.from({ length: 10 }, () => new Error("spawn unavailable")),
+        );
+        if (timing === "before attach") yield* manager.open(openInput());
+        const received: TerminalAttachStreamEvent[] = [];
+        const stop = yield* manager.attachStream(
+          { ...openInput(), replayBytes: DEFAULT_TERMINAL_REPLAY_BYTES },
+          (event) =>
+            Effect.sync(() => {
+              received.push(event);
+            }),
+        );
+        yield* Effect.addFinalizer(() => Effect.sync(stop));
+        const snapshotIndex = received.findIndex((event) => event.type === "snapshot");
+        const errorIndex = received.findIndex((event) => event.type === "error");
+        expect(received[snapshotIndex]).toMatchObject({
+          type: "snapshot",
+          snapshot: { status: "error" },
+        });
+        expect(errorIndex).toBeGreaterThan(snapshotIndex);
+        expect(received[errorIndex]).toMatchObject({
+          type: "error",
+          message: expect.stringContaining("Failed to spawn PTY process"),
+        });
+        ptyAdapter.spawnFailures.length = 0;
+        yield* manager.open(openInput());
+        const retried: TerminalAttachStreamEvent[] = [];
+        const stopRetry = yield* manager.attachStream(openInput(), (event) =>
           Effect.sync(() => {
-            received.push(event);
+            retried.push(event);
           }),
-      );
-      yield* Effect.addFinalizer(() => Effect.sync(stop));
-      const snapshotIndex = received.findIndex((event) => event.type === "snapshot");
-      const errorIndex = received.findIndex((event) => event.type === "error");
-      expect(received[snapshotIndex]).toMatchObject({
-        type: "snapshot",
-        snapshot: { status: "error" },
-      });
-      expect(errorIndex).toBeGreaterThan(snapshotIndex);
-      expect(received[errorIndex]).toMatchObject({
-        type: "error",
-        message: expect.stringContaining("Failed to spawn PTY process"),
-      });
-    }),
+        );
+        yield* Effect.addFinalizer(() => Effect.sync(stopRetry));
+        expect(retried.some((event) => event.type === "error")).toBe(false);
+        expect(retried[0]).toMatchObject({ type: "snapshot", snapshot: { status: "running" } });
+      }),
   );
 
   it.effect("streams extended persisted history before live terminal output", () =>
