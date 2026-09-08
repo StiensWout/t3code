@@ -36,7 +36,7 @@ declare module "micromark-util-types" {
 }
 
 // Bound both incomplete-delimiter lookahead and work handed to a TeX renderer.
-export const MAX_MATH_LENGTH = 16_384;
+const MAX_MATH_LENGTH = 16_384;
 
 export function markdownMath(source: string): MarkdownMath | null {
   const opener = source.startsWith("$$") ? "$$" : source.slice(0, 2);
