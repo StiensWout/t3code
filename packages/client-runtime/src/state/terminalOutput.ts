@@ -37,6 +37,10 @@ export type TerminalOutputUpdate =
   | {
       readonly type: "reset";
       readonly data: string;
+      readonly segments: ReadonlyArray<{
+        readonly data: string;
+        readonly delivery: "replay" | "live";
+      }>;
       readonly cursor: TerminalOutputCursor;
     }
   | {
@@ -257,6 +261,7 @@ export function terminalOutputText(output: TerminalOutputState): string {
 export function readTerminalOutputUpdate(
   output: TerminalOutputState,
   cursor: TerminalOutputCursor,
+  forceReset = false,
 ): TerminalOutputUpdate {
   const nextCursor = {
     generation: output.generation,
@@ -264,29 +269,32 @@ export function readTerminalOutputUpdate(
     offset: output.nextOffset,
   };
   const firstChunk = output.chunks[0];
-  if (
-    cursor.generation !== output.generation ||
-    cursor.resetVersion !== output.resetVersion ||
-    cursor.offset < (firstChunk?.startOffset ?? output.nextOffset)
-  ) {
-    return { type: "reset", data: terminalOutputText(output), cursor: nextCursor };
-  }
-
-  const appended = output.chunks.filter(
-    (chunk) => chunk.startOffset + chunk.data.length > cursor.offset,
-  );
-  if (appended.length === 0) {
+  const sameReset =
+    cursor.generation === output.generation && cursor.resetVersion === output.resetVersion;
+  const reset =
+    forceReset || !sameReset || cursor.offset < (firstChunk?.startOffset ?? output.nextOffset);
+  const chunks = reset
+    ? output.chunks
+    : output.chunks.filter((chunk) => chunk.startOffset + chunk.data.length > cursor.offset);
+  if (!reset && chunks.length === 0) {
     return { type: "none", cursor: nextCursor };
   }
   const segments: Array<{ data: string; delivery: "replay" | "live" }> = [];
-  for (const chunk of appended) {
-    const data = chunk.data.slice(Math.max(0, cursor.offset - chunk.startOffset));
+  const appendSegment = (data: string, delivery: "replay" | "live") => {
+    if (data.length === 0) return;
     const previous = segments.at(-1);
-    if (previous?.delivery === chunk.delivery) previous.data += data;
-    else segments.push({ data, delivery: chunk.delivery });
+    if (previous?.delivery === delivery) previous.data += data;
+    else segments.push({ data, delivery });
+  };
+  for (const chunk of chunks) {
+    const consumed = sameReset ? Math.max(0, cursor.offset - chunk.startOffset) : 0;
+    // A reset must repaint consumed bytes without answering their queries a
+    // second time. Unread live bytes still need replies, even in the same chunk.
+    if (reset) appendSegment(chunk.data.slice(0, consumed), "replay");
+    appendSegment(chunk.data.slice(consumed), chunk.delivery);
   }
   return {
-    type: "append",
+    type: reset ? "reset" : "append",
     segments,
     data: segments.map((segment) => segment.data).join(""),
     cursor: nextCursor,

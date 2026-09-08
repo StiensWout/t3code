@@ -654,6 +654,29 @@ describe("terminal session reducers", () => {
         { data: " live", delivery: "live" },
       ],
     });
+    expect(
+      readTerminalOutputUpdate(liveOutput.output, INITIAL_TERMINAL_OUTPUT_CURSOR),
+    ).toMatchObject({
+      type: "reset",
+      segments: [
+        { data: "hello replay", delivery: "replay" },
+        { data: " live", delivery: "live" },
+      ],
+    });
+    const consumed = readTerminalOutputUpdate(liveOutput.output, cursor).cursor;
+    const next = applyTerminalAttachStreamEvent(liveOutput, {
+      type: "output",
+      threadId: TARGET.threadId,
+      terminalId: TARGET.terminalId,
+      data: " unread",
+    });
+    expect(readTerminalOutputUpdate(next.output, consumed, true)).toMatchObject({
+      type: "reset",
+      segments: [
+        { data: "hello replay live", delivery: "replay" },
+        { data: " unread", delivery: "live" },
+      ],
+    });
   });
 
   it("closes every open replay when a completion marker arrives after a lost one", () => {
