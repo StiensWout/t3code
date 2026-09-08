@@ -2066,3 +2066,54 @@ code {
     visibility: visible;
   }
 }
+
+/* Math shares the prose layout; only a wide equation owns horizontal overflow. */
+.markdown-math {
+  color: inherit;
+}
+.markdown-math-display {
+  display: block;
+  position: relative;
+  margin-block: 1.25em;
+  min-width: 0;
+}
+.markdown-math-display .markdown-math-viewport {
+  display: block;
+  overflow-x: auto;
+  padding-block: 0.5em;
+}
+.markdown-math .katex-display {
+  margin: 0;
+}
+.markdown-math .katex-display > .katex {
+  display: block;
+  width: max-content;
+  min-width: 100%;
+}
+.markdown-math-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.9em;
+  font-size: 0.75rem;
+  opacity: 0;
+}
+.markdown-math-actions button {
+  cursor: pointer;
+}
+.markdown-math:hover .markdown-math-actions,
+.markdown-math:focus-within .markdown-math-actions {
+  opacity: 1;
+}
+.markdown-math-source {
+  display: block;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  margin-top: 0.5em;
+}
+@media (hover: none) {
+  .markdown-math-actions {
+    opacity: 1;
+  }
+}

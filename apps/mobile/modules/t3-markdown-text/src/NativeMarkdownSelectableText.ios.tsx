@@ -1,3 +1,4 @@
+import { NativeMathText } from "./NativeMathText";
 import { createContext, useCallback, useContext } from "react";
 import {
   findNodeHandle,
@@ -244,6 +245,10 @@ export function NativeMarkdownSelectableText(props: {
     props.textStyle.quoteMarkerColor,
     props.textStyle.dividerColor,
   ].join(":");
+
+  if (props.runs.some((run) => run.mathSource !== undefined)) {
+    return <NativeMathText {...props} {...(menu ?? {})} />;
+  }
 
   return (
     <MarkdownTextPrimitive
