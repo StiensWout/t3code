@@ -115,6 +115,7 @@ import {
   materializePiT3McpExtension,
   resolvePiLaunchArgs,
 } from "./piT3McpInjection.ts";
+import { PI_FILE_CHANGE_TOOLS } from "./piT3McpExtensionSource.ts";
 
 export const PI_PROVIDER = ProviderDriverKind.make("pi");
 export const PI_DRIVER_KIND = PI_PROVIDER;
@@ -337,6 +338,8 @@ interface ActivePiTurn {
   readonly promptMayBeCommandOnly: boolean;
   /** Pi reports context as unknown immediately after compaction; keep its estimate for the meter. */
   latestCompactionAfterTokens: number | null;
+  /** Last streamed usage total already emitted on the running turn. */
+  lastLiveUsedTokens: number | null;
   /** Invalidates idle snapshots when new work starts after a settle probe. */
   settleProbeGeneration: number;
   /** An extension may start compaction immediately after Pi emits agent_settled. */
@@ -356,6 +359,19 @@ interface PendingPiPrompt {
   runtimeRequest: OrchestrationV2RuntimeRequest;
   readonly node: OrchestrationV2ExecutionNode;
   readonly turnItem: OrchestrationV2TurnItem;
+}
+
+/**
+ * The T3 bridge confirms tool calls as `Allow <tool>?`. Edits surface as
+ * file-change approvals so clients render them like other providers' edits;
+ * every other confirmation, including ones from user extensions, is a command.
+ */
+function piApprovalRequestKind(title: string): "command" | "file-change" {
+  const toolName = /^Allow (\S+)\?$/.exec(title)?.[1];
+  return toolName !== undefined &&
+    (PI_FILE_CHANGE_TOOLS as ReadonlyArray<string>).includes(toolName)
+    ? "file-change"
+    : "command";
 }
 
 interface PiThreadState {
@@ -496,6 +512,8 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
       // explicitly.
       let baselineModel: { provider: string; modelId: string } | null = null;
       let baselineThinking: string | null = null;
+      /** Context window of the model Pi currently runs, from get_state and set_model. */
+      let contextWindow: number | null = null;
       // Prompt responses carry no id. Keep their session-wide send order and
       // owner so a late ack from a settled turn cannot affect the next turn.
       const pendingPromptResponses: Array<{
@@ -597,6 +615,46 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
           Effect.map((stats) => tokenUsageFromStats(stats, fallbackUsedTokens, updatedAt)),
           Effect.orElseSucceed(() => undefined),
         );
+
+      /**
+       * Pi attaches the current message's cumulative usage to every streaming
+       * update (0.84.2+). Emit it on the running turn only when the total
+       * changes, so the meter moves live without a burst of no-op updates.
+       */
+      const reportLiveUsage = (turn: ActivePiTurn, usage: unknown) =>
+        Effect.gen(function* () {
+          const usedTokens = nonNegativeInteger(usage, "totalTokens");
+          if (
+            usedTokens === undefined ||
+            usedTokens === 0 ||
+            usedTokens === turn.lastLiveUsedTokens ||
+            contextWindow === null ||
+            contextWindow === 0
+          ) {
+            return;
+          }
+          turn.lastLiveUsedTokens = usedTokens;
+          const inputTokens = nonNegativeInteger(usage, "input");
+          const cachedInputTokens = nonNegativeInteger(usage, "cacheRead");
+          const outputTokens = nonNegativeInteger(usage, "output");
+          const updatedAt = yield* DateTime.now;
+          yield* emit({
+            type: "provider_turn.updated",
+            driver: PI_PROVIDER,
+            threadId: turn.turnInput.threadId,
+            providerTurn: {
+              ...turn.providerTurn,
+              tokenUsage: {
+                usedTokens,
+                maxTokens: contextWindow,
+                ...(inputTokens === undefined ? {} : { inputTokens }),
+                ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
+                ...(outputTokens === undefined ? {} : { outputTokens }),
+                updatedAt: DateTime.formatIso(updatedAt),
+              },
+            },
+          });
+        });
 
       const baseItemFields = (
         turn: ActivePiTurn,
@@ -1189,7 +1247,7 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
                 ...itemBase,
                 type: "approval_request",
                 requestId,
-                requestKind: "command",
+                requestKind: piApprovalRequestKind(title),
                 prompt: recordString(event, "message") ?? title,
               }
             : {
@@ -1472,6 +1530,7 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
           case "message_update": {
             if (turn === null) return;
             turn.sawAgentActivity = true;
+            yield* reportLiveUsage(turn, event["usage"]);
             const delta = event["assistantMessageEvent"];
             const deltaType = recordString(delta, "type");
             const contentIndex = recordNumber(delta, "contentIndex") ?? 0;
@@ -1923,6 +1982,8 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
           baselineThinking = null;
         }
         const stateData = yield* request({ type: "get_state" });
+        contextWindow =
+          nonNegativeInteger(recordField(stateData, "model"), "contextWindow") ?? contextWindow;
         // Each baseline is captured independently, and only while nothing has
         // been applied yet, so a `get_state` that arrives after our own
         // selection cannot record that selection as Pi's default.
@@ -2001,7 +2062,8 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
           // Returning to "Pi default" after an explicit pick has to replay the
           // captured baseline, otherwise Pi stays on the last model applied.
           if (appliedModel !== null && baselineModel !== null) {
-            yield* request({ type: "set_model", ...baselineModel });
+            const restoredModel = yield* request({ type: "set_model", ...baselineModel });
+            contextWindow = nonNegativeInteger(restoredModel, "contextWindow") ?? contextWindow;
             appliedModel = null;
             const updatedAt = yield* DateTime.now;
             sessionEntity = { ...sessionEntity, model: PI_INHERIT_MODEL_SLUG, updatedAt };
@@ -2030,11 +2092,12 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
               `Pi model '${modelSelection.model}' must use provider/model format`,
             );
           }
-          yield* request({
+          const selectedModel = yield* request({
             type: "set_model",
             provider: parsed.provider,
             modelId: parsed.modelId,
           });
+          contextWindow = nonNegativeInteger(selectedModel, "contextWindow") ?? contextWindow;
           appliedModel = modelSelection.model;
           const updatedAt = yield* DateTime.now;
           sessionEntity = { ...sessionEntity, model: modelSelection.model, updatedAt };
@@ -2128,6 +2191,13 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
                 }),
             ),
           ),
+        // The run executor routes a bare `/compact` here instead of startTurn.
+        // Pi's start path already turns that text into the RPC compact call.
+        compactThread: (turnInput) =>
+          runtime.startTurn({
+            ...turnInput,
+            message: { ...turnInput.message, text: "/compact" },
+          }),
         startTurn: (turnInput) =>
           Effect.gen(function* () {
             const state = threadState;
@@ -2197,6 +2267,7 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
               promptMayBeCommandOnly:
                 compactCommand !== null || (payload?.message.trimStart().startsWith("/") ?? false),
               latestCompactionAfterTokens: null,
+              lastLiveUsedTokens: null,
               settleProbeGeneration: 0,
               settleWhenIdle: false,
               sawCompaction: false,

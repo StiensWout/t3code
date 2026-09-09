@@ -20,8 +20,8 @@ T3 Code discovers the models reported by Pi and exposes their supported thinking
 thinking picker marks Pi's current configured level as the default without overriding it. Threads
 use Pi's native session files for resume and rollback. Thread forks use T3 Code's portable
 conversation context to start a fresh Pi session instead of cloning Pi's active session. Extension
-dialogs appear in the T3 Code composer, and the composer context meter updates from Pi's own
-context-window statistics after a response settles.
+dialogs appear in the T3 Code composer, and the composer context meter follows Pi's own usage
+reporting while a response streams and after it settles.
 
 Pi skills appear in the composer's `$` menu. This includes user skills and project skills that Pi
 loads for the current workspace; selecting one uses Pi's native skill expansion.
@@ -60,4 +60,5 @@ threads.
   thread to let the interactive Pi session handle any startup prompt.
 - If a project extension is missing, approve the project in Pi, then start a fresh provider session.
 - If a project skill is missing from the `$` menu, approve the project in Pi and refresh the provider.
-- The context meter appears after Pi returns its first usable token snapshot for the thread.
+- The context meter appears once Pi reports usage for the thread. Some model providers only
+  report usage when a response completes, so the meter can wait for the first reply.

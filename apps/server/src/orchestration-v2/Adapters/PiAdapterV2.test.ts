@@ -662,6 +662,15 @@ describe("PiAdapterV2", () => {
   it.effect("streams assistant text and settles a completed turn on agent_settled", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakePi;
+      // The model's context window is what live usage is measured against.
+      fake.queueState({
+        model: { provider: "openai", id: "gpt-5", contextWindow: 200_000 },
+        thinkingLevel: "medium",
+        isStreaming: false,
+        isCompacting: false,
+        sessionFile: FAKE_SESSION_FILE,
+        sessionId: "abc",
+      });
       const { runtime, takeEvent } = yield* openRuntime(fake);
       const providerThread = yield* runtime.ensureThread({
         threadId: THREAD_ID,
@@ -680,16 +689,29 @@ describe("PiAdapterV2", () => {
       yield* fake.emit({ type: "response", command: "prompt", success: true });
       yield* fake.emit({ type: "agent_start" });
       yield* fake.emit({ type: "message_start", message: { role: "assistant" } });
+      const zeroUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 };
+      const streamedUsage = {
+        input: 1_000,
+        output: 2,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 1_002,
+      };
+      // Providers that report no usage until completion stream zeros first.
       yield* fake.emit({
         type: "message_update",
+        usage: zeroUsage,
         assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "Hel" },
       });
       yield* fake.emit({
         type: "message_update",
+        usage: streamedUsage,
         assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "lo" },
       });
+      // An unchanged total must not re-emit the turn.
       yield* fake.emit({
         type: "message_update",
+        usage: streamedUsage,
         assistantMessageEvent: { type: "text_end", contentIndex: 0, content: "Hello" },
       });
       yield* fake.emit({
@@ -708,11 +730,35 @@ describe("PiAdapterV2", () => {
       });
       yield* fake.emit({ type: "agent_settled" });
 
+      const startedTurn = yield* takeEvent((event) => event.type === "provider_turn.updated");
+      assert.isTrue(
+        startedTurn.type === "provider_turn.updated" &&
+          startedTurn.providerTurn.status === "running" &&
+          startedTurn.providerTurn.tokenUsage === undefined,
+      );
+      // Streaming usage moves the meter while the turn is still running.
+      const liveTurn = yield* takeEvent((event) => event.type === "provider_turn.updated");
+      const { updatedAt: liveUpdatedAt, ...liveUsage } =
+        liveTurn.type === "provider_turn.updated" ? (liveTurn.providerTurn.tokenUsage ?? {}) : {};
+      assert.isTrue(
+        liveTurn.type === "provider_turn.updated" && liveTurn.providerTurn.status === "running",
+      );
+      assert.isString(liveUpdatedAt);
+      assert.deepEqual(liveUsage, {
+        usedTokens: 1_002,
+        maxTokens: 200_000,
+        inputTokens: 1_000,
+        cachedInputTokens: 0,
+        outputTokens: 2,
+      });
+      // The repeated total emits nothing: the next turn or item event is the
+      // completed assistant message, not another usage update.
       const assistantItem = yield* takeEvent(
         (event) =>
-          event.type === "turn_item.updated" &&
-          event.turnItem.type === "assistant_message" &&
-          event.turnItem.streaming === false,
+          event.type === "provider_turn.updated" ||
+          (event.type === "turn_item.updated" &&
+            event.turnItem.type === "assistant_message" &&
+            event.turnItem.streaming === false),
       );
       assert.isTrue(
         assistantItem.type === "turn_item.updated" &&
@@ -721,9 +767,10 @@ describe("PiAdapterV2", () => {
       );
       // Session stats ride on the settled provider turn so the shared meter
       // picks them up through the base's per-turn `tokenUsage` (#8144).
-      const completedTurn = yield* takeEvent(
-        (event) =>
-          event.type === "provider_turn.updated" && event.providerTurn.status === "completed",
+      const completedTurn = yield* takeEvent((event) => event.type === "provider_turn.updated");
+      assert.isTrue(
+        completedTurn.type === "provider_turn.updated" &&
+          completedTurn.providerTurn.status === "completed",
       );
       const { updatedAt, ...tokenUsage } =
         completedTurn.type === "provider_turn.updated"
@@ -976,6 +1023,45 @@ describe("PiAdapterV2", () => {
       yield* fake.takeRequest("get_state");
       const terminal = yield* takeEvent((event) => event.type === "turn.terminal");
       assert.isTrue(terminal.type === "turn.terminal" && terminal.status === "completed");
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("compacts a bare /compact routed through compactThread", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      const appThread = yield* makeAppThread("default", THREAD_ID);
+      const runId = RunId.make(`run:${THREAD_ID}:1`);
+      // The run executor sends a bare /compact to compactThread, never to
+      // startTurn, so the adapter must expose it or the command fails.
+      assert.isDefined(runtime.compactThread);
+      yield* runtime.compactThread!({
+        appThread,
+        threadId: THREAD_ID,
+        runId,
+        runOrdinal: 1,
+        providerTurnOrdinal: 1,
+        attemptId: RunAttemptId.make(`run-attempt:${runId}:1`),
+        rootNodeId: NodeId.make(`node:${runId}:root`),
+        providerThread,
+        message: {
+          messageId: `message:${THREAD_ID}:1` as never,
+          text: "/compact",
+          attachments: [],
+          createdBy: "user",
+          creationSource: "web",
+        },
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      const compact = yield* fake.takeRequest("compact");
+      assert.isUndefined(compact["customInstructions"]);
+      assert.isFalse(fake.allRequests().some((request) => request["type"] === "prompt"));
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
@@ -1235,6 +1321,37 @@ describe("PiAdapterV2", () => {
       const uiResponse = yield* fake.takeRequest("extension_ui_response");
       assert.equal(uiResponse["id"], "ui-trust");
       assert.equal(uiResponse["confirmed"], true);
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("raises bridge edit confirmations as file-change approvals", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, providerThread);
+      yield* fake.takeRequest("prompt");
+      for (const [id, title, requestKind] of [
+        ["ui-edit", "Allow edit?", "file-change"],
+        ["ui-bash", "Allow bash?", "command"],
+        ["ui-ext", "Deploy to staging?", "command"],
+      ] as const) {
+        yield* fake.emit({ type: "extension_ui_request", id, method: "confirm", title });
+        const item = yield* takeEvent(
+          (event) =>
+            event.type === "turn_item.updated" && event.turnItem.type === "approval_request",
+        );
+        assert.isTrue(
+          item.type === "turn_item.updated" &&
+            item.turnItem.type === "approval_request" &&
+            item.turnItem.requestKind === requestKind,
+          `${title} should be ${requestKind}`,
+        );
+      }
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
