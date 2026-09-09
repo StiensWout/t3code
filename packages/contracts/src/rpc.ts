@@ -962,20 +962,20 @@ const WsVcsListRefsRpc = Rpc.make(WS_METHODS.vcsListRefs, {
   error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
 });
 
-export const WsVcsListWorktreesRpc = Rpc.make(WS_METHODS.vcsListWorktrees, {
+const WsVcsListWorktreesRpc = Rpc.make(WS_METHODS.vcsListWorktrees, {
   payload: VcsListWorktreesInput,
   success: VcsListWorktreesResult,
   error: Schema.Union([WorktreeInventoryError, EnvironmentAuthorizationError]),
 });
 
-export const WsSubscribeWorktreeInventoryRpc = Rpc.make(WS_METHODS.subscribeWorktreeInventory, {
+const WsSubscribeWorktreeInventoryRpc = Rpc.make(WS_METHODS.subscribeWorktreeInventory, {
   payload: Schema.Struct({}),
   success: WorktreeInventoryChange,
   error: EnvironmentAuthorizationError,
   stream: true,
 });
 
-export const WsVcsPruneWorktreesRpc = Rpc.make(WS_METHODS.vcsPruneWorktrees, {
+const WsVcsPruneWorktreesRpc = Rpc.make(WS_METHODS.vcsPruneWorktrees, {
   payload: VcsPruneWorktreesInput,
   success: VcsPruneWorktreesResult,
   error: Schema.Union([WorktreeMutationError, EnvironmentAuthorizationError]),

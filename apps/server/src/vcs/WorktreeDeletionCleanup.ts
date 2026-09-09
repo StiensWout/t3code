@@ -2,6 +2,7 @@ import type { OrchestrationV2DomainEvent, ThreadId } from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
@@ -33,7 +34,7 @@ const recoverDeletionFailure =
       ),
     );
 
-export function threadDeletionCleanupRequest(
+function threadDeletionCleanupRequest(
   event: OrchestrationV2DomainEvent,
 ): ThreadDeletionCleanupRequest | null {
   if (event.type !== "thread.deleted") return null;
@@ -52,7 +53,7 @@ export class WorktreeDeletionCleanup extends Context.Service<
   }
 >()("t3/vcs/WorktreeDeletionCleanup") {}
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const events = yield* EventSinkV2;
   const settings = yield* ServerSettingsService;
   const worktrees = yield* WorktreeService;
@@ -119,7 +120,13 @@ export const make = Effect.gen(function* () {
             }).pipe(Effect.andThen(Effect.failCause(cause))),
           ),
       ),
-      Stream.retry(Schedule.exponential("1 second")),
+      Stream.retry(
+        Schedule.exponential("1 second").pipe(
+          Schedule.modifyDelay(({ duration }) =>
+            Effect.succeed(Duration.min(duration, Duration.seconds(30))),
+          ),
+        ),
+      ),
       Stream.runForEach((stored) => {
         const request = threadDeletionCleanupRequest(stored.event);
         const enqueue = request === null ? Effect.void : worker.enqueue(request);

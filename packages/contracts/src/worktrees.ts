@@ -112,7 +112,6 @@ export type VcsPruneWorktreesResult = typeof VcsPruneWorktreesResult.Type;
 export const WorktreeInventoryErrorStage = Schema.Literals([
   "load_projects",
   "load_threads",
-  "identify_repository",
   "inspect_repository",
 ]);
 export type WorktreeInventoryErrorStage = typeof WorktreeInventoryErrorStage.Type;
@@ -132,8 +131,6 @@ export class WorktreeInventoryError extends Schema.TaggedError<WorktreeInventory
         return "Failed to load projects for the worktree inventory.";
       case "load_threads":
         return "Failed to load V2 thread shells for the worktree inventory.";
-      case "identify_repository":
-        return "Failed to identify a project's repository.";
       case "inspect_repository":
         return "Failed to inspect a repository for the worktree inventory.";
     }
@@ -153,8 +150,6 @@ export const WorktreeMutationErrorStage = Schema.Literals([
   "missing_branch",
   "outside_managed_root",
   "registered_different_ref",
-  "unregistered_existing_path",
-  "stale_existing_registration",
   "branch_in_use",
   "prune_metadata",
   "stale_registration_remaining",
@@ -207,10 +202,6 @@ export class WorktreeMutationError extends Schema.TaggedError<WorktreeMutationEr
         return `Cannot revive a worktree outside the managed worktrees directory: '${this.path ?? "unknown"}'.`;
       case "registered_different_ref":
         return `Cannot revive '${this.path ?? "unknown"}': Git already registers that path for a different ref.`;
-      case "unregistered_existing_path":
-        return `Cannot revive '${this.path ?? "unknown"}': the directory exists but is not a registered Git worktree.`;
-      case "stale_existing_registration":
-        return `Cannot revive '${this.path ?? "unknown"}': the existing directory has a stale Git worktree registration.`;
       case "branch_in_use":
         return `Cannot revive branch '${this.branch ?? "unknown"}': it is already checked out at '${this.conflictingPath ?? "unknown"}'.`;
       case "prune_metadata":

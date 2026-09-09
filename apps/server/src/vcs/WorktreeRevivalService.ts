@@ -94,7 +94,7 @@ export class WorktreeRevivalService extends Context.Service<
   }
 >()("t3/vcs/WorktreeRevivalService") {}
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -105,6 +105,7 @@ export const make = Effect.gen(function* () {
   const generationByWorktreePath = yield* Ref.make(new Map<string, number>());
   const setupGenerationByProjectWorktree = yield* Ref.make(new Map<string, number>());
 
+  const setupKey = (projectId: ProjectId, worktreePath: string) => `${projectId}\0${worktreePath}`;
   const currentGeneration = (worktreePath: string) =>
     Ref.get(generationByWorktreePath).pipe(
       Effect.map((generations) => generations.get(worktreePath) ?? 0),
@@ -264,14 +265,6 @@ export const make = Effect.gen(function* () {
       workspaceRoot,
       branch: input.branch,
     });
-    if (!isPathInside(managedWorktreesRoot, worktreePath, path)) {
-      return yield* mutationError("outside_managed_root", undefined, {
-        path: worktreePath,
-        workspaceRoot,
-        branch: input.branch,
-      });
-    }
-
     const exists = yield* fs.exists(worktreePath).pipe(
       Effect.mapError((cause) =>
         mutationError("inspect_target_path", cause, {
@@ -281,6 +274,25 @@ export const make = Effect.gen(function* () {
         }),
       ),
     );
+    // An existing directory is left alone wherever it lives and whatever it
+    // has checked out. A detached HEAD after a stopped rebase or a switched
+    // branch is working state the thread runs in, not damage to repair. The
+    // checks below only guard creating a worktree that went missing.
+    if (exists) {
+      return {
+        revived: false,
+        generation: yield* currentGeneration(worktreePath),
+        worktreePath,
+      };
+    }
+    if (!isPathInside(managedWorktreesRoot, worktreePath, path)) {
+      return yield* mutationError("outside_managed_root", undefined, {
+        path: worktreePath,
+        workspaceRoot,
+        branch: input.branch,
+      });
+    }
+
     let registrations = yield* listCanonicalWorkspaces(workspaceRoot, input.branch);
     let targetRegistration = registrations.find((entry) => entry.path === worktreePath);
 
@@ -290,28 +302,6 @@ export const make = Effect.gen(function* () {
         workspaceRoot,
         branch: input.branch,
       });
-    }
-
-    if (exists) {
-      if (targetRegistration === undefined) {
-        return yield* mutationError("unregistered_existing_path", undefined, {
-          path: worktreePath,
-          workspaceRoot,
-          branch: input.branch,
-        });
-      }
-      if (targetRegistration.prunable) {
-        return yield* mutationError("stale_existing_registration", undefined, {
-          path: worktreePath,
-          workspaceRoot,
-          branch: input.branch,
-        });
-      }
-      return {
-        revived: false,
-        generation: yield* currentGeneration(worktreePath),
-        worktreePath,
-      };
     }
 
     const branchRegisteredElsewhere = registrations.find(
@@ -461,7 +451,7 @@ export const make = Effect.gen(function* () {
       worktreePath: input.worktreePath,
       branch: input.branch,
     });
-    const setupGenerationKey = `${input.projectId}\0${revival.worktreePath}`;
+    const setupGenerationKey = setupKey(input.projectId, revival.worktreePath);
     const setupGeneration = (yield* Ref.get(setupGenerationByProjectWorktree)).get(
       setupGenerationKey,
     );
@@ -495,8 +485,25 @@ export const make = Effect.gen(function* () {
     }
     return { revived: revival.revived, generation: revival.generation };
   });
+  // Every turn start on a worktree thread passes through here, so an existing
+  // directory is answered without the mutation permit: a reaper sweep or a
+  // sibling revival must not hold up turns that need no Git mutation. Only a
+  // missing directory, or a pending setup retry, takes the locked path.
   const reviveForThread: WorktreeRevivalService["Service"]["reviveForThread"] = (input) =>
-    lifecycle.withMutationPermit(reviveForThreadUnlocked(input));
+    Effect.gen(function* () {
+      const exists = yield* fs.exists(input.worktreePath).pipe(Effect.orElseSucceed(() => false));
+      if (exists) {
+        const worktreePath = yield* canonicalizePath(input.worktreePath);
+        const generation = yield* currentGeneration(worktreePath);
+        const setupGeneration = (yield* Ref.get(setupGenerationByProjectWorktree)).get(
+          setupKey(input.projectId, worktreePath),
+        );
+        if (generation === 0 || setupGeneration === generation) {
+          return { revived: false, generation };
+        }
+      }
+      return yield* lifecycle.withMutationPermit(reviveForThreadUnlocked(input));
+    });
 
   return WorktreeRevivalService.of({ reviveWorktree, reviveForThread });
 });

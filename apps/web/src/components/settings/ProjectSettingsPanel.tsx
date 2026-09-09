@@ -835,11 +835,10 @@ function ProjectDetail({
             ...(projectThreads.length > 0
               ? [
                   "This permanently clears conversation history for those threads and any archived threads.",
-                  "Worktrees left without threads may be removed; their Git branches are kept.",
                 ]
               : ["This permanently clears any archived conversation history."]),
             isWholeGroup && !hasOtherMembers
-              ? "This removes the selected project entries."
+              ? "This removes only the project entries, not the files on disk."
               : "Other entries in this grouped project are unaffected.",
             "This action cannot be undone.",
           ].join("\n"),
@@ -1427,10 +1426,10 @@ function ProjectDetail({
             }
             description={
               hasOtherMembers
-                ? "Deletes the selected machine's checkout entries and their threads. Other machines are not touched. Unlinked worktrees may be removed; Git branches are kept."
+                ? "Deletes the selected machine's checkout entries and their threads. Other machines and files on disk are not touched."
                 : group.memberProjects.length > 1
-                  ? `Deletes all ${group.memberProjects.length} checkout entries and their threads on every machine. Unlinked worktrees may be removed; Git branches are kept.`
-                  : "Deletes the project entry and its threads. Unlinked worktrees may be removed; Git branches are kept."
+                  ? `Deletes all ${group.memberProjects.length} checkout entries and their threads on every machine. Files on disk are not touched.`
+                  : "Deletes the project entry and its threads. Files on disk are not touched."
             }
             control={
               <Button

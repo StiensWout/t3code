@@ -36,7 +36,7 @@ export class WorktreeReaper extends Context.Service<
   }
 >()("t3/vcs/WorktreeReaper") {}
 
-export const make = (options?: WorktreeReaperOptions) =>
+const make = (options?: WorktreeReaperOptions) =>
   Effect.gen(function* () {
     const worktrees = yield* WorktreeService;
     const settings = yield* ServerSettingsService;

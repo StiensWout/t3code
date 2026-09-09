@@ -320,17 +320,32 @@ export const layer: Layer.Layer<
         | undefined;
       let revivedWorktree = false;
       if (projection.thread.worktreePath !== null && projection.thread.branch !== null) {
-        const revival = yield* worktreeRevival.reviveForThread({
-          threadId: projection.thread.id,
-          projectId: projection.thread.projectId,
-          worktreePath: projection.thread.worktreePath,
-          branch: projection.thread.branch,
-        });
-        observedWorktreeGeneration = {
-          path: projection.thread.worktreePath,
-          generation: revival.generation,
-        };
-        revivedWorktree = revival.revived;
+        // A failed revival must not fail this effect: that only leaves the run
+        // in "starting". Proceeding lets the provider report the missing
+        // directory as a visible turn error the user can act on.
+        const revival = yield* worktreeRevival
+          .reviveForThread({
+            threadId: projection.thread.id,
+            projectId: projection.thread.projectId,
+            worktreePath: projection.thread.worktreePath,
+            branch: projection.thread.branch,
+          })
+          .pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("provider turn start could not revive the worktree", {
+                threadId: projection.thread.id,
+                worktreePath: projection.thread.worktreePath,
+                error,
+              }).pipe(Effect.as(undefined)),
+            ),
+          );
+        if (revival !== undefined) {
+          observedWorktreeGeneration = {
+            path: projection.thread.worktreePath,
+            generation: revival.generation,
+          };
+          revivedWorktree = revival.revived;
+        }
       }
       const existingSessionProjection = projection.providerSessions.find(
         (candidate) => candidate.id === providerSessionId,
@@ -346,11 +361,20 @@ export const layer: Layer.Layer<
             const previousWorktreeGeneration = Option.isSome(liveSession)
               ? worktreeGenerationBySession.get(liveSession.value)
               : undefined;
+            // Only a per-thread provider process holds the worktree as its cwd.
+            // A session shared across threads (Codex) passes cwd per native
+            // thread, and closing it would fail every sibling's running turn.
+            const holdsWorktreeAsCwd =
+              Option.isSome(liveSession) &&
+              !liveSession.value.providerSession.capabilities.sessions
+                .supportsMultipleProviderThreadsPerSession;
             if (
-              revivedWorktree ||
-              (previousWorktreeGeneration !== undefined &&
-                (previousWorktreeGeneration.path !== observedWorktreeGeneration.path ||
-                  previousWorktreeGeneration.generation !== observedWorktreeGeneration.generation))
+              holdsWorktreeAsCwd &&
+              (revivedWorktree ||
+                (previousWorktreeGeneration !== undefined &&
+                  (previousWorktreeGeneration.path !== observedWorktreeGeneration.path ||
+                    previousWorktreeGeneration.generation !==
+                      observedWorktreeGeneration.generation)))
             ) {
               // A provider session can retain an adapter process (and its cwd)
               // across turns. Serialize the full startup sequence by session

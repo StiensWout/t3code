@@ -186,6 +186,91 @@ it.effect("revives worktrees whose first path segment starts with two dots", () 
   }).pipe(Effect.provide(Layer.mergeAll(serverConfigLiveLayer, NodeServices.layer, gitLayer))),
 );
 
+const addWorktree = Effect.fn("WorktreeRevivalServiceTest.addWorktree")(function* (
+  repositoryRoot: string,
+  worktreePath: string,
+) {
+  const git = yield* GitVcsDriver.GitVcsDriver;
+  yield* git.execute({
+    operation: "WorktreeRevivalServiceTest.worktreeAdd",
+    cwd: repositoryRoot,
+    args: ["worktree", "add", worktreePath, "feature/revival"],
+  });
+});
+
+it.effect("leaves an existing worktree alone when its HEAD is detached", () =>
+  Effect.gen(function* () {
+    const path = yield* Path.Path;
+    const config = yield* ServerConfig.ServerConfig;
+    const git = yield* GitVcsDriver.GitVcsDriver;
+    const repositoryRoot = yield* initializeRepository();
+    const worktreePath = path.join(config.worktreesDir, "detached");
+    yield* addWorktree(repositoryRoot, worktreePath);
+    yield* git.execute({
+      operation: "WorktreeRevivalServiceTest.detach",
+      cwd: worktreePath,
+      args: ["checkout", "--detach"],
+    });
+
+    const result = yield* Effect.gen(function* () {
+      const revival = yield* WorktreeRevivalService.WorktreeRevivalService;
+      return yield* revival.reviveForThread({
+        threadId,
+        projectId,
+        worktreePath,
+        branch: "feature/revival",
+      });
+    }).pipe(
+      Effect.provide(
+        makeRevivalLayer(makeProject(repositoryRoot), () =>
+          Effect.succeed({ status: "no-script" }),
+        ),
+      ),
+    );
+
+    assert.deepEqual(result, { revived: false, generation: 0 });
+    const head = yield* git.execute({
+      operation: "WorktreeRevivalServiceTest.symbolicRef",
+      cwd: worktreePath,
+      args: ["symbolic-ref", "-q", "HEAD"],
+      allowNonZeroExit: true,
+    });
+    assert.notEqual(head.exitCode, 0, "HEAD must stay detached");
+  }).pipe(Effect.provide(Layer.mergeAll(serverConfigLiveLayer, NodeServices.layer, gitLayer))),
+);
+
+it.effect("leaves an existing checkout outside the managed root alone", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const repositoryRoot = yield* initializeRepository();
+    const outsideRoot = yield* fs.makeTempDirectoryScoped({
+      prefix: "t3-worktree-revival-outside-",
+    });
+    const worktreePath = path.join(outsideRoot, "checkout");
+    yield* addWorktree(repositoryRoot, worktreePath);
+
+    const result = yield* Effect.gen(function* () {
+      const revival = yield* WorktreeRevivalService.WorktreeRevivalService;
+      return yield* revival.reviveForThread({
+        threadId,
+        projectId,
+        worktreePath,
+        branch: "feature/revival",
+      });
+    }).pipe(
+      Effect.provide(
+        makeRevivalLayer(makeProject(repositoryRoot), () =>
+          Effect.succeed({ status: "no-script" }),
+        ),
+      ),
+    );
+
+    assert.deepEqual(result, { revived: false, generation: 0 });
+    assert.isTrue(yield* fs.exists(path.join(worktreePath, "README.md")));
+  }).pipe(Effect.provide(Layer.mergeAll(serverConfigLiveLayer, NodeServices.layer, gitLayer))),
+);
+
 it.effect("finishes inventory publication when interrupted after Git creates a worktree", () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;

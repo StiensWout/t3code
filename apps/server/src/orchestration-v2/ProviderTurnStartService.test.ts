@@ -8,6 +8,7 @@ import {
   ProviderInstanceId,
   ProviderSessionId,
   ProviderThreadId,
+  WorktreeMutationError,
   ProviderDriverKind,
   ProviderSetupError,
   RunAttemptId,
@@ -38,9 +39,13 @@ import * as WorktreeRevivalService from "../vcs/WorktreeRevivalService.ts";
 import type { ProviderAdapterV2SessionRuntime } from "./ProviderAdapter.ts";
 
 function makeProviderTurnStartFixture(input: {
-  readonly revival: "revived" | "unchanged";
+  readonly revival: "revived" | "unchanged" | "failed";
   readonly revivalGate?: Effect.Effect<void>;
   readonly cancelOnOpen?: boolean;
+  /** Whether `get` reports the session as already open. */
+  readonly liveSession?: boolean;
+  /** Whether the adapter shares one session across provider threads. */
+  readonly sharedSession?: boolean;
 }) {
   const threadId = ThreadId.make(`thread_provider_turn_start_worktree_${input.revival}`);
   const runId = RunId.make(`run_provider_turn_start_worktree_${input.revival}`);
@@ -119,7 +124,12 @@ function makeProviderTurnStartFixture(input: {
     driver: "codex",
     instanceId: providerThread.providerInstanceId,
     providerSessionId,
-    providerSession: { id: providerSessionId },
+    providerSession: {
+      id: providerSessionId,
+      capabilities: {
+        sessions: { supportsMultipleProviderThreadsPerSession: input.sharedSession === true },
+      },
+    },
     ensureThread,
     resumeThread: () => Effect.succeed(providerThread),
     forkThread: () => Effect.succeed(providerThread),
@@ -135,17 +145,31 @@ function makeProviderTurnStartFixture(input: {
       order.push("close");
     }),
   );
-  const get = vi.fn(() => Effect.succeed(Option.none<ProviderAdapterV2SessionRuntime>()));
+  const get = vi.fn(() =>
+    Effect.succeed(
+      input.liveSession === true
+        ? Option.some(session)
+        : Option.none<ProviderAdapterV2SessionRuntime>(),
+    ),
+  );
   const reviveForThread = vi.fn(() =>
     Effect.sync(() => {
       order.push("revive");
     }).pipe(
       Effect.andThen(input.revivalGate ?? Effect.void),
       Effect.andThen(
-        Effect.succeed({
-          revived: input.revival === "revived",
-          generation: 0,
-        }),
+        input.revival === "failed"
+          ? Effect.fail(
+              new WorktreeMutationError({
+                operation: "revive",
+                stage: "missing_branch",
+                branch: "feature/revival",
+              }),
+            )
+          : Effect.succeed({
+              revived: input.revival === "revived",
+              generation: 0,
+            }),
       ),
     ),
   );
@@ -299,7 +323,10 @@ const makeSharedProviderSessionFixture = Effect.gen(function* () {
     driver: "codex",
     instanceId: providerInstanceId,
     providerSessionId,
-    providerSession: { id: providerSessionId },
+    providerSession: {
+      id: providerSessionId,
+      capabilities: { sessions: { supportsMultipleProviderThreadsPerSession: false } },
+    },
     ensureThread: (input: { readonly threadId: ThreadId }) =>
       Effect.sync(() => {
         const providerThread = providerThreads.get(input.threadId);
@@ -809,7 +836,7 @@ for (const previousMessages of [[], ["/compact", " /COMPACT "]]) {
 }
 
 it("restarts the provider session after reviving a missing worktree", async () => {
-  const fixture = makeProviderTurnStartFixture({ revival: "revived" });
+  const fixture = makeProviderTurnStartFixture({ revival: "revived", liveSession: true });
 
   await Effect.flatMap(ProviderTurnStart.ProviderTurnStartServiceV2, (service) =>
     service.start({ threadId: fixture.threadId, runId: fixture.runId }),
@@ -822,7 +849,11 @@ it("restarts the provider session after reviving a missing worktree", async () =
 });
 
 it("stops superseded restart work after restoring the shared provider session", async () => {
-  const fixture = makeProviderTurnStartFixture({ revival: "revived", cancelOnOpen: true });
+  const fixture = makeProviderTurnStartFixture({
+    revival: "revived",
+    cancelOnOpen: true,
+    liveSession: true,
+  });
 
   await Effect.flatMap(ProviderTurnStart.ProviderTurnStartServiceV2, (service) =>
     service.start({ threadId: fixture.threadId, runId: fixture.runId }),
@@ -831,6 +862,32 @@ it("stops superseded restart work after restoring the shared provider session", 
   expect(fixture.order).toEqual(["revive", "close", "open"]);
   expect(fixture.ensureThread).not.toHaveBeenCalled();
   expect(fixture.startRootRun).not.toHaveBeenCalled();
+});
+
+it("keeps a shared provider session open after reviving a worktree", async () => {
+  const fixture = makeProviderTurnStartFixture({
+    revival: "revived",
+    liveSession: true,
+    sharedSession: true,
+  });
+
+  await Effect.flatMap(ProviderTurnStart.ProviderTurnStartServiceV2, (service) =>
+    service.start({ threadId: fixture.threadId, runId: fixture.runId }),
+  ).pipe(Effect.provide(fixture.layer), Effect.runPromise);
+
+  expect(fixture.order).toEqual(["revive", "open", "start-root-run"]);
+  expect(fixture.close).not.toHaveBeenCalled();
+});
+
+it("starts the provider turn when worktree revival fails", async () => {
+  const fixture = makeProviderTurnStartFixture({ revival: "failed", liveSession: true });
+
+  await Effect.flatMap(ProviderTurnStart.ProviderTurnStartServiceV2, (service) =>
+    service.start({ threadId: fixture.threadId, runId: fixture.runId }),
+  ).pipe(Effect.provide(fixture.layer), Effect.runPromise);
+
+  expect(fixture.order).toEqual(["revive", "open", "start-root-run"]);
+  expect(fixture.close).not.toHaveBeenCalled();
 });
 
 effectIt.effect("does not close a provider session after the starting attempt is superseded", () =>

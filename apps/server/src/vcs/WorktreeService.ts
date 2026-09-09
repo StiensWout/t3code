@@ -155,7 +155,7 @@ export class WorktreeService extends Context.Service<
   }
 >()("t3/vcs/WorktreeService") {}
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -248,7 +248,7 @@ export const make = Effect.gen(function* () {
       [
         "for-each-ref",
         `refs/heads/${status.branch}`,
-        "--format=%(refname:short)%09%(upstream:short)%09%(upstream:track,nobracket)",
+        "--format=%(refname:lstrip=2)%09%(upstream:short)%09%(upstream:track,nobracket)",
       ],
     );
     if (branchSyncStdout === null) {
@@ -354,7 +354,7 @@ export const make = Effect.gen(function* () {
         executeLenient("WorktreeService.listGroup.branchSync", group.canonicalWorkspaceRoot, [
           "for-each-ref",
           "refs/heads",
-          "--format=%(refname:short)%09%(upstream:short)%09%(upstream:track,nobracket)",
+          "--format=%(refname:lstrip=2)%09%(upstream:short)%09%(upstream:track,nobracket)",
         ]),
         resolveDefaultRef(group.canonicalWorkspaceRoot),
       ],
@@ -470,7 +470,10 @@ export const make = Effect.gen(function* () {
             path: entry.path,
             branch: entry.refName,
             threads: threadRefs,
-            orphaned: threadRefs.every((thread) => thread.status === "deleted"),
+            // A worktree that never had a thread is not an orphan: it may be a
+            // launch still binding its thread, or a checkout the user made.
+            orphaned:
+              threadRefs.length > 0 && threadRefs.every((thread) => thread.status === "deleted"),
             dirty: status.dirty,
             dirtyFileCount: status.dirtyFileCount,
             hasUpstream,
@@ -502,20 +505,22 @@ export const make = Effect.gen(function* () {
       (project) =>
         Effect.gen(function* () {
           const canonicalWorkspaceRoot = yield* canonicalizePath(project.workspaceRoot);
+          // A project outside any Git repository, or whose directory is gone,
+          // has no worktrees to list; skip it rather than fail the inventory
+          // for every other project and stall the reaper.
           const commonDir = yield* executeLenient(
             "WorktreeService.listWorktrees.repositoryKey",
             canonicalWorkspaceRoot,
             ["rev-parse", "--git-common-dir"],
           ).pipe(
-            Effect.mapError((cause) =>
-              inventoryError("identify_repository", cause, {
+            Effect.catch((cause) =>
+              Effect.logWarning("worktrees.inventory.repository-probe-failed", {
                 projectId: project.id,
                 workspaceRoot: canonicalWorkspaceRoot,
-              }),
+                cause,
+              }).pipe(Effect.as(null)),
             ),
           );
-          // A project outside any Git repository has no worktrees to list;
-          // skip it rather than fail the inventory for every other project.
           if (commonDir === null) return null;
           const repositoryKey =
             commonDir.trim().length === 0
@@ -579,7 +584,85 @@ export const make = Effect.gen(function* () {
     return { worktrees };
   });
 
-  const pruneWorktreesUnlocked = Effect.fn("WorktreeService.pruneWorktrees")(function* (
+  // Fresh Git and thread rechecks plus the removal run under the mutation
+  // permit per worktree, so a sweep over many stale worktrees never holds
+  // every turn start behind the whole batch.
+  const removeIfStillSafe = Effect.fn("WorktreeService.removeIfStillSafe")(function* (
+    worktree: WorktreeInfo,
+    options?: { readonly requireOrphaned?: boolean },
+  ) {
+    const freshBlocker = yield* freshPruneBlocker(worktree).pipe(
+      Effect.catchCause((cause) =>
+        Cause.hasInterruptsOnly(cause)
+          ? Effect.interrupt
+          : Effect.gen(function* () {
+              yield* Effect.logWarning("worktrees.prune.status-failed", {
+                worktreePath: worktree.path,
+                cause,
+              });
+              return "status_unavailable" as const;
+            }),
+      ),
+    );
+    if (freshBlocker !== null) {
+      return { outcome: "skipped" as const, reason: freshBlocker };
+    }
+
+    // Threads can link to a worktree without taking the mutation permit
+    // (branch carry-over, unsettle), so linkage is rechecked on a fresh
+    // shell snapshot immediately before removal, like Git state above.
+    const freshThreadCheck = yield* threadManagement.getShellSnapshot().pipe(
+      Effect.flatMap((snapshot) =>
+        Effect.gen(function* () {
+          const references: WorktreeThreadStatus[] = [];
+          for (const thread of [...snapshot.threads, ...snapshot.archivedThreads]) {
+            if (thread.worktreePath === null) continue;
+            const status = threadStatus(thread);
+            if (status === "deleted") continue;
+            const resolvedPath = yield* canonicalizePath(thread.worktreePath);
+            if (resolvedPath === worktree.path) references.push(status);
+          }
+          return { ok: true as const, references };
+        }),
+      ),
+      Effect.catchCause((cause) =>
+        Cause.hasInterruptsOnly(cause)
+          ? Effect.interrupt
+          : Effect.logWarning("worktrees.prune.thread-recheck-failed", {
+              worktreePath: worktree.path,
+              cause,
+            }).pipe(Effect.as({ ok: false as const, references: [] as WorktreeThreadStatus[] })),
+      ),
+    );
+    if (!freshThreadCheck.ok) {
+      return { outcome: "skipped" as const, reason: "status_unavailable" as const };
+    }
+    if (options?.requireOrphaned === true && freshThreadCheck.references.length > 0) {
+      return { outcome: "ignored" as const };
+    }
+    if (freshThreadCheck.references.includes("active")) {
+      return { outcome: "skipped" as const, reason: "active_thread" as const };
+    }
+
+    const removal = yield* git
+      .removeWorktree({ cwd: worktree.workspaceRoot, path: worktree.path })
+      .pipe(
+        Effect.match({
+          onFailure: (cause) => ({ ok: false as const, cause }),
+          onSuccess: () => ({ ok: true as const }),
+        }),
+      );
+    if (!removal.ok) {
+      return {
+        outcome: "skipped" as const,
+        reason: "remove_failed" as const,
+        detail: removal.cause.message,
+      };
+    }
+    return { outcome: "removed" as const };
+  });
+
+  const pruneWorktreesInternal = Effect.fn("WorktreeService.pruneWorktrees")(function* (
     input: VcsPruneWorktreesInput,
     options?: { readonly requireOrphaned?: boolean },
   ) {
@@ -630,77 +713,16 @@ export const make = Effect.gen(function* () {
         continue;
       }
 
-      const freshBlocker = yield* freshPruneBlocker(worktree).pipe(
-        Effect.catchCause((cause) =>
-          Cause.hasInterruptsOnly(cause)
-            ? Effect.interrupt
-            : Effect.gen(function* () {
-                yield* Effect.logWarning("worktrees.prune.status-failed", {
-                  worktreePath: worktree.path,
-                  cause,
-                });
-                return "status_unavailable" as const;
-              }),
-        ),
-      );
-      if (freshBlocker !== null) {
-        skipped.push({ path: worktree.path, reason: freshBlocker });
-        continue;
-      }
-
-      // Threads can link to a worktree without taking the mutation permit
-      // (branch carry-over, unsettle), so linkage is rechecked on a fresh
-      // shell snapshot immediately before removal, like Git state above.
-      const freshThreadCheck = yield* threadManagement.getShellSnapshot().pipe(
-        Effect.flatMap((snapshot) =>
-          Effect.gen(function* () {
-            const references: WorktreeThreadStatus[] = [];
-            for (const thread of [...snapshot.threads, ...snapshot.archivedThreads]) {
-              if (thread.worktreePath === null) continue;
-              const status = threadStatus(thread);
-              if (status === "deleted") continue;
-              const resolvedPath = yield* canonicalizePath(thread.worktreePath);
-              if (resolvedPath === worktree.path) references.push(status);
-            }
-            return { ok: true as const, references };
-          }),
-        ),
-        Effect.catchCause((cause) =>
-          Effect.logWarning("worktrees.prune.thread-recheck-failed", {
-            worktreePath: worktree.path,
-            cause,
-          }).pipe(Effect.as({ ok: false as const, references: [] as WorktreeThreadStatus[] })),
-        ),
-      );
-      if (!freshThreadCheck.ok) {
-        skipped.push({ path: worktree.path, reason: "status_unavailable" });
-        continue;
-      }
-      if (options?.requireOrphaned === true && freshThreadCheck.references.length > 0) {
-        continue;
-      }
-      if (freshThreadCheck.references.includes("active")) {
-        skipped.push({ path: worktree.path, reason: "active_thread" });
-        continue;
-      }
-
-      const removal = yield* git
-        .removeWorktree({ cwd: worktree.workspaceRoot, path: worktree.path })
-        .pipe(
-          Effect.match({
-            onFailure: (cause) => ({ ok: false as const, cause }),
-            onSuccess: () => ({ ok: true as const }),
-          }),
-        );
-      if (!removal.ok) {
+      const result = yield* lifecycle.withMutationPermit(removeIfStillSafe(worktree, options));
+      if (result.outcome === "ignored") continue;
+      if (result.outcome === "skipped") {
         skipped.push({
           path: worktree.path,
-          reason: "remove_failed",
-          detail: removal.cause.message,
+          reason: result.reason,
+          ...(result.detail === undefined ? {} : { detail: result.detail }),
         });
         continue;
       }
-
       removed.push({ path: worktree.path, workspaceRoot: worktree.workspaceRoot });
       touchedRoots.add(worktree.workspaceRoot);
     }
@@ -742,13 +764,10 @@ export const make = Effect.gen(function* () {
     return { removed, skipped };
   });
 
-  const pruneWorktrees = (input: VcsPruneWorktreesInput) =>
-    lifecycle.withMutationPermit(pruneWorktreesUnlocked(input));
+  const pruneWorktrees = (input: VcsPruneWorktreesInput) => pruneWorktreesInternal(input);
   const pruneOrphanedWorktree = (worktreePath: string) =>
-    lifecycle.withMutationPermit(
-      pruneWorktreesUnlocked({ paths: [worktreePath] }, { requireOrphaned: true }).pipe(
-        Effect.map((result) => result.removed.length > 0),
-      ),
+    pruneWorktreesInternal({ paths: [worktreePath] }, { requireOrphaned: true }).pipe(
+      Effect.map((result) => result.removed.length > 0),
     );
   return WorktreeService.of({
     listWorktrees,

@@ -916,8 +916,8 @@ export const SourceControlWritingStyleSettings = Schema.Struct({
 });
 export type SourceControlWritingStyleSettings = typeof SourceControlWritingStyleSettings.Type;
 
-export const MIN_WORKTREE_AUTO_PRUNE_AFTER_DAYS = 1;
-export const MAX_WORKTREE_AUTO_PRUNE_AFTER_DAYS = 365;
+const MIN_WORKTREE_AUTO_PRUNE_AFTER_DAYS = 1;
+const MAX_WORKTREE_AUTO_PRUNE_AFTER_DAYS = 365;
 export const WorktreeAutoPruneAfterDays = Schema.Int.check(
   Schema.isBetween({
     minimum: MIN_WORKTREE_AUTO_PRUNE_AFTER_DAYS,
@@ -925,7 +925,7 @@ export const WorktreeAutoPruneAfterDays = Schema.Int.check(
   }),
 );
 export type WorktreeAutoPruneAfterDays = typeof WorktreeAutoPruneAfterDays.Type;
-export const DEFAULT_WORKTREE_AUTO_PRUNE_AFTER_DAYS: WorktreeAutoPruneAfterDays = 14;
+const DEFAULT_WORKTREE_AUTO_PRUNE_AFTER_DAYS: WorktreeAutoPruneAfterDays = 14;
 
 export const WorktreeSettings = Schema.Struct({
   /** Remove safe-to-prune worktrees after this many inactive days; null disables it. */
