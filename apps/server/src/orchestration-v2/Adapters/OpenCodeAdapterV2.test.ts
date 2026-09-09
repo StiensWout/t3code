@@ -1761,6 +1761,8 @@ describe("OpenCodeAdapterV2", () => {
         createOpenCodeSdkClient: () => fakeClient,
         loadOpenCodeInventory: unused("loadOpenCodeInventory"),
         loadInventoryFromCli: unused("loadInventoryFromCli"),
+        loadOpenCodeSkills: unused("loadOpenCodeSkills"),
+        loadSkillsFromCli: unused("loadSkillsFromCli"),
       };
       const instanceId = ProviderInstanceId.make("opencode");
       const threadId = ThreadId.make("thread-opencode-adopt");

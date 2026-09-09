@@ -370,7 +370,7 @@ function makeTestLayer(input: {
     }),
   );
   const providerEventIngestorTestLayer = providerEventIngestorLayer.pipe(
-    Layer.provide(Layer.mergeAll(configuredEventSinkLayer, idAllocatorLayer)),
+    Layer.provide(Layer.mergeAll(configuredEventSinkLayer, idAllocatorLayer, TestStoresLayer)),
   );
   return Layer.mergeAll(
     TestStoresLayer,

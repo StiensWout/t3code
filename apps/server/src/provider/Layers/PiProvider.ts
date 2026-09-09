@@ -8,7 +8,12 @@
  * `~/.pi/agent` — custom providers, models.json entries, extensions, skills —
  * shows up in T3 without any hardcoded catalog.
  */
-import { type PiSettings, type ServerProvider, type ServerProviderModel } from "@t3tools/contracts";
+import {
+  type CustomModelSetting,
+  type PiSettings,
+  type ServerProvider,
+  type ServerProviderModel,
+} from "@t3tools/contracts";
 import { causeErrorTag } from "@t3tools/shared/observability";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import { compareSemverVersions } from "@t3tools/shared/semver";
@@ -82,7 +87,7 @@ interface PiDiscovery extends PiDiscoveredCommands {
 }
 
 function piModelsFromSettings(
-  customModels: ReadonlyArray<string> | undefined,
+  customModels: ReadonlyArray<CustomModelSetting> | undefined,
   discovered: ReadonlyArray<ServerProviderModel> = [],
 ): ReadonlyArray<ServerProviderModel> {
   return providerModelsFromSettings(

@@ -30,7 +30,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 
-export class PiRpcError extends Schema.TaggedErrorClass<PiRpcError>()("PiRpcError", {
+export class PiRpcError extends Schema.TaggedError<PiRpcError>()("PiRpcError", {
   operation: Schema.String,
   detail: Schema.optional(Schema.String),
   cause: Schema.optional(Schema.Defect()),

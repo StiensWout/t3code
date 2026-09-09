@@ -1303,7 +1303,7 @@ const PiSettingsPatch = Schema.Struct({
   enabled: Schema.optionalKey(Schema.Boolean),
   binaryPath: Schema.optionalKey(TrimmedString),
   launchArgs: Schema.optionalKey(TrimmedString),
-  customModels: Schema.optionalKey(Schema.Array(Schema.String)),
+  customModels: Schema.optionalKey(Schema.Array(CustomModelSetting)),
 });
 
 const OpenCodeSettingsPatch = Schema.Struct({
