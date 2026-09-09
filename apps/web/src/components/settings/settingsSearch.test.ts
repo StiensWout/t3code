@@ -61,6 +61,7 @@ describe("searchSettings", () => {
       localeLowerCase.mockRestore();
     }
     expect(searchSettings("xyzzy")).toEqual([]);
+    expect(searchSettings("work").map((item) => item.id)).toEqual(["worktrees"]);
   });
 
   it("keeps catalog order for multiple title matches", () => {
