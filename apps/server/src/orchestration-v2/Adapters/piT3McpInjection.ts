@@ -11,8 +11,6 @@ import {
   T3_PI_RUNTIME_MODE_ENV,
 } from "./piT3McpExtensionSource.ts";
 
-export { PI_T3_MCP_EXTENSION_FILENAME, T3_MCP_BEARER_ENV, T3_MCP_URL_ENV, T3_PI_RUNTIME_MODE_ENV };
-
 const RESERVED_PI_LAUNCH_ARGUMENTS = new Set([
   "--continue",
   "-c",

@@ -107,14 +107,35 @@ interface PendingPiRequest {
   readonly deferred: Deferred.Deferred<unknown, PiRpcError>;
 }
 
-function splitJsonlChunks(buffer: string, chunk: string): readonly [ReadonlyArray<string>, string] {
-  const combined = buffer + chunk;
-  const parts = combined.split("\n");
-  const remainder = parts.pop() ?? "";
-  const lines = parts
-    .map((line) => (line.endsWith("\r") ? line.slice(0, -1) : line))
-    .filter((line) => line.length > 0);
-  return [lines, remainder];
+const MAX_PI_RECORD_CHARS = 8 * 1024 * 1024;
+
+function makeJsonlFramer() {
+  let buffer = "";
+  let dropping = false;
+  return (chunk: string): ReadonlyArray<string> => {
+    const lines: string[] = [];
+    let start = 0;
+    while (start < chunk.length) {
+      const newline = chunk.indexOf("\n", start);
+      const end = newline < 0 ? chunk.length : newline;
+      if (!dropping) {
+        if (buffer.length + end - start > MAX_PI_RECORD_CHARS) {
+          buffer = "";
+          dropping = true;
+        } else {
+          buffer += chunk.slice(start, end);
+        }
+      }
+      if (newline < 0) break;
+      if (!dropping && buffer.length > 0) {
+        lines.push(buffer.endsWith("\r") ? buffer.slice(0, -1) : buffer);
+      }
+      buffer = "";
+      dropping = false;
+      start = newline + 1;
+    }
+    return lines;
+  };
 }
 
 const UnknownFromJsonString = Schema.fromJsonString(Schema.Unknown);
@@ -304,13 +325,12 @@ export const makePiRpcConnection = Effect.fnUntraced(function* (options: PiRpcSp
 
   // Reader: decode stdout into LF-delimited JSON records.
   yield* Effect.gen(function* () {
-    let buffer = "";
+    const frame = makeJsonlFramer();
     yield* child.stdout.pipe(
       Stream.decodeText(),
       Stream.runForEach((chunk) =>
         Effect.gen(function* () {
-          const [lines, remainder] = splitJsonlChunks(buffer, chunk);
-          buffer = remainder;
+          const lines = frame(chunk);
           for (const line of lines) {
             const record = parsePiRecord(line);
             if (record === undefined) {
@@ -324,9 +344,9 @@ export const makePiRpcConnection = Effect.fnUntraced(function* (options: PiRpcSp
         }),
       ),
     );
-    const trailing = buffer.length > 0 ? parsePiRecord(buffer) : undefined;
-    if (trailing !== undefined) {
-      yield* routeRecord(trailing);
+    for (const line of frame("\n")) {
+      const trailing = parsePiRecord(line);
+      if (trailing !== undefined) yield* routeRecord(trailing);
     }
   }).pipe(
     Effect.matchCauseEffect({

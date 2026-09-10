@@ -655,7 +655,7 @@ describe("PiAdapterV2", () => {
 
       yield* startTurn(runtime, providerThread, "default", [], "use $repo-review and $deploy");
       const prompt = yield* fake.takeRequest("prompt");
-      assert.equal(prompt["message"], "/skill:repo-review /skill:deploy use and");
+      assert.equal(prompt["message"], "/skill:repo-review /skill:deploy use  and");
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
@@ -1321,6 +1321,97 @@ describe("PiAdapterV2", () => {
       const uiResponse = yield* fake.takeRequest("extension_ui_response");
       assert.equal(uiResponse["id"], "ui-trust");
       assert.equal(uiResponse["confirmed"], true);
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("remembers session approvals only for identical confirmation content", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      // Project-trust style prompt before any turn exists.
+      yield* fake.emit({
+        type: "extension_ui_request",
+        id: "ui-trust",
+        method: "confirm",
+        title: "Run project extensions?",
+        message: "This project has .pi/extensions.",
+      });
+      const pending = yield* takeEvent(
+        (event) =>
+          event.type === "runtime_request.updated" && event.runtimeRequest.status === "pending",
+      );
+      const requestId =
+        pending.type === "runtime_request.updated" ? pending.runtimeRequest.id : undefined;
+      yield* runtime.respondToRuntimeRequest({
+        requestId: requestId!,
+        decision: "acceptForSession",
+      });
+      const uiResponse = yield* fake.takeRequest("extension_ui_response");
+      assert.equal(uiResponse["id"], "ui-trust");
+      assert.equal(uiResponse["confirmed"], true);
+      yield* fake.emit({
+        type: "extension_ui_request",
+        id: "ui-trust-again",
+        method: "confirm",
+        title: "Run project extensions?",
+        message: "This project has .pi/extensions.",
+      });
+      assert.equal((yield* fake.takeRequest("extension_ui_response"))["id"], "ui-trust-again");
+      yield* fake.emit({
+        type: "extension_ui_request",
+        id: "ui-other",
+        method: "confirm",
+        title: "Run project extensions?",
+        message: "A different project.",
+      });
+      const other = yield* takeEvent(
+        (event) =>
+          event.type === "runtime_request.updated" && event.runtimeRequest.status === "pending",
+      );
+      assert.isTrue(
+        other.type === "runtime_request.updated" &&
+          other.runtimeRequest.nativeRequestRef?.nativeId === "ui-other",
+      );
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("offers an explicit empty value for extension input dialogs", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* fake.emit({
+        type: "extension_ui_request",
+        id: "ui-input",
+        method: "input",
+        title: "Optional value",
+      });
+      const event = yield* takeEvent(
+        (event) =>
+          event.type === "turn_item.updated" && event.turnItem.type === "user_input_request",
+      );
+      assert.isTrue(
+        event.type === "turn_item.updated" && event.turnItem.type === "user_input_request",
+      );
+      if (event.type !== "turn_item.updated" || event.turnItem.type !== "user_input_request")
+        return;
+      assert.equal(event.turnItem.questions[0]?.options[0]?.value, "");
+      yield* runtime.respondToRuntimeRequest({
+        requestId: event.turnItem.requestId,
+        answers: { "ui-input": "" },
+      });
+      const response = yield* fake.takeRequest("extension_ui_response");
+      assert.equal(response["value"], "");
+      assert.isUndefined(response["cancelled"]);
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
@@ -2161,12 +2252,16 @@ describe("PiRpc framing", () => {
       yield* push('{"type":"agent_');
       yield* push('start"}\r\n{"type":"agent_settled"}\nnot json\n{"type":"queue_update"}\n');
 
+      yield* push("x".repeat(8 * 1024 * 1024));
+      yield* push('x{"type":"must_not_emit"}\n{"type":"after_oversized"}\n');
+
       const first = yield* Queue.take(connection.events);
       assert.equal(first["type"], "agent_start");
       const second = yield* Queue.take(connection.events);
       assert.equal(second["type"], "agent_settled");
       const third = yield* Queue.take(connection.events);
       assert.equal(third["type"], "queue_update");
+      assert.equal((yield* Queue.take(connection.events))["type"], "after_oversized");
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 });

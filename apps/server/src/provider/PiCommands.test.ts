@@ -116,6 +116,12 @@ it("leaves unrelated dollar-prefixed text unchanged", () => {
 
 it("hoists every known $ skill and keeps the rest of the prompt", () => {
   expect(expandPiSkillReference("use $alpha then $beta please", new Set(["alpha", "beta"]))).toBe(
-    "/skill:alpha /skill:beta use then please",
+    "/skill:alpha /skill:beta use  then  please",
+  );
+});
+
+it("preserves code indentation and line breaks when expanding a skill", () => {
+  expect(expandPiSkillReference("$review\n```ts\n  const x = 1;\n```", new Set(["review"]))).toBe(
+    "/skill:review ```ts\n  const x = 1;\n```",
   );
 });

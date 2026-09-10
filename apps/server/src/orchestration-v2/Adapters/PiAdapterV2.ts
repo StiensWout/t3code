@@ -118,7 +118,7 @@ import {
 import { PI_FILE_CHANGE_TOOLS } from "./piT3McpExtensionSource.ts";
 
 export const PI_PROVIDER = ProviderDriverKind.make("pi");
-export const PI_DRIVER_KIND = PI_PROVIDER;
+const PI_DRIVER_KIND = PI_PROVIDER;
 const PI_DEFAULT_INSTANCE_ID = defaultInstanceIdForDriver(PI_DRIVER_KIND);
 const DEFAULT_PI_SETTINGS = Schema.decodeSync(PiSettings)({});
 
@@ -136,7 +136,7 @@ const PI_UNSOLICITED_ACTIVITY_ERROR =
 const SETTLE_PROBE_MAX_ATTEMPTS = 3;
 const SETTLE_PROBE_RETRY_DELAY = Duration.millis(100);
 
-export const PiProviderCapabilitiesV2 = {
+const PiProviderCapabilitiesV2 = {
   sessions: {
     supportsMultipleProviderThreadsPerSession: false,
     supportsModelSwitchInSession: true,
@@ -356,6 +356,7 @@ interface PendingPiPrompt {
   readonly nativeRequestId: string;
   readonly method: "select" | "confirm" | "input" | "editor";
   readonly questionId: string;
+  readonly approvalKey: string;
   runtimeRequest: OrchestrationV2RuntimeRequest;
   readonly node: OrchestrationV2ExecutionNode;
   readonly turnItem: OrchestrationV2TurnItem;
@@ -474,6 +475,7 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
         ProviderAdapterV2Error | Cause.Done
       >();
       const pendingPrompts = new Map<string, PendingPiPrompt>();
+      const sessionApprovals = new Set<string>();
       // Answering a dialog and terminalizing a turn both publish lifecycle
       // events. Pi can settle immediately after `extension_ui_response`, so
       // serialize the two paths to stop `turn.terminal` from overtaking the
@@ -1181,6 +1183,16 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
           return;
         }
         if (nativeRequestId === undefined) return;
+        const approvalTitle = recordString(event, "title") ?? "";
+        const approvalKey = `${approvalTitle.length}:${approvalTitle}${recordString(event, "message") ?? ""}`;
+        if (method === "confirm" && sessionApprovals.has(approvalKey)) {
+          yield* connection.send({
+            type: "extension_ui_response",
+            id: nativeRequestId,
+            confirmed: true,
+          });
+          return;
+        }
         const state = threadState;
         const turn = state?.activeTurn ?? null;
         const createdAt = yield* DateTime.now;
@@ -1260,6 +1272,7 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
           nativeRequestId,
           method,
           questionId: nativeRequestId,
+          approvalKey,
           runtimeRequest,
           node,
           turnItem,
@@ -2450,6 +2463,9 @@ export function makePiAdapterV2(options: PiAdapterV2Options): ProviderAdapterV2S
             // Dropped only once Pi has the answer, so a failed send leaves the
             // request retryable and still cancellable during teardown.
             pendingPrompts.delete(String(requestInput.requestId));
+            if (pending.method === "confirm" && requestInput.decision === "acceptForSession") {
+              sessionApprovals.add(pending.approvalKey);
+            }
             const resolvedAt = yield* DateTime.now;
             pending.runtimeRequest = {
               ...pending.runtimeRequest,
@@ -2695,8 +2711,14 @@ function piQuestion(
     method === "select" && Array.isArray(event["options"])
       ? event["options"]
           .filter((option): option is string => typeof option === "string")
-          .map((option) => ({ label: option, description: option }))
-      : [];
+          .map((option) => ({ label: option || "Empty value", description: option, value: option }))
+      : [
+          {
+            label: "Submit empty value",
+            description: "Send an empty string to the extension.",
+            value: "",
+          },
+        ];
   // The user-input contract has no prefill field, so an editor dialog's
   // prefill is surfaced inside the question text; without it the user would
   // edit blind against content they cannot see.
@@ -2774,7 +2796,7 @@ export const PiAdapterV2Driver: ProviderAdapterDriver<PiSettings, PiAdapterV2Dri
   ),
 };
 
-export const layer: Layer.Layer<ProviderAdapterV2, never, PiAdapterV2DriverEnv> = Layer.effect(
+const layer: Layer.Layer<ProviderAdapterV2, never, PiAdapterV2DriverEnv> = Layer.effect(
   ProviderAdapterV2,
   Effect.gen(function* () {
     const hostEnvironment = yield* HostProcessEnvironment;

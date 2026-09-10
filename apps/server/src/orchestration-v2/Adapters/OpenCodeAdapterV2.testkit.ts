@@ -25,7 +25,6 @@ import {
 } from "../testkit/ProviderReplayHarness.ts";
 import {
   OPENCODE_DEFAULT_INSTANCE_ID,
-  OPENCODE_DRIVER_KIND,
   OPENCODE_PROVIDER,
   OPENCODE_SDK_PROTOCOL,
   OpenCodeAdapterV2Driver,
@@ -406,9 +405,7 @@ function makeOpenCodeReplayRuntimeLayer(transcript: OpenCodeSdkReplayTranscript)
   );
 }
 
-export function makeOpenCodeProviderAdapterRegistryReplayLayer(
-  transcript: OpenCodeSdkReplayTranscript,
-) {
+function makeOpenCodeProviderAdapterRegistryReplayLayer(transcript: OpenCodeSdkReplayTranscript) {
   const serverConfigLayer = Layer.effect(
     ServerConfig,
     makeReplayServerConfig(transcript.scenario).pipe(Effect.orDie),
@@ -417,7 +414,7 @@ export function makeOpenCodeProviderAdapterRegistryReplayLayer(
     drivers: [OpenCodeAdapterV2Driver],
     configMap: {
       [OPENCODE_DEFAULT_INSTANCE_ID]: {
-        driver: OPENCODE_DRIVER_KIND,
+        driver: OPENCODE_PROVIDER,
         config: { serverUrl: "replay://opencode" },
       },
     },

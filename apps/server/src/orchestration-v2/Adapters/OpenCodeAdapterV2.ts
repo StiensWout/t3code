@@ -109,8 +109,7 @@ import {
 import { makeSubagentChildThread, subagentThreadTitle } from "../SubagentProjection.ts";
 
 export const OPENCODE_PROVIDER = ProviderDriverKind.make("opencode");
-export const OPENCODE_DRIVER_KIND = OPENCODE_PROVIDER;
-export const OPENCODE_DEFAULT_INSTANCE_ID = defaultInstanceIdForDriver(OPENCODE_DRIVER_KIND);
+export const OPENCODE_DEFAULT_INSTANCE_ID = defaultInstanceIdForDriver(OPENCODE_PROVIDER);
 export const OPENCODE_SDK_PROTOCOL = "opencode-sdk.sse" as const;
 const DEFAULT_OPENCODE_SETTINGS = Schema.decodeSync(OpenCodeSettingsSchema)({});
 
@@ -446,7 +445,7 @@ export interface OpenCodeProtocolLogEvent {
   readonly payload: unknown;
 }
 
-export function formatOpenCodeProtocolLogPayload(event: OpenCodeProtocolLogEvent) {
+function formatOpenCodeProtocolLogPayload(event: OpenCodeProtocolLogEvent) {
   return {
     direction: event.direction,
     messageKind: event.messageKind,
@@ -3641,7 +3640,7 @@ export const OpenCodeAdapterV2Driver: ProviderAdapterDriver<
   OpenCodeSettings,
   OpenCodeAdapterV2DriverEnv
 > = {
-  driverKind: OPENCODE_DRIVER_KIND,
+  driverKind: OPENCODE_PROVIDER,
   configSchema: OpenCodeSettingsSchema,
   defaultConfig: (): OpenCodeSettings => DEFAULT_OPENCODE_SETTINGS,
   create: Effect.fn("OpenCodeAdapterV2Driver.create")(
@@ -3668,7 +3667,7 @@ export const OpenCodeAdapterV2Driver: ProviderAdapterDriver<
         Effect.mapError(
           (cause) =>
             new ProviderAdapterDriverCreateError({
-              driver: OPENCODE_DRIVER_KIND,
+              driver: OPENCODE_PROVIDER,
               instanceId: input.instanceId,
               detail: "Failed to create OpenCode v2 adapter.",
               cause,
@@ -3678,25 +3677,24 @@ export const OpenCodeAdapterV2Driver: ProviderAdapterDriver<
   ),
 };
 
-export const layer: Layer.Layer<ProviderAdapterV2, never, OpenCodeAdapterV2DriverEnv> =
-  Layer.effect(
-    ProviderAdapterV2,
-    Effect.gen(function* () {
-      const hostEnvironment = yield* HostProcessEnvironment;
-      const openCodeRuntime = yield* OpenCodeRuntime;
-      const idAllocator = yield* IdAllocatorV2;
-      const providerEventLoggers = yield* ProviderEventLoggers;
-      const serverConfig = yield* ServerConfig;
-      return makeOpenCodeAdapterV2({
-        instanceId: OPENCODE_DEFAULT_INSTANCE_ID,
-        settings: DEFAULT_OPENCODE_SETTINGS,
-        environment: hostEnvironment,
-        runtime: openCodeRuntime,
-        idAllocator,
-        serverConfig,
-        ...(providerEventLoggers.native === undefined
-          ? {}
-          : { nativeEventLogger: providerEventLoggers.native }),
-      });
-    }),
-  );
+const layer: Layer.Layer<ProviderAdapterV2, never, OpenCodeAdapterV2DriverEnv> = Layer.effect(
+  ProviderAdapterV2,
+  Effect.gen(function* () {
+    const hostEnvironment = yield* HostProcessEnvironment;
+    const openCodeRuntime = yield* OpenCodeRuntime;
+    const idAllocator = yield* IdAllocatorV2;
+    const providerEventLoggers = yield* ProviderEventLoggers;
+    const serverConfig = yield* ServerConfig;
+    return makeOpenCodeAdapterV2({
+      instanceId: OPENCODE_DEFAULT_INSTANCE_ID,
+      settings: DEFAULT_OPENCODE_SETTINGS,
+      environment: hostEnvironment,
+      runtime: openCodeRuntime,
+      idAllocator,
+      serverConfig,
+      ...(providerEventLoggers.native === undefined
+        ? {}
+        : { nativeEventLogger: providerEventLoggers.native }),
+    });
+  }),
+);

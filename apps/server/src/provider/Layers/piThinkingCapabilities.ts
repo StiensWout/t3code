@@ -7,15 +7,7 @@ import * as Predicate from "effect/Predicate";
  * model via `thinkingLevelMap`; advertising them globally makes
  * `set_thinking_level` fail on models that lack them.
  */
-export const PI_THINKING_LEVELS = [
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-] as const;
+const PI_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 export type PiThinkingLevel = (typeof PI_THINKING_LEVELS)[number];
 
@@ -46,13 +38,11 @@ export function thinkingCapabilitiesForPiModel(
         id: "thinking",
         label: "Thinking",
         type: "select",
-        options: levels.map(
-          (level): ProviderOptionChoice => ({
-            id: level,
-            label: PI_THINKING_LEVEL_LABELS[level],
-            ...(level === defaultLevel ? { isDefault: true } : {}),
-          }),
-        ),
+        options: levels.map((level): ProviderOptionChoice => ({
+          id: level,
+          label: PI_THINKING_LEVEL_LABELS[level],
+          ...(level === defaultLevel ? { isDefault: true } : {}),
+        })),
       },
     ],
   });

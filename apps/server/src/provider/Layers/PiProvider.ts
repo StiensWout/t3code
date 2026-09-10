@@ -19,6 +19,7 @@ import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import { compareSemverVersions } from "@t3tools/shared/semver";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Stream from "effect/Stream";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
@@ -145,6 +146,11 @@ const discoverPiViaRpc = (
       cwd,
       env: launch.env,
     });
+    yield* Stream.fromQueue(connection.events).pipe(
+      Stream.runDrain,
+      Effect.ignore,
+      Effect.forkScoped,
+    );
     const stateData = yield* connection.request({ type: "get_state" });
     const modelsData = yield* connection.request({ type: "get_available_models" });
     const commandsData = yield* connection

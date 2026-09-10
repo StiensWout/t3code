@@ -30,7 +30,7 @@ export type BuiltInProviderAdapterDriversV2Env =
   | OpenCodeAdapterV2DriverEnv
   | PiAdapterV2DriverEnv;
 
-export const BUILT_IN_PROVIDER_ADAPTER_DRIVERS_V2: ReadonlyArray<
+const BUILT_IN_PROVIDER_ADAPTER_DRIVERS_V2: ReadonlyArray<
   AnyProviderAdapterDriver<BuiltInProviderAdapterDriversV2Env>
 > = [
   CodexAdapterV2Driver,

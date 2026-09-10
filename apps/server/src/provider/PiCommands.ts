@@ -121,7 +121,7 @@ export function expandPiSkillReference(text: string, skillNames: ReadonlySet<str
     if (token === undefined) continue;
     body = `${body.slice(0, token.start)}${body.slice(token.end)}`;
   }
-  body = body.replace(/\s+/g, " ").trim();
+  body = body.trim();
   const prefix = orderedNames.map((name) => `/skill:${name}`).join(" ");
   return body.length === 0 ? prefix : `${prefix} ${body}`;
 }

@@ -23,6 +23,7 @@ import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
 import { ProviderWorkspaceMissingError } from "../provider/Errors.ts";
@@ -192,6 +193,7 @@ interface LiveSessionEntry {
   readonly eventSubscribers: Ref.Ref<
     ReadonlyMap<number, Queue.Queue<ProviderSessionEventSignal, Cause.Done>>
   >;
+  readonly requestEventPermit: Semaphore.Semaphore;
   readonly scope: Scope.Closeable;
   readonly idleGeneration: number;
   readonly busyCount: number;
@@ -646,7 +648,9 @@ export const layerWithOptions = (
               }
 
               const turnItem = projection.turnItems.find(
-                (item) => item.type === "approval_request" && item.requestId === request.id,
+                (item) =>
+                  (item.type === "approval_request" || item.type === "user_input_request") &&
+                  item.requestId === request.id,
               );
               if (turnItem !== undefined) {
                 events.push({
@@ -770,7 +774,7 @@ export const layerWithOptions = (
                   yield* writeReleasedRuntimeRequestEvents({
                     entry,
                     reason: input.reason,
-                  });
+                  }).pipe(entry.requestEventPermit.withPermits(1));
                   if (Option.isSome(closeExit) && Exit.isFailure(closeExit.value)) {
                     return yield* Effect.failCause(closeExit.value.cause);
                   }
@@ -1416,23 +1420,29 @@ export const layerWithOptions = (
                   // request UI can answer them and unblock session setup.
                   const threadId = sessionScopedRuntimeRequestThreadId(event);
                   if (threadId !== undefined) {
-                    yield* providerEventIngestor
-                      .ingestNormalized({
-                        providerSessionId: entry.runtime.providerSessionId,
-                        providerInstanceId: entry.runtime.instanceId,
-                        threadId,
-                        event,
-                      })
-                      .pipe(
-                        Effect.mapError(
-                          (cause) =>
-                            new ProviderAdapterEventStreamError({
-                              driver: entry.runtime.driver,
-                              providerSessionId: entry.runtime.providerSessionId,
-                              cause,
-                            }),
-                        ),
+                    yield* Effect.gen(function* () {
+                      const current = (yield* Ref.get(sessions)).get(
+                        sessionKey(entry.runtime.providerSessionId),
                       );
+                      if (current?.runtime !== entry.runtime) return;
+                      yield* providerEventIngestor
+                        .ingestNormalized({
+                          providerSessionId: entry.runtime.providerSessionId,
+                          providerInstanceId: entry.runtime.instanceId,
+                          threadId,
+                          event,
+                        })
+                        .pipe(
+                          Effect.mapError(
+                            (cause) =>
+                              new ProviderAdapterEventStreamError({
+                                driver: entry.runtime.driver,
+                                providerSessionId: entry.runtime.providerSessionId,
+                                cause,
+                              }),
+                          ),
+                        );
+                    }).pipe(entry.requestEventPermit.withPermits(1));
                     return;
                   }
                   yield* publishToSubscribers(entry.eventSubscribers, { type: "event", event });
@@ -1625,6 +1635,7 @@ export const layerWithOptions = (
                 runtime,
                 exposedRuntime,
                 eventSubscribers,
+                requestEventPermit: yield* Semaphore.make(1),
                 scope: sessionScope,
                 idleGeneration: 0,
                 busyCount: 0,

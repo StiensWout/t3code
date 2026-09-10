@@ -2214,6 +2214,78 @@ it.effect("ProviderSessionManagerV2 marks pending runtime requests non-live on r
     yield* effect.pipe(Effect.provide(makeTestLayer({ state, idleTimeoutMs: 1000 })));
   }),
 );
+it.effect("ProviderSessionManagerV2 terminalizes a pending input transcript item on release", () =>
+  Effect.gen(function* () {
+    const state = yield* Ref.make(emptyState);
+    const effect = Effect.gen(function* () {
+      const eventSink = yield* EventSinkV2;
+      const idAllocator = yield* IdAllocatorV2;
+      const manager = yield* ProviderSessionManagerV2;
+      const projectionStore = yield* ProjectionStoreV2;
+      const now = yield* DateTime.now;
+      const projectId = yield* idAllocator.allocate.project({
+        fixtureName: "provider-session-manager-request-expire",
+      });
+      const threadId = yield* idAllocator.allocate.thread({
+        fixtureName: "provider-session-manager-request-expire",
+        projectId,
+      });
+      const providerSessionId = yield* idAllocator.allocate.providerSession({
+        providerInstanceId: modelSelection.instanceId,
+        threadId,
+      });
+      const providerThread = makeProviderThread({
+        idAllocator,
+        threadId,
+        providerSessionId,
+        now,
+      });
+
+      yield* eventSink.write({
+        events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
+      });
+      const pendingRequest = yield* makePendingRuntimeRequestEvents({
+        idAllocator,
+        threadId,
+        providerSessionId,
+        providerThread,
+        now,
+      });
+      yield* eventSink.write({
+        events: pendingRequest.events.map((event) =>
+          event.type === "turn-item.updated"
+            ? { ...event, payload: { ...event.payload, type: "user_input_request", questions: [] } }
+            : event,
+        ),
+      });
+      yield* manager.open({
+        threadId,
+        providerSessionId,
+        modelSelection,
+        runtimePolicy,
+      });
+      yield* manager.release({
+        providerSessionId,
+        reason: "runtime_error",
+        detail: "process exited",
+      });
+
+      const projection = yield* projectionStore.getThreadProjection(threadId);
+      const request = projection.runtimeRequests.at(-1);
+      const requestNode = projection.nodes.find((node) => node.id === request?.nodeId);
+      const requestTurnItem = projection.turnItems.find(
+        (item) => item.type === "user_input_request" && item.requestId === request?.id,
+      );
+
+      assert.equal(request?.status, "expired");
+      assert.equal(request?.responseCapability.type, "not_resumable");
+      assert.equal(requestNode?.status, "failed");
+      assert.equal(requestTurnItem?.status, "failed");
+    });
+
+    yield* effect.pipe(Effect.provide(makeTestLayer({ state, idleTimeoutMs: 1000 })));
+  }),
+);
 
 it.effect("ProviderSessionManagerV2 persists session-scoped runtime requests without a run", () =>
   Effect.gen(function* () {
