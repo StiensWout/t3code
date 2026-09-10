@@ -318,6 +318,7 @@ function makeReplayClient(controller: OpenCodeReplayController): OpencodeClient 
     session: {
       create: (input: unknown) => request("session.create", input),
       get: (input: unknown) => request("session.get", input),
+      children: (input: unknown) => request("session.children", input),
       update: (input: unknown) => request("session.update", input),
       messages: (input: unknown) => request("session.messages", input),
       promptAsync: (input: unknown) => request("session.promptAsync", input),
