@@ -1254,19 +1254,19 @@ export function HomeScreen(props: HomeScreenProps) {
             renderItem={renderLegacyListItem}
             keyExtractor={keyExtractor}
             itemsAreEqual={(previous, item) => {
-            if (
-              (previous.type === "header" ||
-                previous.type === "thread" ||
-                previous.type === "pending-task" ||
-                previous.type === "show-more") &&
-              (item.type === "header" ||
-                item.type === "thread" ||
-                item.type === "pending-task" ||
-                item.type === "show-more")
-            )
-              return homeListItemsAreEqual(previous, item);
-            return previous === item;
-          }}
+              if (
+                (previous.type === "header" ||
+                  previous.type === "thread" ||
+                  previous.type === "pending-task" ||
+                  previous.type === "show-more") &&
+                (item.type === "header" ||
+                  item.type === "thread" ||
+                  item.type === "pending-task" ||
+                  item.type === "show-more")
+              )
+                return homeListItemsAreEqual(previous, item);
+              return previous === item;
+            }}
             drawDistance={500}
             estimatedItemSize={ESTIMATED_THREAD_ROW_HEIGHT}
             extraData={extraData}

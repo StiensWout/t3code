@@ -1056,6 +1056,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      if (thread.projectId === null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Attach the quick chat to a project before linking a pull request.",
+        });
+      }
       const key = normalizeThreadPullRequestKey(command);
       const existing = findPullRequestLink(thread, key);
       // An explicit link on a dismissed stack member un-dismisses it; any

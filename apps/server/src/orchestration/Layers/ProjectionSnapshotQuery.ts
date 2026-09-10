@@ -448,7 +448,7 @@ function groupPullRequestRowsByThread(
  */
 function mapThreadPullRequests(
   pullRequests: ReadonlyArray<ThreadPullRequestLink>,
-  projectId: ProjectId,
+  projectId: ProjectId | null,
   identity?: OrchestrationProject["repositoryIdentity"],
 ): Pick<OrchestrationThread, "pullRequests" | "linkedPullRequest"> {
   const linkedPullRequest = legacyLinkedPullRequestOf(pullRequests, projectId, identity);
@@ -2229,7 +2229,7 @@ pending_approval_requests AS (
                 ...mapThreadPullRequests(
                   pullRequestsByThread.get(row.threadId) ?? [],
                   row.projectId,
-                  repositoryIdentities.get(row.projectId),
+                  row.projectId === null ? undefined : repositoryIdentities.get(row.projectId),
                 ),
                 branchPullRequest: row.branchPullRequest,
                 latestTurn: latestTurnByThread.get(row.threadId) ?? null,
@@ -2473,7 +2473,7 @@ pending_approval_requests AS (
                   ...mapThreadPullRequests(
                     pullRequestsByThread.get(row.threadId) ?? [],
                     row.projectId,
-                    repositoryIdentities.get(row.projectId),
+                    row.projectId === null ? undefined : repositoryIdentities.get(row.projectId),
                   ),
                   branchPullRequest: row.branchPullRequest,
                   latestTurn: latestTurnByThread.get(row.threadId) ?? null,
@@ -2629,7 +2629,9 @@ pending_approval_requests AS (
                         ...mapThreadPullRequests(
                           pullRequestsByThread.get(row.threadId) ?? [],
                           row.projectId,
-                          repositoryIdentities.get(row.projectId),
+                          row.projectId === null
+                            ? undefined
+                            : repositoryIdentities.get(row.projectId),
                         ),
                         latestTurn: latestTurnByThread.get(row.threadId) ?? null,
                         createdAt: row.createdAt,
@@ -2791,7 +2793,7 @@ pending_approval_requests AS (
                   ...mapThreadPullRequests(
                     pullRequestsByThread.get(row.threadId) ?? [],
                     row.projectId,
-                    repositoryIdentities.get(row.projectId),
+                    row.projectId === null ? undefined : repositoryIdentities.get(row.projectId),
                   ),
                   latestTurn: latestTurnByThread.get(row.threadId) ?? null,
                   createdAt: row.createdAt,
@@ -3124,7 +3126,7 @@ pending_approval_requests AS (
         ...mapThreadPullRequests(
           pullRequestRows.map(mapPullRequestRow),
           threadRow.value.projectId,
-          pullRequestRows.length === 0
+          pullRequestRows.length === 0 || threadRow.value.projectId === null
             ? null
             : Option.getOrNull(yield* getProjectShellById(threadRow.value.projectId))
                 ?.repositoryIdentity,
@@ -3421,7 +3423,7 @@ pending_approval_requests AS (
         ...mapThreadPullRequests(
           pullRequestRows.map(mapPullRequestRow),
           threadRow.value.projectId,
-          pullRequestRows.length === 0
+          pullRequestRows.length === 0 || threadRow.value.projectId === null
             ? null
             : Option.getOrNull(yield* getProjectShellById(threadRow.value.projectId))
                 ?.repositoryIdentity,

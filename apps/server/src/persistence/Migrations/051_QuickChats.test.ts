@@ -4,11 +4,11 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import { runMigrations } from "../Migrations.ts";
 
-it.layer(NodeSqliteClient.layerMemory())("050_QuickChats", (it) => {
+it.layer(NodeSqliteClient.layerMemory())("051_QuickChats", (it) => {
   it.effect("preserves project threads and allows project-free rows", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 49 });
+      yield* runMigrations({ toMigrationInclusive: 50 });
       yield* sql`INSERT INTO projection_threads (thread_id, project_id, title, model_selection_json, runtime_mode, created_at, updated_at)
       VALUES ('existing', 'project-1', 'Existing', '{"instanceId":"codex","model":"gpt-5.4"}', 'full-access', '2026-01-01', '2026-01-01')`;
       yield* runMigrations();

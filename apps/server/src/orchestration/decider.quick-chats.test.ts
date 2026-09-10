@@ -73,6 +73,27 @@ it.layer(NodeServices.layer)("quick chats", (it) => {
       expect(result._tag).toBe("Failure");
     }),
   );
+  it.effect("rejects pull request links on unattached chats", () =>
+    Effect.gen(function* () {
+      const model = yield* createChat;
+      const result = yield* Effect.result(
+        decideOrchestrationCommand({
+          command: {
+            type: "thread.pull-request.link",
+            commandId: CommandId.make("link"),
+            threadId,
+            host: "github.com",
+            repository: "org/repo",
+            number: 1,
+            url: "https://github.com/org/repo/pull/1",
+            source: "manual",
+          },
+          readModel: model,
+        }),
+      );
+      expect(result._tag).toBe("Failure");
+    }),
+  );
   it.effect("attaches an idle chat to a project and preserves its identity", () =>
     Effect.gen(function* () {
       let model = yield* createChat;
