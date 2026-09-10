@@ -74,7 +74,8 @@ describe("detectComposerTrigger", () => {
       rangeStart: "Use a skill\n".length,
       rangeEnd: text.length,
     });
-  });});
+  });
+});
 
 describe("serializeComposerFileLink", () => {
   it("uses the basename as the markdown label", () => {
