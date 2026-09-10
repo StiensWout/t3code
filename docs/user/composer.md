@@ -104,8 +104,8 @@ On mobile, both are also available before starting a thread on **New task**.
 The slash menu also includes skills unless you turn off **Settings → General →
 Show skills in slash menu**. Only skills enabled for the provider are listed.
 
-Provider commands must start the message to run. T3 Code commands such as
-`/model` and `/plan`, and skill mentions, work on any line.
+Commands are offered before other prompt text. Provider commands must start the message to run.
+Skill mentions work anywhere in the message.
 
 Send `/compact` in an existing conversation to reduce context usage when the
 provider supports it. Web and desktop also offer compaction from the context meter.
