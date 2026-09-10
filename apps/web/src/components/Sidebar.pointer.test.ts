@@ -71,6 +71,25 @@ describe("sidebar pointer lifecycle", () => {
     expect(drag.onStart).toHaveBeenCalledOnce();
   });
 
+  it("cancels a failed preparation and ignores subsequent pointer events", () => {
+    const listeners = vi.spyOn(document, "addEventListener");
+    const drag = gesture();
+    const failure = new Error("Unable to prepare rows");
+    drag.onBeforeStart.mockImplementation(() => {
+      throw failure;
+    });
+    const move = listeners.mock.calls.find(([name]) => name === "pointermove")?.[1];
+    if (typeof move !== "function") throw new Error("Missing move listener");
+    expect(() => move.call(document, pointer("pointermove", { clientY: 20 }))).toThrow(failure);
+    document.dispatchEvent(pointer("pointermove", { clientY: 50 }));
+    document.dispatchEvent(pointer("pointerup", { buttons: 0 }));
+    expect(drag.onFinish).toHaveBeenCalledOnce();
+    expect(drag.onCancel).toHaveBeenCalledOnce();
+    expect(drag.onStart).not.toHaveBeenCalled();
+    expect(drag.onMove).not.toHaveBeenCalled();
+    expect(drag.onEnd).not.toHaveBeenCalled();
+  });
+
   it("keeps a click idle and starts only after the drag threshold", () => {
     const click = gesture();
     document.dispatchEvent(pointer("pointermove", { clientY: 16 }));

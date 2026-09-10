@@ -85,7 +85,12 @@ export class SidebarPointerSensor {
       this.document.addEventListener("click", this.suppressClick, { capture: true });
       this.document.addEventListener("selectionchange", this.clearSelection);
       this.clearSelection();
-      this.props.options.onBeforeStart?.();
+      try {
+        this.props.options.onBeforeStart?.();
+      } catch (error) {
+        this.cancel();
+        throw error;
+      }
       this.props.onStart(this.coordinates());
       return;
     }

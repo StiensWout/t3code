@@ -80,7 +80,10 @@ function fixture(rows: TestRow[], virtual = false) {
     getBoundingClientRect: () => ({ top: 0, left: 0 }),
     scrollTop: 50,
     scrollLeft: 0,
-    querySelectorAll: () => parent.children,
+    querySelectorAll: () =>
+      parent.children.filter((row) =>
+        row.attributes.some((attribute) => attribute.name === "data-sidebar-list-key"),
+      ),
     append(node: TestRow) {
       parent.children.push(node);
       node.remove.mockImplementation(() => {
@@ -91,6 +94,7 @@ function fixture(rows: TestRow[], virtual = false) {
   function layout(next: TestRow[]) {
     let top = 8;
     for (const row of next) {
+      if (virtual) row.setAttribute("data-sidebar-list-key", row.name);
       row.offsetTop = top;
       top += row.offsetHeight + 1;
     }
@@ -286,6 +290,22 @@ describe("sidebar list motion", () => {
     layout([b, a]);
     motion.update(true);
     expect(a.animate).toHaveBeenCalledTimes(2);
+  });
+
+  it("excludes virtual exit clones from later row motion", () => {
+    const a = new TestRow("a");
+    const b = new TestRow("b");
+    const { motion, layout, parent } = fixture([a, b], true);
+    motion.update(true);
+    layout([b]);
+    motion.update(true);
+    const clone = a.clones[0]!;
+    expect(parent.children.includes(clone)).toBe(true);
+    expect(parent.querySelectorAll().length).toBe(1);
+    expect(parent.querySelectorAll()[0]).toBe(b);
+    motion.update(true);
+    expect(clone.animations).toHaveLength(1);
+    expect(clone.clones).toHaveLength(0);
   });
 
   it("fades a collapsed-shelf exit at its current visual box and a new wake in", () => {
