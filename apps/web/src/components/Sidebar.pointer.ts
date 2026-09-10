@@ -10,6 +10,7 @@ export function SidebarDragLifecycle({ onUnmount }: { onUnmount: () => void }) {
 
 type Options = {
   distance: number;
+  onBeforeStart?: () => void;
   onAttach: (sensor: SidebarPointerSensor) => void;
   onFinish: (started: boolean) => void;
 };
@@ -84,6 +85,7 @@ export class SidebarPointerSensor {
       this.document.addEventListener("click", this.suppressClick, { capture: true });
       this.document.addEventListener("selectionchange", this.clearSelection);
       this.clearSelection();
+      this.props.options.onBeforeStart?.();
       this.props.onStart(this.coordinates());
       return;
     }
