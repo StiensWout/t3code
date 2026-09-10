@@ -248,6 +248,8 @@ export class GhosttyTerminalCore {
     theme: GhosttyTheme,
     onPtyData: (data: string) => void,
   ): void {
+    cols = Math.max(1, Math.min(65_535, Math.trunc(cols)));
+    rows = Math.max(1, Math.min(65_535, Math.trunc(rows)));
     this.terminalSlot = this.runtime.allocOpaque();
     const terminalResult = this.runtime.call(
       "ghostty_terminal_new",
