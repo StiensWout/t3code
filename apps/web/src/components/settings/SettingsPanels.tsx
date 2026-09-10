@@ -2319,7 +2319,7 @@ export function GeneralSettingsPanel() {
 
         <SettingsRow
           {...searchableSetting("skills-in-slash-menu")}
-          description="Also include skills when / opens the command menu. Typing / after prompt text or typing $ always shows skills."
+          description="Include skills in the / command menu. After prompt text, / searches skills while absolute paths stay as text. $ also searches skills."
           resetAction={
             settings.showSkillsInSlashMenu !== DEFAULT_UNIFIED_SETTINGS.showSkillsInSlashMenu ? (
               <SettingResetButton
