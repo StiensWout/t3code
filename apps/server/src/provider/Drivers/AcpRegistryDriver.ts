@@ -269,7 +269,7 @@ function applyAcpRegistryUrlAuthAction(
   };
 }
 
-export const buildInitialAcpRegistrySnapshot = Effect.fn("AcpRegistryDriver.buildInitialSnapshot")(
+const buildInitialAcpRegistrySnapshot = Effect.fn("AcpRegistryDriver.buildInitialSnapshot")(
   function* (input: SnapshotIdentity & { readonly settings: AcpRegistrySettings }) {
     const checkedAt = DateTime.formatIso(yield* DateTime.now);
     return baseSnapshot({

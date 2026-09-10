@@ -194,7 +194,7 @@ export function normalizeAcpRegistryLiveConfiguration(
   };
 }
 
-export const emptyAcpRegistryAvailableCommands = (): AcpRegistryAvailableCommands => ({
+const emptyAcpRegistryAvailableCommands = (): AcpRegistryAvailableCommands => ({
   slashCommands: [],
   skills: [],
 });

@@ -2463,13 +2463,13 @@ it.effect(
           events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
         });
         yield* eventSink.write({
-          events: yield* makePendingRuntimeRequestEvents({
+          events: (yield* makePendingRuntimeRequestEvents({
             idAllocator,
             threadId,
             providerSessionId,
             providerThread,
             now,
-          }),
+          })).events,
         });
         yield* manager.open({
           threadId,

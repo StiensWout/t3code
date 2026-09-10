@@ -31,7 +31,7 @@ export function unknownRecord(value: unknown): Record<string, unknown> | undefin
     : undefined;
 }
 
-export function resolveAcpPermissionPath(path: string, cwd: string | null): string | undefined {
+function resolveAcpPermissionPath(path: string, cwd: string | null): string | undefined {
   const trimmed = path.trim();
   if (trimmed.length === 0) return undefined;
   if (NodePath.isAbsolute(trimmed)) return trimmed;
@@ -39,7 +39,7 @@ export function resolveAcpPermissionPath(path: string, cwd: string | null): stri
   return `${cwd}${cwd.endsWith(NodePath.sep) ? "" : NodePath.sep}${trimmed}`;
 }
 
-export function acpPathIsWithinRoot(path: string, root: string): boolean {
+function acpPathIsWithinRoot(path: string, root: string): boolean {
   const relative = NodePath.relative(root, path);
   return (
     relative === "" ||
@@ -58,7 +58,7 @@ export function acpPathIsWithinRoot(path: string, root: string): boolean {
  * allowing normal writes to new files. If an existing entry cannot be
  * canonicalized (for example, a broken symlink), fail closed.
  */
-export function acpCanonicalPathForContainment(path: string): string | undefined {
+function acpCanonicalPathForContainment(path: string): string | undefined {
   // Do not lexically normalize before realpath. For a path such as
   // `workspace/link/../file`, the kernel resolves `link` before `..`; an
   // eager NodePath.resolve would erase that symlink traversal and could turn
@@ -152,7 +152,7 @@ function acpWorkspaceWriteAllowsMutation(
  * Disposition of one native operation under the active runtime policy. Shared
  * by provider permission requests and the client fs/terminal handlers.
  */
-export function acpOperationDisposition(
+function acpOperationDisposition(
   runtimePolicy: AcpRuntimePolicy,
   operation: AcpPolicyOperation,
 ): AcpPermissionDisposition {

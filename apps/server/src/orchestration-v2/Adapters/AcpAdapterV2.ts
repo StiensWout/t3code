@@ -1058,7 +1058,7 @@ type AcpRuntimeTeardownState =
   | { readonly _tag: "Failed"; readonly error: ProviderAdapterProtocolError };
 
 /** True when a root session/update carries ingestible turn output, not keepalive noise. */
-export function acpRootSessionUpdateIngestsOutput(
+function acpRootSessionUpdateIngestsOutput(
   notification: EffectAcpSchema.SessionNotification,
 ): boolean {
   const update = notification.update;

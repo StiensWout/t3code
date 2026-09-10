@@ -144,7 +144,7 @@ export interface AcpClientTerminalsOptions {
   readonly forceKillAfter?: Duration.Input | undefined;
 }
 
-export function acpTerminalCommand(input: {
+function acpTerminalCommand(input: {
   readonly request: EffectAcpSchema.CreateTerminalRequest;
   readonly defaultCwd: string;
   readonly environment?: NodeJS.ProcessEnv | undefined;

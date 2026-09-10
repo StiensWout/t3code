@@ -105,7 +105,7 @@ export class AcpRegistryRuntimeCoordinator extends Context.Service<
   }
 }
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const foregroundStarts = yield* PubSub.unbounded<string>();
   const activeForegroundCounts = yield* Ref.make(new Map<string, number>());
   const availableCommandsUpdates = yield* PubSub.unbounded<AvailableCommandsUpdate>();
@@ -366,4 +366,4 @@ export const make = Effect.gen(function* () {
   });
 });
 
-export const layer = Layer.effect(AcpRegistryRuntimeCoordinator, make);
+const layer = Layer.effect(AcpRegistryRuntimeCoordinator, make);
