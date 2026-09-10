@@ -1,13 +1,15 @@
 import type { ReactNode } from "react";
 
 import { APP_DISPLAY_NAME, APP_STAGE_LABEL, APP_VERSION } from "../branding";
-import { cn } from "../lib/utils";
+import { isElectron } from "../env";
+import { cn, isMacPlatform } from "../lib/utils";
 import {
   resolveEnvironmentIdentificationPillLabel,
   resolveSidebarStageBackdropVariant,
   StageBackdropArt,
 } from "./SidebarStageBackdrop";
 import { T3CodeBrand } from "./T3Wordmark";
+import { WorkspacePageHeader } from "./WorkspacePageHeader";
 import { Badge } from "./ui/badge";
 
 /**
@@ -42,9 +44,11 @@ function StageTopbar() {
     : resolveEnvironmentIdentificationPillLabel(APP_STAGE_LABEL);
 
   return (
-    <header
+    <WorkspacePageHeader
+      electron={isElectron}
       className={cn(
-        "relative flex h-[var(--workspace-topbar-height)] shrink-0 items-center justify-between gap-4 overflow-hidden px-4 sm:px-5",
+        "relative justify-between gap-4 overflow-hidden",
+        isElectron && isMacPlatform(navigator.platform) && "pl-[90px] sm:pl-[90px]",
         stageVariant ? "text-white" : "border-b border-border",
       )}
     >
@@ -53,7 +57,7 @@ function StageTopbar() {
           <StageBackdropArt variant={stageVariant} />
         </div>
       ) : null}
-      <div className="relative ml-[var(--workspace-titlebar-content-left)] flex h-7 items-center">
+      <div className="relative flex h-7 shrink-0 items-center">
         <T3CodeBrand labelClassName={stageVariant ? "text-white/70" : undefined} />
         {stagePillLabel ? (
           <Badge
@@ -73,7 +77,7 @@ function StageTopbar() {
       >
         {window.location.host}
       </span>
-    </header>
+    </WorkspacePageHeader>
   );
 }
 
