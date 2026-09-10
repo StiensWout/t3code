@@ -51,7 +51,7 @@ function configureLauncherAliases(manifest) {
   return manifest;
 }
 
-module.exports = function withAppIcons(config) {
+function withAppIcons(config) {
   config = withInfoPlist(config, (cfg) => {
     cfg.modResults.T3AppIcons = Object.fromEntries(
       ids.map((id) => [id, id === "t3-code" ? "" : iconName(id)]),
@@ -160,5 +160,5 @@ module.exports = function withAppIcons(config) {
       return cfg;
     },
   ]);
-};
-module.exports.configureLauncherAliases = configureLauncherAliases;
+}
+module.exports = Object.assign(withAppIcons, { configureLauncherAliases });

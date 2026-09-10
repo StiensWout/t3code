@@ -243,7 +243,9 @@ const config: ExpoConfig = {
     adaptiveIcon: {
       backgroundColor: variant.assets.androidAdaptiveBackgroundColor,
       backgroundImage:
-        APP_VARIANT === "production" ? "./assets/app-icons/primary-background.png" : variant.assets.androidAdaptiveBackgroundImage,
+        APP_VARIANT === "production"
+          ? "./assets/app-icons/primary-background.png"
+          : variant.assets.androidAdaptiveBackgroundImage,
       foregroundImage:
         APP_VARIANT === "production"
           ? "./assets/app-icons/primary-foreground.png"
