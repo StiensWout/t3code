@@ -1,12 +1,13 @@
 import type { ReactNode } from "react";
 
-import { APP_DISPLAY_NAME, APP_STAGE_LABEL, APP_VERSION } from "../branding";
+import { APP_DISPLAY_NAME, APP_VERSION } from "../branding";
 import { isElectron } from "../env";
 import { cn, isMacPlatform } from "../lib/utils";
 import {
   resolveEnvironmentIdentificationPillLabel,
   resolveSidebarStageBackdropVariant,
   StageBackdropArt,
+  useEnvironmentStageLabel,
 } from "./SidebarStageBackdrop";
 import { T3CodeBrand } from "./T3Wordmark";
 import { WorkspacePageHeader } from "./WorkspacePageHeader";
@@ -38,10 +39,11 @@ export function StandaloneSurface({ children }: { readonly children: ReactNode }
  * Nightly, otherwise a hairline bar with the brand and the stage pill.
  */
 function StageTopbar() {
-  const stageVariant = resolveSidebarStageBackdropVariant(APP_STAGE_LABEL);
+  const stageLabel = useEnvironmentStageLabel();
+  const stageVariant = resolveSidebarStageBackdropVariant(stageLabel);
   const stagePillLabel = stageVariant
     ? null
-    : resolveEnvironmentIdentificationPillLabel(APP_STAGE_LABEL);
+    : resolveEnvironmentIdentificationPillLabel(stageLabel);
 
   return (
     <WorkspacePageHeader
@@ -83,21 +85,14 @@ function StageTopbar() {
 
 /** Heading block shared by every standalone screen. */
 export function StandaloneSurfaceHeading({
-  eyebrow,
   title,
   description,
 }: {
-  readonly eyebrow?: string;
   readonly title: string;
   readonly description: ReactNode;
 }) {
   return (
     <div className="mb-4">
-      {eyebrow ? (
-        <p className="mb-1.5 text-[11px] tracking-[0.04em] text-muted-foreground uppercase">
-          {eyebrow}
-        </p>
-      ) : null}
       <h1 className="text-lg font-semibold tracking-tight">{title}</h1>
       <p className="mt-1 text-[13px] leading-relaxed text-muted-foreground">{description}</p>
     </div>
