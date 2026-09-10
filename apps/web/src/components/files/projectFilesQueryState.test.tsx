@@ -202,6 +202,10 @@ describe("project query refresh", () => {
       const render = (mutationId: string | null) => {
         reactHooks.beginRender();
         const query = useProjectEntriesQuery(environmentId, "/repo");
+        expect(projectMocks.listEntries).toHaveBeenLastCalledWith({
+          environmentId,
+          input: { cwd: "/repo", includeIgnored: showGitignoredFiles },
+        });
         renderedPaths = query.data?.entries.map((entry) => entry.path) ?? [];
         useWorkspaceMutationRefresh({
           mutationId,
