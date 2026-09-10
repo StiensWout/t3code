@@ -2972,7 +2972,7 @@ const CHAT_MARKDOWN_COMPONENTS = {
       >
         {(wrapped) => (
           <RenderErrorBoundary
-            resetKeys={[codeBlock.code, language, diffThemeName, isStreaming]}
+            resetKeys={[codeBlock.code, language, diffThemeName, isStreaming, wrapped]}
             fallback={<pre {...props}>{children}</pre>}
           >
             <MarkdownCodeHighlight
