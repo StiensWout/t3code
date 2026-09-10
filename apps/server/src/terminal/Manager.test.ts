@@ -1885,14 +1885,27 @@ it.layer(
 
       // The typed input queues behind the release's hold window; the restart
       // replaces the process before either write reaches the PTY.
+      const holdClock = yield* TestClock.make();
+      const holdStarted = yield* Deferred.make<void>();
       const release = yield* manager
         .write({ threadId: "thread-1", terminalId: DEFAULT_TERMINAL_ID, data: "\u001b[<0;10;5m" })
-        .pipe(Effect.forkScoped);
+        .pipe(
+          Effect.provideService(Clock.Clock, {
+            ...holdClock,
+            sleep: (duration) =>
+              Deferred.succeed(holdStarted, undefined).pipe(
+                Effect.andThen(holdClock.sleep(duration)),
+              ),
+          }),
+          Effect.forkScoped,
+        );
+      yield* Deferred.await(holdStarted);
       const typed = yield* manager
         .write({ threadId: "thread-1", terminalId: DEFAULT_TERMINAL_ID, data: "ls\r" })
         .pipe(Effect.forkScoped);
       yield* Effect.yieldNow;
       yield* manager.restart(restartInput());
+      yield* holdClock.adjust("1 second");
       yield* Fiber.join(release);
       yield* Fiber.join(typed);
 
