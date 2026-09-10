@@ -28,12 +28,12 @@ async function renderAppIcon(projectRoot, id, layer = "complete") {
   const icon = catalog[id];
   if (!icon) throw new Error(`Unknown app icon: ${id}`);
   const source = await fs.readFile(
-    path.join(projectRoot, "assets/android-icon-foreground.svg"),
+    path.resolve(projectRoot, "../../assets/prod/app-icon.icon/Assets/text.svg"),
     "utf8",
   );
   const mark = source.match(/<path[\s\S]*?\sd="([^"]+)"/)[1];
   const glyph = (y, fill) =>
-    `<svg x="22" y="${y}" width="56" height="33.8" viewBox="0 0 76.7 46.28"><path d="${mark}" fill="${fill}"/></svg>`;
+    `<svg x="22" y="${y}" width="56" height="33.8" viewBox="15.53 37 94.5 57"><path d="${mark}" fill="${fill}"/></svg>`;
   const foreground = `${icon.shadow ? glyph(33.9, icon.shadow) : ""}${glyph(33.1, icon.mark)}`;
   const background = `<rect width="100" height="100" fill="url(#field)"/><rect width="100" height="100" fill="url(#light)"/><path d="M0 0H100V24Q52 13 0 38Z" fill="url(#gloss)"/>`;
   // Android owns the outer mask. Its foreground has a 108dp viewport with the
