@@ -105,9 +105,10 @@ export const makeAcpMcpOverAcpBridge = Effect.fn("AcpMcpOverAcpBridge.make")(fun
           return yield* Effect.fail(new AcpMcpOverAcpError("MCP-over-ACP message exceeds 8 MiB."));
         }
         const response = yield* Effect.tryPromise({
-          try: () =>
+          try: (signal) =>
             fetchImplementation(options.endpoint, {
               method: "POST",
+              signal,
               headers: {
                 "content-type": "application/json",
                 accept: "application/json, text/event-stream",
@@ -149,9 +150,10 @@ export const makeAcpMcpOverAcpBridge = Effect.fn("AcpMcpOverAcpBridge.make")(fun
       const sessionId = connection.sessionId;
       if (sessionId !== null) {
         const response = yield* Effect.tryPromise({
-          try: () =>
+          try: (signal) =>
             fetchImplementation(options.endpoint, {
               method: "DELETE",
+              signal,
               headers: {
                 authorization: options.authorization,
                 "mcp-session-id": sessionId,

@@ -2,6 +2,7 @@
 // @effect-diagnostics preferSchemaOverJson:off
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 
 import { makeAcpMcpOverAcpBridge } from "./AcpMcpOverAcpBridge.ts";
 
@@ -64,6 +65,29 @@ describe("AcpMcpOverAcpBridge", () => {
       expect(requests.at(-1)?.method).toBe("DELETE");
       expect(requests.at(-1)?.headers.get("mcp-session-id")).toBe("session-42");
     }),
+  );
+
+  it.effect("aborts an in-flight HTTP request when the ACP call is interrupted", () =>
+    Effect.gen(function* () {
+      const started = Promise.withResolvers<AbortSignal>();
+      const bridge = yield* makeAcpMcpOverAcpBridge({
+        endpoint: "http://127.0.0.1:1/mcp",
+        authorization: "Bearer bridge-test",
+        allocateConnectionId: Effect.succeed("connection-1"),
+        fetchImplementation: (_url, init) => {
+          if (!init?.signal) throw new Error("Missing cancellation signal");
+          started.resolve(init.signal);
+          return new Promise<Response>(() => {});
+        },
+      });
+      const connected = yield* bridge.connect({ serverId: "t3-code" });
+      const request = yield* bridge
+        .message({ connectionId: connected.connectionId, method: "tools/list" })
+        .pipe(Effect.forkChild);
+      const signal = yield* Effect.promise(() => started.promise);
+      yield* Fiber.interrupt(request);
+      expect(signal.aborted).toBe(true);
+    }).pipe(Effect.scoped),
   );
 
   it.effect("rejects unknown servers, connections, and oversized messages", () =>
