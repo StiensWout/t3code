@@ -652,7 +652,6 @@ export class GhosttyTerminalSurface {
   private hoverPointer: { x: number; y: number } | null = null;
   /** Cursor shown when no link is hovered: "default" while an app owns the mouse. */
   private hoverBaseCursor = "";
-  private linkModifierActive = false;
   private selectionClickSequence: TerminalSelectionClickSequence | null = null;
   private selectionMoved = false;
   private composing = false;
@@ -1423,7 +1422,6 @@ export class GhosttyTerminalSurface {
   };
 
   private readonly onKeyUp = (event: KeyboardEvent) => {
-    this.updateLinkModifier(event);
     if (this.suppressedKeyCodes.delete(event.code)) {
       // A native paste belongs to the same shortcut gesture and arrives before
       // its keyup. Do not let an async-only shortcut suppress a later context-
@@ -1453,9 +1451,6 @@ export class GhosttyTerminalSurface {
 
   private readonly onBlur = () => {
     this.focused = false;
-    // The link modifier deliberately survives input blur: hover-linking is a
-    // pointer gesture and the window-level listeners keep tracking the key
-    // while focus lives in the composer or elsewhere.
     this.refreshHoveredLink();
     // Suppressions survive blur deliberately: a shortcut that moves focus (for
     // example terminal-toggle) must still swallow its own keyup if focus comes
@@ -1763,7 +1758,6 @@ export class GhosttyTerminalSurface {
 
   private updateHoverCursor(event: PointerEvent): void {
     this.hoverPointer = { x: event.clientX, y: event.clientY };
-    this.linkModifierActive = isTerminalLinkPointerGesture(event);
     // While an application owns the mouse, a click goes to it rather than
     // starting a text selection, so the I-beam would lie about the gesture.
     this.hoverBaseCursor = shouldReportTerminalMouse(this.core.isMouseTracking(), event)
@@ -1771,24 +1765,6 @@ export class GhosttyTerminalSurface {
       : "";
     this.refreshHoveredLink();
   }
-
-  private updateLinkModifier(event: Pick<KeyboardEvent, "ctrlKey" | "metaKey">): void {
-    const active = isTerminalLinkPointerGesture(event);
-    if (active === this.linkModifierActive) return;
-    this.linkModifierActive = active;
-    this.refreshHoveredLink();
-  }
-
-  private readonly onWindowModifierKey = (event: KeyboardEvent) => {
-    this.updateLinkModifier(event);
-  };
-
-  private readonly onWindowBlur = () => {
-    // A modifier released in another window or app never produces a keyup
-    // here; do not leave a link underlined by a key that is no longer held.
-    this.linkModifierActive = false;
-    this.refreshHoveredLink();
-  };
 
   private readonly onPointerLeave = () => {
     this.lastMouseMotionData = "";
@@ -1810,12 +1786,12 @@ export class GhosttyTerminalSurface {
 
   /**
    * Re-derive the no-link hover cursor after output may have toggled mouse
-   * tracking under a stationary pointer. Approximates the modifier state with
-   * the tracked link modifier; the next pointer event restores exactness.
+   * tracking under a stationary pointer. The next pointer event restores
+   * the cursor for any held modifiers.
    */
   private refreshHoverBaseCursor(): void {
     if (this.hoverPointer === null) return;
-    const next = this.core.isMouseTracking() && !this.linkModifierActive ? "default" : "";
+    const next = this.core.isMouseTracking() ? "default" : "";
     if (next === this.hoverBaseCursor) return;
     this.hoverBaseCursor = next;
     if (!this.hoveredLink) this.canvas.style.cursor = next;
@@ -1872,7 +1848,6 @@ export class GhosttyTerminalSurface {
         this.clearHoveredLink();
       } else {
         this.hoverPointer = { x: event.clientX, y: event.clientY };
-        this.linkModifierActive = isTerminalLinkPointerGesture(event);
         // The click may have ended tracking (a quit button): the base cursor
         // set at press time must not keep showing an arrow over the shell.
         this.hoverBaseCursor = shouldReportTerminalMouse(this.core.isMouseTracking(), event)
@@ -2030,12 +2005,6 @@ export class GhosttyTerminalSurface {
   };
 
   private installEvents(): void {
-    // Link hovering is a pointer gesture: the Ctrl/Cmd modifier must light
-    // links up even while keyboard focus lives in the composer or elsewhere,
-    // so the modifier is tracked at the window rather than the hidden input.
-    window.addEventListener("keydown", this.onWindowModifierKey);
-    window.addEventListener("keyup", this.onWindowModifierKey);
-    window.addEventListener("blur", this.onWindowBlur);
     this.input.addEventListener("keydown", this.onKeyDown);
     this.input.addEventListener("keyup", this.onKeyUp);
     this.input.addEventListener("focus", this.onFocus);
@@ -2062,9 +2031,6 @@ export class GhosttyTerminalSurface {
   }
 
   private removeEvents(): void {
-    window.removeEventListener("keydown", this.onWindowModifierKey);
-    window.removeEventListener("keyup", this.onWindowModifierKey);
-    window.removeEventListener("blur", this.onWindowBlur);
     this.input.removeEventListener("keydown", this.onKeyDown);
     this.input.removeEventListener("keyup", this.onKeyUp);
     this.input.removeEventListener("focus", this.onFocus);
