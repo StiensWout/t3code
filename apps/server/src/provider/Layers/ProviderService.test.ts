@@ -1214,7 +1214,7 @@ for (const failure of ["persistence", "provider mismatch", "stop"] as const) {
       recordImportedTranscript: () => Effect.die("unused"),
     },
     liveOptions: {
-      issueMcpCredential: ({ threadId, providerInstanceId }) =>
+      issueMcpCredential: ({ threadId, providerInstanceId, preview }) =>
         Effect.sync(() => {
           issued.push(threadId);
           return {
@@ -1225,6 +1225,7 @@ for (const failure of ["persistence", "provider mismatch", "stop"] as const) {
               providerSessionId: "test-session",
               endpoint: "http://localhost/mcp",
               authorizationHeader: "Bearer test-credential",
+              preview,
             },
           };
         }),
