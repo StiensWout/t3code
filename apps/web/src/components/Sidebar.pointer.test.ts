@@ -33,16 +33,17 @@ function gesture() {
     onPending: vi.fn(),
   };
   const onFinish = vi.fn();
+  const onBeforeStart = vi.fn();
   // The sensor never reads dnd-kit's layout context or active node.
   const props = {
     active: "thread",
     event: pointer("pointerdown"),
-    options: { distance: 6, onAttach: vi.fn(), onFinish },
+    options: { distance: 6, onAttach: vi.fn(), onFinish, onBeforeStart },
     ...callbacks,
   } as unknown as SensorProps<ConstructorParameters<typeof SidebarPointerSensor>[0]["options"]>;
   const sensor = new SidebarPointerSensor(props);
   sensors.push(sensor);
-  return { sensor, onFinish, ...callbacks };
+  return { sensor, onFinish, onBeforeStart, ...callbacks };
 }
 
 beforeEach(() => {
@@ -61,6 +62,15 @@ afterEach(() => {
 });
 
 describe("sidebar pointer lifecycle", () => {
+  it("prepares virtual rows before drag capture, without materializing ordinary clicks", () => {
+    const drag = gesture();
+    document.dispatchEvent(pointer("pointermove", { clientY: 14 }));
+    expect(drag.onBeforeStart).not.toHaveBeenCalled();
+    drag.onStart.mockImplementation(() => expect(drag.onBeforeStart).toHaveBeenCalledOnce());
+    document.dispatchEvent(pointer("pointermove", { clientY: 20 }));
+    expect(drag.onStart).toHaveBeenCalledOnce();
+  });
+
   it("keeps a click idle and starts only after the drag threshold", () => {
     const click = gesture();
     document.dispatchEvent(pointer("pointermove", { clientY: 16 }));
