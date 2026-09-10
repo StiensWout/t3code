@@ -160,7 +160,8 @@ describe("GhosttyTerminalCore snapshots", () => {
     core.write("ASCII");
     core.snapshot();
 
-    const grapheme = `z${"\u0301".repeat(256)}`;
+    // The pinned Ghostty revision retains at most 64 suffix codepoints per cell.
+    const grapheme = `z${"\u0301".repeat(64)}`;
     core.resetAndWrite(`${grapheme}X`);
     const alloc = vi.spyOn(runtime, "alloc");
     const free = vi.spyOn(runtime, "free");

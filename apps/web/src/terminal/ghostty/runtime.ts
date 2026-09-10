@@ -17,6 +17,7 @@ interface TypeLayout {
   readonly fields: Readonly<Record<string, TypeField>>;
   /** Alias target, e.g. GhosttyMode -> u16. */
   readonly type?: string;
+  readonly underlying?: string;
 }
 
 type TypeLayouts = Readonly<Record<string, TypeLayout>>;
@@ -158,6 +159,10 @@ export class GhosttyRuntime {
     for (let alias = this.layouts[type]; alias?.kind === "alias"; alias = this.layouts[type]) {
       if (alias.type === undefined || alias.type === type) break;
       type = alias.type;
+    }
+    const layout = this.layouts[type];
+    if (layout?.kind === "enum" && layout.underlying !== undefined) {
+      type = layout.underlying;
     }
     return type === field.type ? field : { ...field, type };
   }
