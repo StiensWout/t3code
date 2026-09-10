@@ -3087,10 +3087,14 @@ export default function Sidebar() {
   }, []);
   const threadListRef = useRef<HTMLElement | null>(null);
   const dragLabelOffsetRef = useRef(0);
-  const restrictBelowPins = useCallback<Modifier>(
-    (args) => restrictBelowSidebarLabel(args, dragLabelOffsetRef.current),
-    [],
-  );
+  const restrictBelowPins = useCallback<Modifier>((args) => {
+    const viewport = threadListRef.current;
+    return restrictBelowSidebarLabel(
+      args,
+      dragLabelOffsetRef.current,
+      viewport ? viewport.getBoundingClientRect().top - viewport.scrollTop : undefined,
+    );
+  }, []);
   const listMotionRef = useRef<ReturnType<typeof createSidebarListMotion> | null>(null);
   const attachListMotionRef = useCallback((node: HTMLElement | null) => {
     threadListRef.current = node;
@@ -3283,7 +3287,10 @@ export default function Sidebar() {
         const listRect = list.getBoundingClientRect();
         const scale = list.offsetWidth > 0 ? listRect.width / list.offsetWidth : 1;
         dragLabelOffsetRef.current =
-          header.getBoundingClientRect().top - listRect.top + SIDEBAR_DRAG_LABEL_HEIGHT * scale;
+          header.getBoundingClientRect().top -
+          listRect.top +
+          list.scrollTop +
+          SIDEBAR_DRAG_LABEL_HEIGHT * scale;
       } else {
         dragLabelOffsetRef.current = 0;
       }
