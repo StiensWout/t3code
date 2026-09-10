@@ -20,7 +20,6 @@ import {
 import { Button } from "../ui/button";
 
 const invalidLinkMessage = {
-  eyebrow: "Authorization request",
   title: "This connect link is incomplete",
   description:
     "The link is missing its authorization request. Re-run `t3 connect` in your terminal and open the freshly printed URL.",
@@ -85,11 +84,6 @@ export function ConnectCliAuthorizeSurface() {
   return (
     <StandaloneSurface>
       <StandaloneSurfaceHeading
-        eyebrow={
-          request.loopbackPort === undefined
-            ? "Step 1 of 2 · Browser authorization"
-            : "Browser authorization"
-        }
         title="Connecting your terminal"
         description={
           isSignedIn
@@ -122,7 +116,6 @@ export function ConnectCliCallbackSurface() {
     return (
       <StandaloneSurface>
         <StandaloneSurfaceHeading
-          eyebrow="Step 2 of 2 · Terminal handoff"
           title="Authorization did not complete"
           description="No authorization code was returned. Re-run `t3 connect` in your terminal and try again."
         />
@@ -138,7 +131,6 @@ export function ConnectCliCallbackSurface() {
     return (
       <StandaloneSurface>
         <StandaloneSurfaceHeading
-          eyebrow="Step 2 of 2 · Terminal handoff"
           title="This code belongs to a different request"
           description="This authorization response does not match a connect request started in this browser. Re-run `t3 connect` in your terminal and open the freshly printed URL in this browser."
         />
@@ -152,7 +144,6 @@ export function ConnectCliCallbackSurface() {
   return (
     <StandaloneSurface>
       <StandaloneSurfaceHeading
-        eyebrow="Step 2 of 2 · Terminal handoff"
         title="Almost connected"
         description={
           accountLabel
