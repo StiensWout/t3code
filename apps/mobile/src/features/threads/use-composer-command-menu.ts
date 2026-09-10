@@ -342,23 +342,16 @@ export function useComposerCommandMenu({
 
     if (trigger.kind === "slash-command" || trigger.kind === "slash-skill") {
       const q = trigger.query.toLowerCase();
-<<<<<<< HEAD
       const visibleSkills = getProviderSkillsForSlashMenu(skills, true);
-      const commandItems = isSkillOnlySlash ? [] : buildComposerSlashCommandItems({
-        query: q,
-        atMessageStart: draftMessage.slice(0, trigger.rangeStart).trim() === "",
-=======
       const commandItems = buildComposerSlashCommandItems({
         query: q,
         triggerKind: trigger.kind,
         draftMessage,
         triggerRangeStart: trigger.rangeStart,
->>>>>>> 937053cf47 (fix(composer): handle inline slash edge cases)
         hasThread,
         hasCompactableConversation,
         offersUsageLimits,
         allowInteractionMode: onUpdateInteractionMode !== undefined,
-<<<<<<< HEAD
         selectedProviderStatus: selectedProviderStatus
           ? {
               ...selectedProviderStatus,
@@ -368,9 +361,6 @@ export function useComposerCommandMenu({
               ),
             }
           : null,
-=======
-        selectedProviderStatus,
->>>>>>> 937053cf47 (fix(composer): handle inline slash edge cases)
       });
 
       const skillItems = visibleSkills
