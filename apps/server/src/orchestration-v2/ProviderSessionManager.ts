@@ -147,6 +147,7 @@ export interface ProviderSessionManagerV2Shape {
     readonly runtimePolicy: ProviderAdapterV2RuntimePolicy;
     readonly resumeFromSession?: OrchestrationV2ProviderSession;
     readonly initialNativeThreadId?: string;
+    readonly initialProviderItemIdentityVersion?: 2;
   }) => Effect.Effect<ProviderAdapterV2SessionRuntime, ProviderSessionManagerV2Error>;
   readonly get: (
     providerSessionId: ProviderSessionId,
@@ -1598,6 +1599,12 @@ export const layerWithOptions = (
                   ...(input.initialNativeThreadId === undefined
                     ? {}
                     : { initialNativeThreadId: input.initialNativeThreadId }),
+                  ...(input.initialProviderItemIdentityVersion === undefined
+                    ? {}
+                    : {
+                        initialProviderItemIdentityVersion:
+                          input.initialProviderItemIdentityVersion,
+                      }),
                 })
                 .pipe(
                   Effect.provideService(Scope.Scope, sessionScope),
