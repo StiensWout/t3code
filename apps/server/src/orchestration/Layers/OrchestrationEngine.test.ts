@@ -1319,6 +1319,11 @@ describe("OrchestrationEngine", () => {
                   },
           ),
         );
+        if (change === "relink") {
+          expect(
+            (await system.readModel()).threads[0]?.pullRequests.map((link) => link.number),
+          ).toEqual([3]);
+        }
         const command = {
           type: "thread.pull-request.sync",
           commandId: CommandId.make("pr-race-stale-sync"),
