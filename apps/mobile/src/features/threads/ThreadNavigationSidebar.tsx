@@ -1,3 +1,4 @@
+import { resolveThreadProviderInstance } from "./thread-provider-instance";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { createThreadMovePlanner } from "./threadOrder";
 import type {

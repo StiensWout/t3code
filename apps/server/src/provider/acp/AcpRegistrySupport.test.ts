@@ -761,15 +761,17 @@ describe("AcpRegistrySupport", () => {
     }).pipe(
       Effect.scoped,
       Effect.provide(
-        resolverLayer((request) =>
-          Effect.succeed(
-            HttpClientResponse.fromWeb(
-              request,
-              new Response(
-                JSON.stringify({ version: "1.0.0", agents: [...invalidAgents, ...validAgents] }),
+        resolverLayer(
+          (request) =>
+            Effect.succeed(
+              HttpClientResponse.fromWeb(
+                request,
+                new Response(
+                  JSON.stringify({ version: "1.0.0", agents: [...invalidAgents, ...validAgents] }),
+                ),
               ),
             ),
-          ),
+          { PATH: "" },
         ),
       ),
     );

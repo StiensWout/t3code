@@ -1,3 +1,4 @@
+import { resolveThreadProviderInstance } from "../threads/thread-provider-instance";
 import type { ThreadMoveDestination } from "../threads/threadOrder";
 import { createThreadMovePlanner } from "../threads/threadOrder";
 import {

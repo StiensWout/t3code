@@ -12,7 +12,7 @@ import {
   ServerSettingsError,
   TerminalProviderInstanceNotFoundError,
 } from "@t3tools/contracts";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import { HostProcessPlatform, HostProcessArchitecture } from "@t3tools/shared/hostProcess";
 import * as Data from "effect/Data";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
@@ -1823,7 +1823,11 @@ it.layer(
           Path: "C:\\Windows\\System32",
           SystemRoot: "C:\\Windows",
         },
-      }).pipe(Effect.provide(withHostPlatform("win32")));
+      }).pipe(
+        Effect.provide(
+          Layer.merge(withHostPlatform("win32"), Layer.succeed(HostProcessArchitecture, "x64")),
+        ),
+      );
 
       yield* manager.open(openInput());
 
