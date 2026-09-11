@@ -90,6 +90,7 @@ const CACHE_RETENTION_DAYS = 90;
 const ANTIGRAVITY_LIST_OPTIONS: ListTranscriptFilesOptions = {
   extension: ".db",
   companionSuffixes: ["-wal"],
+  canonicalPaths: true,
 };
 
 /** On-disk shape of the rate snapshot. */
@@ -272,9 +273,8 @@ export const make = Effect.gen(function* () {
    * Antigravity has several: T3 Code runs the agent against a private profile
    * per provider instance under the state directory, while the standalone CLI
    * and a standalone ACP agent (Zed, for one) keep conversations under the
-   * user's own Gemini home. Each is its own source, and every bucket names
-   * its source, so two servers on one machine can share the Gemini home
-   * without the client counting it twice.
+   * user's own Gemini home. These are discovery roots and can overlap;
+   * collectDirs assigns each database to its canonical containing directory.
    */
   const resolveTranscriptDirs = Effect.fn("UsageService.resolveTranscriptDirs")(function* (
     settings: ServerSettingsValue,
@@ -431,6 +431,9 @@ export const make = Effect.gen(function* () {
       Effect.provideService(Path.Path, path),
     );
     const scanned: ScannedDir[] = [];
+    const walkedRoots: string[] = [];
+    const antigravityDirs = new Map<string, { path: string; records: readonly UsageRecord[] }[]>();
+    const antigravityPaths = new Set<string>();
     for (const { provider, dir, listOptions } of dirs) {
       const volumeId = yield* Effect.promise(() => readDirectoryVolumeId(dir));
       const exists = yield* fileSystem
@@ -440,9 +443,33 @@ export const make = Effect.gen(function* () {
         scanned.push({ provider, dir, volumeId, files: null });
         continue;
       }
+      const root =
+        provider === "antigravity"
+          ? yield* fileSystem.realPath(dir).pipe(Effect.orElseSucceed(() => dir))
+          : dir;
+      walkedRoots.push(root);
       const files = yield* Effect.promise(() =>
-        listTranscriptFiles(dir, windowStartMs, listOptions),
+        listTranscriptFiles(root, windowStartMs, listOptions),
       );
+      if (provider === "antigravity") {
+        // Managed profiles and standalone homes can reach the same database.
+        // Canonical file paths prevent duplicate reads; containing directories
+        // give every environment the same source ownership boundary.
+        for (const file of files) {
+          const canonicalPath = file.path;
+          if (antigravityPaths.has(canonicalPath)) continue;
+          antigravityPaths.add(canonicalPath);
+          const records = yield* readFileRecords(canonicalPath, file.size, file.mtimeMs, provider);
+          const sourceDir = path.dirname(canonicalPath);
+          let sourceFiles = antigravityDirs.get(sourceDir);
+          if (sourceFiles === undefined) {
+            sourceFiles = [];
+            antigravityDirs.set(sourceDir, sourceFiles);
+          }
+          sourceFiles.push({ path: canonicalPath, records });
+        }
+        continue;
+      }
       const parsedFiles: { path: string; records: readonly UsageRecord[] }[] = [];
       for (const file of files) {
         const records = yield* readFileRecords(file.path, file.size, file.mtimeMs, provider);
@@ -450,7 +477,12 @@ export const make = Effect.gen(function* () {
       }
       scanned.push({ provider, dir, volumeId, files: parsedFiles });
     }
-    return scanned;
+    for (const [dir, files] of antigravityDirs) {
+      const volumeId = yield* Effect.promise(() => readDirectoryVolumeId(dir));
+      scanned.push({ provider: "antigravity", dir, volumeId, files });
+      walkedRoots.push(dir);
+    }
+    return { scanned, walkedRoots };
   });
 
   const scanSummary = Effect.fn("UsageService.scanSummary")(function* (
@@ -505,7 +537,7 @@ export const make = Effect.gen(function* () {
     // Pricing only matters once records are aggregated, so the rate table
     // loads while transcripts stream instead of gating them: a cold rates
     // fetch on a slow network no longer delays the scan by its own timeout.
-    const [, scannedDirs] = yield* Effect.all(
+    const [, { scanned: scannedDirs, walkedRoots }] = yield* Effect.all(
       [ensureRates(false), collectDirs(windowStartMs, settings)],
       { concurrency: 2 },
     );
@@ -523,7 +555,6 @@ export const make = Effect.gen(function* () {
     const sources: UsageSource[] = [];
     const buckets: UsageBucket[] = [];
     const livePaths = new Set<string>();
-    const walkedRoots: string[] = [];
 
     for (const { provider, dir, volumeId, files } of scannedDirs) {
       if (files === null) {
@@ -539,10 +570,8 @@ export const make = Effect.gen(function* () {
         continue;
       }
 
-      walkedRoots.push(dir);
-      // One aggregator per directory, so every bucket can name the source it
-      // came from. De-duplication never crossed directories: each provider's
-      // keys are scoped to its own transcript tree.
+      // One aggregator per source directory. Antigravity discovery roots are
+      // already grouped by canonical database directory with each file counted once.
       const aggregator = new UsageAggregator(aggregateOptions);
       let scannedFiles = 0;
       let skippedFiles = 0;

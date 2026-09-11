@@ -196,8 +196,8 @@ export function parseAntigravityGeneration(
     sessionId: firstString(root, 4) || fallbackSessionId,
     totals,
     reportedCostUsd: null,
-    // One row per generation, and a conversation lives in exactly one
-    // database, so nothing is ever seen twice.
+    // One row per generation. UsageService deduplicates canonical database
+    // paths before reading, so records need no further generation-level key.
     dedupeKey: null,
   };
 }

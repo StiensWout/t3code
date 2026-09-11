@@ -8,7 +8,13 @@ import * as NodeSqlite from "node:sqlite";
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
-import { UsageDay, type UsageSummaryInput } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  USAGE_CONTRACT_VERSION,
+  UsageDay,
+  type UsageSummaryInput,
+} from "@t3tools/contracts";
+import { mergeUsage } from "@t3tools/shared/usageMerge";
 import * as Duration from "effect/Duration";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -71,6 +77,20 @@ function antigravityGeneration(outputTokens: number): Uint8Array {
   return Uint8Array.from(bytesField(1, chatModel));
 }
 
+async function writeAntigravityConversation(dir: string, outputTokens: number) {
+  await NodeFSP.mkdir(dir, { recursive: true });
+  const database = new NodeSqlite.DatabaseSync(NodePath.join(dir, "conversation.db"));
+  try {
+    database.exec("PRAGMA journal_mode = WAL");
+    database.exec("CREATE TABLE gen_metadata (idx integer PRIMARY KEY, data blob)");
+    database
+      .prepare("INSERT INTO gen_metadata (idx, data) VALUES (?, ?)")
+      .run(0, antigravityGeneration(outputTokens));
+  } finally {
+    database.close();
+  }
+}
+
 const WINDOW: UsageSummaryInput = {
   timeZone: "UTC",
   sinceDay: UsageDay.make("2026-07-31"),
@@ -102,6 +122,7 @@ const serviceLayers = (input: {
   readonly prefix: string;
   readonly home: string;
   readonly settings: Parameters<typeof ServerSettings.layerTest>[0];
+  readonly geminiHome?: string;
   readonly onRatesFetch?: () => void;
   /** Defaults to an unparsable document so every scan retries the fetch. */
   readonly ratesDocument?: unknown;
@@ -125,7 +146,7 @@ const serviceLayers = (input: {
     Layer.provideMerge(
       Layer.succeed(HostProcessEnvironment, {
         GROK_HOME: NodePath.join(input.home, "grok"),
-        GEMINI_HOME: NodePath.join(input.home, "gemini"),
+        GEMINI_HOME: input.geminiHome ?? NodePath.join(input.home, "gemini"),
       }),
     ),
   );
@@ -189,6 +210,156 @@ describe("UsageService", () => {
         }
       }).pipe(
         Effect.provide(serviceLayers({ prefix: "usage-service-antigravity-test", home, settings })),
+      );
+    }).pipe(Effect.scoped),
+  );
+
+  it.live("counts overlapping Antigravity roots and database aliases once", () =>
+    Effect.gen(function* () {
+      const { settings, home } = yield* setup;
+      yield* Effect.gen(function* () {
+        const config = yield* ServerConfig.ServerConfig;
+        const profile = NodePath.join(config.stateDir, "providers", "antigravity", "profile");
+        const conversations = NodePath.join(profile, "antigravity-acp", "conversations");
+        yield* Effect.promise(() => writeAntigravityConversation(conversations, 26));
+        const service = yield* UsageService.make.pipe(
+          Effect.provideService(HostProcessEnvironment, {
+            GEMINI_HOME: profile,
+            GROK_HOME: NodePath.join(home, "grok"),
+          }),
+        );
+        for (let scan = 0; scan < 2; scan++) {
+          const summary = yield* service.readSummary(WINDOW);
+          assert.strictEqual(totalOutputTokens(summary), 26);
+          assert.strictEqual(
+            summary.buckets.reduce((sum, bucket) => sum + bucket.records, 0),
+            1,
+          );
+          const sources = summary.sources.filter(
+            (source) => source.fingerprint.provider === "antigravity" && source.status === "ok",
+          );
+          assert.strictEqual(sources.length, 1);
+          assert.strictEqual(sources[0]?.scannedFiles, 1);
+          assert.strictEqual(
+            sources[0]?.fingerprint.resolvedHomePath,
+            yield* Effect.promise(() => NodeFSP.realpath(conversations)),
+          );
+          if (scan === 0) {
+            yield* Effect.promise(() =>
+              NodeFSP.symlink(
+                NodePath.join(conversations, "conversation.db"),
+                NodePath.join(conversations, "alias.db"),
+              ),
+            );
+          }
+        }
+        const appender = yield* Effect.acquireRelease(
+          Effect.sync(
+            () => new NodeSqlite.DatabaseSync(NodePath.join(conversations, "conversation.db")),
+          ),
+          (database) => Effect.sync(() => database.close()),
+        );
+        appender
+          .prepare("INSERT INTO gen_metadata (idx, data) VALUES (?, ?)")
+          .run(1, antigravityGeneration(40));
+        assert.strictEqual(totalOutputTokens(yield* service.readSummary(WINDOW)), 66);
+      }).pipe(
+        Effect.provide(serviceLayers({ prefix: "usage-overlapping-antigravity", home, settings })),
+      );
+    }).pipe(Effect.scoped),
+  );
+
+  it.live("merges a managed parent and another environment's symlinked standalone source", () =>
+    Effect.gen(function* () {
+      const { settings, home } = yield* setup;
+      yield* Effect.gen(function* () {
+        const config = yield* ServerConfig.ServerConfig;
+        const managedRoot = NodePath.join(config.stateDir, "providers", "antigravity");
+        const sharedProfile = NodePath.join(managedRoot, "shared-profile");
+        const sharedDir = NodePath.join(sharedProfile, "antigravity-acp", "conversations");
+        yield* Effect.promise(() => writeAntigravityConversation(sharedDir, 26));
+        yield* Effect.promise(() =>
+          writeAntigravityConversation(
+            NodePath.join(managedRoot, "private-profile", "antigravity-acp", "conversations"),
+            13,
+          ),
+        );
+        const alias = NodePath.join(home, "shared-profile-alias");
+        yield* Effect.promise(() => NodeFSP.symlink(sharedProfile, alias, "dir"));
+        const managed = yield* UsageService.make;
+        const managedSummary = yield* managed.readSummary(WINDOW);
+        const standaloneSummary = yield* Effect.gen(function* () {
+          const otherConfig = yield* ServerConfig.ServerConfig;
+          yield* Effect.promise(() =>
+            writeAntigravityConversation(
+              NodePath.join(
+                otherConfig.stateDir,
+                "providers",
+                "antigravity",
+                "private",
+                "antigravity-acp",
+                "conversations",
+              ),
+              11,
+            ),
+          );
+          const standalone = yield* UsageService.make;
+          return yield* standalone.readSummary(WINDOW);
+        }).pipe(
+          Effect.provide(
+            serviceLayers({
+              prefix: "usage-standalone-antigravity",
+              home,
+              settings,
+              geminiHome: alias,
+              ratesDocument: {
+                "gemini-3.8-flash": { input_cost_per_token: 1e-5, output_cost_per_token: 5e-5 },
+              },
+            }),
+          ),
+        );
+        assert.strictEqual(totalOutputTokens(managedSummary), 39);
+        assert.strictEqual(totalOutputTokens(standaloneSummary), 37);
+        const canonicalDir = yield* Effect.promise(() => NodeFSP.realpath(sharedDir));
+        const managedSource = managedSummary.sources.find(
+          (source) => source.fingerprint.resolvedHomePath === canonicalDir,
+        );
+        const standaloneSource = standaloneSummary.sources.find(
+          (source) => source.fingerprint.resolvedHomePath === canonicalDir,
+        );
+        assert.ok(managedSource);
+        assert.ok(standaloneSource);
+        assert.deepStrictEqual(managedSource.fingerprint, standaloneSource.fingerprint);
+        const environments = [
+          {
+            environmentId: EnvironmentId.make("a-managed"),
+            label: "Managed",
+            summary: managedSummary,
+          },
+          {
+            environmentId: EnvironmentId.make("b-standalone"),
+            label: "Standalone",
+            summary: standaloneSummary,
+          },
+        ];
+        for (const summaries of [environments, environments.toReversed()]) {
+          const merged = mergeUsage(summaries, USAGE_CONTRACT_VERSION);
+          assert.strictEqual(merged.outputTokens, 50);
+          assert.strictEqual(merged.records, 3);
+          assert.strictEqual(merged.sessions, 3);
+          assert.closeTo(merged.costUsd, 30 * 1e-5 + 50 * 5e-5, 1e-12);
+        }
+      }).pipe(
+        Effect.provide(
+          serviceLayers({
+            prefix: "usage-managed-antigravity",
+            home,
+            settings,
+            ratesDocument: {
+              "gemini-3.8-flash": { input_cost_per_token: 1e-5, output_cost_per_token: 5e-5 },
+            },
+          }),
+        ),
       );
     }).pipe(Effect.scoped),
   );

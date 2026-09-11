@@ -107,6 +107,8 @@ export interface ListTranscriptFilesOptions {
    * checkpoint.
    */
   readonly companionSuffixes?: readonly string[];
+  /** Resolve aliases before statting the transcript and its companion files. */
+  readonly canonicalPaths?: boolean;
 }
 
 /**
@@ -145,12 +147,13 @@ export async function listTranscriptFiles(
         continue;
       }
       try {
-        const stats = await NodeFSP.stat(child);
+        const filePath = options?.canonicalPaths ? await NodeFSP.realpath(child) : child;
+        const stats = await NodeFSP.stat(filePath);
         let size = stats.size;
         let mtimeMs = stats.mtimeMs;
         for (const suffix of companionSuffixes) {
           try {
-            const companion = await NodeFSP.stat(`${child}${suffix}`);
+            const companion = await NodeFSP.stat(`${filePath}${suffix}`);
             // Opening a WAL database, even read-only, recreates an empty `-wal`
             // beside it; a companion with no content must not move the key.
             if (companion.size === 0) continue;
@@ -160,7 +163,7 @@ export async function listTranscriptFiles(
             // No companion; the main file stands alone.
           }
         }
-        if (mtimeMs >= sinceMs) found.push({ path: child, size, mtimeMs });
+        if (mtimeMs >= sinceMs) found.push({ path: filePath, size, mtimeMs });
       } catch {
         // Vanished between readdir and stat.
       }
