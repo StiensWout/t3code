@@ -165,6 +165,67 @@ function totalOutputTokens(summary: { buckets: readonly { totals: { outputTokens
 }
 
 describe("UsageService", () => {
+  it.live("deduplicates copied Claude messages across source directories", () =>
+    Effect.gen(function* () {
+      const { transcript, settings, home } = yield* setup;
+      const account = NodePath.join(home, "claude-account");
+      yield* Effect.promise(async () => {
+        await NodeFSP.writeFile(transcript, claudeLine(1, 5));
+        await NodeFSP.mkdir(NodePath.join(account, "projects"), { recursive: true });
+        await NodeFSP.writeFile(
+          NodePath.join(account, "projects", "copy.jsonl"),
+          claudeLine(1, 5) + claudeLine(2, 7),
+        );
+      });
+      const service = yield* UsageService.make.pipe(
+        Effect.provide(
+          serviceLayers({
+            prefix: "usage-copied-account-history",
+            home,
+            settings: {
+              ...settings,
+              providerInstances: {
+                [ProviderInstanceId.make("claude-work")]: {
+                  driver: ProviderDriverKind.make("claudeAgent"),
+                  config: { homePath: account },
+                },
+              },
+            },
+            ratesDocument: {
+              "claude-fable-5": { input_cost_per_token: 1e-5, output_cost_per_token: 5e-5 },
+            },
+          }),
+        ),
+      );
+      for (const summary of [
+        yield* service.readSummary(WINDOW),
+        yield* service.readSummary(WINDOW),
+      ]) {
+        assert.strictEqual(totalOutputTokens(summary), 12);
+        assert.strictEqual(
+          summary.buckets.reduce((sum, bucket) => sum + bucket.records, 0),
+          2,
+        );
+        assert.strictEqual(
+          summary.sources.reduce((sum, source) => sum + source.distinctSessions, 0),
+          1,
+        );
+        for (const bucket of summary.buckets) {
+          assert.isDefined(bucket.source);
+          assert.strictEqual(
+            summary.sources[bucket.source!]?.fingerprint.resolvedHomePath,
+            NodePath.join(account, "projects"),
+          );
+        }
+        const merged = mergeUsage(
+          [{ environmentId: EnvironmentId.make("copied"), label: "Copied", summary }],
+          USAGE_CONTRACT_VERSION,
+        );
+        assert.closeTo(merged.costUsd, 20 * 1e-5 + 12 * 5e-5, 1e-12);
+      }
+    }).pipe(Effect.scoped),
+  );
+
   it.live("reads configured and disabled accounts once across shared and aliased homes", () =>
     Effect.gen(function* () {
       const { transcript, settings, home } = yield* setup;

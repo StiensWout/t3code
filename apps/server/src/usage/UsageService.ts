@@ -634,6 +634,7 @@ export const make = Effect.gen(function* () {
       priceOverrides: createOverrideRateTable(settings.usagePriceOverrides),
     };
 
+    const seenRecords = new Set<string>();
     const sources: UsageSource[] = [];
     const buckets: UsageBucket[] = [];
     const livePaths = new Set<string>();
@@ -656,7 +657,7 @@ export const make = Effect.gen(function* () {
 
       // One aggregator per source directory. Antigravity discovery roots are
       // already grouped by canonical database directory with each file counted once.
-      const aggregator = new UsageAggregator(aggregateOptions);
+      const aggregator = new UsageAggregator(aggregateOptions, seenRecords);
       let scannedFiles = 0;
       let skippedFiles = 0;
       // Distinct per directory. Buckets carry per-cell session counts, but a
