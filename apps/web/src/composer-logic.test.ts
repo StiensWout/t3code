@@ -197,14 +197,12 @@ describe("detectComposerTrigger", () => {
     });
   });
 
-  it("keeps commands available when only terminal context precedes the slash", () => {
-    const text = `${INLINE_TERMINAL_CONTEXT_PLACEHOLDER}\n/rev`;
-    const trigger = detectComposerTrigger(text, text.length);
-
-    expect(trigger).toEqual({
-      kind: "slash-command",
+  it("searches skills after a terminal context reference without reopening commands", () => {
+    const text = `${terminalReference}\n/rev`;
+    expect(detectComposerTrigger(text, text.length)).toEqual({
+      kind: "slash-skill",
       query: "rev",
-      rangeStart: 2,
+      rangeStart: terminalReference.length + 1,
       rangeEnd: text.length,
     });
   });
