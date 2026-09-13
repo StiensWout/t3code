@@ -19,7 +19,7 @@ export function connectedWidgetActivities(
       const project = projects.get(thread.projectId);
       if (!project || thread.archivedAt !== null) continue;
       const activity = projectThreadAwareness({ environmentId, project, thread });
-      if (!activity || activity.phase === "completed" || activity.phase === "failed") continue;
+      if (!activity || activity.phase === "completed") continue;
       const live = state.status === "live";
       rows.push({
         environmentId,
