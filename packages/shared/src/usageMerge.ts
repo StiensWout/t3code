@@ -151,8 +151,8 @@ function claimSources(environments: readonly EnvironmentUsage[]): {
  *
  * A bucket that names its source is kept only when that directory is owned.
  * Older servers aggregate per provider and omit the index, so their buckets
- * fall back to provider-level ownership; those servers only ever had one
- * directory per provider, which makes the two rules equivalent for them.
+ * fall back to provider-level ownership because their buckets cannot be
+ * attributed to individual directories.
  */
 function ownedContribution(
   environment: EnvironmentUsage,

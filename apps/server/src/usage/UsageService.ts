@@ -271,7 +271,11 @@ export const make = Effect.gen(function* () {
   const resolveTranscriptDirs = Effect.fn("UsageService.resolveTranscriptDirs")(function* (
     settings: ServerSettingsValue,
   ) {
-    const dirs: Array<{ provider: UsageProviderKind; dir: string; fileName?: string }> = [];
+    const dirs: Array<{
+      provider: UsageProviderKind;
+      dir: string;
+      listOptions?: ListTranscriptFilesOptions;
+    }> = [];
     const seen = new Set<string>();
     for (const driver of ["claudeAgent", "codex", "grok"] as const) {
       // Disabled accounts still have history. Explicit default slots replace
@@ -316,27 +320,16 @@ export const make = Effect.gen(function* () {
         const key = `${provider}\0${dir}`;
         if (seen.has(key)) continue;
         seen.add(key);
-        dirs.push({ provider, dir, ...(provider === "grok" ? { fileName: "updates.jsonl" } : {}) });
+        dirs.push({
+          provider,
+          dir,
+          ...(provider === "grok" ? { listOptions: { fileName: "updates.jsonl" } } : {}),
+        });
       }
     }
-    return dirs;
-    const claudeHome = yield* resolveClaudeHomePath(settings.providers.claudeAgent);
-    const claudeDir = yield* resolveClaudeTranscriptDir(claudeHome);
-    const codexLayout = yield* resolveCodexHomeLayout(settings.providers.codex);
-    // Grok Settings only expose the binary path; home is `$GROK_HOME` or `~/.grok`.
-    // Empty/whitespace GROK_HOME must fall back: coalescing alone would scan cwd.
-    const grokHome = resolveEnvHome("GROK_HOME", ".grok");
-    // Antigravity's home is `$GEMINI_HOME` or `~/.gemini`, shared with Gemini CLI.
     const geminiHome = resolveEnvHome("GEMINI_HOME", ".gemini");
-
     return [
-      { provider: "claude" as const, dir: claudeDir },
-      { provider: "codex" as const, dir: path.join(codexLayout.sharedHomePath, "sessions") },
-      {
-        provider: "grok" as const,
-        dir: path.join(grokHome, "sessions"),
-        listOptions: { fileName: "updates.jsonl" },
-      },
+      ...dirs,
       {
         provider: "antigravity" as const,
         dir: path.join(config.stateDir, "providers", "antigravity"),

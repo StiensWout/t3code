@@ -25,12 +25,15 @@ import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Scheduler from "effect/Scheduler";
+import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as UsageService from "./UsageService.ts";
+
+const encodeUnknownJsonString = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 function claudeLine(id: number, outputTokens: number, model = "claude-fable-5"): string {
   return `${JSON.stringify({
@@ -125,6 +128,7 @@ const serviceLayers = (input: {
   readonly home: string;
   readonly settings: Parameters<typeof ServerSettings.layerTest>[0];
   readonly geminiHome?: string;
+  readonly environment?: NodeJS.ProcessEnv;
   readonly onRatesFetch?: () => void;
   /** Defaults to an unparsable document so every scan retries the fetch. */
   readonly ratesDocument?: unknown;
@@ -380,7 +384,6 @@ describe("UsageService", () => {
         );
       }).pipe(Effect.scoped),
   );
-
 
   it.live("counts Antigravity conversations kept under the state directory", () =>
     Effect.gen(function* () {
@@ -669,8 +672,7 @@ describe("UsageService", () => {
             exists: (path) =>
               fileSystem.exists(path).pipe(
                 Effect.tap(() => {
-                  if (path !== NodePath.join(home, "claude", ".claude", "projects"))
-                    return Effect.void;
+                  if (path !== NodePath.join(home, "claude", "projects")) return Effect.void;
                   homeProbes += 1;
                   return Deferred.succeed(
                     homeProbes === 1 ? firstScanStarted : secondScanStarted,
