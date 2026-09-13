@@ -25,6 +25,32 @@ function fixture() {
 }
 
 describe("native math text bridge", () => {
+  it("copies a visible source disclosure without duplicating it in a whole equation selection", () => {
+    const { dom, update, messages } = fixture();
+    try {
+      update(
+        [
+          '<span class="display"><span class="equation" data-source="$x$">x</span><span class="source">$x$</span></span>',
+        ],
+        1,
+      );
+      const { document } = dom.window;
+      const source = document.querySelector(".source")!;
+      const selection = dom.window.getSelection()!;
+      const range = document.createRange();
+      range.selectNode(source);
+      selection.addRange(range);
+      document.dispatchEvent(new dom.window.Event("copy", { cancelable: true }));
+      expect(messages.at(-1)).toEqual({ type: "copy", revision: 1, text: "$x$" });
+      selection.removeAllRanges();
+      range.selectNode(document.querySelector(".display")!);
+      selection.addRange(range);
+      document.dispatchEvent(new dom.window.Event("copy", { cancelable: true }));
+      expect(messages.at(-1)).toEqual({ type: "copy", revision: 1, text: "$x$" });
+    } finally {
+      dom.window.close();
+    }
+  });
   it("keeps a completed equation and its open source while adjacent text streams", () => {
     const { dom, update, messages } = fixture();
     try {
