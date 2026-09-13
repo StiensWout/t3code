@@ -741,7 +741,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           id: ThreadId.make("thread-1"),
           projectId: asProjectId("project-1"),
           title: "Thread 1",
-          session: snapshot.threads[0]?.session,
+          session: snapshot.threads[0]?.session ?? null,
         });
       }
 
@@ -2346,6 +2346,19 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       assert.deepStrictEqual(
         (yield* snapshotQuery.searchThreads({ query: "hidden needle" })).matches,
         [],
+      );
+      yield* sql`UPDATE projection_threads SET project_id = NULL WHERE thread_id = 'thread-active'`;
+      assert.deepStrictEqual(
+        (yield* snapshotQuery.searchThreads({ query: "user needle" })).matches,
+        [],
+      );
+      const quickMatches = yield* snapshotQuery.searchThreads({
+        query: "user needle",
+        includeQuickChats: true,
+      });
+      assert.deepStrictEqual(
+        quickMatches.matches.map((match) => [match.threadId, match.projectId]),
+        [[ThreadId.make("thread-active"), null]],
       );
       yield* sql`
         UPDATE projection_threads

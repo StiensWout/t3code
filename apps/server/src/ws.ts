@@ -1,4 +1,8 @@
 import {
+  projectQuickChatShellItem,
+  projectQuickChatShellSnapshot,
+} from "./orchestration/quickChatCompatibility.ts";
+import {
   sameUsageLimitCommandCoverage,
   withUsageLimitsCommands,
 } from "@t3tools/shared/usageLimits";
@@ -1622,13 +1626,22 @@ const makeWsRpcLayer = (
                 }),
                 synchronizedThenLive,
               );
-            }),
+            }).pipe(
+              Effect.map((stream) =>
+                stream.pipe(
+                  Stream.map((item) => projectQuickChatShellItem(item, input.includeQuickChats)),
+                ),
+              ),
+            ),
             { "rpc.aggregate": "orchestration" },
           ),
-        [ORCHESTRATION_WS_METHODS.getArchivedShellSnapshot]: (_input) =>
+        [ORCHESTRATION_WS_METHODS.getArchivedShellSnapshot]: (input) =>
           observeRpcEffect(
             ORCHESTRATION_WS_METHODS.getArchivedShellSnapshot,
             projectionSnapshotQuery.getArchivedShellSnapshot().pipe(
+              Effect.map((snapshot) =>
+                projectQuickChatShellSnapshot(snapshot, input.includeQuickChats),
+              ),
               Effect.tapError((cause) =>
                 Effect.logError("orchestration archived shell snapshot load failed", { cause }),
               ),
@@ -2576,7 +2589,7 @@ const makeWsRpcLayer = (
                       }),
                   ),
                 );
-              if (Option.isNone(thread)) {
+              if (Option.isNone(thread) || thread.value.projectId === null) {
                 return yield* new AssetWorkspaceContextNotFoundError({
                   resource: input.resource,
                 });
