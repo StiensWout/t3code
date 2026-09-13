@@ -12,6 +12,7 @@ const now = "2026-09-06T12:00:00.000Z";
 const thread: OrchestrationThreadShell = {
   id: ThreadId.make("thread"),
   projectId,
+  pullRequests: [],
   title: "Fix widget",
   modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-6" },
   runtimeMode: "full-access",
