@@ -1,3 +1,4 @@
+import { makeQuickChatWorkspace } from "./orchestration/quickChatWorkspace.ts";
 import {
   projectQuickChatShellItem,
   projectQuickChatShellSnapshot,
@@ -559,6 +560,7 @@ const makeWsRpcLayer = (
       const providerInstallation = yield* makeProviderInstallation();
       const serverUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
       const config = yield* ServerConfig.ServerConfig;
+      const quickChatWorkspace = yield* makeQuickChatWorkspace;
       const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
       const serverSettings = yield* ServerSettings.ServerSettingsService;
       const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
@@ -2589,9 +2591,15 @@ const makeWsRpcLayer = (
                       }),
                   ),
                 );
-              if (Option.isNone(thread) || thread.value.projectId === null) {
+              if (Option.isNone(thread)) {
                 return yield* new AssetWorkspaceContextNotFoundError({
                   resource: input.resource,
+                });
+              }
+              if (thread.value.projectId === null) {
+                return yield* issueAssetUrl({
+                  resource: input.resource,
+                  workspaceRoot: quickChatWorkspace.directory(thread.value.id),
                 });
               }
               const project = yield* projectionSnapshotQuery

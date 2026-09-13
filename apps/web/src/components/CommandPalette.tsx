@@ -1169,7 +1169,9 @@ function OpenCommandPaletteDialog(props: {
   const newQuickChat = useNewQuickChat();
   const quickChatItems = useMemo<CommandPaletteActionItem[]>(() => {
     const eligible = environments.filter(
-      (environment) => environment.serverConfig?.environment.capabilities.quickChats === true,
+      (environment) =>
+        environment.serverConfig?.environment.capabilities.quickChats === true &&
+        canCreateProjectInEnvironment(environment.connection.phase),
     );
     const preferredId =
       activeThread?.environmentId ?? activeDraftThread?.environmentId ?? primaryEnvironmentId;

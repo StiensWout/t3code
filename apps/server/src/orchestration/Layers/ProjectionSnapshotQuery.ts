@@ -144,7 +144,7 @@ const ProjectionThreadActivityIdRowSchema = Schema.Struct({
 const ProjectionThreadSessionDbRowSchema = ProjectionThreadSession;
 const ProjectionThreadRuntimeContextDbRowSchema = Schema.Struct({
   id: ThreadId,
-  projectId: ProjectId,
+  projectId: ProjectionThread.fields.projectId,
   title: Schema.String,
   session: Schema.NullOr(ProjectionThreadSessionDbRowSchema),
 });

@@ -745,6 +745,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         });
       }
 
+      yield* sql`UPDATE projection_threads SET project_id = NULL WHERE thread_id = 'thread-1'`;
       yield* sql`
         UPDATE projection_thread_sessions
         SET status = 'starting', active_turn_id = NULL, provider_name = 'claudeAgent',
@@ -756,6 +757,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       );
       assert.equal(changedContext._tag, "Some");
       if (changedContext._tag === "Some") {
+        assert.equal(changedContext.value.projectId, null);
         assert.equal(changedContext.value.session?.status, "starting");
         assert.equal(changedContext.value.session?.activeTurnId, null);
         assert.equal(changedContext.value.session?.providerName, "claudeAgent");

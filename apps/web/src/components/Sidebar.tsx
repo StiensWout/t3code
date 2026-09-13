@@ -2765,9 +2765,7 @@ export default function Sidebar() {
     // sort, or mixed-version fleets would render different pinned orders on
     // web and mobile from the same data.
     const sortedPinned = sortPinnedThreadsForSidebar(pinned);
-    const sortedActive = sortThreadsForSidebar(active).toSorted(
-      (left, right) => Number(left.projectId === null) - Number(right.projectId === null),
-    );
+    const sortedActive = sortThreadsForSidebar(active);
     return {
       pinnedThreads:
         optimisticDrop?.section !== "pinned" || optimisticDrop.order === null
@@ -2779,14 +2777,16 @@ export default function Sidebar() {
             }),
       draggableThreadKeys: draggable,
       activeReorderableThreadKeys: activeReorderable,
-      activeThreads:
-        optimisticDrop?.section !== "active" || optimisticDrop.order === null
-          ? sortedActive
-          : orderItemsByPreferredIds({
-              items: sortedActive,
-              preferredIds: optimisticDrop.order,
-              getId: (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-            }),
+      activeThreads: (optimisticDrop?.section !== "active" || optimisticDrop.order === null
+        ? sortedActive
+        : orderItemsByPreferredIds({
+            items: sortedActive,
+            preferredIds: optimisticDrop.order,
+            getId: (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+          })
+      ).toSorted(
+        (left, right) => Number(left.projectId === null) - Number(right.projectId === null),
+      ),
       // Soonest wake first: "what comes back next" is the shelf's question.
       snoozedThreads: snoozed.toSorted(
         (left, right) =>

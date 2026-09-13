@@ -5507,6 +5507,43 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("serves relative media from a quick-chat workspace", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const stateDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-quick-media-" });
+      const thread = makeDefaultOrchestrationThreadShell({ projectId: null });
+      yield* buildAppUnderTest({
+        config: { stateDir },
+        layers: {
+          projectionSnapshotQuery: {
+            getThreadShellById: () => Effect.succeed(Option.some(thread)),
+          },
+        },
+      });
+      const scratch = path.join(
+        stateDir,
+        "quick-chats",
+        Buffer.from(thread.id).toString("base64url"),
+      );
+      yield* fileSystem.makeDirectory(scratch, { recursive: true });
+      yield* fileSystem.writeFileString(path.join(scratch, "plot.png"), "quick chat plot");
+      const wsUrl = yield* getWsServerUrl("/ws");
+      yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          Effect.gen(function* () {
+            const issued = yield* client[WS_METHODS.assetsCreateUrl]({
+              resource: { _tag: "media-file", threadId: thread.id, path: "plot.png" },
+            });
+            const response = yield* HttpClient.get(issued.relativeUrl);
+            assert.equal(response.status, 200);
+            assert.equal(yield* response.text, "quick chat plot");
+          }),
+        ),
+      );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("serves absolute host media without a local thread and rejects relative media", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest();

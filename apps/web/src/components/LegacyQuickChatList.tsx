@@ -76,10 +76,10 @@ export function LegacyQuickChatList() {
   const route = useParams({ strict: false });
   const threads = useThreadShells()
     .filter((thread) => thread.projectId === null && thread.archivedAt === null)
-    .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   if (threads.length === 0) return null;
   return (
-    <div className="pt-4">
+    <div className="pt-4 group-data-[collapsible=icon]:hidden">
       <div className="px-2 pb-1 text-xs font-medium">Quick chats</div>
       <ul>
         {threads.map((thread) => (
