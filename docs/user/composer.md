@@ -126,7 +126,7 @@ skill-only menu. Type `$` to find and add a skill anywhere. Skill rows show thei
 System, Personal, Project, or App.
 On mobile, both are also available before starting a thread on **New task**.
 
-The slash menu also includes skills unless you turn off **Settings → General →
+The slash menu in an empty composer also includes skills unless you turn off **Settings → General →
 Show skills in slash menu**. Only skills enabled for the provider are listed.
 
 Commands are offered before other prompt text. Provider commands must start the message to run.
