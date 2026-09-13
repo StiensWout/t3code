@@ -286,7 +286,7 @@ export const make = Effect.gen(function* () {
       provider: UsageProviderKind;
       dir: string;
       volumeId: string;
-      listOptions?: Parameters<typeof listTranscriptFiles>[2];
+      listOptions?: ListTranscriptFilesOptions;
     }> = [];
     const seen = new Set<string>();
     for (const driver of ["claudeAgent", "codex", "grok"] as const) {
@@ -358,28 +358,13 @@ export const make = Effect.gen(function* () {
           provider,
           dir,
           volumeId,
-          ...(provider === "grok" ? { fileName: "updates.jsonl" } : {}),
+          ...(provider === "grok" ? { listOptions: { fileName: "updates.jsonl" } } : {}),
         });
       }
     }
-    return dirs;
-    const claudeHome = yield* resolveClaudeHomePath(settings.providers.claudeAgent);
-    const claudeDir = yield* resolveClaudeTranscriptDir(claudeHome);
-    const codexLayout = yield* resolveCodexHomeLayout(settings.providers.codex);
-    // Grok Settings only expose the binary path; home is `$GROK_HOME` or `~/.grok`.
-    // Empty/whitespace GROK_HOME must fall back: coalescing alone would scan cwd.
-    const grokHome = resolveEnvHome("GROK_HOME", ".grok");
-    // Antigravity's home is `$GEMINI_HOME` or `~/.gemini`, shared with Gemini CLI.
     const geminiHome = resolveEnvHome("GEMINI_HOME", ".gemini");
-
     return [
-      { provider: "claude" as const, dir: claudeDir },
-      { provider: "codex" as const, dir: path.join(codexLayout.sharedHomePath, "sessions") },
-      {
-        provider: "grok" as const,
-        dir: path.join(grokHome, "sessions"),
-        listOptions: { fileName: "updates.jsonl" },
-      },
+      ...dirs,
       {
         provider: "antigravity" as const,
         dir: path.join(config.stateDir, "providers", "antigravity"),
@@ -528,7 +513,9 @@ export const make = Effect.gen(function* () {
     const walkedRoots: string[] = [];
     const antigravityDirs = new Map<string, { path: string; records: readonly UsageRecord[] }[]>();
     const antigravityPaths = new Set<string>();
-    for (const { provider, dir, volumeId, listOptions } of dirs) {
+    for (const rootDir of dirs) {
+      const { provider, dir, listOptions } = rootDir;
+      const volumeId = "volumeId" in rootDir ? rootDir.volumeId : yield* Effect.promise(() => readDirectoryVolumeId(dir));
       const exists = yield* fileSystem
         .exists(dir)
         .pipe(Effect.catchCause(() => Effect.succeed(false)));
