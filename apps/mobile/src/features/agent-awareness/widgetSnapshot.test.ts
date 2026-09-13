@@ -85,6 +85,18 @@ describe("connected widget activity", () => {
     }
   });
 
+  it("keeps failed direct activity visible without counting it as active", () => {
+    const failed = {
+      ...thread,
+      latestTurn: { ...thread.latestTurn!, state: "error" as const, completedAt: now },
+    };
+    expect(mergeWidgetActivities({}, connected([failed]))).toMatchObject({
+      activeCount: 0,
+      activities: [{ phase: "failed", status: "Agent failed", threadTitle: "Fix widget" }],
+    });
+    expect(mergeWidgetActivities({}, connected([{ ...failed, archivedAt: now }]))).toEqual({});
+  });
+
   it("clears completed, archived, and removed threads even when relay data still says running", () => {
     const relay = mergeWidgetActivities({}, connected([thread]));
     for (const threads of [
