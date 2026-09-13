@@ -1,4 +1,6 @@
 import { markdownMathRanges } from "@t3tools/client-runtime/markdown-math";
+import { parseComposerContextHref } from "@t3tools/shared/composerContextReferences";
+import type { NativeMarkdownTextRun } from "./nativeMarkdownText";
 import type { MarkdownNode } from "react-native-nitro-markdown/headless";
 
 /** Shield math from the native parser, then restore typed nodes using the shared grammar. */
@@ -48,4 +50,12 @@ export function parseNativeMarkdownMath(
     };
   }
   return restore(parse(protectedSource));
+}
+
+/** Rich context selection needs the native clipboard bridge; keep its TeX readable there. */
+export function shouldTypesetNativeMath(runs: ReadonlyArray<NativeMarkdownTextRun>): boolean {
+  return (
+    runs.some((run) => run.mathSource !== undefined) &&
+    !runs.some((run) => parseComposerContextHref(run.href ?? "") !== null)
+  );
 }
