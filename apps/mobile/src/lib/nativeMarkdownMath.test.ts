@@ -1,6 +1,9 @@
 import { JSDOM } from "jsdom";
 import { describe, expect, it } from "vite-plus/test";
-import { parseNativeMarkdownMath } from "../../modules/t3-markdown-text/src/nativeMarkdownMath";
+import {
+  parseNativeMarkdownMath,
+  shouldTypesetNativeMath,
+} from "../../modules/t3-markdown-text/src/nativeMarkdownMath";
 import {
   nativeMathSvg,
   nativeMathRunHtml,
@@ -31,6 +34,20 @@ const textStyle = {
 };
 
 describe("native math", () => {
+  it("keeps rich context selection native while typesetting other math chunks", () => {
+    const math = { text: "$x$", mathSource: "$x$" };
+    expect(shouldTypesetNativeMath([math])).toBe(true);
+    expect(shouldTypesetNativeMath([math, { text: "docs", href: "https://example.com" }])).toBe(
+      true,
+    );
+    expect(
+      shouldTypesetNativeMath([
+        math,
+        { text: "Screenshot", href: "t3-context://v1/image/screenshot" },
+      ]),
+    ).toBe(false);
+    expect(shouldTypesetNativeMath([{ text: "plain" }])).toBe(false);
+  });
   it("uses shared math recognition and keeps code and currency literal", () => {
     let input = "";
     const source = String.raw`Use \(x_i\), keep ` + "`$code$` and pay $20 or $30.";
