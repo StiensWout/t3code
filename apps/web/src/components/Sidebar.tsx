@@ -4899,7 +4899,10 @@ export default function Sidebar() {
                 onDragEnd={handleThreadDragEnd}
               >
                 <SidebarDragLifecycle onUnmount={cancelThreadDrag} />
-                <SortableContext items={sortableIds} strategy={compact ? compactSidebarSortingStrategy : sidebarSortingStrategy}>
+                <SortableContext
+                  items={sortableIds}
+                  strategy={compact ? compactSidebarSortingStrategy : sidebarSortingStrategy}
+                >
                   {(() => {
                     const renderThreadRowInner = (
                       thread: EnvironmentThreadShell,
@@ -5020,12 +5023,24 @@ export default function Sidebar() {
                           id={threadKey}
                           disabled={!draggableThreadKeys.has(threadKey) || optimisticDrop !== null}
                         >
-                          {(bag) => renderThreadRowInner(thread, section, draggingCompactSnoozed && bag.isDragging ? { ...bag, hidden: true } : bag)}
+                          {(bag) =>
+                            renderThreadRowInner(
+                              thread,
+                              section,
+                              draggingCompactSnoozed && bag.isDragging
+                                ? { ...bag, hidden: true }
+                                : bag,
+                            )
+                          }
                         </SortableThreadRow>
                       );
                     };
                     const from = dragState?.activeSection ?? null;
-                    const showDragLabels = from !== null && (!compact || dragTargetSection === "active" || dragTargetSection === "pinned");
+                    const showDragLabels =
+                      from !== null &&
+                      (!compact ||
+                        dragTargetSection === "active" ||
+                        dragTargetSection === "pinned");
                     const snoozedItems: { key: string; render: () => ReactNode }[] = [];
                     const items: { key: string; render: () => ReactNode }[] = [
                       {
@@ -5043,7 +5058,13 @@ export default function Sidebar() {
                       },
                     ];
                     for (const item of sidebarListItems) {
-                      const destination = compact && (item.kind === "thread" ? item.section === "snoozed" : item.marker === "snoozed-header") ? snoozedItems : items;
+                      const destination =
+                        compact &&
+                        (item.kind === "thread"
+                          ? item.section === "snoozed"
+                          : item.marker === "snoozed-header")
+                          ? snoozedItems
+                          : items;
                       if (item.kind === "thread") {
                         destination.push({
                           key: item.key,
@@ -5187,32 +5208,49 @@ export default function Sidebar() {
 
                     return (
                       <>
-                      <SidebarVirtualList
-                        data={items}
-                        getItemType={(item) => {
-                          const section = sectionByThreadKey.get(item.key);
-                          return section === "pinned" || section === "active"
-                            ? "card"
-                            : section
-                              ? "slim"
-                              : item.key;
-                        }}
-                        aria-label="Threads"
-                        activeKey={routeThreadKey}
-                        retainedKeys={[renamingThreadKey, dragState?.activeKey ?? null]}
-                        materialize={materializeThreadList}
-                        draggingKey={dragState?.activeKey}
-                        onViewportRef={attachListMotionRef}
-                        renderItem={(item) => item.render()}
-                        estimatedItemSize={compactThreadRows ? 37 : 83}
-                      />
-                      {compact && snoozedFooter ? createPortal(snoozedItems.map((item) => item.render()), snoozedFooter, "snoozed-footer") : null}
-                      {compactSnoozedDragThread ? createPortal(
-                        <DragOverlay dropAnimation={null}><ul className="pointer-events-none">
-                          {renderThreadRowInner(compactSnoozedDragThread, "snoozed", {
-                            isDragging: true, listeners: undefined, setNodeRef: () => {}, transform: null, transition: undefined,
-                          })}
-                        </ul></DragOverlay>, document.body, "compact-snoozed-drag") : null}
+                        <SidebarVirtualList
+                          data={items}
+                          getItemType={(item) => {
+                            const section = sectionByThreadKey.get(item.key);
+                            return section === "pinned" || section === "active"
+                              ? "card"
+                              : section
+                                ? "slim"
+                                : item.key;
+                          }}
+                          aria-label="Threads"
+                          activeKey={routeThreadKey}
+                          retainedKeys={[renamingThreadKey, dragState?.activeKey ?? null]}
+                          materialize={materializeThreadList}
+                          draggingKey={dragState?.activeKey}
+                          onViewportRef={attachListMotionRef}
+                          renderItem={(item) => item.render()}
+                          estimatedItemSize={compactThreadRows ? 37 : 83}
+                        />
+                        {compact && snoozedFooter
+                          ? createPortal(
+                              snoozedItems.map((item) => item.render()),
+                              snoozedFooter,
+                              "snoozed-footer",
+                            )
+                          : null}
+                        {compactSnoozedDragThread
+                          ? createPortal(
+                              <DragOverlay dropAnimation={null}>
+                                <ul className="pointer-events-none">
+                                  {renderThreadRowInner(compactSnoozedDragThread, "snoozed", {
+                                    isDragging: true,
+                                    listeners: undefined,
+                                    setNodeRef: () => {},
+                                    transform: null,
+                                    transition: undefined,
+                                  })}
+                                </ul>
+                              </DragOverlay>,
+                              document.body,
+                              "compact-snoozed-drag",
+                            )
+                          : null}
                       </>
                     );
                   })()}
