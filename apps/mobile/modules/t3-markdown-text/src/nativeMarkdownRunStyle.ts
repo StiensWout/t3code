@@ -1,4 +1,5 @@
 import type { TextStyle } from "react-native";
+import { parseComposerContextHref } from "@t3tools/shared/composerContextReferences";
 import type { NativeMarkdownTextRun } from "./nativeMarkdownText";
 import type { NativeMarkdownTextStyle } from "./SelectableMarkdownText.types";
 
@@ -14,7 +15,7 @@ function resolveHeadingFontSize(textStyle: NativeMarkdownTextStyle, headingLevel
   }
 
   const scale = textStyle.fontSize / DEFAULT_BODY_FONT_SIZE;
-  return Math.max(12, Math.round(DEFAULT_HEADING_FONT_SIZES[index] * scale));
+  return Math.max(12, Math.round((DEFAULT_HEADING_FONT_SIZES[index] ?? 15) * scale));
 }
 
 export function nativeMarkdownRunStyle(
@@ -94,7 +95,11 @@ export function nativeMarkdownRunStyle(
     fontStyle: run.italic ? "italic" : "normal",
     fontWeight: isHeading || run.bold || isFile || isSkill ? "700" : "400",
     textDecorationLine,
-    backgroundColor: isCodeBlock ? textStyle.codeBlockBackgroundColor : undefined,
+    backgroundColor: isCodeBlock
+      ? textStyle.codeBlockBackgroundColor
+      : parseComposerContextHref(run.href ?? "")
+        ? textStyle.codeBackgroundColor
+        : undefined,
     ...(hasParagraphStyle
       ? {
           shadowColor: "transparent",
