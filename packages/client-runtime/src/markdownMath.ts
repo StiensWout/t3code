@@ -1,6 +1,7 @@
 import type { Literal, Root } from "mdast";
 import { markdownLineEnding, markdownSpace } from "micromark-util-character";
 import type { Code, Construct, State, Tokenizer } from "micromark-util-types";
+import remarkGfm from "remark-gfm";
 import remarkParse from "remark-parse";
 import { unified, type Processor } from "unified";
 
@@ -199,7 +200,7 @@ function attachMath(this: Processor) {
 
 export const remarkMath = attachMath;
 
-const parser = unified().use(remarkParse).use(remarkMath).freeze();
+const parser = unified().use(remarkParse).use(remarkGfm).use(remarkMath).freeze();
 
 /** Source ranges let native Markdown use the same grammar without a second delimiter scanner. */
 export function markdownMathRanges(source: string) {
