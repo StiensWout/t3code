@@ -31,6 +31,8 @@ describe("Markdown math", () => {
     "    \\[x\\]",
     String.raw`\$x\$ and \\(x\\)`,
     "[link](https://example.com/$x$)",
+    "https://example.com/$x$",
+    "www.example.com/$x$",
     "$$\nunfinished\n\nNext paragraph $5",
     "$ incomplete$ and $incomplete $",
     "$$$x$$$",

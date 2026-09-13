@@ -34,6 +34,16 @@ const textStyle = {
 };
 
 describe("native math", () => {
+  it("keeps file mentions inside an equation in one math run", () => {
+    const source = String.raw`$x \text{ @foo.ts }$`;
+    const runs = nativeMarkdownDocumentRuns({
+      type: "document",
+      children: [{ type: "paragraph", children: [{ type: "math_inline", content: source }] }],
+    });
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({ text: source, mathSource: source });
+    expect(runs[0]?.href).toBeUndefined();
+  });
   it("keeps rich context selection native while typesetting other math chunks", () => {
     const math = { text: "$x$", mathSource: "$x$" };
     expect(shouldTypesetNativeMath([math])).toBe(true);

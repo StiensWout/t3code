@@ -389,7 +389,8 @@ function decorateSkillRuns(
 
 function decorateMentionRuns(runs: ReadonlyArray<NativeMarkdownTextRun>) {
   return runs.flatMap((run) => {
-    if (run.code || run.href || run.skillName || run.role === "code-block") return [run];
+    if (run.mathSource || run.code || run.href || run.skillName || run.role === "code-block")
+      return [run];
     const decorated: NativeMarkdownTextRun[] = [];
     let cursor = 0;
     for (const token of collectComposerInlineTokens(`${run.text} `)) {
