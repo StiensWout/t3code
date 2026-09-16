@@ -21,7 +21,7 @@ const make = Effect.gen(function* () {
           threadId,
           title,
         })
-        .pipe(Effect.mapError((cause) => new ThreadRenameFailedError({ cause })));
+        .pipe(Effect.mapError((cause) => new ThreadRenameFailedError({ threadId, cause })));
       return { threadId, title };
     }),
   });

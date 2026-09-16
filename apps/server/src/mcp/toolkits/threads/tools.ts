@@ -8,7 +8,7 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
 export class ThreadRenameFailedError extends Schema.TaggedError<ThreadRenameFailedError>()(
   "ThreadRenameFailedError",
-  { cause: Schema.Defect() },
+  { threadId: ThreadId, cause: Schema.Defect() },
 ) {
   override get message(): string {
     return "Could not rename the current thread.";
