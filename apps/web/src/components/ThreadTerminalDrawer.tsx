@@ -982,12 +982,12 @@ export function TerminalViewport({
   }, [drawerHeight, environmentId, resizeEpoch, terminalId, threadId]);
 
   useLayoutEffect(() => {
+    if (panelResizeEpoch === 0 && resizeEpoch === 0) return;
     const terminal = terminalRef.current;
     if (!terminal || !visibleRef.current) return;
     // Drag-end epochs run after the final DOM width commits, before paint.
     // Flush even if ResizeObserver has already fitted the local grid.
     if (terminal.fit()) terminal.flushResize();
-    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Epochs signal committed layout changes.
   }, [panelResizeEpoch, resizeEpoch]);
   return (
     <div
