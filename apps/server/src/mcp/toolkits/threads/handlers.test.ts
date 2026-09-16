@@ -8,7 +8,10 @@ import {
   ThreadId,
   ThreadMetadataMcpUpdateResult,
 } from "@t3tools/contracts";
+import * as Crypto from "effect/Crypto";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -69,13 +72,15 @@ const EngineLayer = Layer.mergeAll(
   Layer.provide(ThreadPlanProgress.layer),
   Layer.provide(OrchestrationEventStoreLive),
   Layer.provide(OrchestrationCommandReceiptRepositoryLive),
-  Layer.provide(Layer.succeed(RepositoryIdentityResolver, { resolve: () => Effect.succeed(null) })),
   Layer.provide(SqlitePersistenceMemory),
 );
-const TestLayer = ThreadsToolkitRegistrationLive.pipe(
-  Layer.provideMerge(McpServer.McpServer.layer),
-  Layer.provideMerge(EngineLayer),
+const TestDependencies = Layer.mergeAll(McpServer.McpServer.layer, EngineLayer).pipe(
   Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-mcp-rename-test-" })),
+  Layer.provide(NodeServices.layer),
+);
+const TestLayer = ThreadsToolkitRegistrationLive.pipe(
+  Layer.provideMerge(TestDependencies),
+  Layer.provide(Layer.succeed(RepositoryIdentityResolver, { resolve: () => Effect.succeed(null) })),
   Layer.provide(NodeServices.layer),
 );
 
@@ -173,6 +178,9 @@ it.effect("ports the object-root tool contract and persists a convention title a
     expect((yield* update({ action: "rename", title: "LIN-42 another name" })).title).toBe(
       "LIN-42 another name",
     );
+    const longTitle = "x".repeat(1024);
+    expect((yield* update({ action: "rename", title: longTitle })).title).toBe(longTitle);
+    expect((yield* readThread()).title).toBe(longTitle);
   }).pipe(Effect.provide(TestLayer)),
 );
 
@@ -352,6 +360,130 @@ it.effect("links and unlinks the current PR while preserving other links and dur
   }).pipe(Effect.provide(TestLayer)),
 );
 
+it.effect("an empty unlink preserves a PR linked after its snapshot was read", () =>
+  Effect.gen(function* () {
+    const crypto = yield* Crypto.Crypto;
+    const requestKey = yield* crypto.randomUUIDv4;
+    const snapshotRead = yield* Deferred.make<void>();
+    const resumeUnlink = yield* Deferred.make<void>();
+    const gatedCrypto = {
+      ...crypto,
+      randomUUIDv4: Effect.gen(function* () {
+        yield* Deferred.succeed(snapshotRead, undefined);
+        yield* Deferred.await(resumeUnlink);
+        return requestKey;
+      }),
+    };
+    yield* Effect.gen(function* () {
+      const { engine, update, readThread } = yield* makeHarness;
+      const unlink = yield* update({ action: "unlink_pull_request" }).pipe(Effect.forkChild);
+      yield* Deferred.await(snapshotRead);
+      const pr = {
+        host: "github.com",
+        repository: "pingdotgg/t3code",
+        number: 11968,
+        url: "https://github.com/pingdotgg/t3code/pull/11968",
+      };
+      yield* engine.dispatch({
+        type: "thread.pull-request.link",
+        commandId: CommandId.make("concurrent-link"),
+        threadId,
+        ...pr,
+        source: "agent",
+      });
+      yield* Deferred.succeed(resumeUnlink, undefined);
+      const result = yield* Fiber.join(unlink);
+      expect(result.linkedPullRequest).toMatchObject({
+        repository: pr.repository,
+        number: pr.number,
+      });
+      expect((yield* readThread()).pullRequests).toMatchObject([pr]);
+      const beforeRetry = yield* engine.latestSequence;
+      expect(yield* update({ action: "unlink_pull_request", clientRequestId: requestKey })).toEqual(
+        result,
+      );
+      expect(yield* engine.latestSequence).toBe(beforeRetry);
+    }).pipe(
+      Effect.provide(
+        ThreadsToolkitRegistrationLive.pipe(
+          Layer.provide(Layer.succeed(Crypto.Crypto, gatedCrypto)),
+          Layer.provideMerge(TestDependencies),
+          Layer.provide(
+            Layer.succeed(RepositoryIdentityResolver, {
+              resolve: (rootPath) =>
+                Effect.succeed({
+                  provider: "github",
+                  canonicalKey: "github.com/pingdotgg/t3code",
+                  locator: {
+                    source: "git-remote",
+                    remoteName: "origin",
+                    remoteUrl: "https://github.com/pingdotgg/t3code.git",
+                  },
+                  rootPath,
+                  owner: "pingdotgg",
+                  name: "t3code",
+                }),
+            }),
+          ),
+        ),
+      ),
+    );
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("validates known PR URL identities and supports self-hosted repository paths", () =>
+  Effect.gen(function* () {
+    const { engine, call, update, readThread } = yield* makeHarness;
+    const before = yield* engine.latestSequence;
+    for (const pullRequest of [
+      {
+        repository: "other/repo",
+        number: 11968,
+        url: "https://github.com/pingdotgg/t3code/pull/11968",
+      },
+      {
+        repository: "pingdotgg/t3code",
+        number: 42,
+        url: "https://github.com/pingdotgg/t3code/pull/11968",
+      },
+      { repository: "other/repo", number: 42, url: "https://git.example/team/repo/pulls/42" },
+    ]) {
+      const result = yield* call({ action: "link_pull_request", pullRequest });
+      expect(result.isError).toBe(true);
+      expect(result.content).toEqual([
+        { type: "text", text: "Pull request repository and number must match its URL." },
+      ]);
+    }
+    expect(yield* engine.latestSequence).toBe(before);
+    expect((yield* readThread()).pullRequests).toEqual([]);
+    for (const pullRequest of [
+      {
+        repository: "PingDotGG/T3Code",
+        number: 11968,
+        url: "https://github.com/pingdotgg/t3code/pull/11968",
+      },
+      {
+        repository: "group/subgroup/repo",
+        number: 42,
+        url: "https://git.example/group/subgroup/repo/-/merge_requests/42",
+      },
+      { repository: "team/repo", number: 42, url: "https://git.example:8443/team/repo/pulls/42" },
+      {
+        repository: "org/project/_git/repo",
+        number: 42,
+        url: "https://dev.azure.com/org/project/_git/repo/pullrequest/42",
+      },
+      { repository: "team/repo", number: 42, url: "https://custom.example/review/42" },
+    ]) {
+      const result = yield* update({ action: "link_pull_request", pullRequest });
+      expect(result.linkedPullRequest?.number).toBe(pullRequest.number);
+      expect((yield* readThread()).pullRequests.some((link) => link.url === pullRequest.url)).toBe(
+        true,
+      );
+    }
+  }).pipe(Effect.provide(TestLayer)),
+);
+
 it.effect("rejects invalid action inputs and missing permission without writing events", () =>
   Effect.gen(function* () {
     const { engine, call, readThread } = yield* makeHarness;
@@ -361,7 +493,6 @@ it.effect("rejects invalid action inputs and missing permission without writing 
       { action: "rename" },
       { action: "rename", title: " \n\t " },
       { action: "rename", title: 42 },
-      { action: "rename", title: "x".repeat(513) },
       { action: "link_pull_request" },
       { action: "regenerate_title", title: "Unexpected" },
       { action: "unlink_pull_request", title: "Unexpected" },

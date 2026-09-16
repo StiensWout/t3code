@@ -35,7 +35,7 @@ function isHttpUrl(value: string): boolean {
   }
 }
 
-const ThreadMetadataTitle = TrimmedNonEmptyString.check(Schema.isMaxLength(512)).annotate({
+const ThreadMetadataTitle = TrimmedNonEmptyString.annotate({
   description: "New concise display title. Required only when action is rename.",
 });
 
@@ -70,7 +70,7 @@ export type ThreadMetadataMcpAction = typeof ThreadMetadataMcpAction.Type;
 
 export const ThreadMetadataMcpPullRequest = Schema.Struct({
   repository: TrimmedNonEmptyString.annotate({
-    description: "Repository name as owner/name.",
+    description: "Full repository path from the pull request URL, such as owner/name.",
   }),
   number: PositiveInt.annotate({ description: "Pull request number." }),
   url: ThreadMetadataMcpPullRequestUrl,

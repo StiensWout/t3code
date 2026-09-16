@@ -19,6 +19,7 @@ const ThreadUpdateTool = Tool.make("t3_thread_update", {
     McpCapabilityUnavailableError,
     ThreadMetadataMcp.ThreadMetadataThreadNotFoundError,
     ThreadMetadataMcp.ThreadMetadataUpdateFailedError,
+    ThreadMetadataMcp.ThreadMetadataPullRequestMismatchError,
   ]),
   dependencies: [
     McpInvocationContext.McpInvocationContext,

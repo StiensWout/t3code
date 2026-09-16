@@ -8,6 +8,7 @@ import {
   type ThreadMetadataMcpUpdateInput,
   type ThreadMetadataMcpUpdateResult,
 } from "@t3tools/contracts";
+import { parseChangeRequestUrl } from "@t3tools/shared/changeRequestUrl";
 import {
   legacyThreadPullRequestKey,
   resolveThreadCurrentPullRequestLink,
@@ -41,6 +42,15 @@ export class ThreadMetadataUpdateFailedError extends Schema.TaggedError<ThreadMe
   }
 }
 
+export class ThreadMetadataPullRequestMismatchError extends Schema.TaggedError<ThreadMetadataPullRequestMismatchError>()(
+  "ThreadMetadataPullRequestMismatchError",
+  { threadId: ThreadId },
+) {
+  override get message(): string {
+    return "Pull request repository and number must match its URL.";
+  }
+}
+
 export class ThreadMetadataMcpService extends Context.Service<
   ThreadMetadataMcpService,
   {
@@ -50,6 +60,7 @@ export class ThreadMetadataMcpService extends Context.Service<
       ThreadMetadataMcpUpdateResult,
       | ThreadMetadataThreadNotFoundError
       | ThreadMetadataUpdateFailedError
+      | ThreadMetadataPullRequestMismatchError
       | McpCapabilityUnavailableError,
       McpInvocationContext.McpInvocationContext
     >;
@@ -80,7 +91,7 @@ function metadataCommand(
       const current = resolveThreadCurrentPullRequestLink(target.pullRequests);
       return current === null
         ? // Record a receipt even for an empty unlink so a retry cannot remove a later link.
-          { ...base, type: "thread.meta.update", linkedPullRequest: null }
+          { ...base, type: "thread.meta.update" }
         : {
             ...base,
             type: "thread.pull-request.unlink",
@@ -92,7 +103,7 @@ function metadataCommand(
   }
 }
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const engine = yield* OrchestrationEngine.OrchestrationEngineService;
   const snapshots = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
@@ -122,6 +133,16 @@ export const make = Effect.gen(function* () {
     const target = threadId === scope.threadId ? parent : yield* getThread(threadId);
     if (target.projectId !== parent.projectId) {
       return yield* new ThreadMetadataThreadNotFoundError({ threadId });
+    }
+    if (input.action === "link_pull_request" && input.pullRequest !== undefined) {
+      const parsed = parseChangeRequestUrl(input.pullRequest.url);
+      if (
+        parsed !== null &&
+        (parsed.repository !== input.pullRequest.repository.toLowerCase() ||
+          parsed.number !== input.pullRequest.number)
+      ) {
+        return yield* new ThreadMetadataPullRequestMismatchError({ threadId });
+      }
     }
     const requestKey = input.clientRequestId ?? (yield* crypto.randomUUIDv4.pipe(Effect.orDie));
     const commandId = CommandId.make(
