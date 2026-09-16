@@ -342,6 +342,7 @@ interface OpenCodeSessionContext {
   readonly server: OpenCodeServerConnection;
   readonly directory: string;
   openCodeSessionId: string;
+  needsAttachmentRecovery: boolean;
   readonly relatedSessionIds: Set<string>;
   readonly resolvedRequestIds: Set<string>;
   readonly autoRepliedRequestIds: Set<string>;
@@ -3008,6 +3009,7 @@ export function makeOpenCodeAdapter(
           server: started.server,
           directory,
           openCodeSessionId: started.openCodeSession.id,
+          needsAttachmentRecovery: resumeSessionId !== undefined,
           relatedSessionIds: new Set([started.openCodeSession.id]),
           resolvedRequestIds: new Set(),
           autoRepliedRequestIds: new Set(),
@@ -3092,6 +3094,68 @@ export function makeOpenCodeAdapter(
       },
     );
 
+    // Older T3 versions stored text documents twice: a usable path in the
+    // prompt and a native file part that model converters can reject forever.
+    // Repair only those duplicates, once on the first send after resuming.
+    // Partial failure is retryable: the next scan sees only remaining parts.
+    const recoverTextAttachments = Effect.fn("recoverTextAttachments")(function* (
+      context: OpenCodeSessionContext,
+    ) {
+      if (!context.needsAttachmentRecovery) return;
+      const sessionID = context.openCodeSessionId;
+      const messages = yield* runOpenCodeSdk("session.messages", () =>
+        context.client.session.messages({ sessionID }),
+      ).pipe(Effect.mapError(toRequestError));
+      const duplicates = (messages.data ?? []).flatMap((entry) =>
+        entry.info.role !== "user"
+          ? []
+          : entry.parts.filter(
+              (part) =>
+                part.type === "file" &&
+                part.mime.trim().toLowerCase().startsWith("text/") &&
+                part.filename &&
+                entry.parts.some(
+                  (other) =>
+                    other.type === "text" &&
+                    !other.ignored &&
+                    other.text.includes(`[Attached file "${part.filename}" is saved at: `),
+                ),
+            ),
+      );
+      if (duplicates.length > 0) {
+        const status = yield* runOpenCodeSdk("session.status", () =>
+          context.client.session.status(),
+        ).pipe(Effect.mapError(toRequestError));
+        const currentStatus = status.data?.[sessionID]?.type;
+        if (currentStatus && currentStatus !== "idle") {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "sendTurn",
+            issue:
+              "OpenCode is still running. Wait for it to finish before retrying attachment recovery.",
+          });
+        }
+        for (const part of duplicates) {
+          if (
+            context.openCodeSessionId !== sessionID ||
+            sessions.get(context.session.threadId) !== context ||
+            (yield* Ref.get(context.stopped))
+          ) {
+            return yield* Effect.interrupt;
+          }
+          yield* runOpenCodeSdk("part.delete", () =>
+            context.client.part.delete({
+              sessionID,
+              messageID: part.messageID,
+              partID: part.id,
+            }),
+          ).pipe(Effect.mapError(toRequestError));
+        }
+      }
+      if (context.openCodeSessionId !== sessionID) return yield* Effect.interrupt;
+      context.needsAttachmentRecovery = false;
+    });
+
     const sendTurn: OpenCodeAdapterShape["sendTurn"] = Effect.fn("sendTurn")(function* (input) {
       const context = yield* ensureSessionContext(sessions, input.threadId);
       yield* awaitOpenCodeContextReady(context);
@@ -3124,7 +3188,7 @@ export function makeOpenCodeAdapter(
             Effect.orElseSucceed(() => []),
           )).find((command) => command.name === commandMatch[1])
         : undefined;
-      // OpenCode ingests images, text, and PDFs natively; formats its model
+      // OpenCode ingests supported images and PDFs natively; formats its model
       // paths reject ride only as the prompt's file path line.
       const fileParts = toOpenCodeFileParts({
         attachments: input.attachments,
@@ -3158,6 +3222,10 @@ export function makeOpenCodeAdapter(
               return yield* cancellationResult.failure;
             }
           }
+          if (sessions.get(input.threadId) !== context || (yield* Ref.get(context.stopped))) {
+            return yield* Effect.interrupt;
+          }
+          yield* recoverTextAttachments(context);
           if (sessions.get(input.threadId) !== context || (yield* Ref.get(context.stopped))) {
             return yield* Effect.interrupt;
           }
