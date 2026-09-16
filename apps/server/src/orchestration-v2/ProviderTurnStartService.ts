@@ -15,13 +15,10 @@ import * as Context from "effect/Context";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-import { GitWorkflowService } from "../git/GitWorkflowService.ts";
-import { ProjectService } from "../project/ProjectService.ts";
 import { ProviderAuthService } from "../provider/Services/ProviderAuthService.ts";
 import { EventSinkV2 } from "./EventSink.ts";
 import * as ContextHandoffService from "./ContextHandoffService.ts";
@@ -49,6 +46,7 @@ import {
   selectInheritedBackgroundTurnItems,
 } from "./RunExecutionService.ts";
 import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
+import { WorktreeRevivalService } from "../vcs/WorktreeRevivalService.ts";
 
 export class ProviderTurnStartError extends Schema.TaggedError<ProviderTurnStartError>()(
   "ProviderTurnStartError",
@@ -84,28 +82,31 @@ export const layer: Layer.Layer<
   | EventSinkV2
   | ContextHandoffService.ContextHandoffServiceV2
   | IdAllocatorV2
-  | FileSystem.FileSystem
-  | GitWorkflowService
-  | ProjectService
   | ProviderAuthService
   | ProjectionStoreV2
   | ProviderSessionManagerV2
   | RunExecutionServiceV2
   | RuntimePolicyV2
+  | WorktreeRevivalService
 > = Layer.effect(
   ProviderTurnStartServiceV2,
   Effect.gen(function* () {
     const eventSink = yield* EventSinkV2;
     const contextHandoffService = yield* ContextHandoffService.ContextHandoffServiceV2;
     const idAllocator = yield* IdAllocatorV2;
-    const fileSystem = yield* FileSystem.FileSystem;
-    const gitWorkflow = yield* GitWorkflowService;
-    const projects = yield* ProjectService;
     const providerAuth = yield* ProviderAuthService;
     const projectionStore = yield* ProjectionStoreV2;
     const providerSessions = yield* ProviderSessionManagerV2;
     const runExecution = yield* RunExecutionServiceV2;
     const runtimePolicy = yield* RuntimePolicyV2;
+    const worktreeRevival = yield* WorktreeRevivalService;
+    // The worktree generation each live provider runtime was opened against. A
+    // per-thread runtime whose worktree was recreated since then still holds the
+    // deleted directory as its cwd and must restart before its next turn.
+    const worktreeGenerationBySession = new WeakMap<
+      ProviderAdapterV2SessionRuntime,
+      { readonly path: string; readonly generation: number }
+    >();
 
     // These callbacks outlive startup while a run drains background work. Build
     // them outside start's scope so they cannot retain its full thread history.
@@ -449,43 +450,6 @@ export const layer: Layer.Layer<
           return;
         }
       }
-      const { worktreePath, branch } = projection.thread;
-      if (worktreePath !== null && branch !== null) {
-        const exists = yield* fileSystem
-          .exists(worktreePath)
-          .pipe(Effect.orElseSucceed(() => true));
-        if (!exists) {
-          const project = yield* projects.getById(projection.thread.projectId).pipe(
-            Effect.map(Option.getOrUndefined),
-            Effect.orElseSucceed(() => undefined),
-          );
-          if (project !== undefined) {
-            yield* Effect.logWarning("provider turn start recreating missing worktree", {
-              threadId: projection.thread.id,
-              worktreePath,
-              branch,
-            });
-            yield* gitWorkflow.pruneWorktrees({ cwd: project.workspaceRoot }).pipe(
-              Effect.andThen(
-                gitWorkflow.createWorktree({
-                  cwd: project.workspaceRoot,
-                  refName: branch,
-                  path: worktreePath,
-                }),
-              ),
-              Effect.catchCause((cause) =>
-                Cause.hasInterruptsOnly(cause)
-                  ? Effect.failCause(cause)
-                  : Effect.logWarning("provider turn start failed to recreate worktree", {
-                      threadId: projection.thread.id,
-                      worktreePath,
-                      cause: Cause.pretty(cause),
-                    }),
-              ),
-            );
-          }
-        }
-      }
       const selectInheritedBackgroundItems = (
         current: ProjectionRuntimeRecoveryState,
       ): ReturnType<typeof selectInheritedBackgroundTurnItems> =>
@@ -514,6 +478,56 @@ export const layer: Layer.Layer<
         thread: projection.thread,
         modelSelection: run.modelSelection,
       });
+      let observedWorktreeGeneration:
+        | { readonly path: string; readonly generation: number }
+        | undefined;
+      if (projection.thread.worktreePath !== null && projection.thread.branch !== null) {
+        const worktreePath = projection.thread.worktreePath;
+        // A failed revival must not fail this effect: that only leaves the run
+        // in "starting". Proceeding lets the provider report the missing
+        // directory as a visible turn error the user can act on.
+        const revival = yield* worktreeRevival
+          .reviveForThread({
+            threadId: projection.thread.id,
+            projectId: projection.thread.projectId,
+            worktreePath,
+            branch: projection.thread.branch,
+          })
+          .pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("provider turn start could not revive the worktree", {
+                threadId: projection.thread.id,
+                worktreePath,
+                error,
+              }).pipe(Effect.as(undefined)),
+            ),
+          );
+        // Revival can recreate the worktree and run project setup, so the run
+        // may have been cancelled or superseded while it ran.
+        if (!(yield* isCurrentAttemptInStatus("starting"))) return;
+        if (revival !== undefined) {
+          observedWorktreeGeneration = { path: worktreePath, generation: revival.generation };
+          const liveSession = yield* providerSessions.get(providerSessionId);
+          const previousWorktreeGeneration = Option.isSome(liveSession)
+            ? worktreeGenerationBySession.get(liveSession.value)
+            : undefined;
+          // Only a per-thread provider process holds the worktree as its cwd.
+          // A session shared across threads (Codex) passes cwd per native
+          // thread, and closing it would fail every sibling's running turn.
+          const holdsWorktreeAsCwd =
+            Option.isSome(liveSession) &&
+            !liveSession.value.providerSession.capabilities.sessions
+              .supportsMultipleProviderThreadsPerSession;
+          const worktreeChanged =
+            revival.revived ||
+            (previousWorktreeGeneration !== undefined &&
+              (previousWorktreeGeneration.path !== worktreePath ||
+                previousWorktreeGeneration.generation !== revival.generation));
+          if (holdsWorktreeAsCwd && worktreeChanged) {
+            yield* providerSessions.close(providerSessionId);
+          }
+        }
+      }
       const existingSessionProjection = projection.providerSessions.find(
         (candidate) => candidate.id === providerSessionId,
       );
@@ -563,6 +577,9 @@ export const layer: Layer.Layer<
         return;
       }
       const session = sessionResult.success;
+      if (observedWorktreeGeneration !== undefined) {
+        worktreeGenerationBySession.set(session, observedWorktreeGeneration);
+      }
       let effectiveHandoffs = handoffs;
       const loadedProviderThread = yield* Effect.gen(function* () {
         if (nativeForkTransfer !== undefined) {
