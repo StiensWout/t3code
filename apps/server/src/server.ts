@@ -100,6 +100,11 @@ import * as VcsProcess from "./vcs/VcsProcess.ts";
 import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
 import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
 import * as ProjectCloneTracker from "./project/ProjectCloneTracker.ts";
+import * as WorktreeDeletionCleanup from "./vcs/WorktreeDeletionCleanup.ts";
+import * as WorktreeLifecycle from "./vcs/WorktreeLifecycle.ts";
+import * as WorktreeReaper from "./vcs/WorktreeReaper.ts";
+import * as WorktreeRevival from "./vcs/WorktreeRevivalService.ts";
+import * as WorktreeService from "./vcs/WorktreeService.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as ReviewService from "./review/ReviewService.ts";
 import * as SourceControlProviderRegistry from "./sourceControl/SourceControlProviderRegistry.ts";
@@ -151,6 +156,7 @@ import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import {
   OrchestrationEventInfrastructureLayerLive,
+  OrchestrationV2EventSinkLayerLive,
   OrchestrationV2ProductionLayerLive,
   ProjectServiceLayerLive,
   ProjectSetupScriptRunnerLayerLive,
@@ -343,9 +349,12 @@ const GitLayerLive = Layer.empty.pipe(
   Layer.provideMerge(GitVcsDriver.layer),
 );
 
+const WorktreeLifecycleLayerLive = WorktreeLifecycle.layer;
+
 const GitWorkflowLayerLive = GitWorkflowService.layer.pipe(
   Layer.provideMerge(VcsDriverRegistryLayerLive),
   Layer.provideMerge(GitLayerLive),
+  Layer.provideMerge(WorktreeLifecycleLayerLive),
 );
 
 const SourceControlRepositoryServiceLayerLive = SourceControlRepositoryService.layer.pipe(
@@ -442,6 +451,13 @@ const CloudManagedEndpointRuntimeLive = Layer.mergeAll(
   ),
 );
 
+const WorktreeRevivalLayerLive = WorktreeRevival.layer.pipe(
+  Layer.provideMerge(ProjectServiceLayerLive),
+  Layer.provideMerge(ProjectSetupScriptRunnerLayerLive),
+  Layer.provideMerge(GitLayerLive),
+  Layer.provideMerge(WorktreeLifecycleLayerLive),
+);
+
 const OrchestrationV2RuntimeLayerLive = OrchestrationV2ProductionLayerLive.pipe(
   Layer.provide(ProviderEventIngestor.analyticsLive),
   Layer.provide(CheckpointStoreLayerLive),
@@ -454,11 +470,31 @@ const OrchestrationV2RuntimeLayerLive = OrchestrationV2ProductionLayerLive.pipe(
       Layer.provide(ProjectServiceLayerLive),
     ),
   ),
+  Layer.provideMerge(WorktreeRevivalLayerLive),
 );
 
 const OrchestrationApplicationLayerLive = CheckpointDiffQuery.layer.pipe(
   Layer.provideMerge(CheckpointStoreLayerLive),
   Layer.provideMerge(OrchestrationV2RuntimeLayerLive),
+);
+
+const WorktreeManagementLayerLive = WorktreeService.layer.pipe(
+  Layer.provideMerge(OrchestrationApplicationLayerLive),
+  Layer.provideMerge(WorktreeLifecycleLayerLive),
+  Layer.provideMerge(GitLayerLive),
+  Layer.provideMerge(VcsLayerLive),
+);
+
+const WorktreeReaperLayerLive = WorktreeReaper.layer.pipe(
+  Layer.provideMerge(WorktreeManagementLayerLive),
+  Layer.provideMerge(ServerSettingsLayerLive),
+);
+
+const WorktreeDeletionCleanupLayerLive = WorktreeDeletionCleanup.layer.pipe(
+  Layer.provideMerge(OrchestrationV2EventSinkLayerLive),
+  Layer.provideMerge(OrchestrationApplicationLayerLive),
+  Layer.provideMerge(WorktreeManagementLayerLive),
+  Layer.provideMerge(ServerSettingsLayerLive),
 );
 
 // Automatic thread settlement (#8600): a server-owned sweep evaluates
@@ -536,6 +572,9 @@ const RuntimeCoreDependenciesBaseLive = Layer.mergeAll(
   Layer.provideMerge(Layer.mergeAll(SourceControlProviderRegistryLayerLive, GitHubCli.layer)),
   Layer.provideMerge(GitLayerLive),
   Layer.provideMerge(VcsLayerLive),
+  Layer.provideMerge(WorktreeManagementLayerLive),
+  Layer.provideMerge(WorktreeDeletionCleanupLayerLive),
+  Layer.provideMerge(WorktreeReaperLayerLive),
   Layer.provideMerge(Layer.mergeAll(TerminalLayerLive, PreviewLayerLive, DeviceLayerLive)),
   Layer.provideMerge(PersistenceLayerLive),
   // Both read a user-owned file out of the state directory and stream changes
