@@ -20,6 +20,14 @@ on Windows and Linux to start a new thread and immediately open another draft. T
 next draft keeps the workspace mode and base branch you selected. With **New
 worktree**, each background submission creates its own worktree.
 
+## Rename a thread
+
+Ask the agent to rename the current thread, for example to
+`CU-869y9uv0 change the button to green`. A skill can set the name once it knows
+the task ID and description. The name syncs across your connected clients, and
+automatic title generation will not replace it. You can still rename it from
+the thread menu or ask the agent to change it again.
+
 ## Pin and reorder threads
 
 Pin a thread from its menu to keep it above your active work.
