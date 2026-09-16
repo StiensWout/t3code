@@ -1,40 +1,34 @@
-import { McpCapabilityUnavailableError, ThreadId, TrimmedNonEmptyString } from "@t3tools/contracts";
+import {
+  McpCapabilityUnavailableError,
+  ThreadMetadataMcpUpdateInput,
+  ThreadMetadataMcpUpdateResult,
+} from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import * as Tool from "effect/unstable/ai/Tool";
 import * as Toolkit from "effect/unstable/ai/Toolkit";
 
-import * as OrchestrationEngine from "../../../orchestration/Services/OrchestrationEngine.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import * as ThreadMetadataMcp from "../../ThreadMetadataMcpService.ts";
 
-export class ThreadRenameFailedError extends Schema.TaggedError<ThreadRenameFailedError>()(
-  "ThreadRenameFailedError",
-  { threadId: ThreadId, cause: Schema.Defect() },
-) {
-  override get message(): string {
-    return "Could not rename the current thread.";
-  }
-}
-
-const RenameThreadTool = Tool.make("rename_thread", {
+const ThreadUpdateTool = Tool.make("t3_thread_update", {
   description:
-    "Rename the current T3 Code thread when the user or a skill asks for a specific name. Pass the desired title, including any task ID or naming convention. This saves a manual title that automatic title generation will not overwrite. Only the calling thread can be renamed.",
-  parameters: Schema.Struct({
-    title: TrimmedNonEmptyString.annotate({
-      description:
-        "The new thread title. Leading and trailing whitespace is removed; it must not be empty.",
-    }),
-  }),
-  success: Schema.Struct({ threadId: ThreadId, title: TrimmedNonEmptyString }),
-  failure: Schema.Union([McpCapabilityUnavailableError, ThreadRenameFailedError]),
+    "Update metadata for a thread in the calling project when the user or a skill asks. Omit threadId to update this thread. Use action='rename' with title, action='regenerate_title' with no extra field, action='link_pull_request' with pullRequest to add a link, or action='unlink_pull_request' to remove the current PR. Other links are preserved; linkedPullRequest in the result is the current PR. Rename saves a manual title that automatic generation will not overwrite. Workspace and branch changes are not supported. Reuse clientRequestId for retries within this provider session to avoid repeating the mutation. Results contain the original command receipt and current saved metadata.",
+  parameters: ThreadMetadataMcpUpdateInput,
+  success: ThreadMetadataMcpUpdateResult,
+  failure: Schema.Union([
+    McpCapabilityUnavailableError,
+    ThreadMetadataMcp.ThreadMetadataThreadNotFoundError,
+    ThreadMetadataMcp.ThreadMetadataUpdateFailedError,
+  ]),
   dependencies: [
     McpInvocationContext.McpInvocationContext,
-    OrchestrationEngine.OrchestrationEngineService,
+    ThreadMetadataMcp.ThreadMetadataMcpService,
   ],
 })
-  .annotate(Tool.Title, "Rename current thread")
+  .annotate(Tool.Title, "Update T3 thread metadata")
   .annotate(Tool.Readonly, false)
-  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Destructive, true)
   .annotate(Tool.Idempotent, false)
   .annotate(Tool.OpenWorld, false);
 
-export const ThreadsToolkit = Toolkit.make(RenameThreadTool);
+export const ThreadsToolkit = Toolkit.make(ThreadUpdateTool);

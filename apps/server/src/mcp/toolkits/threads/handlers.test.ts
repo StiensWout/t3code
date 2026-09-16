@@ -6,10 +6,12 @@ import {
   ProjectId,
   ProviderInstanceId,
   ThreadId,
+  ThreadMetadataMcpUpdateResult,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { McpSchema, McpServer } from "effect/unstable/ai";
 
@@ -28,7 +30,10 @@ import { RepositoryIdentityResolver } from "../../../project/RepositoryIdentityR
 import { ThreadsToolkitRegistrationLive } from "../../McpHttpServer.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
+const decodeResult = Schema.decodeUnknownEffect(ThreadMetadataMcpUpdateResult);
 const threadId = ThreadId.make("calling-thread");
+const foreignThreadId = ThreadId.make("foreign-thread");
+const foreignProjectId = ProjectId.make("foreign-project");
 const otherThreadId = ThreadId.make("other-thread");
 const projectId = ProjectId.make("project");
 const providerInstanceId = ProviderInstanceId.make("codex");
@@ -87,12 +92,20 @@ const makeHarness = Effect.gen(function* () {
     workspaceRoot: "/tmp/mcp-rename-test",
     createdAt,
   });
-  for (const id of [threadId, otherThreadId]) {
+  yield* engine.dispatch({
+    type: "project.create",
+    commandId: CommandId.make("create-foreign-project"),
+    projectId: foreignProjectId,
+    title: "Foreign project",
+    workspaceRoot: "/tmp/mcp-metadata-foreign-test",
+    createdAt,
+  });
+  for (const id of [threadId, otherThreadId, foreignThreadId]) {
     yield* engine.dispatch({
       type: "thread.create",
       commandId: CommandId.make(`create-${id}`),
       threadId: id,
-      projectId,
+      projectId: id === foreignThreadId ? foreignProjectId : projectId,
       title: "Original title",
       modelSelection: { instanceId: providerInstanceId, model: "gpt-5" },
       runtimeMode: "full-access",
@@ -104,130 +117,266 @@ const makeHarness = Effect.gen(function* () {
   }
   const call = (args: Record<string, unknown>, scope = invocation) =>
     server
-      .callTool({ name: "rename_thread", arguments: args })
+      .callTool({ name: "t3_thread_update", arguments: args })
       .pipe(
         Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
         Effect.provideService(McpSchema.McpServerClient, client),
       );
   const readThread = (id = threadId) =>
     snapshots.getThreadDetailById(id).pipe(Effect.map(Option.getOrThrow));
-  return { server, engine, call, readThread };
+  const update = Effect.fn("updateThreadMetadata")(function* (
+    args: Record<string, unknown>,
+    scope = invocation,
+  ) {
+    const result = yield* call(args, scope);
+    expect(result.isError).toBe(false);
+    return yield* decodeResult(result.structuredContent);
+  });
+  return { server, engine, call, update, readThread };
 });
 
-it.effect(
-  "renames only the calling thread, persists a manual title, and supports renaming again",
-  () =>
-    Effect.gen(function* () {
-      const { server, engine, call, readThread } = yield* makeHarness;
-      const tool = server.tools.find(({ tool }) => tool.name === "rename_thread")?.tool;
-      expect(tool?.inputSchema.properties).toHaveProperty("title");
-      expect(tool?.inputSchema.properties).not.toHaveProperty("threadId");
-      expect(tool?.annotations).toMatchObject({
-        readOnlyHint: false,
-        destructiveHint: false,
-        idempotentHint: false,
-        openWorldHint: false,
-      });
-
-      const title = "CU-869y9uv0 change the button to green and keep the ticket ID";
-      const before = yield* engine.latestSequence;
-      // An extra target supplied by a caller cannot override the credential's thread.
-      const result = yield* call({ title: `  ${title}\n`, threadId: otherThreadId });
-      expect(result.isError).toBe(false);
-      expect(result.structuredContent).toEqual({ threadId, title });
-      expect(yield* readThread()).toMatchObject({
-        title,
-        titleState: { source: "manual", needsRefinement: false },
-      });
-      expect(yield* readThread(otherThreadId)).toMatchObject({ title: "Original title" });
-      const events = yield* engine.readEvents(before).pipe(Stream.runCollect);
-      expect(events).toMatchObject([
-        {
-          type: "thread.meta-updated",
-          aggregateId: threadId,
-          payload: { threadId, title, titleState: { source: "manual" } },
-        },
-      ]);
-
-      expect((yield* call({ title })).isError).toBe(false);
-      expect((yield* call({ title: "LIN-42 another name" })).structuredContent).toEqual({
-        threadId,
-        title: "LIN-42 another name",
-      });
-      expect(yield* readThread()).toMatchObject({ title: "LIN-42 another name" });
-    }).pipe(Effect.provide(TestLayer)),
-);
-
-it.effect("keeps the agent's title when title generation or regeneration finishes late", () =>
+it.effect("ports the object-root tool contract and persists a convention title as manual", () =>
   Effect.gen(function* () {
-    const { engine, call, readThread } = yield* makeHarness;
-    const requestId = CommandId.make("regenerate-title");
-    yield* engine.dispatch({
-      type: "thread.meta.update",
-      commandId: requestId,
-      threadId,
-      regenerateTitle: true,
+    const { server, engine, update, readThread } = yield* makeHarness;
+    const tool = server.tools.find(({ tool }) => tool.name === "t3_thread_update")?.tool;
+    expect(tool?.inputSchema).toMatchObject({ type: "object" });
+    expect(tool?.inputSchema.properties).toHaveProperty("threadId");
+    expect(tool?.annotations).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
     });
-    yield* call({ title: "CU-869y9uv0 chosen title" });
-    yield* engine.dispatch({
-      type: "thread.title.regeneration.complete",
-      commandId: CommandId.make("late-regeneration"),
+    const title = "CU-869y9uv0 change the button to green and keep the ticket ID";
+    const before = yield* engine.latestSequence;
+    const result = yield* update({ action: "rename", title: `  ${title}\n` });
+    expect(result).toMatchObject({
       threadId,
-      requestId,
-      title: "Unwanted regenerated title",
-    });
-    yield* engine.dispatch({
-      type: "thread.title.generate.complete",
-      commandId: CommandId.make("late-generation"),
-      threadId,
-      expectedTitle: "Original title",
-      expectedVersion: null,
-      title: "Unwanted generated title",
-      needsRefinement: true,
-    });
-    expect(yield* readThread()).toMatchObject({
-      title: "CU-869y9uv0 chosen title",
-      titleState: { source: "manual", needsRefinement: false },
+      action: "rename",
+      title,
       titleRegeneration: null,
+      linkedPullRequest: null,
     });
+    expect(result.sequence).toBeGreaterThan(before);
+    expect(yield* readThread()).toMatchObject({
+      title,
+      titleState: { source: "manual", needsRefinement: false },
+    });
+    expect(yield* readThread(otherThreadId)).toMatchObject({ title: "Original title" });
+    expect(yield* engine.readEvents(before).pipe(Stream.runCollect)).toMatchObject([
+      {
+        type: "thread.meta-updated",
+        aggregateId: threadId,
+        payload: { threadId, title, titleState: { source: "manual" } },
+      },
+    ]);
+    expect((yield* update({ action: "rename", title: "LIN-42 another name" })).title).toBe(
+      "LIN-42 another name",
+    );
   }).pipe(Effect.provide(TestLayer)),
 );
 
-it.effect("rejects missing, blank, and non-string titles without writing events", () =>
+it.effect("updates another thread only within the calling project", () =>
+  Effect.gen(function* () {
+    const { engine, call, update, readThread } = yield* makeHarness;
+    expect(
+      yield* update({ action: "rename", threadId: otherThreadId, title: "Sibling title" }),
+    ).toMatchObject({ threadId: otherThreadId, title: "Sibling title" });
+    expect(yield* readThread(otherThreadId)).toMatchObject({ title: "Sibling title" });
+    const before = yield* engine.latestSequence;
+    for (const target of [foreignThreadId, ThreadId.make("missing-thread")]) {
+      const result = yield* call({ action: "rename", threadId: target, title: "Denied title" });
+      expect(result.isError).toBe(true);
+      expect(result.content).toEqual([
+        { type: "text", text: "Thread not found in the calling project." },
+      ]);
+    }
+    const missingCaller = yield* call(
+      { action: "rename", threadId: otherThreadId, title: "Denied title" },
+      { ...invocation, threadId: ThreadId.make("missing-caller") },
+    );
+    expect(missingCaller.isError).toBe(true);
+    expect(yield* engine.latestSequence).toBe(before);
+    expect(yield* readThread()).toMatchObject({ title: "Original title" });
+    expect(yield* readThread(foreignThreadId)).toMatchObject({ title: "Original title" });
+  }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect(
+  "deduplicates concurrent retry keys and reports current metadata with the original receipt",
+  () =>
+    Effect.gen(function* () {
+      const { engine, update, readThread } = yield* makeHarness;
+      const input = { action: "rename", title: "First title", clientRequestId: "rename-🚀" };
+      const before = yield* engine.latestSequence;
+      const [first, repeated] = yield* Effect.all([update(input), update(input)], {
+        concurrency: "unbounded",
+      });
+      expect(repeated).toEqual(first);
+      expect(yield* engine.readEvents(before).pipe(Stream.runCollect)).toHaveLength(1);
+      yield* update({ action: "rename", title: "Later title" });
+      const after = yield* engine.latestSequence;
+      expect(yield* update(input)).toMatchObject({
+        commandId: first.commandId,
+        sequence: first.sequence,
+        title: "Later title",
+      });
+      expect(yield* engine.latestSequence).toBe(after);
+      expect(yield* readThread()).toMatchObject({ title: "Later title" });
+      const sibling = yield* update({ ...input, threadId: otherThreadId });
+      expect(sibling.commandId).not.toBe(first.commandId);
+      const nextSession = yield* update(input, {
+        ...invocation,
+        providerSessionId: "next-session",
+      });
+      expect(nextSession.commandId).not.toBe(first.commandId);
+      expect(nextSession.title).toBe("First title");
+    }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect(
+  "regenerates once per retry key and keeps a later manual title against late completion",
+  () =>
+    Effect.gen(function* () {
+      const { engine, update, readThread } = yield* makeHarness;
+      const input = { action: "regenerate_title", clientRequestId: "shared-key" };
+      const regeneration = yield* update(input);
+      expect(regeneration.titleRegeneration).toMatchObject({ requestId: regeneration.commandId });
+      expect(yield* update(input)).toEqual(regeneration);
+      const renamed = yield* update({
+        action: "rename",
+        title: "CU-869y9uv0 chosen title",
+        clientRequestId: "shared-key",
+      });
+      expect(renamed.commandId).not.toBe(regeneration.commandId);
+      yield* engine.dispatch({
+        type: "thread.title.regeneration.complete",
+        commandId: CommandId.make("late-regeneration"),
+        threadId,
+        requestId: regeneration.commandId,
+        title: "Unwanted regenerated title",
+      });
+      yield* engine.dispatch({
+        type: "thread.title.generate.complete",
+        commandId: CommandId.make("late-generation"),
+        threadId,
+        expectedTitle: "Original title",
+        expectedVersion: null,
+        title: "Unwanted generated title",
+        needsRefinement: true,
+      });
+      expect(yield* readThread()).toMatchObject({
+        title: "CU-869y9uv0 chosen title",
+        titleState: { source: "manual", needsRefinement: false },
+        titleRegeneration: null,
+      });
+      const before = yield* engine.latestSequence;
+      expect(yield* update(input)).toMatchObject({
+        commandId: regeneration.commandId,
+        sequence: regeneration.sequence,
+        titleRegeneration: null,
+      });
+      expect(yield* engine.latestSequence).toBe(before);
+    }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("links and unlinks the current PR while preserving other links and durable retries", () =>
+  Effect.gen(function* () {
+    const { engine, update, readThread } = yield* makeHarness;
+    const firstPr = {
+      repository: "pingdotgg/t3code",
+      number: 8690,
+      url: "https://github.com/pingdotgg/t3code/pull/8690",
+    };
+    const secondPr = {
+      ...firstPr,
+      number: 11968,
+      url: "https://github.com/pingdotgg/t3code/pull/11968",
+    };
+    const linked = yield* update({
+      action: "link_pull_request",
+      pullRequest: firstPr,
+      clientRequestId: "link-pr",
+    });
+    expect(linked.linkedPullRequest).toMatchObject(firstPr);
+    expect((yield* readThread()).pullRequests).toMatchObject([
+      { ...firstPr, host: "github.com", source: "agent" },
+    ]);
+    expect(
+      yield* update({
+        action: "link_pull_request",
+        pullRequest: firstPr,
+        clientRequestId: "link-pr",
+      }),
+    ).toEqual(linked);
+    yield* update({ action: "link_pull_request", pullRequest: secondPr });
+    expect((yield* readThread()).pullRequests).toHaveLength(2);
+    const unlinked = yield* update({ action: "unlink_pull_request", clientRequestId: "unlink-pr" });
+    expect(unlinked.linkedPullRequest).not.toBeNull();
+    expect((yield* readThread()).pullRequests).toHaveLength(1);
+    expect(yield* update({ action: "unlink_pull_request", clientRequestId: "unlink-pr" })).toEqual(
+      unlinked,
+    );
+    expect((yield* readThread()).pullRequests).toHaveLength(1);
+    expect((yield* update({ action: "unlink_pull_request" })).linkedPullRequest).toBeNull();
+    expect((yield* readThread()).pullRequests).toEqual([]);
+    const emptyUnlink = yield* update({
+      action: "unlink_pull_request",
+      clientRequestId: "empty-unlink",
+    });
+    expect(emptyUnlink.linkedPullRequest).toBeNull();
+    const after = yield* engine.latestSequence;
+    expect(
+      yield* update({
+        action: "link_pull_request",
+        pullRequest: firstPr,
+        clientRequestId: "link-pr",
+      }),
+    ).toMatchObject({
+      commandId: linked.commandId,
+      sequence: linked.sequence,
+      linkedPullRequest: null,
+    });
+    expect(yield* engine.latestSequence).toBe(after);
+    yield* update({ action: "link_pull_request", pullRequest: secondPr });
+    const retriedEmptyUnlink = yield* update({
+      action: "unlink_pull_request",
+      clientRequestId: "empty-unlink",
+    });
+    expect(retriedEmptyUnlink).toMatchObject({
+      commandId: emptyUnlink.commandId,
+      sequence: emptyUnlink.sequence,
+      linkedPullRequest: secondPr,
+    });
+    expect((yield* readThread()).pullRequests).toHaveLength(1);
+  }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("rejects invalid action inputs and missing permission without writing events", () =>
   Effect.gen(function* () {
     const { engine, call, readThread } = yield* makeHarness;
     const before = yield* engine.latestSequence;
-    for (const args of [{}, { title: "" }, { title: " \n\t " }, { title: 42 }]) {
+    for (const args of [
+      {},
+      { action: "rename" },
+      { action: "rename", title: " \n\t " },
+      { action: "rename", title: 42 },
+      { action: "rename", title: "x".repeat(513) },
+      { action: "link_pull_request" },
+      { action: "regenerate_title", title: "Unexpected" },
+      { action: "unlink_pull_request", title: "Unexpected" },
+    ]) {
       expect((yield* call(args).pipe(Effect.flip))._tag).toBe("InvalidParams");
     }
+    const denied = yield* call(
+      { action: "rename", title: "New title" },
+      { ...invocation, capabilities: new Set(["preview"]) },
+    );
+    expect(denied.isError).toBe(true);
+    expect(denied.content).toEqual([
+      { type: "text", text: "MCP credential does not grant the thread-metadata capability." },
+    ]);
     expect(yield* engine.latestSequence).toBe(before);
     expect(yield* readThread()).toMatchObject({ title: "Original title" });
   }).pipe(Effect.provide(TestLayer)),
-);
-
-it.effect(
-  "reports missing permission and missing threads as tool errors without renaming another thread",
-  () =>
-    Effect.gen(function* () {
-      const { engine, call, readThread } = yield* makeHarness;
-      const before = yield* engine.latestSequence;
-      const denied = yield* call(
-        { title: "New title" },
-        { ...invocation, capabilities: new Set(["preview"]) },
-      );
-      expect(denied.isError).toBe(true);
-      expect(denied.content).toEqual([
-        { type: "text", text: "MCP credential does not grant the thread-metadata capability." },
-      ]);
-      const missing = yield* call(
-        { title: "New title" },
-        { ...invocation, threadId: ThreadId.make("missing-thread") },
-      );
-      expect(missing.isError).toBe(true);
-      expect(missing.content).toEqual([
-        { type: "text", text: "Could not rename the current thread." },
-      ]);
-      expect(yield* engine.latestSequence).toBe(before);
-      expect(yield* readThread()).toMatchObject({ title: "Original title" });
-    }).pipe(Effect.provide(TestLayer)),
 );
