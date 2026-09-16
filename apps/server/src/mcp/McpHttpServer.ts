@@ -31,8 +31,8 @@ import {
 } from "./toolkits/preview/tools.ts";
 import { PullRequestsToolkitHandlersLive } from "./toolkits/pullRequests/handlers.ts";
 import { PullRequestsToolkit } from "./toolkits/pullRequests/tools.ts";
-import { ThreadsToolkitHandlersLive } from "./toolkits/threads/handlers.ts";
-import { ThreadsToolkit } from "./toolkits/threads/tools.ts";
+import * as ThreadsHandlers from "./toolkits/threads/handlers.ts";
+import * as ThreadsTools from "./toolkits/threads/tools.ts";
 import {
   DeviceScreenshotToolkitHandlersLive,
   DeviceStandardToolkitHandlersLive,
@@ -610,8 +610,8 @@ export const PullRequestsToolkitRegistrationLive = McpServer.toolkit(PullRequest
   Layer.provide(PullRequestsToolkitHandlersLive),
 );
 
-export const ThreadsToolkitRegistrationLive = McpServer.toolkit(ThreadsToolkit).pipe(
-  Layer.provide(ThreadsToolkitHandlersLive),
+export const ThreadsToolkitRegistrationLive = McpServer.toolkit(ThreadsTools.ThreadsToolkit).pipe(
+  Layer.provide(ThreadsHandlers.ThreadsToolkitHandlersLive),
 );
 
 const DeviceStandardToolkitRegistrationLive = McpServer.toolkit(DeviceStandardToolkit).pipe(
