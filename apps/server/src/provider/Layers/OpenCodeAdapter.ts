@@ -1,3 +1,5 @@
+import * as NodeURL from "node:url";
+
 import {
   EventId,
   type OpenCodeSettings,
@@ -3106,22 +3108,44 @@ export function makeOpenCodeAdapter(
       const messages = yield* runOpenCodeSdk("session.messages", () =>
         context.client.session.messages({ sessionID }),
       ).pipe(Effect.mapError(toRequestError));
-      const duplicates = (messages.data ?? []).flatMap((entry) =>
-        entry.info.role !== "user"
-          ? []
-          : entry.parts.filter(
-              (part) =>
-                part.type === "file" &&
-                part.mime.trim().toLowerCase().startsWith("text/") &&
-                part.filename &&
-                entry.parts.some(
-                  (other) =>
-                    other.type === "text" &&
-                    !other.ignored &&
-                    other.text.includes(`[Attached file "${part.filename}" is saved at: `),
-                ),
-            ),
-      );
+      const duplicates: Array<Part> = [];
+      for (const entry of messages.data ?? []) {
+        if (entry.info.role !== "user") continue;
+        for (const part of entry.parts) {
+          if (
+            part.type !== "file" ||
+            !part.mime.trim().toLowerCase().startsWith("text/") ||
+            !part.filename
+          )
+            continue;
+          const prefix = `[Attached file "${part.filename}" is saved at: `;
+          const savedPaths = entry.parts.flatMap((other) =>
+            other.type === "text" && !other.ignored
+              ? other.text
+                  .split("\n")
+                  .filter((line) => line.startsWith(prefix) && line.endsWith("]"))
+                  .map((line) => line.slice(prefix.length, -1))
+              : [],
+          );
+          // OpenCode replaces file URLs with inline bytes when it ingests a
+          // document. Names are not unique, so verify the retained file itself.
+          const inlineData = /^data:[^,]*;base64,(.*)$/s.exec(part.url)?.[1];
+          for (const savedPath of savedPaths) {
+            if (!path.isAbsolute(savedPath)) continue;
+            const bytes =
+              inlineData === undefined
+                ? undefined
+                : yield* fileSystem.readFile(savedPath).pipe(Effect.orElseSucceed(() => undefined));
+            if (
+              part.url === NodeURL.pathToFileURL(savedPath).href ||
+              (bytes !== undefined && Buffer.from(bytes).toString("base64") === inlineData)
+            ) {
+              duplicates.push(part);
+              break;
+            }
+          }
+        }
+      }
       if (duplicates.length > 0) {
         const status = yield* runOpenCodeSdk("session.status", () =>
           context.client.session.status(),

@@ -1,4 +1,5 @@
 import * as NodeAssert from "node:assert/strict";
+import * as NodeURL from "node:url";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
@@ -1373,9 +1374,13 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       const adapter = yield* OpenCodeAdapter;
       const threadId = asThreadId("thread-legacy-html");
       const sessionID = "ses_legacy_html";
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const savedPath = path.join(yield* fs.makeTempDirectoryScoped(), "report.html");
+      yield* fs.writeFileString(savedPath, "<h1>test</h1>");
       const text = {
         type: "text",
-        text: '[Attached file "report.html" is saved at: /tmp/report.html]',
+        text: `[Attached file "report.html" is saved at: ${savedPath}]`,
       };
       const html = {
         id: "prt_html",
@@ -1385,6 +1390,11 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
         filename: "report.html",
         mime: "text/html",
         url: "data:text/html;base64,PGgxPnRlc3Q8L2gxPg==",
+      };
+      const sameName = {
+        ...html,
+        id: "prt_same_name",
+        url: "data:text/html;base64,b3RoZXIgZG9jdW1lbnQ=",
       };
       const image = { ...html, id: "prt_image", mime: "image/png", filename: "screenshot.png" };
       const unowned = { ...html, id: "prt_unowned", filename: "other.html" };
@@ -1402,7 +1412,7 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
         assistant,
         {
           info: { id: "msg_file", role: "user" },
-          parts: [text, html, image, unowned, ignoredText, ignored],
+          parts: [text, html, sameName, image, unowned, ignoredText, ignored],
         },
       ];
       const session = yield* adapter.startSession({
@@ -1419,7 +1429,7 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
         assistant,
         {
           info: { id: "msg_file", role: "user" },
-          parts: [text, image, unowned, ignoredText, ignored],
+          parts: [text, sameName, image, unowned, ignoredText, ignored],
         },
       ]);
       NodeAssert.partialDeepStrictEqual(runtimeMock.state.promptCalls, [
@@ -1448,7 +1458,7 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
         type: "file",
         filename: "report.html",
         mime: "text/html",
-        url: "file:///tmp/report.html",
+        url: NodeURL.pathToFileURL("/tmp/report.html").href,
       };
       const second = { ...html, id: "prt_second" };
       runtimeMock.state.messages = [
@@ -1498,7 +1508,7 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
         type: "file",
         filename: "report.html",
         mime: "text/html",
-        url: "file:///tmp/report.html",
+        url: NodeURL.pathToFileURL("/tmp/report.html").href,
       };
       const second = { ...html, id: "prt_second" };
       runtimeMock.state.messages = [
