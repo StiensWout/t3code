@@ -103,7 +103,7 @@ function metadataCommand(
   }
 }
 
-const make = Effect.gen(function* () {
+export const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const engine = yield* OrchestrationEngine.OrchestrationEngineService;
   const snapshots = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;

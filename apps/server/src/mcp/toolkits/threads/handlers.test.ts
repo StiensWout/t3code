@@ -7,6 +7,7 @@ import {
   ProviderInstanceId,
   ThreadId,
   ThreadMetadataMcpUpdateResult,
+  type ThreadMetadataMcpUpdateInput,
 } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
@@ -32,6 +33,7 @@ import { SqlitePersistenceMemory } from "../../../persistence/Layers/Sqlite.ts";
 import { RepositoryIdentityResolver } from "../../../project/RepositoryIdentityResolver.ts";
 import { ThreadsToolkitRegistrationLive } from "../../McpHttpServer.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import * as ThreadMetadataMcp from "../../ThreadMetadataMcpService.ts";
 
 const decodeResult = Schema.decodeUnknownEffect(ThreadMetadataMcpUpdateResult);
 const threadId = ThreadId.make("calling-thread");
@@ -375,7 +377,14 @@ it.effect("an empty unlink preserves a PR linked after its snapshot was read", (
       }),
     };
     yield* Effect.gen(function* () {
-      const { engine, update, readThread } = yield* makeHarness;
+      const { engine, readThread } = yield* makeHarness;
+      const metadata = yield* ThreadMetadataMcp.make.pipe(
+        Effect.provideService(Crypto.Crypto, gatedCrypto),
+      );
+      const update = (input: ThreadMetadataMcpUpdateInput) =>
+        metadata
+          .update(input)
+          .pipe(Effect.provideService(McpInvocationContext.McpInvocationContext, invocation));
       const unlink = yield* update({ action: "unlink_pull_request" }).pipe(Effect.forkChild);
       yield* Deferred.await(snapshotRead);
       const pr = {
@@ -406,7 +415,6 @@ it.effect("an empty unlink preserves a PR linked after its snapshot was read", (
     }).pipe(
       Effect.provide(
         ThreadsToolkitRegistrationLive.pipe(
-          Layer.provide(Layer.succeed(Crypto.Crypto, gatedCrypto)),
           Layer.provideMerge(TestDependencies),
           Layer.provide(
             Layer.succeed(RepositoryIdentityResolver, {
@@ -425,6 +433,7 @@ it.effect("an empty unlink preserves a PR linked after its snapshot was read", (
                 }),
             }),
           ),
+          Layer.provide(NodeServices.layer),
         ),
       ),
     );
