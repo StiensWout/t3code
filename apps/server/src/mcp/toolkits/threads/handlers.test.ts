@@ -125,7 +125,7 @@ it.effect(
       expect(tool?.annotations).toMatchObject({
         readOnlyHint: false,
         destructiveHint: false,
-        idempotentHint: true,
+        idempotentHint: false,
         openWorldHint: false,
       });
 

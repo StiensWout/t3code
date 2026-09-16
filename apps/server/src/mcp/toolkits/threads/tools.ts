@@ -34,7 +34,7 @@ const RenameThreadTool = Tool.make("rename_thread", {
   .annotate(Tool.Title, "Rename current thread")
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false)
-  .annotate(Tool.Idempotent, true)
+  .annotate(Tool.Idempotent, false)
   .annotate(Tool.OpenWorld, false);
 
 export const ThreadsToolkit = Toolkit.make(RenameThreadTool);
