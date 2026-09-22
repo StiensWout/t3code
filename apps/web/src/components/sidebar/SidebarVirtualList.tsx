@@ -1,5 +1,5 @@
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
 import { getVirtualizedScrollFadeClassName } from "../ui/scroll-area";
@@ -44,6 +44,7 @@ export function SidebarVirtualList<T extends { key: string }>({
   const [focusedKey, setFocusedKey] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [fillSpace, setFillSpace] = useState(0);
+  const extraData = useMemo(() => ({ renderItem, fillSpace }), [renderItem, fillSpace]);
   const [fade, setFade] = useState({ top: false, bottom: false });
   const keys = materialize
     ? data.map((item) => item.key)
@@ -130,8 +131,8 @@ export function SidebarVirtualList<T extends { key: string }>({
       role={role}
       aria-label={label}
       data={data}
-      extraData={renderItem}
-      dataVersion={`${keys.join("\0")}\0${fillSpace}`}
+      extraData={extraData}
+      dataVersion={keys.join("\0")}
       alwaysRender={{ keys }}
       keyExtractor={(item) => item.key}
       {...(getItemType ? { getItemType } : {})}
