@@ -109,8 +109,8 @@ vi.mock("./agentLiveActivity", () => ({
   startAgentLiveActivity: widgetMocks.start,
 }));
 
-vi.mock("../../widgets/AgentActivityWidget", () => ({
-  default: { updateSnapshot: widgetMocks.updateSnapshot },
+vi.mock("./agentActivityWidget", () => ({
+  updateAgentActivityWidget: widgetMocks.updateSnapshot,
 }));
 
 // The state modules pull the whole connection stack (and native expo modules)
