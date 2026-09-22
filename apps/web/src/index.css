@@ -1893,7 +1893,7 @@ code {
    shot, no layout change. */
 @media (prefers-reduced-motion: no-preference) {
   .chat-markdown[data-streaming] > *,
-  .chat-markdown[data-streaming] .chat-markdown-shiki {
+  .chat-markdown[data-streaming] [data-markdown-code] {
     transition: opacity 600ms ease-out;
 
     @starting-style {
