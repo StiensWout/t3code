@@ -4816,6 +4816,12 @@ export default function Sidebar() {
                         });
                         continue;
                       }
+                      if (
+                        item.marker === "snoozed-header" ||
+                        (item.marker === "settled-header" && snoozedThreads.length === 0)
+                      ) {
+                        items.push({ key: "shelf-spacer", render: () => null });
+                      }
                       switch (item.marker) {
                         case "pinned-header":
                           items.push({
@@ -4873,7 +4879,6 @@ export default function Sidebar() {
                               <SidebarSectionHeader
                                 key="snoozed-shelf-header"
                                 marker="snoozed-header"
-                                className="mt-auto"
                                 label={
                                   snoozedShelfExpanded
                                     ? "Snoozed"
@@ -4894,7 +4899,6 @@ export default function Sidebar() {
                               <SidebarSectionHeader
                                 key="settled-shelf-header"
                                 marker="settled-header"
-                                className={cn(snoozedThreads.length === 0 && "mt-auto")}
                                 label={
                                   settledShelfExpanded
                                     ? "Settled"
@@ -4962,6 +4966,7 @@ export default function Sidebar() {
                               : item.key;
                         }}
                         aria-label="Threads"
+                        fillSpaceKey="shelf-spacer"
                         activeKey={routeThreadKey}
                         retainedKeys={[renamingThreadKey, dragState?.activeKey ?? null]}
                         materialize={materializeThreadList}

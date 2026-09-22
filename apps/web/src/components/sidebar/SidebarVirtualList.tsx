@@ -18,6 +18,7 @@ export function SidebarVirtualList<T extends { key: string }>({
   revealVersion,
   retainedKeys = EMPTY_KEYS,
   estimatedItemSize = 83,
+  fillSpaceKey,
   role = "list",
   id,
   "aria-label": label,
@@ -32,6 +33,8 @@ export function SidebarVirtualList<T extends { key: string }>({
   revealVersion?: string;
   retainedKeys?: readonly (string | null)[];
   estimatedItemSize?: number;
+  /** A non-interactive item that keeps the following shelves at the viewport bottom. */
+  fillSpaceKey?: string;
   role?: "list" | "listbox";
   id?: string;
   "aria-label": string;
@@ -40,10 +43,15 @@ export function SidebarVirtualList<T extends { key: string }>({
   const revealed = useRef<{ key: string; version: string | undefined } | null>(null);
   const [focusedKey, setFocusedKey] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const [fillSpace, setFillSpace] = useState(0);
   const [fade, setFade] = useState({ top: false, bottom: false });
   const keys = materialize
     ? data.map((item) => item.key)
-    : [...new Set([activeKey, focusedKey, ...retainedKeys].filter((key) => key !== null))];
+    : [
+        ...new Set(
+          [activeKey, focusedKey, fillSpaceKey, ...retainedKeys].filter((key) => key != null),
+        ),
+      ];
 
   useEffect(() => () => onViewportRef?.(null), [onViewportRef]);
 
@@ -56,6 +64,32 @@ export function SidebarVirtualList<T extends { key: string }>({
       previous.top === top && previous.bottom === bottom ? previous : { top, bottom },
     );
   }, []);
+
+  useEffect(() => {
+    const list = listRef.current;
+    if (!loaded || !list || !fillSpaceKey) return;
+    const viewport: HTMLElement = list.getScrollableNode();
+    let frame = 0;
+    const schedule = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const state = list.getState();
+        // Subtract the measured spacer, not the pending React value, so a resize
+        // cannot feed its previous height back into the next content estimate.
+        const naturalHeight = state.contentLength - (state.sizes.get(fillSpaceKey) ?? 0);
+        setFillSpace(Math.max(0, viewport.clientHeight - naturalHeight));
+      });
+    };
+    const unlisten = list.getState().listen("totalSize", schedule);
+    const observer = new ResizeObserver(schedule);
+    observer.observe(viewport);
+    schedule();
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+      unlisten();
+    };
+  }, [fillSpaceKey, loaded]);
 
   useEffect(() => {
     if (!loaded) return;
@@ -97,7 +131,7 @@ export function SidebarVirtualList<T extends { key: string }>({
       aria-label={label}
       data={data}
       extraData={renderItem}
-      dataVersion={keys.join("\0")}
+      dataVersion={`${keys.join("\0")}\0${fillSpace}`}
       alwaysRender={{ keys }}
       keyExtractor={(item) => item.key}
       {...(getItemType ? { getItemType } : {})}
@@ -105,7 +139,9 @@ export function SidebarVirtualList<T extends { key: string }>({
         <div
           data-sidebar-list-key={item.key}
           data-sidebar-dragging={item.key === draggingKey || undefined}
-          className="pb-px"
+          aria-hidden={item.key === fillSpaceKey || undefined}
+          className={item.key === fillSpaceKey ? undefined : "pb-px"}
+          style={item.key === fillSpaceKey ? { height: fillSpace } : undefined}
         >
           {renderItem(item, index)}
         </div>
