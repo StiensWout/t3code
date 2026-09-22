@@ -8,12 +8,10 @@ import * as NodeSqlite from "node:sqlite";
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
-import { mergeUsage } from "@t3tools/shared/usageMerge";
 import {
   EnvironmentId,
   ProviderDriverKind,
   ProviderInstanceId,
-  EnvironmentId,
   USAGE_CONTRACT_VERSION,
   UsageDay,
   type UsageSummaryInput,
@@ -521,6 +519,31 @@ describe("UsageService", () => {
     }).pipe(Effect.scoped),
   );
 
+  it.live("reads standalone Antigravity IDE databases while ignoring legacy protobuf files", () =>
+    Effect.gen(function* () {
+      const { settings, home } = yield* setup;
+      const conversations = NodePath.join(home, "gemini", "antigravity", "conversations");
+      yield* Effect.promise(() => writeAntigravityConversation(conversations, 26));
+      yield* Effect.promise(() =>
+        NodeFSP.writeFile(NodePath.join(conversations, "legacy.pb"), antigravityGeneration(99)),
+      );
+      yield* Effect.gen(function* () {
+        const service = yield* UsageService.make;
+        const summary = yield* service.readSummary(WINDOW);
+        assert.strictEqual(totalOutputTokens(summary), 26);
+        const sources = summary.sources.filter(
+          (source) => source.fingerprint.provider === "antigravity",
+        );
+        assert.strictEqual(sources.length, 1);
+        assert.strictEqual(sources[0]?.scannedFiles, 1);
+        assert.strictEqual(
+          sources[0]?.fingerprint.resolvedHomePath,
+          yield* Effect.promise(() => NodeFSP.realpath(conversations)),
+        );
+      }).pipe(Effect.provide(serviceLayers({ prefix: "usage-antigravity-ide", home, settings })));
+    }).pipe(Effect.scoped),
+  );
+
   it.live("counts overlapping Antigravity roots and database aliases once", () =>
     Effect.gen(function* () {
       const { settings, home } = yield* setup;
@@ -574,6 +597,47 @@ describe("UsageService", () => {
         Effect.provide(serviceLayers({ prefix: "usage-overlapping-antigravity", home, settings })),
       );
     }).pipe(Effect.scoped),
+  );
+
+  it.live(
+    "retains canonical Antigravity sources after overlapping roots are removed and restarted",
+    () =>
+      Effect.gen(function* () {
+        const { settings, home } = yield* setup;
+        yield* Effect.gen(function* () {
+          const config = yield* ServerConfig.ServerConfig;
+          const profile = NodePath.join(config.stateDir, "providers", "antigravity", "profile");
+          const conversations = NodePath.join(profile, "antigravity-acp", "conversations");
+          yield* Effect.promise(() => writeAntigravityConversation(conversations, 26));
+          const environment = { GEMINI_HOME: profile, GROK_HOME: NodePath.join(home, "grok") };
+          const service = yield* UsageService.make.pipe(
+            Effect.provideService(HostProcessEnvironment, environment),
+          );
+          const before = yield* service.readSummary(WINDOW);
+          const sources = before.sources.filter(
+            (source) => source.fingerprint.provider === "antigravity",
+          );
+          assert.strictEqual(totalOutputTokens(before), 26);
+          yield* Effect.promise(() => NodeFSP.rm(profile, { recursive: true }));
+          const after = yield* service.readSummary(WINDOW);
+          assert.deepStrictEqual(after.buckets, before.buckets);
+          assert.deepStrictEqual(
+            after.sources.filter((source) => source.fingerprint.provider === "antigravity"),
+            sources,
+          );
+          const restarted = yield* UsageService.make.pipe(
+            Effect.provideService(HostProcessEnvironment, environment),
+          );
+          const restored = yield* restarted.readSummary(WINDOW);
+          assert.deepStrictEqual(restored.buckets, before.buckets);
+          assert.deepStrictEqual(
+            restored.sources.filter((source) => source.fingerprint.provider === "antigravity"),
+            sources,
+          );
+        }).pipe(
+          Effect.provide(serviceLayers({ prefix: "usage-retained-antigravity", home, settings })),
+        );
+      }).pipe(Effect.scoped),
   );
 
   it.live("merges a managed parent and another environment's symlinked standalone source", () =>

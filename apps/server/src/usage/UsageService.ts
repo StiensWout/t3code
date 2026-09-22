@@ -269,6 +269,40 @@ export const make = Effect.gen(function* () {
       : path.join(NodeOS.homedir(), fallback);
   };
 
+  const resolveSource = Effect.fn("UsageService.resolveSource")(function* (
+    provider: UsageProviderKind,
+    directory: string,
+    retentionCutoffMs: number,
+  ) {
+    const sourceKey = provider + "\0" + directory;
+    const previous = sourceCache.get(sourceKey);
+    // Keep canonical paths and source fingerprints stable after root cleanup,
+    // including aliases and clients merging pre-cleanup environment summaries.
+    const dir = yield* fileSystem
+      .realPath(directory)
+      .pipe(Effect.orElseSucceed(() => previous?.dir ?? directory));
+    const currentVolumeId = yield* Effect.promise(() => readDirectoryVolumeId(dir));
+    const hasRetainedHistory = fileCache
+      .entries()
+      .some(
+        ([filePath, entry]) =>
+          entry.provider === provider &&
+          entry.mtimeMs >= retentionCutoffMs &&
+          entry.records.length + entry.tailRecords.length > 0 &&
+          isWithinDirectory(filePath, dir),
+      );
+    // A recreated directory still reports the retained history under its old identity.
+    const volumeId =
+      previous?.dir === dir && (hasRetainedHistory || !currentVolumeId)
+        ? previous.volumeId || currentVolumeId
+        : currentVolumeId;
+    if (previous?.dir !== dir || previous.volumeId !== volumeId) {
+      sourceCache.set(sourceKey, { dir, volumeId });
+      cacheDirty = true;
+    }
+    return { dir, volumeId };
+  });
+
   /**
    * Resolves the transcript directories for each provider.
    *
@@ -325,32 +359,7 @@ export const make = Effect.gen(function* () {
           );
         }
         const directory = path.resolve(home, provider === "claude" ? "projects" : "sessions");
-        const sourceKey = provider + "\0" + directory;
-        const previous = sourceCache.get(sourceKey);
-        // Keep canonical paths and source fingerprints stable after root cleanup,
-        // including aliases and clients merging pre-cleanup environment summaries.
-        const dir = yield* fileSystem
-          .realPath(directory)
-          .pipe(Effect.orElseSucceed(() => previous?.dir ?? directory));
-        const currentVolumeId = yield* Effect.promise(() => readDirectoryVolumeId(dir));
-        const hasRetainedHistory = fileCache
-          .entries()
-          .some(
-            ([filePath, entry]) =>
-              entry.provider === provider &&
-              entry.mtimeMs >= retentionCutoffMs &&
-              entry.records.length + entry.tailRecords.length > 0 &&
-              isWithinDirectory(filePath, dir),
-          );
-        // A recreated directory still reports the retained history under its old identity.
-        const volumeId =
-          previous?.dir === dir && (hasRetainedHistory || !currentVolumeId)
-            ? previous.volumeId || currentVolumeId
-            : currentVolumeId;
-        if (previous?.dir !== dir || previous.volumeId !== volumeId) {
-          sourceCache.set(sourceKey, { dir, volumeId });
-          cacheDirty = true;
-        }
+        const { dir, volumeId } = yield* resolveSource(provider, directory, retentionCutoffMs);
         const key = `${provider}\0${dir}`;
         if (seen.has(key)) continue;
         seen.add(key);
@@ -378,6 +387,11 @@ export const make = Effect.gen(function* () {
       {
         provider: "antigravity" as const,
         dir: path.join(geminiHome, "antigravity-cli", "conversations"),
+        listOptions: ANTIGRAVITY_LIST_OPTIONS,
+      },
+      {
+        provider: "antigravity" as const,
+        dir: path.join(geminiHome, "antigravity", "conversations"),
         listOptions: ANTIGRAVITY_LIST_OPTIONS,
       },
     ];
@@ -510,43 +524,53 @@ export const make = Effect.gen(function* () {
       Effect.provideService(Path.Path, path),
     );
     const scanned: ScannedDir[] = [];
-    const walkedRoots: string[] = [];
     const antigravityDirs = new Map<string, { path: string; records: readonly UsageRecord[] }[]>();
     const antigravityPaths = new Set<string>();
     for (const rootDir of dirs) {
-      const { provider, dir, listOptions } = rootDir;
-      const volumeId = "volumeId" in rootDir ? rootDir.volumeId : yield* Effect.promise(() => readDirectoryVolumeId(dir));
+      const { provider, listOptions } = rootDir;
+      const { dir, volumeId } =
+        "volumeId" in rootDir
+          ? rootDir
+          : yield* resolveSource(provider, rootDir.dir, retentionCutoffMs);
       const exists = yield* fileSystem
         .exists(dir)
         .pipe(Effect.catchCause(() => Effect.succeed(false)));
-      if (!exists) {
+      if (provider !== "antigravity" && !exists) {
         scanned.push({ provider, dir, volumeId, files: null });
         continue;
       }
-      const root =
-        provider === "antigravity"
-          ? yield* fileSystem.realPath(dir).pipe(Effect.orElseSucceed(() => dir))
-          : dir;
-      walkedRoots.push(root);
-      const files = yield* Effect.promise(() =>
-        listTranscriptFiles(root, windowStartMs, listOptions),
-      );
+      const files = exists
+        ? yield* Effect.promise(() => listTranscriptFiles(dir, windowStartMs, listOptions))
+        : [];
       if (provider === "antigravity") {
-        // Managed profiles and standalone homes can reach the same database.
-        // Canonical file paths prevent duplicate reads; containing directories
-        // give every environment the same source ownership boundary.
+        // Discovery roots may overlap, including after their files are removed.
+        // Both live and saved records belong to the canonical database directory.
+        const retainedFiles = new Map<string, readonly UsageRecord[]>();
         for (const file of files) {
-          const canonicalPath = file.path;
-          if (antigravityPaths.has(canonicalPath)) continue;
-          antigravityPaths.add(canonicalPath);
-          const records = yield* readFileRecords(canonicalPath, file.size, file.mtimeMs, provider);
-          const sourceDir = path.dirname(canonicalPath);
+          if (antigravityPaths.has(file.path) || retainedFiles.has(file.path)) continue;
+          const records = yield* readFileRecords(file.path, file.size, file.mtimeMs, provider);
+          retainedFiles.set(file.path, records);
+        }
+        for (const [filePath, entry] of fileCache) {
+          if (
+            entry.provider === provider &&
+            entry.mtimeMs >= retentionCutoffMs &&
+            isWithinDirectory(filePath, dir) &&
+            !retainedFiles.has(filePath)
+          ) {
+            retainedFiles.set(filePath, [...entry.records, ...entry.tailRecords]);
+          }
+        }
+        for (const [filePath, records] of retainedFiles) {
+          if (antigravityPaths.has(filePath)) continue;
+          antigravityPaths.add(filePath);
+          const sourceDir = path.dirname(filePath);
           let sourceFiles = antigravityDirs.get(sourceDir);
           if (sourceFiles === undefined) {
             sourceFiles = [];
             antigravityDirs.set(sourceDir, sourceFiles);
           }
-          sourceFiles.push({ path: canonicalPath, records });
+          sourceFiles.push({ path: filePath, records });
         }
         continue;
       }
@@ -558,11 +582,10 @@ export const make = Effect.gen(function* () {
       scanned.push({ provider, dir, volumeId, files: parsedFiles });
     }
     for (const [dir, files] of antigravityDirs) {
-      const volumeId = yield* Effect.promise(() => readDirectoryVolumeId(dir));
+      const { volumeId } = yield* resolveSource("antigravity", dir, retentionCutoffMs);
       scanned.push({ provider: "antigravity", dir, volumeId, files });
-      walkedRoots.push(dir);
     }
-    return { scanned, walkedRoots };
+    return scanned;
   });
 
   const scanSummary = Effect.fn("UsageService.scanSummary")(function* (
@@ -619,7 +642,7 @@ export const make = Effect.gen(function* () {
     // Pricing only matters once records are aggregated, so the rate table
     // loads while transcripts stream instead of gating them: a cold rates
     // fetch on a slow network no longer delays the scan by its own timeout.
-    const [, { scanned: scannedDirs, walkedRoots }] = yield* Effect.all(
+    const [, scannedDirs] = yield* Effect.all(
       [ensureRates(false), collectDirs(windowStartMs, settings, retentionCutoffMs)],
       { concurrency: 2 },
     );
@@ -637,7 +660,6 @@ export const make = Effect.gen(function* () {
     const seenRecords = new Set<string>();
     const sources: UsageSource[] = [];
     const buckets: UsageBucket[] = [];
-    const livePaths = new Set<string>();
 
     for (const { provider, dir, volumeId, files } of scannedDirs) {
       const retainedFiles = [...(files ?? [])];
@@ -649,7 +671,9 @@ export const make = Effect.gen(function* () {
           entry.provider !== provider ||
           entry.mtimeMs < retentionCutoffMs ||
           livePaths.has(filePath) ||
-          !isWithinDirectory(filePath, dir)
+          (provider === "antigravity"
+            ? path.dirname(filePath) !== dir
+            : !isWithinDirectory(filePath, dir))
         )
           continue;
         retainedFiles.push({ path: filePath, records: [...entry.records, ...entry.tailRecords] });
