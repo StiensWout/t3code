@@ -4782,7 +4782,11 @@ export default function Sidebar() {
                         <SortableThreadRow
                           key={threadKey}
                           id={threadKey}
-                          disabled={renamingThreadKey === threadKey || !draggableThreadKeys.has(threadKey) || optimisticDrop !== null}
+                          disabled={
+                            renamingThreadKey === threadKey ||
+                            !draggableThreadKeys.has(threadKey) ||
+                            optimisticDrop !== null
+                          }
                         >
                           {(bag) => renderThreadRowInner(thread, section, bag)}
                         </SortableThreadRow>
@@ -4947,7 +4951,6 @@ export default function Sidebar() {
                       });
 
                     return (
-                      <>
                       <SidebarVirtualList
                         data={items}
                         getItemType={(item) => {
@@ -4965,9 +4968,7 @@ export default function Sidebar() {
                         draggingKey={dragState?.activeKey}
                         onViewportRef={attachListMotionRef}
                         renderItem={(item) => item.render()}
-                        estimatedItemSize={83}
                       />
-                      </>
                     );
                   })()}
                 </SortableContext>
