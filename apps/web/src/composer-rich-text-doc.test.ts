@@ -383,7 +383,7 @@ describe("slash suggestions from the rich composer document", () => {
     expect(selected.contextIds).toEqual(["terminal_terminal-1"]);
   });
 
-  it.each(["Use /tmp/build.sh", "Use /etc/hosts"])(
+  it.each(["Use /tmp/build.sh", "Use /etc/hosts", String.raw`Use /tmp\build.sh`])(
     "leaves a typed absolute path alone: %s",
     (text) => {
       const map = roundTrip(text);
