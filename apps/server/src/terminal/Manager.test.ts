@@ -2602,7 +2602,7 @@ it.layer(
 
   it.effect("injects runtime env overrides into spawned terminals", () =>
     Effect.gen(function* () {
-      const { manager, ptyAdapter } = yield* createManager(5, { env: { FORCE_COLOR: "3" } });
+      const { manager, ptyAdapter } = yield* createManager({ env: { FORCE_COLOR: "3" } });
       yield* manager.open(
         openInput({
           env: {
