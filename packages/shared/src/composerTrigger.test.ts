@@ -58,7 +58,7 @@ describe("detectComposerTrigger", () => {
     });
   });
 
-  it.each(["Use /tmp/build.sh", "Use /etc/hosts"])(
+  it.each(["Use /tmp/build.sh", "Use /etc/hosts", String.raw`Use /tmp\build.sh`])(
     "keeps the absolute path in %s as ordinary text",
     (text) => {
       expect(detectComposerTrigger(text, text.length)).toBeNull();

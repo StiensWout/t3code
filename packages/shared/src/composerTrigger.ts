@@ -131,7 +131,7 @@ export function detectComposerTrigger(
       rangeStart: tokenStart,
       rangeEnd: cursor,
     };
-  if (token.startsWith("/") && !token.slice(1).includes("/") && hasContentBeforeToken) {
+  if (token.startsWith("/") && !/[\\/]/.test(token.slice(1)) && hasContentBeforeToken) {
     return {
       kind: "slash-skill",
       query: token.slice(1),
