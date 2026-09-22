@@ -1218,6 +1218,15 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
         sessionId: "http://127.0.0.1:9999/session",
       });
 
+      runtimeMock.state.recoveryRequestImplementation = async (operation) => {
+        if (operation === "session.messages") throw new Error("History is unavailable");
+      };
+      yield* adapter.sendTurn({
+        threadId,
+        input: "Continue in the replacement session",
+        modelSelection: createModelSelection(ProviderInstanceId.make("opencode"), "test/model"),
+      });
+      NodeAssert.equal(runtimeMock.state.promptCalls.length, 1);
       yield* adapter.stopSession(threadId);
     }),
   );

@@ -2919,7 +2919,11 @@ export function makeOpenCodeAdapter(
                       permission: buildOpenCodePermissionRules(input.runtimeMode),
                     }),
                   );
-                  return { openCodeSession: reusable, created: false };
+                  return {
+                    openCodeSession: reusable,
+                    created: false,
+                    needsAttachmentRecovery: true,
+                  };
                 }
 
                 // The session lives under a different cwd (e.g. the thread
@@ -2946,7 +2950,7 @@ export function makeOpenCodeAdapter(
                       permission: buildOpenCodePermissionRules(input.runtimeMode),
                     }),
                   );
-                  return { openCodeSession: forked, created: true };
+                  return { openCodeSession: forked, created: true, needsAttachmentRecovery: true };
                 }
 
                 if (resumeSessionId) {
@@ -2966,7 +2970,11 @@ export function makeOpenCodeAdapter(
                     detail: "OpenCode session.create returned no session payload.",
                   });
                 }
-                return { openCodeSession: createdSession.data, created: true };
+                return {
+                  openCodeSession: createdSession.data,
+                  created: true,
+                  needsAttachmentRecovery: false,
+                };
               });
 
               return {
@@ -2975,6 +2983,7 @@ export function makeOpenCodeAdapter(
                 client,
                 openCodeSession: resolved.openCodeSession,
                 created: resolved.created,
+                needsAttachmentRecovery: resolved.needsAttachmentRecovery,
               };
             }).pipe(Effect.provideService(Scope.Scope, sessionScope)),
           );
@@ -3011,7 +3020,7 @@ export function makeOpenCodeAdapter(
           server: started.server,
           directory,
           openCodeSessionId: started.openCodeSession.id,
-          needsAttachmentRecovery: resumeSessionId !== undefined,
+          needsAttachmentRecovery: started.needsAttachmentRecovery,
           relatedSessionIds: new Set([started.openCodeSession.id]),
           resolvedRequestIds: new Set(),
           autoRepliedRequestIds: new Set(),
