@@ -22,8 +22,8 @@ import { useAppearancePreferences } from "../settings/appearance/AppearancePrefe
 import {
   getNativeTerminalHardwareKeyRevision,
   getNativeTerminalStreamingRevision,
-  NATIVE_TERMINAL_STREAMING_REVISION,
   resolveNativeTerminalSurfaceView,
+  supportsNativeReplayStreaming,
   type NativeTerminalSurfaceHandle,
 } from "./nativeTerminalModule";
 import {
@@ -211,8 +211,7 @@ export const TerminalSurface = memo(function TerminalSurface(props: TerminalSurf
   const NativeTerminalSurfaceView = resolveNativeTerminalSurfaceView();
   const hasNativeSurface = Boolean(NativeTerminalSurfaceView);
   const streamingRevision = getNativeTerminalStreamingRevision();
-  const supportsStreaming =
-    streamingRevision !== null && streamingRevision >= NATIVE_TERMINAL_STREAMING_REVISION;
+  const supportsStreaming = supportsNativeReplayStreaming();
   const themeConfig = buildGhosttyThemeConfig(theme);
   const nativeRef = useRef<NativeTerminalSurfaceHandle>(null);
   const nativeCommandQueueRef = useRef(Promise.resolve());
