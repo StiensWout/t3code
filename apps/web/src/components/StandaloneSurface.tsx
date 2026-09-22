@@ -62,11 +62,7 @@ function StageTopbar() {
       <div className="relative flex h-7 shrink-0 items-center">
         <T3CodeBrand labelClassName={stageVariant ? "text-white/70" : undefined} />
         {stagePillLabel ? (
-          <Badge
-            className="ml-1 rounded-full px-1.5 text-muted-foreground"
-            size="sm"
-            variant="secondary"
-          >
+          <Badge className="ml-1" size="sm" variant="secondary">
             {stagePillLabel}
           </Badge>
         ) : null}
