@@ -1163,10 +1163,15 @@ export function refreshActiveLiveActivityRemoteRegistration(): Effect.Effect<
         : null;
     if (accountGeneration !== deviceRegistrationGeneration || !relayTokenProvider) return;
     const snapshot = yield* readAgentActivitySnapshot();
-    if (accountGeneration !== deviceRegistrationGeneration || !relayTokenProvider) return;
+    if (
+      accountGeneration !== deviceRegistrationGeneration ||
+      !relayTokenProvider ||
+      widgetGeneration !== widgetRefreshGeneration
+    )
+      return;
     // Home-screen widgets do not depend on the Live Activities preference or
     // an existing lock-screen card. Failed reads retain the last snapshot.
-    if (snapshot && widgetGeneration === widgetRefreshGeneration) {
+    if (snapshot) {
       publishAgentActivityWidget(snapshot.aggregate ?? {});
     }
     if (activities.length === 0) {
