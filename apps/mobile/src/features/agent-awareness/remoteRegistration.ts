@@ -37,7 +37,7 @@ import {
 } from "../../persistence/imperative";
 import type { AgentActivityProps, AgentActivityRowProps } from "../../widgets/AgentActivity";
 import { getAgentLiveActivities, startAgentLiveActivity } from "./agentLiveActivity";
-import AgentActivityWidget from "../../widgets/AgentActivityWidget";
+import { updateAgentActivityWidget } from "./agentActivityWidget";
 import { resolveCloudPublicConfig } from "../cloud/publicConfig";
 import { supportsAgentAwarenessPush } from "./capabilities";
 import { makeRelayDeviceRegistrationRequest, resolveApsEnvironment } from "./registrationPayload";
@@ -150,7 +150,7 @@ function publishMergedAgentActivityWidget(): void {
   );
   if (identity === publishedWidgetIdentity) return;
   try {
-    AgentActivityWidget.updateSnapshot(props);
+    updateAgentActivityWidget(props);
     publishedWidgetIdentity = identity;
   } catch (error) {
     logRegistrationError("home-screen widget publication failed", error);
