@@ -8,8 +8,8 @@ API-equivalent cost. These estimates are not your subscription bill.
 
 Totals depend on the history available on each server. Grok turns without a saved completed-turn
 record are missing from the totals. Antigravity totals cover T3 Code threads plus Antigravity
-SQLite conversations stored under that machine's Gemini home, including standalone CLI, ACP,
-and IDE sessions. Older Antigravity `.pb` conversations are not included.
+SQLite conversations stored under the server's `GEMINI_HOME` (or `~/.gemini` when unset), including
+standalone CLI, ACP, and IDE sessions. Older Antigravity `.pb` conversations are not included.
 
 Usage includes each configured account's history, including disabled accounts. Custom homes follow
 the account's home setting or its `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, or `GROK_HOME` environment
