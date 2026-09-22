@@ -156,13 +156,13 @@ function NightlySkyArt({ compact = false }: { compact?: boolean }) {
           <g filter={`url(#${hazeId})`} fill="none" strokeLinecap="round">
             <path
               d="M-40 72C80 30 170 92 300 40S520 18 680 58"
-              style={{ stroke: "var(--stage-night-glow-highlight)" }}
+              className="stroke-(--stage-night-glow-highlight)"
               strokeOpacity="0.26"
               strokeWidth="24"
             />
             <path
               d="M-40 18C100 62 220 -4 360 52S560 92 680 28"
-              style={{ stroke: "var(--stage-night-glow-secondary)" }}
+              className="stroke-(--stage-night-glow-secondary)"
               strokeOpacity="0.22"
               strokeWidth="34"
             />
