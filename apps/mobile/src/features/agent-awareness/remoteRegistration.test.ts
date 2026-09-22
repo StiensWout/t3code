@@ -947,6 +947,7 @@ describe("makeRelayDeviceRegistrationRequest", () => {
 
   for (const transition of ["sign-out", "account-switch", "release", "newer-refresh"] as const) {
     it.effect(`discards a suspended widget snapshot after ${transition}`, () => {
+      vi.mocked(loadPreferences).mockResolvedValue({ liveActivitiesEnabled: true });
       const started = Promise.withResolvers<void>();
       const response = Promise.withResolvers<Response>();
       let calls = 0;
@@ -968,7 +969,17 @@ describe("makeRelayDeviceRegistrationRequest", () => {
         if (transition === "release") releaseAgentAwarenessRelayTokenProvider();
         if (transition === "newer-refresh") yield* refreshActiveLiveActivityRemoteRegistration();
         widgetMocks.updateSnapshot.mockClear();
-        response.resolve(Response.json({ aggregate: null }));
+        response.resolve(
+          Response.json({
+            aggregate: {
+              title: "T3 Code",
+              subtitle: "Working",
+              activeCount: 1,
+              updatedAt: "2026-09-06T12:00:00.000Z",
+              activities: [],
+            },
+          }),
+        );
         yield* Fiber.join(refresh);
         expect(widgetMocks.updateSnapshot).not.toHaveBeenCalled();
         expect(widgetMocks.start).not.toHaveBeenCalled();
