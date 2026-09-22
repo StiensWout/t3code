@@ -89,6 +89,9 @@ const runtimeMock = {
     revertCalls: [] as Array<{ sessionID: string; messageID?: string }>,
     messageCalls: [] as Array<{ sessionID: string; messageID: string }>,
     messageFailures: 0,
+    recoveryRequestImplementation: null as
+      | ((operation: string, signal?: AbortSignal) => Promise<void>)
+      | null,
     partDeleteFailureId: undefined as string | undefined,
     partDeleteImplementation: null as (() => Promise<void>) | null,
     promptCalls: [] as Array<unknown>,
@@ -157,6 +160,7 @@ const runtimeMock = {
     this.state.revertCalls.length = 0;
     this.state.messageCalls.length = 0;
     this.state.messageFailures = 0;
+    this.state.recoveryRequestImplementation = null;
     this.state.partDeleteFailureId = undefined;
     this.state.partDeleteImplementation = null;
     this.state.promptCalls.length = 0;
@@ -355,7 +359,11 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
               : (runtimeMock.state.sessionChildrenById.get(sessionID) ?? []),
           };
         },
-        status: async () => {
+        status: async (_input?: unknown, options?: { signal?: AbortSignal }) => {
+          await runtimeMock.state.recoveryRequestImplementation?.(
+            "session.status",
+            options?.signal,
+          );
           runtimeMock.state.sessionStatusCalls += 1;
           if (runtimeMock.state.sessionStatusImplementation) {
             return await runtimeMock.state.sessionStatusImplementation();
@@ -411,10 +419,19 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
           runtimeMock.state.summarizeCalls.push(input);
           return { data: true };
         },
-        messages: async ({ sessionID }: { sessionID: string }) => ({
-          data:
-            runtimeMock.state.forkMessagesBySession.get(sessionID) ?? runtimeMock.state.messages,
-        }),
+        messages: async (
+          { sessionID }: { sessionID: string },
+          options?: { signal?: AbortSignal },
+        ) => {
+          await runtimeMock.state.recoveryRequestImplementation?.(
+            "session.messages",
+            options?.signal,
+          );
+          return {
+            data:
+              runtimeMock.state.forkMessagesBySession.get(sessionID) ?? runtimeMock.state.messages,
+          };
+        },
         message: async ({ sessionID, messageID }: { sessionID: string; messageID: string }) => {
           runtimeMock.state.messageCalls.push({ sessionID, messageID });
           if (runtimeMock.state.messageFailures > 0) {
@@ -450,15 +467,15 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
         },
       },
       part: {
-        delete: async ({
-          sessionID,
-          messageID,
-          partID,
-        }: {
-          sessionID: string;
-          messageID: string;
-          partID: string;
-        }) => {
+        delete: async (
+          {
+            sessionID,
+            messageID,
+            partID,
+          }: { sessionID: string; messageID: string; partID: string },
+          options?: { signal?: AbortSignal },
+        ) => {
+          await runtimeMock.state.recoveryRequestImplementation?.("part.delete", options?.signal);
           await runtimeMock.state.partDeleteImplementation?.();
           if (runtimeMock.state.partDeleteFailureId === partID)
             throw new Error("part deletion failed");
@@ -1491,6 +1508,71 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       yield* adapter.stopSession(threadId);
     }),
   );
+
+  for (const operation of ["session.messages", "session.status", "part.delete"]) {
+    it.effect(`releases a stalled ${operation} recovery request so a later send can retry`, () =>
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const threadId = asThreadId("thread-timeout-html");
+        const sessionID = "ses_timeout_html";
+        const text = {
+          type: "text",
+          text: '[Attached file "report.html" is saved at: /tmp/report.html]',
+        };
+        runtimeMock.state.messages = [
+          {
+            info: { id: "msg_file", role: "user" },
+            parts: [
+              text,
+              {
+                id: "prt_html",
+                messageID: "msg_file",
+                sessionID,
+                type: "file",
+                filename: "report.html",
+                mime: "text/html",
+                url: NodeURL.pathToFileURL("/tmp/report.html").href,
+              },
+            ],
+          },
+        ];
+        yield* adapter.startSession({
+          threadId,
+          runtimeMode: "full-access",
+          resumeCursor: { schemaVersion: 1, sessionId: sessionID },
+        });
+        const started = promiseWithResolvers<void>();
+        let signal: AbortSignal | undefined;
+        runtimeMock.state.recoveryRequestImplementation = async (method, requestSignal) => {
+          if (method !== operation) return;
+          signal = requestSignal;
+          started.resolve(undefined);
+          await new Promise<void>((_resolve, reject) => {
+            requestSignal?.addEventListener("abort", () => reject(requestSignal.reason), {
+              once: true,
+            });
+          });
+        };
+        const input = {
+          threadId,
+          input: "Continue",
+          modelSelection: createModelSelection(ProviderInstanceId.make("opencode"), "test/model"),
+        };
+        const sending = yield* adapter.sendTurn(input).pipe(Effect.flip, Effect.forkChild);
+        yield* Effect.promise(() => started.promise);
+        yield* advanceTestClock(10_000);
+        const error = yield* Fiber.join(sending);
+        NodeAssert.equal(error._tag, "ProviderAdapterRequestError");
+        NodeAssert.equal(signal?.aborted, true);
+        NodeAssert.deepEqual(runtimeMock.state.promptCalls, []);
+        runtimeMock.state.recoveryRequestImplementation = null;
+        yield* adapter.sendTurn(input);
+        NodeAssert.deepEqual(runtimeMock.state.messages[0]?.parts, [text]);
+        NodeAssert.equal(runtimeMock.state.promptCalls.length, 1);
+        yield* adapter.stopSession(threadId);
+      }),
+    );
+  }
 
   it.effect("stops attachment recovery when its session is closed", () =>
     Effect.gen(function* () {

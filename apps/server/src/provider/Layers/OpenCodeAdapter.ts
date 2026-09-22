@@ -3096,6 +3096,18 @@ export function makeOpenCodeAdapter(
       },
     );
 
+    const attachmentRecoveryDeadline = (operation: string) =>
+      Effect.timeoutOrElse({
+        duration: "10 seconds",
+        orElse: () =>
+          Effect.fail(
+            new OpenCodeRuntimeError({
+              operation,
+              detail: "OpenCode attachment recovery request did not complete within 10 seconds.",
+            }),
+          ),
+      });
+
     // Older T3 versions stored text documents twice: a usable path in the
     // prompt and a native file part that model converters can reject forever.
     // Repair only those duplicates, once on the first send after resuming.
@@ -3105,9 +3117,9 @@ export function makeOpenCodeAdapter(
     ) {
       if (!context.needsAttachmentRecovery) return;
       const sessionID = context.openCodeSessionId;
-      const messages = yield* runOpenCodeSdk("session.messages", () =>
-        context.client.session.messages({ sessionID }),
-      ).pipe(Effect.mapError(toRequestError));
+      const messages = yield* runOpenCodeSdk("session.messages", (signal) =>
+        context.client.session.messages({ sessionID }, { signal }),
+      ).pipe(attachmentRecoveryDeadline("session.messages"), Effect.mapError(toRequestError));
       const duplicates: Array<Part> = [];
       for (const entry of messages.data ?? []) {
         if (entry.info.role !== "user") continue;
@@ -3147,9 +3159,9 @@ export function makeOpenCodeAdapter(
         }
       }
       if (duplicates.length > 0) {
-        const status = yield* runOpenCodeSdk("session.status", () =>
-          context.client.session.status(),
-        ).pipe(Effect.mapError(toRequestError));
+        const status = yield* runOpenCodeSdk("session.status", (signal) =>
+          context.client.session.status(undefined, { signal }),
+        ).pipe(attachmentRecoveryDeadline("session.status"), Effect.mapError(toRequestError));
         const currentStatus = status.data?.[sessionID]?.type;
         if (currentStatus && currentStatus !== "idle") {
           return yield* new ProviderAdapterValidationError({
@@ -3167,13 +3179,12 @@ export function makeOpenCodeAdapter(
           ) {
             return yield* Effect.interrupt;
           }
-          yield* runOpenCodeSdk("part.delete", () =>
-            context.client.part.delete({
-              sessionID,
-              messageID: part.messageID,
-              partID: part.id,
-            }),
-          ).pipe(Effect.mapError(toRequestError));
+          yield* runOpenCodeSdk("part.delete", (signal) =>
+            context.client.part.delete(
+              { sessionID, messageID: part.messageID, partID: part.id },
+              { signal },
+            ),
+          ).pipe(attachmentRecoveryDeadline("part.delete"), Effect.mapError(toRequestError));
         }
       }
       if (context.openCodeSessionId !== sessionID) return yield* Effect.interrupt;
