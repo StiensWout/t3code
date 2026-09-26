@@ -140,6 +140,18 @@ function inventoryError(
   });
 }
 
+/** Pruning on behalf of automatic cleanup rather than a user's request. */
+export interface WorktreePruneOptions {
+  /**
+   * Checked against the revalidated worktree under the mutation permit, right
+   * before its removal. The reaper passes its retention policy so a policy
+   * change during a sweep is honoured.
+   */
+  readonly stillWanted?: (worktree: WorktreeInfo) => Effect.Effect<boolean>;
+}
+
+type InternalPruneOptions = WorktreePruneOptions & { readonly requireOrphaned?: boolean };
+
 export class WorktreeService extends Context.Service<
   WorktreeService,
   {
@@ -148,6 +160,7 @@ export class WorktreeService extends Context.Service<
     ) => Effect.Effect<VcsListWorktreesResult, WorktreeInventoryError>;
     readonly pruneWorktrees: (
       input: VcsPruneWorktreesInput,
+      options?: WorktreePruneOptions,
     ) => Effect.Effect<VcsPruneWorktreesResult, WorktreeMutationError>;
     readonly pruneOrphanedWorktree: (
       worktreePath: string,
@@ -347,8 +360,15 @@ const make = Effect.gen(function* () {
               ),
             ),
           ),
+          // A registration whose directory is gone has nothing on disk to
+          // manage, and its status can never be read, so as a row it could
+          // never be removed. Git's own gc and the next removal in that
+          // repository prune it, and revival prunes it before recreating the
+          // path.
           Effect.map((rawEntries) =>
-            rawEntries.filter((entry) => isPathInside(managedWorktreesRoot, entry.path, path)),
+            rawEntries.filter(
+              (entry) => !entry.prunable && isPathInside(managedWorktreesRoot, entry.path, path),
+            ),
           ),
         ),
         executeLenient("WorktreeService.listGroup.branchSync", group.canonicalWorkspaceRoot, [
@@ -589,7 +609,7 @@ const make = Effect.gen(function* () {
   // every turn start behind the whole batch.
   const removeIfStillSafe = Effect.fn("WorktreeService.removeIfStillSafe")(function* (
     worktree: WorktreeInfo,
-    options?: { readonly requireOrphaned?: boolean },
+    options?: InternalPruneOptions,
   ) {
     const freshBlocker = yield* freshPruneBlocker(worktree).pipe(
       Effect.catchCause((cause) =>
@@ -643,6 +663,9 @@ const make = Effect.gen(function* () {
     if (freshThreadCheck.references.includes("active")) {
       return { outcome: "skipped" as const, reason: "active_thread" as const };
     }
+    if (options?.stillWanted !== undefined && !(yield* options.stillWanted(worktree))) {
+      return { outcome: "ignored" as const };
+    }
 
     const removal = yield* git
       .removeWorktree({ cwd: worktree.workspaceRoot, path: worktree.path })
@@ -664,7 +687,7 @@ const make = Effect.gen(function* () {
 
   const pruneWorktreesInternal = Effect.fn("WorktreeService.pruneWorktrees")(function* (
     input: VcsPruneWorktreesInput,
-    options?: { readonly requireOrphaned?: boolean },
+    options?: InternalPruneOptions,
   ) {
     // Re-derive the inventory so safety reflects the current state, never a
     // stale client view. Git's non-forced remove is a second safety boundary.
@@ -764,7 +787,8 @@ const make = Effect.gen(function* () {
     return { removed, skipped };
   });
 
-  const pruneWorktrees = (input: VcsPruneWorktreesInput) => pruneWorktreesInternal(input);
+  const pruneWorktrees = (input: VcsPruneWorktreesInput, options?: WorktreePruneOptions) =>
+    pruneWorktreesInternal(input, options);
   const pruneOrphanedWorktree = (worktreePath: string) =>
     pruneWorktreesInternal({ paths: [worktreePath] }, { requireOrphaned: true }).pipe(
       Effect.map((result) => result.removed.length > 0),

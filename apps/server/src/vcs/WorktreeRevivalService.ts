@@ -1,5 +1,7 @@
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -103,7 +105,19 @@ const make = Effect.gen(function* () {
   const projectsService = yield* ProjectService.ProjectService;
   const setupScripts = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
   const generationByWorktreePath = yield* Ref.make(new Map<string, number>());
-  const setupGenerationByProjectWorktree = yield* Ref.make(new Map<string, number>());
+  // Project setup for a recreated worktree: one run per project, worktree, and
+  // generation, shared by every turn start that needs it.
+  const setupRuns = yield* Ref.make(
+    new Map<
+      string,
+      {
+        readonly generation: number;
+        readonly outcome: Deferred.Deferred<void, WorktreeMutationError>;
+      }
+    >(),
+  );
+  // Setup runs are forked here so they outlive the turn start that began them.
+  const serviceScope = yield* Effect.scope;
 
   const setupKey = (projectId: ProjectId, worktreePath: string) => `${projectId}\0${worktreePath}`;
   const currentGeneration = (worktreePath: string) =>
@@ -427,7 +441,7 @@ const make = Effect.gen(function* () {
       .withMutationPermit(reviveWorktreeUnlocked(input))
       .pipe(Effect.map(({ revived }) => ({ revived })));
 
-  const reviveForThreadUnlocked = Effect.fn("WorktreeRevivalService.reviveForThread")(function* (
+  const loadProject = Effect.fn("WorktreeRevivalService.loadProject")(function* (
     input: WorktreeRevivalForThreadInput,
   ) {
     const project = yield* projectsService.getById(input.projectId).pipe(
@@ -446,63 +460,137 @@ const make = Effect.gen(function* () {
         projectId: input.projectId,
       });
     }
-    const revival = yield* reviveWorktreeUnlocked({
-      workspaceRoot: project.value.workspaceRoot,
-      worktreePath: input.worktreePath,
-      branch: input.branch,
-    });
-    const setupGenerationKey = setupKey(input.projectId, revival.worktreePath);
-    const setupGeneration = (yield* Ref.get(setupGenerationByProjectWorktree)).get(
-      setupGenerationKey,
-    );
-    if (revival.generation > 0 && setupGeneration !== revival.generation) {
-      yield* setupScripts
-        .runForThread({
-          threadId: input.threadId,
-          projectId: input.projectId,
-          projectCwd: project.value.workspaceRoot,
-          worktreePath: revival.worktreePath,
-          project: {
-            id: project.value.id,
-            workspaceRoot: project.value.workspaceRoot,
-            scripts: project.value.scripts,
-          },
-        })
-        .pipe(
-          Effect.mapError((cause) =>
-            mutationError("run_setup", cause, {
-              path: input.worktreePath,
-              workspaceRoot: project.value.workspaceRoot,
-              branch: input.branch,
-            }),
-          ),
-        );
-      yield* Ref.update(setupGenerationByProjectWorktree, (generations) => {
-        const next = new Map(generations);
-        next.set(setupGenerationKey, revival.generation);
-        return next;
-      });
-    }
-    return { revived: revival.revived, generation: revival.generation };
+    return project.value;
   });
-  // Every turn start on a worktree thread passes through here, so an existing
-  // directory is answered without the mutation permit: a reaper sweep or a
-  // sibling revival must not hold up turns that need no Git mutation. Only a
-  // missing directory, or a pending setup retry, takes the locked path.
+
+  /**
+   * Runs the project's setup script in a recreated worktree and resolves
+   * `outcome` once the agent may start. As at thread launch, an async script
+   * only has to start, while a script marked `async: false` has to exit 0.
+   */
+  const runSetup = Effect.fn("WorktreeRevivalService.runSetup")(function* (
+    input: WorktreeRevivalForThreadInput,
+    worktreePath: string,
+    outcome: Deferred.Deferred<void, WorktreeMutationError>,
+  ) {
+    const project = yield* loadProject(input);
+    const setupFailed = (cause: unknown) =>
+      mutationError("run_setup", cause, {
+        path: input.worktreePath,
+        workspaceRoot: project.workspaceRoot,
+        branch: input.branch,
+      });
+    const setup = yield* setupScripts
+      .runForThread({
+        threadId: input.threadId,
+        projectId: input.projectId,
+        projectCwd: project.workspaceRoot,
+        worktreePath,
+        project: {
+          id: project.id,
+          workspaceRoot: project.workspaceRoot,
+          scripts: project.scripts,
+        },
+        // Reports the script's exit code back so a required script can be awaited.
+        observeCompletion: {},
+      })
+      .pipe(Effect.mapError(setupFailed));
+    if (setup.status !== "started" || setup.completion === undefined) return;
+    if (setup.async) yield* Deferred.succeed(outcome, undefined);
+    // Awaiting completion also releases the script's terminal subscription.
+    const completion = yield* setup.completion;
+    if (!setup.async && completion.exitCode !== 0) {
+      return yield* setupFailed(
+        `Setup script exited with ${completion.exitCode ?? "no exit code"}.`,
+      );
+    }
+  });
+
+  /**
+   * Waits until project setup in a recreated worktree lets the agent start.
+   * Concurrent turn starts share one run per worktree generation. The run is
+   * forked into the service scope because a cancelled turn start must not
+   * stop observing the script, or the next turn would wait on it forever. A
+   * failed run is forgotten so the next turn tries setup again.
+   */
+  const ensureSetup = Effect.fn("WorktreeRevivalService.ensureSetup")(function* (
+    input: WorktreeRevivalForThreadInput,
+    worktreePath: string,
+    generation: number,
+  ) {
+    const key = setupKey(input.projectId, worktreePath);
+    const fresh = yield* Deferred.make<void, WorktreeMutationError>();
+    const outcome = yield* Ref.modify(setupRuns, (runs) => {
+      const current = runs.get(key);
+      if (current !== undefined && current.generation === generation) {
+        return [current.outcome, runs] as const;
+      }
+      return [fresh, new Map(runs).set(key, { generation, outcome: fresh })] as const;
+    });
+    if (outcome === fresh) {
+      yield* runSetup(input, worktreePath, fresh).pipe(
+        Effect.onExit((exit) =>
+          Effect.gen(function* () {
+            if (Exit.isFailure(exit)) {
+              yield* Ref.update(setupRuns, (runs) => {
+                if (runs.get(key)?.outcome !== fresh) return runs;
+                const next = new Map(runs);
+                next.delete(key);
+                return next;
+              });
+            }
+            yield* Deferred.done(fresh, exit);
+          }),
+        ),
+        Effect.forkIn(serviceScope),
+      );
+    }
+    yield* Deferred.await(outcome);
+  });
+
+  /**
+   * Makes sure a thread's worktree exists before its turn starts. Every turn
+   * start on a worktree thread passes through here, so an existing directory
+   * is used as is and without the mutation permit: a reaper sweep or a sibling
+   * revival must not hold up turns that need no Git mutation. A missing one is
+   * recreated from its branch under the permit. Setup for a recreated worktree
+   * runs outside the permit, since a slow script must not block every other
+   * worktree mutation.
+   */
   const reviveForThread: WorktreeRevivalService["Service"]["reviveForThread"] = (input) =>
     Effect.gen(function* () {
       const exists = yield* fs.exists(input.worktreePath).pipe(Effect.orElseSucceed(() => false));
+      let revival: {
+        readonly revived: boolean;
+        readonly generation: number;
+        readonly worktreePath: string;
+      };
       if (exists) {
         const worktreePath = yield* canonicalizePath(input.worktreePath);
-        const generation = yield* currentGeneration(worktreePath);
-        const setupGeneration = (yield* Ref.get(setupGenerationByProjectWorktree)).get(
-          setupKey(input.projectId, worktreePath),
+        revival = {
+          revived: false,
+          generation: yield* currentGeneration(worktreePath),
+          worktreePath,
+        };
+      } else {
+        revival = yield* lifecycle.withMutationPermit(
+          loadProject(input).pipe(
+            Effect.flatMap((project) =>
+              reviveWorktreeUnlocked({
+                workspaceRoot: project.workspaceRoot,
+                worktreePath: input.worktreePath,
+                branch: input.branch,
+              }),
+            ),
+          ),
         );
-        if (generation === 0 || setupGeneration === generation) {
-          return { revived: false, generation };
-        }
       }
-      return yield* lifecycle.withMutationPermit(reviveForThreadUnlocked(input));
+      // Generation 0 means this server never recreated the worktree, so its
+      // setup belonged to the thread launch that created it.
+      if (revival.generation > 0) {
+        yield* ensureSetup(input, revival.worktreePath, revival.generation);
+      }
+      return { revived: revival.revived, generation: revival.generation };
     });
 
   return WorktreeRevivalService.of({ reviveWorktree, reviveForThread });
