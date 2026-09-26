@@ -30,28 +30,47 @@ const makeWorktree = (overrides: Partial<WorktreeInfo> = {}): WorktreeInfo => ({
   ...overrides,
 });
 
+/**
+ * The worktree service is stubbed: prune records the paths whose removal the
+ * reaper still wants, and `duringList` runs while the inventory is read, with
+ * the same settings service the reaper sees.
+ */
 const makeLayer = (
   inventory: ReadonlyArray<WorktreeInfo>,
   prune: (paths: ReadonlyArray<string>) => void,
   settings: Parameters<typeof ServerSettings.layerTest>[0],
   observed?: { readonly listCalls: { value: number } },
+  duringList: Effect.Effect<void, never, ServerSettings.ServerSettingsService> = Effect.void,
 ) => {
-  const worktreeLayer = Layer.succeed(
+  const worktreeLayer = Layer.effect(
     WorktreeService.WorktreeService,
-    WorktreeService.WorktreeService.of({
-      listWorktrees: () =>
-        Effect.sync(() => {
-          if (observed !== undefined) observed.listCalls.value += 1;
-          return { worktrees: [...inventory] };
-        }),
-      pruneWorktrees: (input) =>
-        Effect.sync(() => prune(input.paths)).pipe(
-          Effect.as({
-            removed: [],
-            skipped: [],
-          }),
-        ),
-      pruneOrphanedWorktree: () => Effect.succeed(false),
+    Effect.gen(function* () {
+      const context = yield* Effect.context<ServerSettings.ServerSettingsService>();
+      return WorktreeService.WorktreeService.of({
+        listWorktrees: () =>
+          duringList.pipe(
+            Effect.provide(context),
+            Effect.andThen(
+              Effect.sync(() => {
+                if (observed !== undefined) observed.listCalls.value += 1;
+                return { worktrees: [...inventory] };
+              }),
+            ),
+          ),
+        pruneWorktrees: (input, options) =>
+          Effect.filter(input.paths, (path) => {
+            const worktree = inventory.find((candidate) => candidate.path === path);
+            return worktree === undefined || options?.stillWanted === undefined
+              ? Effect.succeed(true)
+              : options.stillWanted(worktree);
+          }).pipe(
+            Effect.map((paths) => {
+              prune(paths);
+              return { removed: [], skipped: [] };
+            }),
+          ),
+        pruneOrphanedWorktree: () => Effect.succeed(false),
+      });
     }),
   );
   return WorktreeReaper.layerWith({ initialDelayMs: 0, sweepIntervalMs: 60_000 }).pipe(
@@ -116,5 +135,31 @@ it.effect("can sweep safe orphans immediately and stays inert when disabled", ()
       yield* reaper.sweep;
     }).pipe(Effect.provide(disabledLayer));
     assert.deepEqual(disabledPruned, []);
+  }),
+);
+
+it.effect("keeps worktrees when cleanup is turned off during a sweep", () =>
+  Effect.gen(function* () {
+    const pruned: ReadonlyArray<string>[] = [];
+    const layer = makeLayer(
+      [makeWorktree({ path: "/worktrees/old", lastActivityAt: "1960-01-01T00:00:00.000Z" })],
+      (paths) => pruned.push(paths),
+      { worktrees: { autoPruneAfterDays: 14, deleteOrphanedImmediately: false } },
+      undefined,
+      ServerSettings.ServerSettingsService.pipe(
+        Effect.flatMap((settings) =>
+          settings.updateSettings({ worktrees: { autoPruneAfterDays: null } }),
+        ),
+        Effect.orDie,
+        Effect.asVoid,
+      ),
+    );
+
+    yield* Effect.gen(function* () {
+      const reaper = yield* WorktreeReaper.WorktreeReaper;
+      yield* reaper.sweep;
+    }).pipe(Effect.provide(layer));
+
+    assert.deepEqual(pruned.flat(), []);
   }),
 );

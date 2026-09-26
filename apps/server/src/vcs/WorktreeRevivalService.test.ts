@@ -387,3 +387,113 @@ it.effect("retries setup after a recreated worktree's first setup attempt fails"
     assert.isTrue(yield* fs.exists(worktreePath));
   }).pipe(Effect.provide(Layer.mergeAll(serverConfigLiveLayer, NodeServices.layer, gitLayer))),
 );
+
+/** A setup script that has started and settles when `completion` does. */
+const startedSetup = (
+  worktreePath: string,
+  async: boolean,
+  completion: Effect.Effect<ProjectSetupScriptRunner.ProjectSetupScriptCompletion>,
+) =>
+  ({
+    status: "started",
+    scriptId: "setup",
+    scriptName: "Setup",
+    scriptCommand: "vp i",
+    terminalId: "setup-setup",
+    cwd: worktreePath,
+    async,
+    completion,
+  }) as const;
+
+it.effect(
+  "keeps a required setup running once when the turn start that began it is cancelled",
+  () =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const config = yield* ServerConfig.ServerConfig;
+      const repositoryRoot = yield* initializeRepository();
+      const worktreePath = path.join(config.worktreesDir, "setup", "required");
+      const setupStarted = yield* Deferred.make<void>();
+      const setupFinished =
+        yield* Deferred.make<ProjectSetupScriptRunner.ProjectSetupScriptCompletion>();
+      let setupRuns = 0;
+      const layer = makeRevivalLayer(makeProject(repositoryRoot), () =>
+        Effect.sync(() => {
+          setupRuns += 1;
+        }).pipe(
+          Effect.andThen(Deferred.succeed(setupStarted, undefined)),
+          Effect.as(startedSetup(worktreePath, false, Deferred.await(setupFinished))),
+        ),
+      );
+      const input = { threadId, projectId, worktreePath, branch: "feature/revival" };
+
+      const result = yield* Effect.gen(function* () {
+        const revival = yield* WorktreeRevivalService.WorktreeRevivalService;
+        const cancelled = yield* revival.reviveForThread(input).pipe(Effect.forkChild);
+        yield* Deferred.await(setupStarted);
+        yield* Fiber.interrupt(cancelled);
+        const next = yield* revival.reviveForThread(input).pipe(Effect.forkChild);
+        yield* Deferred.succeed(setupFinished, { exitCode: 0, durationMs: 1 });
+        return yield* Fiber.join(next);
+      }).pipe(Effect.provide(layer));
+
+      assert.deepEqual(result, { revived: false, generation: 1 });
+      assert.equal(setupRuns, 1);
+    }).pipe(Effect.provide(Layer.mergeAll(serverConfigLiveLayer, NodeServices.layer, gitLayer))),
+);
+
+it.effect("fails a revival whose required setup exits non-zero and reruns it next time", () =>
+  Effect.gen(function* () {
+    const path = yield* Path.Path;
+    const config = yield* ServerConfig.ServerConfig;
+    const repositoryRoot = yield* initializeRepository();
+    const worktreePath = path.join(config.worktreesDir, "setup", "exit-code");
+    const exitCodes = [1, 0];
+    const layer = makeRevivalLayer(makeProject(repositoryRoot), () =>
+      Effect.sync(() =>
+        startedSetup(
+          worktreePath,
+          false,
+          Effect.succeed({ exitCode: exitCodes.shift() ?? 0, durationMs: 1 }),
+        ),
+      ),
+    );
+    const input = { threadId, projectId, worktreePath, branch: "feature/revival" };
+
+    const { error, retry } = yield* Effect.gen(function* () {
+      const revival = yield* WorktreeRevivalService.WorktreeRevivalService;
+      const error = yield* revival.reviveForThread(input).pipe(Effect.flip);
+      const retry = yield* revival.reviveForThread(input);
+      return { error, retry };
+    }).pipe(Effect.provide(layer));
+
+    assert.equal(error.stage, "run_setup");
+    assert.equal(error.cause, "Setup script exited with 1.");
+    assert.deepEqual(retry, { revived: false, generation: 1 });
+    assert.deepEqual(exitCodes, []);
+  }).pipe(Effect.provide(Layer.mergeAll(serverConfigLiveLayer, NodeServices.layer, gitLayer))),
+);
+
+it.effect("does not wait for a setup script that lets the agent start alongside it", () =>
+  Effect.gen(function* () {
+    const path = yield* Path.Path;
+    const config = yield* ServerConfig.ServerConfig;
+    const repositoryRoot = yield* initializeRepository();
+    const worktreePath = path.join(config.worktreesDir, "setup", "async");
+    const layer = makeRevivalLayer(makeProject(repositoryRoot), () =>
+      Effect.succeed(startedSetup(worktreePath, true, Effect.never)),
+    );
+
+    const result = yield* Effect.gen(function* () {
+      const revival = yield* WorktreeRevivalService.WorktreeRevivalService;
+      return yield* revival.reviveForThread({
+        threadId,
+        projectId,
+        worktreePath,
+        branch: "feature/revival",
+      });
+    }).pipe(Effect.provide(layer));
+
+    assert.deepEqual(result, { revived: true, generation: 1 });
+  }).pipe(Effect.provide(Layer.mergeAll(serverConfigLiveLayer, NodeServices.layer, gitLayer))),
+);

@@ -538,3 +538,116 @@ it.effect("skips a project outside any Git repository instead of failing the inv
     );
   }).pipe(Effect.provide(Layer.mergeAll(serverConfigLiveLayer, NodeServices.layer, gitLayer))),
 );
+
+const initRepository = Effect.fn("WorktreeServiceTest.initRepository")(function* (prefix: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const driver = yield* GitVcsDriver.GitVcsDriver;
+  const repositoryRoot = yield* fs.makeTempDirectoryScoped({ prefix });
+  for (const args of [
+    ["init", "-b", "main"],
+    ["config", "user.email", "test@example.com"],
+    ["config", "user.name", "T3 Test"],
+  ]) {
+    yield* driver.execute({ operation: "WorktreeServiceTest.init", cwd: repositoryRoot, args });
+  }
+  yield* fs.writeFileString(path.join(repositoryRoot, "README.md"), "hello\n");
+  yield* driver.execute({
+    operation: "WorktreeServiceTest.add",
+    cwd: repositoryRoot,
+    args: ["add", "README.md"],
+  });
+  yield* driver.execute({
+    operation: "WorktreeServiceTest.commit",
+    cwd: repositoryRoot,
+    args: ["commit", "-m", "initial"],
+  });
+  return repositoryRoot;
+});
+
+it.effect("leaves a worktree whose directory is gone out of the inventory", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const config = yield* ServerConfig.ServerConfig;
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    const repositoryRoot = yield* initRepository("t3-worktree-v2-stale-repo-");
+    const keptPath = path.join(config.worktreesDir, "stale", "kept");
+    const deletedPath = path.join(config.worktreesDir, "stale", "deleted");
+    for (const [worktreePath, branch] of [
+      [keptPath, "feature/kept"],
+      [deletedPath, "feature/deleted"],
+    ] as const) {
+      yield* driver.createWorktree({
+        cwd: repositoryRoot,
+        refName: "main",
+        newRefName: branch,
+        path: worktreePath,
+      });
+    }
+    yield* fs.remove(deletedPath, { recursive: true });
+
+    const { worktrees } = yield* Effect.gen(function* () {
+      const service = yield* WorktreeService;
+      return yield* service.listWorktrees({});
+    }).pipe(
+      Effect.provide(
+        makeTestLayer(
+          () => [makeProject(projectA, repositoryRoot)],
+          () => [],
+        ),
+      ),
+    );
+
+    assert.deepEqual(
+      worktrees.map((worktree) => worktree.path),
+      [yield* fs.realPath(keptPath)],
+    );
+  }).pipe(Effect.provide(Layer.mergeAll(serverConfigLiveLayer, NodeServices.layer, gitLayer))),
+);
+
+it.effect("keeps a safe worktree whose removal the caller no longer wants", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const config = yield* ServerConfig.ServerConfig;
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    const repositoryRoot = yield* initRepository("t3-worktree-v2-unwanted-repo-");
+    const worktreePath = path.join(config.worktreesDir, "unwanted", "feature");
+    yield* driver.createWorktree({
+      cwd: repositoryRoot,
+      refName: "main",
+      newRefName: "feature/unwanted",
+      path: worktreePath,
+    });
+    const canonicalPath = yield* fs.realPath(worktreePath);
+
+    const { unwanted, wanted } = yield* Effect.gen(function* () {
+      const service = yield* WorktreeService;
+      const unwanted = yield* service.pruneWorktrees(
+        { paths: [worktreePath] },
+        { stillWanted: () => Effect.succeed(false) },
+      );
+      const stillThere = yield* fs.exists(worktreePath);
+      const wanted = yield* service.pruneWorktrees(
+        { paths: [worktreePath] },
+        { stillWanted: () => Effect.succeed(true) },
+      );
+      return { unwanted: { ...unwanted, stillThere }, wanted };
+    }).pipe(
+      Effect.provide(
+        makeTestLayer(
+          () => [makeProject(projectA, repositoryRoot)],
+          () => [],
+        ),
+      ),
+    );
+
+    assert.deepEqual(unwanted, { removed: [], skipped: [], stillThere: true });
+    assert.deepEqual(
+      wanted.removed.map((entry) => entry.path),
+      [canonicalPath],
+    );
+    assert.isFalse(yield* fs.exists(worktreePath));
+  }).pipe(Effect.provide(Layer.mergeAll(serverConfigLiveLayer, NodeServices.layer, gitLayer))),
+);

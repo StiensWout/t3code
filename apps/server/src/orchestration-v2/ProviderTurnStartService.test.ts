@@ -766,12 +766,17 @@ function makeWorktreeTurnStartFixture(input: {
       order.push("start-root-run");
     }),
   );
+  const events: Array<OrchestrationV2DomainEvent> = [];
   const layer = ProviderTurnStart.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
         Layer.mock(ContextHandoffService.ContextHandoffServiceV2)({}),
         Layer.mock(EventSink.EventSinkV2)({
-          writeIfRunCurrent: () => Effect.succeed({ committed: true, storedEvents: [] } as never),
+          writeIfRunCurrent: ({ events: written }) =>
+            Effect.sync(() => {
+              events.push(...written);
+              return { committed: true, storedEvents: [] } as never;
+            }),
         }),
         IdAllocator.layer,
         Layer.mock(ProjectionStore.ProjectionStoreV2)({
@@ -797,6 +802,7 @@ function makeWorktreeTurnStartFixture(input: {
   return {
     layer,
     order,
+    events,
     open,
     close,
     startRootRun,
@@ -859,14 +865,28 @@ effectIt.effect("restarts a live session after another thread recreated its work
   }),
 );
 
-effectIt.effect("starts the provider turn when worktree revival fails", () =>
+effectIt.effect("fails the run with the reason when its worktree cannot be restored", () =>
   Effect.gen(function* () {
     const fixture = makeWorktreeTurnStartFixture({ revival: "failed", liveSession: true });
 
     yield* fixture.start.pipe(Effect.provide(fixture.layer));
 
-    expect(fixture.order).toEqual(["revive", "open", "start-root-run"]);
-    expect(fixture.close).not.toHaveBeenCalled();
+    expect(fixture.order).toEqual(["revive"]);
+    expect(fixture.events).toMatchObject([
+      {
+        type: "turn-item.updated",
+        payload: {
+          type: "error",
+          title: "Worktree could not be restored",
+          failure: {
+            message: "Cannot recreate the worktree: branch 'feature/revival' no longer exists.",
+          },
+        },
+      },
+      { type: "run.updated", payload: { status: "failed" } },
+      { type: "run-attempt.updated", payload: { status: "failed" } },
+      { type: "node.updated", payload: { status: "failed" } },
+    ]);
   }),
 );
 

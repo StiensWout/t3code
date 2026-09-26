@@ -14,6 +14,8 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schedule from "effect/Schedule";
 
+import type { WorktreeInfo, WorktreeSettings } from "@t3tools/contracts";
+
 import { ServerSettingsService } from "../serverSettings.ts";
 import { WorktreeService } from "./WorktreeService.ts";
 
@@ -36,6 +38,16 @@ export class WorktreeReaper extends Context.Service<
   }
 >()("t3/vcs/WorktreeReaper") {}
 
+/** Whether the retention policy selects a safe worktree for removal now. */
+function isExpired(policy: WorktreeSettings, nowMs: number, worktree: WorktreeInfo): boolean {
+  if (policy.deleteOrphanedImmediately && worktree.orphaned) return true;
+  if (policy.autoPruneAfterDays === null || worktree.lastActivityAt === null) return false;
+  const lastActivityMs = Date.parse(worktree.lastActivityAt);
+  return (
+    !Number.isNaN(lastActivityMs) && lastActivityMs < nowMs - policy.autoPruneAfterDays * DAY_MS
+  );
+}
+
 const make = (options?: WorktreeReaperOptions) =>
   Effect.gen(function* () {
     const worktrees = yield* WorktreeService;
@@ -51,20 +63,23 @@ const make = (options?: WorktreeReaperOptions) =>
 
       const { worktrees: inventory } = yield* worktrees.listWorktrees({});
       const now = yield* Clock.currentTimeMillis;
-      const cutoffMs =
-        policy.autoPruneAfterDays === null ? null : now - policy.autoPruneAfterDays * DAY_MS;
-      const candidates = inventory.filter((worktree) => {
-        if (!worktree.safeToPrune) return false;
-        if (policy.deleteOrphanedImmediately && worktree.orphaned) return true;
-        if (cutoffMs === null || worktree.lastActivityAt === null) return false;
-        const lastActivityMs = Date.parse(worktree.lastActivityAt);
-        return !Number.isNaN(lastActivityMs) && lastActivityMs < cutoffMs;
-      });
+      const candidates = inventory.filter(
+        (worktree) => worktree.safeToPrune && isExpired(policy, now, worktree),
+      );
       if (candidates.length === 0) return;
 
-      const result = yield* worktrees.pruneWorktrees({
-        paths: candidates.map((worktree) => worktree.path),
-      });
+      // Reading the inventory and removing worktrees both take time. The
+      // policy is read again right before each removal, so turning cleanup off
+      // or lengthening retention during a sweep is honoured.
+      const stillWanted = (worktree: WorktreeInfo) =>
+        Effect.all([settings.getSettings, Clock.currentTimeMillis]).pipe(
+          Effect.map(([current, nowMs]) => isExpired(current.worktrees, nowMs, worktree)),
+          Effect.orElseSucceed(() => false),
+        );
+      const result = yield* worktrees.pruneWorktrees(
+        { paths: candidates.map((worktree) => worktree.path) },
+        { stillWanted },
+      );
       yield* Effect.logInfo("worktree.reaper.sweep-complete", {
         candidateCount: candidates.length,
         removedCount: result.removed.length,

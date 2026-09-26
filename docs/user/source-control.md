@@ -145,7 +145,8 @@ conversation.
 T3 Code only performs automatic cleanup when a worktree has no active thread, no local changes, and
 no unpushed commits. Removing a safe worktree keeps its local branch and T3 checkpoint history. If a
 thread needs that worktree again, T3 Code recreates it from the retained branch before starting the
-next turn.
+next turn and runs the project's setup script there again. If the worktree cannot be recreated, for
+example because its branch was deleted, the turn stops and shows why.
 
 **Auto-remove after** sets how long an unused safe worktree is kept. Enable **Remove with last
 thread** to remove a safe worktree as soon as its last linked thread is deleted instead of waiting

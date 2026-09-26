@@ -12,7 +12,6 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
-import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -483,49 +482,60 @@ export const layer: Layer.Layer<
         | undefined;
       if (projection.thread.worktreePath !== null && projection.thread.branch !== null) {
         const worktreePath = projection.thread.worktreePath;
-        // A failed revival must not fail this effect: that only leaves the run
-        // in "starting". Proceeding lets the provider report the missing
-        // directory as a visible turn error the user can act on.
-        const revival = yield* worktreeRevival
-          .reviveForThread({
+        const revivalResult = yield* Effect.result(
+          worktreeRevival.reviveForThread({
             threadId: projection.thread.id,
             projectId: projection.thread.projectId,
             worktreePath,
             branch: projection.thread.branch,
-          })
-          .pipe(
-            Effect.catch((error) =>
-              Effect.logWarning("provider turn start could not revive the worktree", {
-                threadId: projection.thread.id,
-                worktreePath,
-                error,
-              }).pipe(Effect.as(undefined)),
-            ),
-          );
-        // Revival can recreate the worktree and run project setup, so the run
-        // may have been cancelled or superseded while it ran.
+          }),
+        );
+        if (revivalResult._tag === "Failure") {
+          // A missing worktree that cannot be recreated, or a required setup
+          // script that failed, leaves nothing for the provider to run in.
+          // Settle the run with the reason; the next message tries again.
+          const revivalError = revivalResult.failure;
+          yield* settleRunBeforeStart({
+            signal: "worktree-revival-failure",
+            status: "failed",
+            now: yield* DateTime.now,
+            providerInstanceId: run.providerInstanceId,
+            itemProviderThreadId: providerThread.id,
+            item: {
+              type: "error",
+              title: "Worktree could not be restored",
+              failure: makeProviderFailure({
+                cause: revivalError,
+                message: revivalError.message,
+                class: "validation_error",
+              }),
+            },
+          });
+          return;
+        }
+        const revival = revivalResult.success;
+        // Revival can recreate the worktree and wait for project setup, so the
+        // run may have been cancelled or superseded meanwhile.
         if (!(yield* isCurrentAttemptInStatus("starting"))) return;
-        if (revival !== undefined) {
-          observedWorktreeGeneration = { path: worktreePath, generation: revival.generation };
-          const liveSession = yield* providerSessions.get(providerSessionId);
-          const previousWorktreeGeneration = Option.isSome(liveSession)
-            ? worktreeGenerationBySession.get(liveSession.value)
-            : undefined;
-          // Only a per-thread provider process holds the worktree as its cwd.
-          // A session shared across threads (Codex) passes cwd per native
-          // thread, and closing it would fail every sibling's running turn.
-          const holdsWorktreeAsCwd =
-            Option.isSome(liveSession) &&
-            !liveSession.value.providerSession.capabilities.sessions
-              .supportsMultipleProviderThreadsPerSession;
-          const worktreeChanged =
-            revival.revived ||
-            (previousWorktreeGeneration !== undefined &&
-              (previousWorktreeGeneration.path !== worktreePath ||
-                previousWorktreeGeneration.generation !== revival.generation));
-          if (holdsWorktreeAsCwd && worktreeChanged) {
-            yield* providerSessions.close(providerSessionId);
-          }
+        observedWorktreeGeneration = { path: worktreePath, generation: revival.generation };
+        const liveSession = yield* providerSessions.get(providerSessionId);
+        const previousWorktreeGeneration = Option.isSome(liveSession)
+          ? worktreeGenerationBySession.get(liveSession.value)
+          : undefined;
+        // Only a per-thread provider process holds the worktree as its cwd.
+        // A session shared across threads (Codex) passes cwd per native
+        // thread, and closing it would fail every sibling's running turn.
+        const holdsWorktreeAsCwd =
+          Option.isSome(liveSession) &&
+          !liveSession.value.providerSession.capabilities.sessions
+            .supportsMultipleProviderThreadsPerSession;
+        const worktreeChanged =
+          revival.revived ||
+          (previousWorktreeGeneration !== undefined &&
+            (previousWorktreeGeneration.path !== worktreePath ||
+              previousWorktreeGeneration.generation !== revival.generation));
+        if (holdsWorktreeAsCwd && worktreeChanged) {
+          yield* providerSessions.close(providerSessionId);
         }
       }
       const existingSessionProjection = projection.providerSessions.find(
