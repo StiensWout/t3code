@@ -381,6 +381,13 @@ describe("settings search targets", () => {
     expect(isSettingsSearchScopeAvailable(model.scope, "project")).toBe(true);
   });
 
+  it("reaches the worktree inventory from every selection", () => {
+    const worktrees = getSettingsSearchTargetScope("worktrees")!;
+    for (const kind of ["all", "environment", "project", "checkout"] as const) {
+      expect(isSettingsSearchScopeAvailable(worktrees.scope, kind)).toBe(true);
+    }
+  });
+
   it("reaches source control discovery and git fetch interval from the default scope", () => {
     for (const id of ["source-control", "git-fetch-interval"]) {
       const item = getSettingsSearchTargetScope(id)!;
