@@ -606,34 +606,25 @@ it.effect("leaves a worktree whose directory is gone out of the inventory", () =
   }).pipe(Effect.provide(Layer.mergeAll(serverConfigLiveLayer, NodeServices.layer, gitLayer))),
 );
 
-it.effect("keeps a safe worktree whose removal the caller no longer wants", () =>
+it.effect("removes a safe worktree and keeps its branch", () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const config = yield* ServerConfig.ServerConfig;
     const driver = yield* GitVcsDriver.GitVcsDriver;
-    const repositoryRoot = yield* initRepository("t3-worktree-v2-unwanted-repo-");
-    const worktreePath = path.join(config.worktreesDir, "unwanted", "feature");
+    const repositoryRoot = yield* initRepository("t3-worktree-v2-remove-repo-");
+    const worktreePath = path.join(config.worktreesDir, "remove", "feature");
     yield* driver.createWorktree({
       cwd: repositoryRoot,
       refName: "main",
-      newRefName: "feature/unwanted",
+      newRefName: "feature/remove",
       path: worktreePath,
     });
     const canonicalPath = yield* fs.realPath(worktreePath);
 
-    const { unwanted, wanted } = yield* Effect.gen(function* () {
+    const result = yield* Effect.gen(function* () {
       const service = yield* WorktreeService;
-      const unwanted = yield* service.pruneWorktrees(
-        { paths: [worktreePath] },
-        { stillWanted: () => Effect.succeed(false) },
-      );
-      const stillThere = yield* fs.exists(worktreePath);
-      const wanted = yield* service.pruneWorktrees(
-        { paths: [worktreePath] },
-        { stillWanted: () => Effect.succeed(true) },
-      );
-      return { unwanted: { ...unwanted, stillThere }, wanted };
+      return yield* service.pruneWorktrees({ paths: [worktreePath] });
     }).pipe(
       Effect.provide(
         makeTestLayer(
@@ -643,11 +634,18 @@ it.effect("keeps a safe worktree whose removal the caller no longer wants", () =
       ),
     );
 
-    assert.deepEqual(unwanted, { removed: [], skipped: [], stillThere: true });
     assert.deepEqual(
-      wanted.removed.map((entry) => entry.path),
+      result.removed.map((entry) => entry.path),
       [canonicalPath],
     );
+    assert.deepEqual(result.skipped, []);
     assert.isFalse(yield* fs.exists(worktreePath));
+    const branch = yield* driver.execute({
+      operation: "WorktreeServiceTest.branchKept",
+      cwd: repositoryRoot,
+      args: ["show-ref", "--verify", "--quiet", "refs/heads/feature/remove"],
+      allowNonZeroExit: true,
+    });
+    assert.equal(branch.exitCode, 0);
   }).pipe(Effect.provide(Layer.mergeAll(serverConfigLiveLayer, NodeServices.layer, gitLayer))),
 );

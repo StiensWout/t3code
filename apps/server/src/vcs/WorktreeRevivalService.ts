@@ -551,7 +551,7 @@ const make = Effect.gen(function* () {
   /**
    * Makes sure a thread's worktree exists before its turn starts. Every turn
    * start on a worktree thread passes through here, so an existing directory
-   * is used as is and without the mutation permit: a reaper sweep or a sibling
+   * is used as is and without the mutation permit: a cleanup or a sibling
    * revival must not hold up turns that need no Git mutation. A missing one is
    * recreated from its branch under the permit. Setup for a recreated worktree
    * runs outside the permit, since a slow script must not block every other

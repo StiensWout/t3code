@@ -36,6 +36,7 @@ import { forkParked } from "./serverActivation.ts";
 import * as Settings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
+import * as WorktreeLifecycle from "./vcs/WorktreeLifecycle.ts";
 import { withWorkspaceLease } from "./workspace/workspaceLease.ts";
 
 const decodeCleanupThread = Schema.decodeUnknownEffect(
@@ -114,6 +115,7 @@ export const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const git = yield* GitVcsDriver.GitVcsDriver;
   const gitManager = yield* GitManager.GitManager;
+  const worktreeLifecycle = yield* WorktreeLifecycle.WorktreeLifecycle;
   const terminals = yield* TerminalManager.TerminalManager;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -369,10 +371,16 @@ export const make = Effect.gen(function* () {
           )
         )
           return;
-        yield* git.removeWorktree({ cwd: project.workspaceRoot, path: worktreePath, force: false });
+        // Serialized with every other worktree mutation, and shown in the
+        // Worktrees inventory without a manual refresh.
+        yield* worktreeLifecycle.withMutationPermit(
+          git
+            .removeWorktree({ cwd: project.workspaceRoot, path: worktreePath, force: false })
+            .pipe(Effect.tap(() => worktreeLifecycle.markInventoryChanged)),
+        );
         yield* gitManager.invalidateStatus(project.workspaceRoot);
-        // Preserve branch and path: ProviderCommandReactor recreates the checkout
-        // from that branch when the thread is resumed.
+        // Preserve branch and path: WorktreeRevivalService recreates the
+        // checkout from that branch before the thread's next turn.
         yield* Effect.logInfo("storage cleanup removed worktree", { threadId: thread.id });
       }).pipe(
         (effect) => withWorkspaceLease(worktreePath, effect),

@@ -34,7 +34,6 @@ import {
   readEnvironmentSupportsSettlement,
   readEnvironmentSupportsSnooze,
   readEnvironmentSupportsVisitedTracking,
-  readEnvironmentSupportsWorktreeManagement,
   readEnvironmentThreadRefs,
   readProject,
   readThreadShell,
@@ -405,15 +404,10 @@ export function useThreadActions() {
         const shell = readThreadShell(ref);
         return shell === null ? [] : [shell];
       });
-      const needsLegacyWorktreeCleanup = !readEnvironmentSupportsWorktreeManagement(
-        threadRef.environmentId,
-      );
-      const threadProject = needsLegacyWorktreeCleanup
-        ? readProject({
-            environmentId: threadRef.environmentId,
-            projectId: thread.projectId,
-          })
-        : null;
+      const threadProject = readProject({
+        environmentId: threadRef.environmentId,
+        projectId: thread.projectId,
+      });
       const deletedIds =
         opts.deletedThreadKeys && opts.deletedThreadKeys.size > 0
           ? new Set<ThreadId>(
@@ -427,9 +421,10 @@ export function useThreadActions() {
         deletedIds && deletedIds.size > 0
           ? threads.filter((entry) => entry.id === threadRef.threadId || !deletedIds.has(entry.id))
           : threads;
-      const orphanedWorktreePath = needsLegacyWorktreeCleanup
-        ? getOrphanedWorktreePathForThread(survivingThreads, threadRef.threadId)
-        : null;
+      const orphanedWorktreePath = getOrphanedWorktreePathForThread(
+        survivingThreads,
+        threadRef.threadId,
+      );
       const displayWorktreePath = orphanedWorktreePath
         ? formatWorktreePathForDisplay(orphanedWorktreePath)
         : null;
@@ -565,7 +560,6 @@ export function useThreadActions() {
         // The thread was deleted. Cleanup has its own toast; returning its
         // failure would make callers incorrectly report a thread deletion error.
       }
-
       return deleteResult;
     },
     [

@@ -27,15 +27,12 @@ import {
   getBackgroundActivityPresetSettings,
   resolveServerBackgroundActivitySettings,
 } from "@t3tools/shared/backgroundActivitySettings";
-import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
 
 import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
 import { useSettingsScope } from "./SettingsScopeContext";
 import { ProjectDefaultsSettings } from "./ProjectDefaultsSettings";
 import { cn } from "../../lib/utils";
 import { useAtomCommand } from "../../state/use-atom-command";
-
-import { useEnvironmentSettings, useUpdateEnvironmentSettings } from "../../hooks/useSettings";
 import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
 import { useProject } from "../../state/entities";
 import { environmentServerConfigsAtom } from "../../state/server";
@@ -72,7 +69,6 @@ import {
   NumberFieldInput,
 } from "../ui/number-field";
 import { Switch } from "../ui/switch";
-import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 import {
@@ -93,7 +89,6 @@ import {
   PolicyTooltip,
   SettingResetButton,
   SettingsPageContainer,
-  SettingsRow,
   SettingsSearchTarget,
   SettingsSection,
   useRelativeTimeTick,
@@ -545,51 +540,7 @@ type WorktreeManagementViewProps = {
   readonly pendingPath: string | null;
   readonly inventoryError: string | null;
   readonly isPending: boolean;
-  readonly pruneAfterDays: number | null;
-  readonly deleteOrphanedImmediately: boolean;
-  readonly canResetPruneAfterDays: boolean;
-  readonly canResetDeleteOrphaned: boolean;
-  readonly onPruneAfterDaysChange: (days: number | null) => void;
-  readonly onDeleteOrphanedImmediatelyChange: (checked: boolean) => void;
-  readonly onResetPruneAfterDays: () => void;
-  readonly onResetDeleteOrphaned: () => void;
 };
-
-function WorktreeRetentionSelect({
-  pruneAfterDays,
-  onChange,
-  className = "w-full sm:w-36",
-}: {
-  readonly pruneAfterDays: number | null;
-  readonly onChange: (days: number | null) => void;
-  readonly className?: string;
-}) {
-  const value = pruneAfterDays === null ? "never" : String(pruneAfterDays);
-  return (
-    <Select
-      value={value}
-      onValueChange={(nextValue) => onChange(nextValue === "never" ? null : Number(nextValue))}
-    >
-      <SelectTrigger className={className} aria-label="Automatic worktree cleanup">
-        <SelectValue>
-          {pruneAfterDays === null
-            ? "Never"
-            : `${pruneAfterDays} ${pruneAfterDays === 1 ? "day" : "days"}`}
-        </SelectValue>
-      </SelectTrigger>
-      <SelectPopup align="end" alignItemWithTrigger={false}>
-        <SelectItem hideIndicator value="never">
-          Never
-        </SelectItem>
-        {[1, 7, 14, 30, 60, 90, 365].map((days) => (
-          <SelectItem key={days} hideIndicator value={String(days)}>
-            {days} {days === 1 ? "day" : "days"}
-          </SelectItem>
-        ))}
-      </SelectPopup>
-    </Select>
-  );
-}
 
 type WorktreeRowProps = {
   readonly environmentId: EnvironmentId;
@@ -792,51 +743,6 @@ function WorktreeStateCell({ worktree, onPrune, pendingPath }: WorktreeRowProps)
   );
 }
 
-/** Cleanup policy as canonical settings rows. */
-function WorktreePolicyRows(props: WorktreeManagementViewProps) {
-  return (
-    <>
-      <SettingsRow
-        title="Auto-remove after"
-        description="Idle worktrees are removed after this long. Dirty or unpushed ones are kept."
-        resetAction={
-          props.canResetPruneAfterDays ? (
-            <SettingResetButton
-              label="automatic worktree cleanup"
-              onClick={props.onResetPruneAfterDays}
-            />
-          ) : undefined
-        }
-        control={
-          <WorktreeRetentionSelect
-            pruneAfterDays={props.pruneAfterDays}
-            onChange={props.onPruneAfterDaysChange}
-          />
-        }
-      />
-      <SettingsRow
-        title="Remove with last thread"
-        description="Remove the worktree when its last thread is deleted."
-        resetAction={
-          props.canResetDeleteOrphaned ? (
-            <SettingResetButton
-              label="orphaned worktree cleanup"
-              onClick={props.onResetDeleteOrphaned}
-            />
-          ) : undefined
-        }
-        control={
-          <Switch
-            checked={props.deleteOrphanedImmediately}
-            onCheckedChange={(checked) => props.onDeleteOrphanedImmediatelyChange(Boolean(checked))}
-            aria-label="Remove a worktree when its last linked thread is deleted"
-          />
-        }
-      />
-    </>
-  );
-}
-
 function WorktreeRow({ environmentId, worktree, onPrune, pendingPath }: WorktreeRowProps) {
   return (
     <div className="flex min-w-0 items-center gap-3 py-1.5">
@@ -932,7 +838,6 @@ function WorktreeLedgerView(props: WorktreeManagementViewProps) {
   const groups = groupWorktreesByProject(props.worktrees);
   return (
     <div className="space-y-1">
-      <WorktreePolicyRows {...props} />
       <WorktreeErrorStrip error={props.inventoryError} />
       {props.isPending ? (
         <WorktreePendingStrip label="Reading worktrees..." />
@@ -1009,8 +914,8 @@ type WorktreeEnvironmentTarget = {
   readonly isPrimary: boolean;
 };
 
-/** Worktree inventory and cleanup policy for one environment. Mounted per
-    environment, so state can never leak across servers. */
+/** Worktree inventory for one environment. Mounted per environment, so state
+    can never leak across servers. */
 function WorktreeEnvironmentGroup({
   target,
   showLabel,
@@ -1023,8 +928,6 @@ function WorktreeEnvironmentGroup({
   readonly onPendingChange: (environmentId: EnvironmentId, pending: boolean) => void;
 }) {
   const environmentId = target.environmentId;
-  const settings = useEnvironmentSettings(environmentId);
-  const updateSettings = useUpdateEnvironmentSettings(environmentId);
   const inventory = useEnvironmentQuery(worktreeEnvironment.list({ environmentId, input: {} }));
   const inventoryChanges = useEnvironmentQuery(
     worktreeEnvironment.changes({ environmentId, input: {} }),
@@ -1100,9 +1003,6 @@ function WorktreeEnvironmentGroup({
       });
   };
 
-  const pruneAfterDays = settings.worktrees.autoPruneAfterDays;
-  const deleteOrphanedImmediately = settings.worktrees.deleteOrphanedImmediately;
-  const defaults = DEFAULT_UNIFIED_SETTINGS.worktrees;
   const isInitialInventoryPending = inventory.isPending && inventory.data === null;
   const managementProps: WorktreeManagementViewProps = {
     environmentId,
@@ -1111,19 +1011,6 @@ function WorktreeEnvironmentGroup({
     pendingPath,
     inventoryError: inventory.error ?? null,
     isPending: isInitialInventoryPending,
-    pruneAfterDays,
-    deleteOrphanedImmediately,
-    canResetPruneAfterDays: pruneAfterDays !== defaults.autoPruneAfterDays,
-    canResetDeleteOrphaned: deleteOrphanedImmediately !== defaults.deleteOrphanedImmediately,
-    onPruneAfterDaysChange: (days) => updateSettings({ worktrees: { autoPruneAfterDays: days } }),
-    onDeleteOrphanedImmediatelyChange: (checked) =>
-      updateSettings({ worktrees: { deleteOrphanedImmediately: checked } }),
-    onResetPruneAfterDays: () =>
-      updateSettings({ worktrees: { autoPruneAfterDays: defaults.autoPruneAfterDays } }),
-    onResetDeleteOrphaned: () =>
-      updateSettings({
-        worktrees: { deleteOrphanedImmediately: defaults.deleteOrphanedImmediately },
-      }),
   };
 
   return (

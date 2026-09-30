@@ -24,7 +24,7 @@ export const WorktreeProjectRef = Schema.Struct({
 });
 export type WorktreeProjectRef = typeof WorktreeProjectRef.Type;
 
-/** Reasons a managed worktree must not be pruned automatically. */
+/** Reasons a managed worktree cannot be removed from the inventory. */
 export const WorktreePruneBlocker = Schema.Literals([
   "active_thread",
   "dirty",
@@ -42,8 +42,6 @@ export const WorktreeInfo = Schema.Struct({
   path: Schema.NonEmptyString,
   branch: Schema.NullOr(TrimmedNonEmptyString),
   threads: Schema.Array(WorktreeThreadRef),
-  /** No non-deleted V2 shell references this worktree. */
-  orphaned: Schema.Boolean,
   /** null when the working-tree status could not be read. */
   dirty: Schema.NullOr(Schema.Boolean),
   /** Number of changed/untracked files; null when status could not be read. */
@@ -54,7 +52,7 @@ export const WorktreeInfo = Schema.Struct({
   aheadOfUpstreamCount: Schema.NullOr(NonNegativeInt),
   behindUpstreamCount: Schema.NullOr(NonNegativeInt),
   aheadOfDefaultCount: Schema.NullOr(NonNegativeInt),
-  /** Latest linked-thread activity; falls back to directory mtime for orphans. */
+  /** Latest linked-thread activity; falls back to directory mtime without a live thread. */
   lastActivityAt: Schema.NullOr(IsoDateTime),
   safeToPrune: Schema.Boolean,
   pruneBlockers: Schema.Array(WorktreePruneBlocker),

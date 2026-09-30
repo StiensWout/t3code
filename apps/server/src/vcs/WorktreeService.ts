@@ -140,18 +140,6 @@ function inventoryError(
   });
 }
 
-/** Pruning on behalf of automatic cleanup rather than a user's request. */
-export interface WorktreePruneOptions {
-  /**
-   * Checked against the revalidated worktree under the mutation permit, right
-   * before its removal. The reaper passes its retention policy so a policy
-   * change during a sweep is honoured.
-   */
-  readonly stillWanted?: (worktree: WorktreeInfo) => Effect.Effect<boolean>;
-}
-
-type InternalPruneOptions = WorktreePruneOptions & { readonly requireOrphaned?: boolean };
-
 export class WorktreeService extends Context.Service<
   WorktreeService,
   {
@@ -160,11 +148,7 @@ export class WorktreeService extends Context.Service<
     ) => Effect.Effect<VcsListWorktreesResult, WorktreeInventoryError>;
     readonly pruneWorktrees: (
       input: VcsPruneWorktreesInput,
-      options?: WorktreePruneOptions,
     ) => Effect.Effect<VcsPruneWorktreesResult, WorktreeMutationError>;
-    readonly pruneOrphanedWorktree: (
-      worktreePath: string,
-    ) => Effect.Effect<boolean, WorktreeMutationError>;
   }
 >()("t3/vcs/WorktreeService") {}
 
@@ -490,10 +474,6 @@ const make = Effect.gen(function* () {
             path: entry.path,
             branch: entry.refName,
             threads: threadRefs,
-            // A worktree that never had a thread is not an orphan: it may be a
-            // launch still binding its thread, or a checkout the user made.
-            orphaned:
-              threadRefs.length > 0 && threadRefs.every((thread) => thread.status === "deleted"),
             dirty: status.dirty,
             dirtyFileCount: status.dirtyFileCount,
             hasUpstream,
@@ -527,7 +507,7 @@ const make = Effect.gen(function* () {
           const canonicalWorkspaceRoot = yield* canonicalizePath(project.workspaceRoot);
           // A project outside any Git repository, or whose directory is gone,
           // has no worktrees to list; skip it rather than fail the inventory
-          // for every other project and stall the reaper.
+          // for every other project.
           const commonDir = yield* executeLenient(
             "WorktreeService.listWorktrees.repositoryKey",
             canonicalWorkspaceRoot,
@@ -605,11 +585,10 @@ const make = Effect.gen(function* () {
   });
 
   // Fresh Git and thread rechecks plus the removal run under the mutation
-  // permit per worktree, so a sweep over many stale worktrees never holds
-  // every turn start behind the whole batch.
+  // permit per worktree, so a request for many worktrees never holds every
+  // turn start behind the whole batch.
   const removeIfStillSafe = Effect.fn("WorktreeService.removeIfStillSafe")(function* (
     worktree: WorktreeInfo,
-    options?: InternalPruneOptions,
   ) {
     const freshBlocker = yield* freshPruneBlocker(worktree).pipe(
       Effect.catchCause((cause) =>
@@ -657,14 +636,8 @@ const make = Effect.gen(function* () {
     if (!freshThreadCheck.ok) {
       return { outcome: "skipped" as const, reason: "status_unavailable" as const };
     }
-    if (options?.requireOrphaned === true && freshThreadCheck.references.length > 0) {
-      return { outcome: "ignored" as const };
-    }
     if (freshThreadCheck.references.includes("active")) {
       return { outcome: "skipped" as const, reason: "active_thread" as const };
-    }
-    if (options?.stillWanted !== undefined && !(yield* options.stillWanted(worktree))) {
-      return { outcome: "ignored" as const };
     }
 
     const removal = yield* git
@@ -685,10 +658,9 @@ const make = Effect.gen(function* () {
     return { outcome: "removed" as const };
   });
 
-  const pruneWorktreesInternal = Effect.fn("WorktreeService.pruneWorktrees")(function* (
-    input: VcsPruneWorktreesInput,
-    options?: InternalPruneOptions,
-  ) {
+  const pruneWorktrees: WorktreeService["Service"]["pruneWorktrees"] = Effect.fn(
+    "WorktreeService.pruneWorktrees",
+  )(function* (input) {
     // Re-derive the inventory so safety reflects the current state, never a
     // stale client view. Git's non-forced remove is a second safety boundary.
     const { worktrees } = yield* listWorktrees({}).pipe(
@@ -721,13 +693,6 @@ const make = Effect.gen(function* () {
         skipped.push({ path: requestedPath, reason: "unknown_worktree" });
         continue;
       }
-      // Thread deletion cleanup is allowed to remove only an orphan. This is
-      // deliberately checked on the fresh inventory above so a worktree that
-      // became shared after the deletion event cannot be removed by a stale
-      // observation.
-      if (options?.requireOrphaned === true && !worktree.orphaned) {
-        continue;
-      }
       if (!worktree.safeToPrune) {
         skipped.push({
           path: worktree.path,
@@ -736,8 +701,7 @@ const make = Effect.gen(function* () {
         continue;
       }
 
-      const result = yield* lifecycle.withMutationPermit(removeIfStillSafe(worktree, options));
-      if (result.outcome === "ignored") continue;
+      const result = yield* lifecycle.withMutationPermit(removeIfStillSafe(worktree));
       if (result.outcome === "skipped") {
         skipped.push({
           path: worktree.path,
@@ -787,16 +751,9 @@ const make = Effect.gen(function* () {
     return { removed, skipped };
   });
 
-  const pruneWorktrees = (input: VcsPruneWorktreesInput, options?: WorktreePruneOptions) =>
-    pruneWorktreesInternal(input, options);
-  const pruneOrphanedWorktree = (worktreePath: string) =>
-    pruneWorktreesInternal({ paths: [worktreePath] }, { requireOrphaned: true }).pipe(
-      Effect.map((result) => result.removed.length > 0),
-    );
   return WorktreeService.of({
     listWorktrees,
     pruneWorktrees,
-    pruneOrphanedWorktree,
   });
 });
 
