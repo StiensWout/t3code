@@ -74,12 +74,15 @@ export function SidebarVirtualList<T extends { key: string }>({
 
   useEffect(() => {
     const list = listRef.current;
-    if (!loaded || !list || !fillSpaceKey) return;
+    if (!loaded || !list) return;
     const viewport: HTMLElement = list.getScrollableNode();
     let frame = 0;
     const schedule = () => {
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
+        // Resizes and content changes can move either edge without a scroll event.
+        updateFade();
+        if (!fillSpaceKey) return;
         const state = list.getState();
         // Subtract the measured spacer, not the pending React value, so a resize
         // cannot feed its previous height back into the next content estimate.
@@ -96,7 +99,7 @@ export function SidebarVirtualList<T extends { key: string }>({
       observer.disconnect();
       unlisten();
     };
-  }, [fillSpaceKey, loaded]);
+  }, [fillSpaceKey, loaded, updateFade]);
 
   useEffect(() => {
     if (!loaded) return;
