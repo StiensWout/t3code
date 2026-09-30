@@ -58,13 +58,15 @@ const PREVIEW_ASSETS = {
   androidNotificationColor: "#7565C7",
 } as const;
 
+// Production Android layers come from scripts/generate-app-icons.cjs so the default
+// launcher icon matches the alternate icons offered in Settings -> Appearance.
 const RELEASE_ASSETS = {
   appIcon: "./assets/app-icons/primary.png",
   iosIcon: fromRepoRoot(BRAND_ASSET_PATHS.productionIconComposerProject),
   splashIcon: fromRepoRoot(BRAND_ASSET_PATHS.productionIosIconPng),
-  androidAdaptiveForeground,
+  androidAdaptiveForeground: "./assets/app-icons/primary-foreground.png",
   androidAdaptiveBackgroundColor: "#000000",
-  androidAdaptiveBackgroundImage: undefined,
+  androidAdaptiveBackgroundImage: "./assets/app-icons/primary-background.png",
   androidSplashIcon: "./assets/android-splash-icon-prod.png",
   androidMonochromeIcon: "./assets/android-icon-mark.png",
   androidNotificationIcon: "./assets/android-notification-icon.png",
@@ -281,14 +283,10 @@ const config: ExpoConfig = {
       : {}),
     adaptiveIcon: {
       backgroundColor: variant.assets.androidAdaptiveBackgroundColor,
-      backgroundImage:
-        APP_VARIANT === "production"
-          ? "./assets/app-icons/primary-background.png"
-          : variant.assets.androidAdaptiveBackgroundImage,
-      foregroundImage:
-        APP_VARIANT === "production"
-          ? "./assets/app-icons/primary-foreground.png"
-          : variant.assets.androidAdaptiveForeground,
+      ...(variant.assets.androidAdaptiveBackgroundImage
+        ? { backgroundImage: variant.assets.androidAdaptiveBackgroundImage }
+        : {}),
+      foregroundImage: variant.assets.androidAdaptiveForeground,
       monochromeImage: variant.assets.androidMonochromeIcon,
     },
     // Opts into OnBackInvokedCallback-based back dispatch (Android 13+).

@@ -59,7 +59,10 @@ is instead rendered from the same Icon Composer SVG sources by `vp run icons:exp
 - `apps/mobile/assets/android-icon-foreground.png`: the shared transparent wordmark, sized to stay
   inside the safe zone
 - `apps/mobile/assets/android-icon-background-dev.png` and `-nightly.png`: full-bleed variant
-  artwork (blueprint grid and annotations; night sky and clouds). Production uses a solid color.
+  artwork (blueprint grid and annotations; night sky and clouds).
+- `apps/mobile/assets/app-icons/primary-*.png`: the production launcher layers, rendered with the
+  alternate app icons from `apps/mobile/assets/app-icons/catalog.json` by
+  `node apps/mobile/scripts/generate-app-icons.cjs`.
 - `apps/mobile/assets/android-splash-icon-*.png`: the two layers composed into one 288dp image, so
   the splash mask reproduces the launcher icon's framing.
 
