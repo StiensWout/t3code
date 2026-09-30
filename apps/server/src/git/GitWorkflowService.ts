@@ -337,12 +337,12 @@ export const make = Effect.gen(function* () {
       "GitWorkflowService.resolvePullRequest",
       gitManager.resolvePullRequest,
     ),
+    // Creating a worktree only adds a new path, so it skips the mutation
+    // permit: parallel launches keep checking out (and fetching) side by side.
     preparePullRequestThread: (input) =>
-      worktreeLifecycle.withMutationPermit(
-        ensureGit("GitWorkflowService.preparePullRequestThread", input.cwd).pipe(
-          Effect.andThen(gitManager.preparePullRequestThread(input)),
-          Effect.tap(() => worktreeLifecycle.markInventoryChanged),
-        ),
+      ensureGit("GitWorkflowService.preparePullRequestThread", input.cwd).pipe(
+        Effect.andThen(gitManager.preparePullRequestThread(input)),
+        Effect.tap(() => worktreeLifecycle.markInventoryChanged),
       ),
     listRefs: (input) =>
       detectGitRepositoryForCommand("GitWorkflowService.listRefs", input.cwd).pipe(
@@ -351,11 +351,9 @@ export const make = Effect.gen(function* () {
         ),
       ),
     createWorktree: (input, options) =>
-      worktreeLifecycle.withMutationPermit(
-        ensureGitCommand("GitWorkflowService.createWorktree", input.cwd).pipe(
-          Effect.andThen(git.createWorktree(input, options)),
-          Effect.tap(() => worktreeLifecycle.markInventoryChanged),
-        ),
+      ensureGitCommand("GitWorkflowService.createWorktree", input.cwd).pipe(
+        Effect.andThen(git.createWorktree(input, options)),
+        Effect.tap(() => worktreeLifecycle.markInventoryChanged),
       ),
     listLocalBranchNames: (cwd) =>
       ensureGitCommand("GitWorkflowService.listLocalBranchNames", cwd).pipe(

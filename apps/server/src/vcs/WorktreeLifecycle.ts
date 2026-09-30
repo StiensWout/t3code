@@ -7,6 +7,13 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 
 import type { WorktreeInventoryChange } from "@t3tools/contracts";
 
+/**
+ * Server-wide coordination for existing worktrees. Removals and revival hold
+ * the mutation permit, so a removal's final safety check or a revival's
+ * missing-path check never interleaves with another removal or revival.
+ * Creating a new worktree only adds a path and skips it. Every change bumps
+ * the inventory revision that settings clients subscribe to.
+ */
 export class WorktreeLifecycle extends Context.Service<
   WorktreeLifecycle,
   {
