@@ -3,6 +3,7 @@ import * as NodeURL from "node:url";
 import {
   EventId,
   type OpenCodeSettings,
+  PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   ProviderDriverKind,
   ProviderInstanceId,
   type ProviderRuntimeEvent,
@@ -3118,6 +3119,20 @@ export function makeOpenCodeAdapter(
           ),
       });
 
+    // Saved-path lines share a text part with user-typed input, so a path is
+    // read only when it is a regular upload inside managed attachment storage.
+    // Anything else, such as /dev/zero, resolves to undefined and is kept.
+    const attachmentsRoot = path.resolve(serverConfig.attachmentsDir);
+    const readSavedAttachment = (savedPath: string) =>
+      Effect.gen(function* () {
+        if (!path.resolve(savedPath).startsWith(`${attachmentsRoot}${path.sep}`)) return undefined;
+        const info = yield* fileSystem.stat(savedPath);
+        if (info.type !== "File" || Number(info.size) > PROVIDER_SEND_TURN_MAX_FILE_BYTES) {
+          return undefined;
+        }
+        return yield* fileSystem.readFile(savedPath);
+      }).pipe(Effect.orElseSucceed(() => undefined));
+
     // Older T3 versions stored text documents twice: a usable path in the
     // prompt and a native file part that model converters can reject forever.
     // Repair only those duplicates, once on the first send after resuming.
@@ -3155,9 +3170,7 @@ export function makeOpenCodeAdapter(
           for (const savedPath of savedPaths) {
             if (!path.isAbsolute(savedPath)) continue;
             const bytes =
-              inlineData === undefined
-                ? undefined
-                : yield* fileSystem.readFile(savedPath).pipe(Effect.orElseSucceed(() => undefined));
+              inlineData === undefined ? undefined : yield* readSavedAttachment(savedPath);
             if (
               part.url === NodeURL.pathToFileURL(savedPath).href ||
               (bytes !== undefined && Buffer.from(bytes).toString("base64") === inlineData)

@@ -1453,11 +1453,21 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       const sessionID = "ses_legacy_html";
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const savedPath = path.join(yield* fs.makeTempDirectoryScoped(), "report.html");
+      const { attachmentsDir } = yield* ServerConfig;
+      const savedPath = path.join(
+        yield* fs.makeTempDirectoryScoped({ directory: attachmentsDir }),
+        "report.html",
+      );
       yield* fs.writeFileString(savedPath, "<h1>test</h1>");
+      // Identical bytes outside managed storage must not justify a deletion.
+      const outsidePath = path.join(yield* fs.makeTempDirectoryScoped(), "outside.html");
+      yield* fs.writeFileString(outsidePath, "<h1>test</h1>");
       const text = {
         type: "text",
-        text: `[Attached file "report.html" is saved at: ${savedPath}]`,
+        text: [
+          `[Attached file "report.html" is saved at: ${savedPath}]`,
+          `[Attached file "outside.html" is saved at: ${outsidePath}]`,
+        ].join("\n"),
       };
       const html = {
         id: "prt_html",
@@ -1475,6 +1485,7 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       };
       const image = { ...html, id: "prt_image", mime: "image/png", filename: "screenshot.png" };
       const unowned = { ...html, id: "prt_unowned", filename: "other.html" };
+      const outside = { ...html, id: "prt_outside", filename: "outside.html" };
       const ignoredText = {
         type: "text",
         ignored: true,
@@ -1489,7 +1500,7 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
         assistant,
         {
           info: { id: "msg_file", role: "user" },
-          parts: [text, html, sameName, image, unowned, ignoredText, ignored],
+          parts: [text, html, sameName, image, unowned, outside, ignoredText, ignored],
         },
       ];
       const session = yield* adapter.startSession({
@@ -1506,7 +1517,7 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
         assistant,
         {
           info: { id: "msg_file", role: "user" },
-          parts: [text, sameName, image, unowned, ignoredText, ignored],
+          parts: [text, sameName, image, unowned, outside, ignoredText, ignored],
         },
       ]);
       NodeAssert.partialDeepStrictEqual(runtimeMock.state.promptCalls, [
