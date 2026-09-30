@@ -585,39 +585,49 @@ function SidebarFooter({ className, ...props }: React.ComponentProps<"div">) {
 function SidebarContent({
   className,
   fixedHeader,
+  scrollable = true,
   ...props
 }: React.ComponentProps<"div"> & {
   fixedHeader?: React.ReactNode;
+  /** Virtualized children own their viewport and must receive a bounded height. */
+  scrollable?: boolean;
 }) {
+  const content = (
+    <div
+      // Reordered rows must not pull the viewport to their new position.
+      className={cn(
+        // Stacked groups share one inset between them instead of doubling
+        // it, including across the fixed header's boundary.
+        "flex w-full min-w-0 flex-col [overflow-anchor:none] group-data-[collapsible=icon]:overflow-hidden [&>[data-sidebar=group]+[data-sidebar=group]]:pt-0",
+        fixedHeader && "[&>[data-sidebar=group]:first-child]:pt-0",
+        className,
+      )}
+      data-sidebar="content"
+      data-slot="sidebar-content"
+      {...props}
+    />
+  );
   return (
     <>
       {fixedHeader ? <div className="w-full shrink-0">{fixedHeader}</div> : null}
       {/* Rows take focus on click. Scroll padding would make the browser nudge
           the list whenever a focused row sits under the fade. */}
-      <ScrollArea
-        hideScrollbars
-        scrollFade
-        scrollFadePadding={false}
-        // Thread rows provide keyboard access to this scroll region. Keeping
-        // Base UI's viewport out of the tab order lets its presentational role
-        // flatten in WebKit instead of becoming a VoiceOver interaction group.
-        viewportTabIndex={-1}
-        className="h-auto min-h-0 flex-1 [&>[data-slot=scroll-area-viewport]]:[--fade-size:0.75rem]"
-      >
-        <div
-          // Reordered rows must not pull the viewport to their new position.
-          className={cn(
-            // Stacked groups share one inset between them instead of doubling
-            // it, including across the fixed header's boundary.
-            "flex w-full min-w-0 flex-col [overflow-anchor:none] group-data-[collapsible=icon]:overflow-hidden [&>[data-sidebar=group]+[data-sidebar=group]]:pt-0",
-            fixedHeader && "[&>[data-sidebar=group]:first-child]:pt-0",
-            className,
-          )}
-          data-sidebar="content"
-          data-slot="sidebar-content"
-          {...props}
-        />
-      </ScrollArea>
+      {scrollable ? (
+        <ScrollArea
+          hideScrollbars
+          scrollFade
+          scrollFadePadding={false}
+          // Thread rows provide keyboard access to this scroll region. Keeping
+          // Base UI's viewport out of the tab order lets its presentational role
+          // flatten in WebKit instead of becoming a VoiceOver interaction group.
+          viewportTabIndex={-1}
+          className="h-auto min-h-0 flex-1 [&>[data-slot=scroll-area-viewport]]:[--fade-size:0.75rem]"
+        >
+          {content}
+        </ScrollArea>
+      ) : (
+        content
+      )}
     </>
   );
 }
