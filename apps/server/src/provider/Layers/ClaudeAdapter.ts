@@ -3293,9 +3293,6 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     if (message.type !== "assistant") {
       return;
     }
-    // Claude is answering on the rewound branch, so the prompt before this
-    // message is recorded and ordinary resumes follow the new branch.
-    context.rewindTo = undefined;
 
     // Subagent-owned assistant snapshots (parent_tool_use_id set) are the
     // subagent's own conversation, not the parent's. Emitting them created
@@ -3326,6 +3323,11 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       yield* updateResumeCursor(context);
       return;
     }
+
+    // Claude is answering on the rewound branch, so the prompt before this
+    // message is recorded and ordinary resumes follow the new branch. A
+    // subagent's reply lives in its own transcript and proves nothing here.
+    context.rewindTo = undefined;
 
     // Auto-start a synthetic turn for assistant messages that arrive without
     // an active turn (e.g., background agent/subagent responses between user prompts).

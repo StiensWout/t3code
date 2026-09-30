@@ -6880,9 +6880,13 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
-  for (const firstEntry of ["reply", "compaction"] as const) {
+  for (const firstEntry of ["reply", "compaction", "subagent reply"] as const) {
+    // A subagent's reply lives in its own transcript, so it keeps the point.
+    const keepsRewindPoint = firstEntry === "subagent reply";
     it.effect(
-      `keeps a Claude rewind point until the rewound branch records a ${firstEntry}`,
+      keepsRewindPoint
+        ? "keeps a Claude rewind point past a subagent reply"
+        : `keeps a Claude rewind point until the rewound branch records a ${firstEntry}`,
       () => {
         let firstTurnId = "";
         let secondTurnId = "";
@@ -6929,7 +6933,7 @@ describe("ClaudeAdapterLive", () => {
 
           const nextTurn = yield* adapter.sendTurn({
             threadId: session.threadId,
-            input: firstEntry === "reply" ? "second, edited" : "/compact",
+            input: firstEntry === "compaction" ? "/compact" : "second, edited",
             attachments: [],
           });
           const completedFiber = yield* Stream.filter(
@@ -6937,12 +6941,12 @@ describe("ClaudeAdapterLive", () => {
             (event) => event.type === "turn.completed",
           ).pipe(Stream.runHead, Effect.forkChild);
           harness.queries.at(-1)!.emit(
-            (firstEntry === "reply"
+            (firstEntry !== "compaction"
               ? {
                   type: "assistant",
                   session_id: CLAUDE_ORIGINAL_SESSION_ID,
-                  uuid: "assistant-2-edited",
-                  parent_tool_use_id: null,
+                  uuid: keepsRewindPoint ? "subagent-assistant" : "assistant-2-edited",
+                  parent_tool_use_id: keepsRewindPoint ? "task-tool-1" : null,
                   message: {
                     id: "assistant-message-2-edited",
                     content: [{ type: "text", text: "Edited" }],
@@ -6971,6 +6975,9 @@ describe("ClaudeAdapterLive", () => {
             threadId: session.threadId,
             resume: CLAUDE_ORIGINAL_SESSION_ID,
             ...(firstEntry === "reply" ? { resumeSessionAt: "assistant-2-edited" } : {}),
+            ...(keepsRewindPoint
+              ? { resumeSessionAt: "subagent-assistant", rewindTo: "assistant-1" }
+              : {}),
             turnCount: 2,
             turnStartMessageIds: [firstTurnId, nextTurn.turnId],
           });
@@ -6982,7 +6989,10 @@ describe("ClaudeAdapterLive", () => {
           });
           const resumedOptions = harness.getLastCreateQueryInput()?.options;
           assert.equal(resumedOptions?.resume, CLAUDE_ORIGINAL_SESSION_ID);
-          assert.equal(resumedOptions?.resumeSessionAt, undefined);
+          assert.equal(
+            resumedOptions?.resumeSessionAt,
+            keepsRewindPoint ? "assistant-1" : undefined,
+          );
         }).pipe(
           Effect.provideService(Random.Random, makeDeterministicRandomService()),
           Effect.provide(harness.layer),
