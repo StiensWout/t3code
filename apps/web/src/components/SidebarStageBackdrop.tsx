@@ -54,13 +54,27 @@ export function SidebarStageBackdrop({ variant }: { variant: SidebarStageBackdro
       aria-hidden
       className="sidebar-stage-backdrop pointer-events-none absolute inset-x-0 top-0 z-0 h-20 select-none overflow-hidden"
     >
-      <StageBackdropArt variant={variant} />
+      <StageBackdropArt variant={variant} dissolve />
     </div>
   );
 }
 
-export function StageBackdropArt({ variant }: { variant: SidebarStageBackdropVariant }) {
-  return variant === "nightly" ? <NightlySkyArt /> : <DevBlueprintArt />;
+/**
+ * Full-size stage art. `dissolve` fades its lower half into `--stage-fade`, which only the
+ * sidebar-stage-backdrop utility defines, so other placements keep the raw art.
+ */
+export function StageBackdropArt({
+  variant,
+  dissolve = false,
+}: {
+  variant: SidebarStageBackdropVariant;
+  dissolve?: boolean;
+}) {
+  return variant === "nightly" ? (
+    <NightlySkyArt dissolve={dissolve} />
+  ) : (
+    <DevBlueprintArt dissolve={dissolve} />
+  );
 }
 
 export function StageBackdropButtonArt({ variant }: { variant: SidebarStageBackdropVariant }) {
@@ -83,6 +97,8 @@ function StageDissolve({ id, anchor }: { id: string; anchor: string }) {
     </linearGradient>
   );
 }
+
+type StageArtProps = { compact?: boolean; dissolve?: boolean };
 
 type Star = { cx: number; cy: number; r: number; opacity: number };
 
@@ -111,7 +127,7 @@ function createStarField(seed: number, count: number): ReadonlyArray<Star> {
 
 const NIGHTLY_STARS = createStarField(79, 28);
 
-function NightlySkyArt({ compact = false }: { compact?: boolean }) {
+function NightlySkyArt({ compact = false, dissolve = false }: StageArtProps) {
   const idPrefix = useId().replaceAll(":", "");
   const skyId = `${idPrefix}-stage-night-sky`;
   const hazeId = `${idPrefix}-stage-night-haze`;
@@ -194,13 +210,12 @@ function NightlySkyArt({ compact = false }: { compact?: boolean }) {
       <rect width="100%" height="96" fill={`url(#${skyId})`} />
       <rect width="100%" height="96" fill={`url(#${hazePatternId})`} />
       <rect width="100%" height="96" fill={`url(#${starsId})`} />
-      {/* The send-button crop sits on the composer, not the sidebar, so it keeps the raw art. */}
-      {compact ? null : <rect width="100%" height="96" fill={`url(#${fadeId})`} />}
+      {dissolve ? <rect width="100%" height="96" fill={`url(#${fadeId})`} /> : null}
     </svg>
   );
 }
 
-function DevBlueprintArt({ compact = false }: { compact?: boolean }) {
+function DevBlueprintArt({ compact = false, dissolve = false }: StageArtProps) {
   const idPrefix = useId().replaceAll(":", "");
   const paperId = `${idPrefix}-stage-bp-paper`;
   const glowId = `${idPrefix}-stage-bp-glow`;
@@ -379,8 +394,7 @@ function DevBlueprintArt({ compact = false }: { compact?: boolean }) {
       <rect width="100%" height="96" fill={`url(#${majorGridId})`} />
       <rect width="100%" height="6" fill={`url(#${rulerId})`} />
       <rect width="100%" height="96" fill={`url(#${annotationsId})`} />
-      {/* The send-button crop sits on the composer, not the sidebar, so it keeps the raw art. */}
-      {compact ? null : <rect width="100%" height="96" fill={`url(#${fadeId})`} />}
+      {dissolve ? <rect width="100%" height="96" fill={`url(#${fadeId})`} /> : null}
     </svg>
   );
 }
