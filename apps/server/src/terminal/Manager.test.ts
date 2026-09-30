@@ -641,7 +641,7 @@ it.layer(
     Effect.gen(function* () {
       const ptyAdapter = new FakePtyAdapter();
       ptyAdapter.exitOnSubscribe = { exitCode: 7, signal: null };
-      const { manager, getEvents } = yield* createManager(5, { ptyAdapter });
+      const { manager, getEvents } = yield* createManager({ ptyAdapter });
       const exited = yield* Deferred.make<void>();
       const unsubscribe = yield* manager.subscribe((event) =>
         event.type === "exited"
@@ -1291,7 +1291,7 @@ it.layer(
   it.effect("closes only a thread's idle shells, ignoring a helper forked from the shell", () =>
     Effect.gen(function* () {
       // FakePtyAdapter assigns pids from 9000 in open order.
-      const { manager, ptyAdapter } = yield* createManager(5, {
+      const { manager, ptyAdapter } = yield* createManager({
         processTable: Effect.succeed([
           { pid: 9000, ppid: 1, name: "zsh" },
           // An async prompt worker: a copy of the shell with no children.
@@ -1311,6 +1311,8 @@ it.layer(
       yield* manager.open(openInput({ threadId: "thread-2" }));
 
       yield* manager.closeIdle({ threadId: "thread-1" });
+      // Closing forks the SIGTERM, so it can land after closeIdle returns.
+      yield* waitFor(Effect.sync(() => ptyAdapter.processes[0]?.killed === true));
 
       expect(ptyAdapter.processes.map((process) => process.killed)).toEqual([
         true,
@@ -1326,7 +1328,7 @@ it.layer(
       const ptyAdapter = new FakePtyAdapter();
       // The typed command's process misses the snapshot, but its input or echo lands.
       let duringCheck: (pid: number) => Effect.Effect<void> = () => Effect.void;
-      const { manager, getEvents } = yield* createManager(5, {
+      const { manager, getEvents } = yield* createManager({
         ptyAdapter,
         subprocessPollIntervalMs: 60_000,
         subprocessInspector: (pid) =>

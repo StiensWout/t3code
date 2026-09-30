@@ -2689,7 +2689,11 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
               session.startupError = null;
               // onExit may replay an exit immediately; accept it before subscribing.
               session.unsubscribeData = spawnResult.process.onData((data) => {
-                if (!session.process || session.status !== "running" || session.pid !== processPid) {
+                if (
+                  !session.process ||
+                  session.status !== "running" ||
+                  session.pid !== processPid
+                ) {
                   return;
                 }
                 if (!enqueueOutputData(session, processPid, data) || !eventsActivated) {
