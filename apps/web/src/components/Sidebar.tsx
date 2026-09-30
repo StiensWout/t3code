@@ -3166,11 +3166,6 @@ export default function Sidebar() {
     },
     [unsnoozeThread],
   );
-  const [materializeThreadList, setMaterializeThreadList] = useState(false);
-  const prepareThreadDrag = useCallback(() => {
-    listMotionRef.current?.suspend();
-    flushSync(() => setMaterializeThreadList(true));
-  }, []);
   const threadListRef = useRef<HTMLElement | null>(null);
   const dragLabelOffsetRef = useRef(0);
   const restrictBelowPins = useCallback<Modifier>((args) => {
@@ -3187,6 +3182,13 @@ export default function Sidebar() {
     listMotionRef.current?.dispose();
     listMotionRef.current = node === null ? null : createSidebarListMotion(node, { virtual: true });
     listMotionRef.current?.update(false);
+  }, []);
+  // Drag targets are measured from mounted rows, so pickup mounts the whole
+  // list first. finishThreadDrag restores virtualization.
+  const [materializeThreadList, setMaterializeThreadList] = useState(false);
+  const prepareThreadDrag = useCallback(() => {
+    listMotionRef.current?.suspend();
+    flushSync(() => setMaterializeThreadList(true));
   }, []);
 
   // Hold the chosen section and order until every key write arrives. This
@@ -5019,6 +5021,7 @@ export default function Sidebar() {
                         // sidebar's navigation landmark already names this region.
                         role="presentation"
                         fillSpaceKey="shelf-spacer"
+                        grow={sidebarListHasRows}
                         activeKey={routeThreadKey}
                         retainedKeys={[renamingThreadKey, dragState?.activeKey ?? null]}
                         materialize={materializeThreadList}

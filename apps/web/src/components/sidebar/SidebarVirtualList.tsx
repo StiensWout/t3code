@@ -19,6 +19,7 @@ export function SidebarVirtualList<T extends { key: string }>({
   retainedKeys = EMPTY_KEYS,
   estimatedItemSize = 83,
   fillSpaceKey,
+  grow = true,
   role,
   id,
   "aria-label": label,
@@ -35,6 +36,9 @@ export function SidebarVirtualList<T extends { key: string }>({
   estimatedItemSize?: number;
   /** A non-interactive item that keeps the following shelves at the viewport bottom. */
   fillSpaceKey?: string;
+  /** Fill the remaining sidebar height. Pass false while nothing is listed so
+   * a following empty state stays at the top instead of below an empty viewport. */
+  grow?: boolean;
   /** Search results are a listbox. Thread rows stay presentational so screen
    * readers traverse them linearly instead of entering a list boundary. */
   role: "listbox" | "presentation";
@@ -154,7 +158,8 @@ export function SidebarVirtualList<T extends { key: string }>({
       recycleItems={false}
       maintainVisibleContentPosition
       className={cn(
-        "relative h-0 min-h-0 flex-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+        "relative min-h-0 overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+        grow && "h-0 flex-auto",
         // Sortable cards translate past their measured row boxes while dragging.
         "[&_:has(>[data-sidebar-list-key])]:[contain:layout_style]!",
         "[&_:has(>[data-sidebar-list-key][data-sidebar-dragging])]:z-20",
