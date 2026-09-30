@@ -3,13 +3,25 @@ import { parseComposerContextHref } from "@t3tools/shared/composerContextReferen
 import type { NativeMarkdownTextRun } from "./nativeMarkdownText";
 import type { MarkdownNode } from "react-native-nitro-markdown/headless";
 
+function hasDollarText(node: MarkdownNode): boolean {
+  return node.type === "text"
+    ? (node.content?.includes("$") ?? false)
+    : (node.children?.some(hasDollarText) ?? false);
+}
+
 /** Shield math from the native parser, then restore typed nodes using the shared grammar. */
 export function parseNativeMarkdownMath(
   source: string,
   parse: (markdown: string) => MarkdownNode,
 ): MarkdownNode {
+  const document = parse(source);
+  // Agent output often has `$` only in shell or template code. Math restores only
+  // into native text, so skip the JS grammar pass unless native text could hold it.
+  // Backslash openers are checked in the source because escapes drop the backslash.
+  if (!source.includes("\\(") && !source.includes("\\[") && !hasDollarText(document))
+    return document;
   const ranges = markdownMathRanges(source);
-  if (ranges.length === 0) return parse(source);
+  if (ranges.length === 0) return document;
   let prefix = ":t3-math-";
   while (source.includes(prefix)) prefix += "-";
   const mathByMarker = new Map(ranges.map((math, index) => [`${prefix}${index}:`, math]));

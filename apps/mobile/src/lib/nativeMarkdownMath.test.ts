@@ -73,6 +73,19 @@ describe("native math", () => {
     ]);
   });
 
+  it("typesets dollar math in native text but not dollars inside native code", () => {
+    const asText = (markdown: string) => ({
+      type: "paragraph" as const,
+      children: [{ type: "text" as const, content: markdown }],
+    });
+    expect(
+      nativeMarkdownDocumentRuns(parseNativeMarkdownMath("Energy $E$ here", asText)),
+    ).toContainEqual({ text: "$E$", mathSource: "$E$", role: "body" });
+    const code = "```sh\necho $HOME/$E$\n```";
+    const nativeCode = { type: "code_block" as const, content: "echo $HOME/$E$\n" };
+    expect(parseNativeMarkdownMath(code, () => nativeCode)).toBe(nativeCode);
+  });
+
   it.each([
     String.raw`$x_i^2+\alpha$`,
     String.raw`\(\frac{a}{b}\)`,
