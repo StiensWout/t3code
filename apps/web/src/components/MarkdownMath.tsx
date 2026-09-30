@@ -16,14 +16,14 @@ export const MarkdownMath = memo(function MarkdownMath({ source }: { source: str
     <span
       className={
         math.display
-          ? "markdown-math markdown-math-display group/math relative my-[1.25em] block min-w-0 text-inherit"
+          ? "markdown-math group/math relative my-[1.25em] block min-w-0 text-inherit"
           : "markdown-math text-inherit"
       }
       data-markdown-math=""
       data-markdown-copy={source}
     >
       {math.display ? (
-        <span className="markdown-math-actions flex justify-end gap-[0.9em] text-xs opacity-0 select-none group-hover/math:opacity-100 group-focus-within/math:opacity-100 [@media(hover:none)]:opacity-100">
+        <span className="flex justify-end gap-2.5 text-xs opacity-0 select-none group-hover/math:opacity-100 group-focus-within/math:opacity-100 [@media(hover:none)]:opacity-100">
           <Button
             variant="link"
             size="xs"
@@ -53,11 +53,7 @@ export const MarkdownMath = memo(function MarkdownMath({ source }: { source: str
         </span>
       ) : null}
       <span
-        className={
-          math.display
-            ? "markdown-math-viewport block overflow-x-auto py-[0.5em]"
-            : "markdown-math-viewport"
-        }
+        className={math.display ? "block overflow-x-auto py-2" : undefined}
         tabIndex={math.display ? 0 : undefined}
         role={math.display ? "region" : undefined}
         aria-label={math.display ? "Equation" : undefined}
@@ -69,7 +65,7 @@ export const MarkdownMath = memo(function MarkdownMath({ source }: { source: str
         </RenderErrorBoundary>
       </span>
       {showSource && math.display ? (
-        <span className="markdown-math-source mt-[0.5em] block font-mono text-xs wrap-anywhere whitespace-pre-wrap">
+        <span className="mt-[0.5em] block font-mono text-xs wrap-anywhere whitespace-pre-wrap">
           {source}
         </span>
       ) : null}
