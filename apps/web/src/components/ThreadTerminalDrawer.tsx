@@ -982,13 +982,15 @@ export function TerminalViewport({
   }, [drawerHeight, environmentId, resizeEpoch, terminalId, threadId]);
 
   useLayoutEffect(() => {
-    if (panelResizeEpoch === 0 && resizeEpoch === 0) return;
+    if (panelResizeEpoch === 0) return;
     const terminal = terminalRef.current;
     if (!terminal || !visibleRef.current) return;
-    // Drag-end epochs run after the final DOM width commits, before paint.
-    // Flush even if ResizeObserver has already fitted the local grid.
+    // The panel's drag-end epoch runs after the final DOM width commits, before
+    // paint. Flush even if ResizeObserver has already fitted the local grid.
+    // The drawer's own resizeEpoch also advances on every window resize event,
+    // so it stays on the debounced path above.
     if (terminal.fit()) terminal.flushResize();
-  }, [panelResizeEpoch, resizeEpoch]);
+  }, [panelResizeEpoch]);
   return (
     <div
       ref={containerRef}
