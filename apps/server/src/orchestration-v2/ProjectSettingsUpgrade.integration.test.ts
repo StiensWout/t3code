@@ -24,6 +24,7 @@ import { ServerSettingsService } from "../serverSettings.ts";
 import { SourceControlProviderRegistry } from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
+import { layerNoop as worktreeRevivalTestLayer } from "../vcs/WorktreeRevivalService.testkit.ts";
 import { WorkspacePaths } from "../workspace/WorkspacePaths.ts";
 import { LegacyV1ThreadImporter } from "./legacy/LegacyV1ThreadImporter.ts";
 import { OrchestrationV2LayerLive, ProjectServiceLayerLive } from "./runtimeLayer.ts";
@@ -166,6 +167,7 @@ const makeRuntimeLayer = (dbPath: string) => {
         pruneWorktrees: () => Effect.void,
       }),
     ),
+    Layer.provide(worktreeRevivalTestLayer),
     Layer.provide(platform),
   );
 };
