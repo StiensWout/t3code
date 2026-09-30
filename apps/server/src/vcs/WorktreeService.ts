@@ -493,6 +493,8 @@ const make = Effect.gen(function* () {
   const listWorktrees: WorktreeService["Service"]["listWorktrees"] = Effect.fn(
     "WorktreeService.listWorktrees",
   )(function* (input) {
+    // Read first, so a change that lands while listing reports a newer revision.
+    const revision = yield* lifecycle.revision;
     const projectSnapshot = yield* projectsService.snapshot.pipe(
       Effect.mapError((cause) => inventoryError("load_projects", cause)),
     );
@@ -581,7 +583,7 @@ const make = Effect.gen(function* () {
       const bMs = b.lastActivityAt === null ? 0 : Date.parse(b.lastActivityAt);
       return aMs - bMs;
     });
-    return { worktrees };
+    return { worktrees, revision };
   });
 
   // Fresh Git and thread rechecks plus the removal run under the mutation

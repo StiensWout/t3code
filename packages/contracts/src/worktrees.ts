@@ -81,6 +81,9 @@ export type VcsPruneWorktreesInput = typeof VcsPruneWorktreesInput.Type;
 
 export const VcsListWorktreesResult = Schema.Struct({
   worktrees: Schema.Array(WorktreeInfo),
+  /** Inventory revision read before listing. A newer change revision means
+      this list may already be stale. */
+  revision: NonNegativeInt,
 });
 export type VcsListWorktreesResult = typeof VcsListWorktreesResult.Type;
 

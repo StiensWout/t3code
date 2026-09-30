@@ -947,17 +947,19 @@ function WorktreeEnvironmentGroup({
     removedPaths.size === 0
       ? inventoryWorktrees
       : inventoryWorktrees.filter((worktree) => !removedPaths.has(worktree.path));
-  const observedInventoryRevision = useRef<number | null>(null);
+  const refreshedForRevision = useRef<number | null>(null);
+  const listedRevision = inventory.data?.revision;
 
   useEffect(() => {
     const revision = inventoryChanges.data?.revision;
-    if (revision === undefined || observedInventoryRevision.current === revision) return;
-    // The first revision describes the state the initial query already read;
-    // only later bumps mean the inventory changed underneath us.
-    const isFirstObservation = observedInventoryRevision.current === null;
-    observedInventoryRevision.current = revision;
-    if (!isFirstObservation) inventory.refresh();
-  }, [inventory.refresh, inventoryChanges.data?.revision]);
+    if (revision === undefined || listedRevision === undefined) return;
+    // The list and the change stream are separate requests, so compare the
+    // revision the list was read at. Differs, not newer: a restarted server
+    // starts over at 0. One read per revision, so a failing read cannot loop.
+    if (revision === listedRevision || refreshedForRevision.current === revision) return;
+    refreshedForRevision.current = revision;
+    inventory.refresh();
+  }, [inventory.refresh, inventoryChanges.data?.revision, listedRevision]);
 
   useEffect(() => {
     if (refreshToken === 0) return;

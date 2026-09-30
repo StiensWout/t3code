@@ -622,9 +622,12 @@ it.effect("removes a safe worktree and keeps its branch", () =>
     });
     const canonicalPath = yield* fs.realPath(worktreePath);
 
-    const result = yield* Effect.gen(function* () {
+    const { before, result, after } = yield* Effect.gen(function* () {
       const service = yield* WorktreeService;
-      return yield* service.pruneWorktrees({ paths: [worktreePath] });
+      const before = yield* service.listWorktrees({});
+      const result = yield* service.pruneWorktrees({ paths: [worktreePath] });
+      const after = yield* service.listWorktrees({});
+      return { before, result, after };
     }).pipe(
       Effect.provide(
         makeTestLayer(
@@ -639,6 +642,11 @@ it.effect("removes a safe worktree and keeps its branch", () =>
       [canonicalPath],
     );
     assert.deepEqual(result.skipped, []);
+    // The removal bumps the revision a later list reports, so clients can tell
+    // an earlier list is stale.
+    assert.equal(before.worktrees.length, 1);
+    assert.deepEqual(after.worktrees, []);
+    assert.isAbove(after.revision, before.revision);
     assert.isFalse(yield* fs.exists(worktreePath));
     const branch = yield* driver.execute({
       operation: "WorktreeServiceTest.branchKept",

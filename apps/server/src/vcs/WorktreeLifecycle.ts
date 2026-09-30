@@ -21,6 +21,7 @@ export class WorktreeLifecycle extends Context.Service<
       effect: Effect.Effect<A, E, R>,
     ) => Effect.Effect<A, E, R>;
     readonly markInventoryChanged: Effect.Effect<void>;
+    readonly revision: Effect.Effect<number>;
     readonly changes: Stream.Stream<WorktreeInventoryChange>;
   }
 >()("t3/vcs/WorktreeLifecycle") {}
@@ -39,6 +40,7 @@ export const make = Effect.gen(function* () {
   return WorktreeLifecycle.of({
     withMutationPermit,
     markInventoryChanged,
+    revision: SubscriptionRef.get(revision),
     changes,
   });
 });
