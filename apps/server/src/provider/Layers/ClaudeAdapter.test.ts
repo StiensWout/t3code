@@ -6991,6 +6991,104 @@ describe("ClaudeAdapterLive", () => {
     );
   }
 
+  it.effect("keeps a prompt stopped after a Claude rewind once Claude reports the abort", () => {
+    let firstTurnId = "";
+    let secondTurnId = "";
+    let editedTurnId = "";
+    let thirdTurnId = "";
+    let resumedAt: string | undefined;
+    const harness = makeHarness({
+      getSessionMessages: async () =>
+        thirdTurnId === ""
+          ? [
+              claudeHistoryMessage({ type: "user", uuid: firstTurnId, content: "first" }),
+              claudeHistoryMessage({ type: "assistant", uuid: "assistant-1" }),
+              claudeHistoryMessage({ type: "user", uuid: secondTurnId, content: "second" }),
+              claudeHistoryMessage({ type: "assistant", uuid: "assistant-2" }),
+            ]
+          : [
+              claudeHistoryMessage({ type: "user", uuid: firstTurnId, content: "first" }),
+              claudeHistoryMessage({ type: "assistant", uuid: "assistant-1" }),
+              // Claude truncates at resumeSessionAt, so resuming at the rewind
+              // point would drop the prompt Stop interrupted.
+              ...(resumedAt === "assistant-1"
+                ? []
+                : [
+                    claudeHistoryMessage({ type: "user", uuid: editedTurnId, content: "edited" }),
+                    claudeHistoryMessage({
+                      type: "user",
+                      uuid: "interrupt-marker",
+                      content: [{ type: "text", text: "[Request interrupted by user]" }],
+                    }),
+                  ]),
+              claudeHistoryMessage({ type: "user", uuid: thirdTurnId, content: "third" }),
+              claudeHistoryMessage({ type: "assistant", uuid: "assistant-3" }),
+            ],
+    });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      firstTurnId = (yield* sendCompletedClaudeTurn(adapter, harness, session.threadId, "first"))
+        .turnId;
+      secondTurnId = (yield* sendCompletedClaudeTurn(adapter, harness, session.threadId, "second"))
+        .turnId;
+      yield* adapter.rollbackThread(session.threadId, 1);
+
+      editedTurnId = (yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "edited",
+        attachments: [],
+      })).turnId;
+      // Stop before any reply. Claude reports the abort, and holding its
+      // interrupt ack keeps the session open to read the cursor that
+      // turn.completed persists.
+      const rewound = harness.queries.at(-1)!;
+      let ackInterrupt = () => {};
+      rewound.interrupt = () => {
+        rewound.emit({
+          type: "result",
+          subtype: "error_during_execution",
+          is_error: false,
+          errors: ["Error: Request was aborted."],
+          session_id: CLAUDE_ORIGINAL_SESSION_ID,
+          uuid: "result-interrupted",
+        } as unknown as SDKMessage);
+        return new Promise<void>((resolve) => {
+          ackInterrupt = resolve;
+        });
+      };
+      const completedFiber = yield* Stream.filter(
+        adapter.streamEvents,
+        (event) => event.type === "turn.completed",
+      ).pipe(Stream.runHead, Effect.forkChild);
+      const interruptFiber = yield* adapter.interruptTurn(session.threadId).pipe(Effect.forkChild);
+      yield* Fiber.join(completedFiber);
+      const cursor = (yield* adapter.listSessions())[0]?.resumeCursor;
+      ackInterrupt();
+      yield* Fiber.join(interruptFiber);
+
+      yield* adapter.startSession({
+        threadId: session.threadId,
+        runtimeMode: "full-access",
+        resumeCursor: cursor,
+      });
+      resumedAt = harness.getLastCreateQueryInput()?.options.resumeSessionAt;
+      assert.equal(resumedAt, undefined);
+
+      thirdTurnId = (yield* sendCompletedClaudeTurn(adapter, harness, session.threadId, "third"))
+        .turnId;
+      yield* adapter.rollbackThread(session.threadId, 2);
+      assert.equal(harness.getLastCreateQueryInput()?.options.resumeSessionAt, "assistant-1");
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("rewinds a Claude turn that includes tool results and a later steer", () => {
     let firstTurnId = "";
     let secondTurnId = "";

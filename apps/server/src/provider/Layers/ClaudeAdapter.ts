@@ -358,7 +358,8 @@ interface ClaudeSessionContext {
   currentEffort: string | undefined;
   resumeSessionId: string | undefined;
   /** Pending rewind point (see `ClaudeResumeState.rewindTo`). Cleared once the
-   * rewound branch records something: an assistant message or a compaction. */
+   * rewound branch records something: an assistant message, a compaction, or
+   * a prompt that Stop interrupted after Claude saved it. */
   rewindTo: string | undefined;
   readonly pendingApprovals: Map<ApprovalRequestId, PendingApproval>;
   readonly pendingUserInputs: Map<ApprovalRequestId, PendingUserInput>;
@@ -2709,6 +2710,20 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         ...(errorMessage ? { errorMessage } : {}),
       });
       return;
+    }
+
+    // Stop waits for Claude's own result before closing the session (see
+    // settleInterruptedTurn), and Claude saves a prompt before running it. So
+    // that result means the rewound branch recorded the interrupted prompt.
+    // A turn that ends without a result keeps the rewind point. Update the
+    // cursor before turn.completed, which is when it gets persisted.
+    if (
+      result !== undefined &&
+      context.interruptedTurnSettled !== undefined &&
+      context.rewindTo !== undefined
+    ) {
+      context.rewindTo = undefined;
+      yield* updateResumeCursor(context);
     }
 
     for (const [index, tool] of context.inFlightTools.entries()) {
