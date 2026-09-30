@@ -366,6 +366,10 @@ const createManager = (
 const withHostPlatform = (platform: NodeJS.Platform) =>
   Layer.succeed(HostProcessPlatform, platform);
 
+/** Kill signals are forked, so closed events are the synchronous record of closeIdle. */
+const closedTerminalIds = (events: ReadonlyArray<TerminalEvent>) =>
+  events.flatMap((event) => (event.type === "closed" ? [event.terminalId] : []));
+
 it.layer(
   Layer.merge(NodeServices.layer, ProcessRunner.layer.pipe(Layer.provide(NodeServices.layer))),
   { excludeTestServices: true },
@@ -1291,7 +1295,7 @@ it.layer(
   it.effect("closes only a thread's idle shells, ignoring a helper forked from the shell", () =>
     Effect.gen(function* () {
       // FakePtyAdapter assigns pids from 9000 in open order.
-      const { manager, ptyAdapter } = yield* createManager({
+      const { manager, ptyAdapter, getEvents } = yield* createManager({
         processTable: Effect.succeed([
           { pid: 9000, ppid: 1, name: "zsh" },
           // An async prompt worker: a copy of the shell with no children.
@@ -1320,6 +1324,7 @@ it.layer(
         false,
         false,
       ]);
+      expect(closedTerminalIds(yield* getEvents)).toEqual(["idle"]);
     }),
   );
 
@@ -1338,22 +1343,30 @@ it.layer(
       });
       yield* manager.open(openInput({ terminalId: "typed" }));
       yield* manager.open(openInput({ terminalId: "echoed" }));
-      const [typed, echoed] = ptyAdapter.processes;
-      duringCheck = (pid) =>
-        pid === typed!.pid
-          ? manager
-              .write({ threadId: "thread-1", terminalId: "typed", data: "make build\r" })
-              .pipe(Effect.orDie)
-          : Effect.gen(function* () {
-              echoed!.emitData("make build\r\n");
-              yield* waitFor(
-                Effect.map(getEvents, (events) => events.some((event) => event.type === "output")),
-              );
-            }).pipe(Effect.orDie);
+      yield* manager.open(openInput({ terminalId: "batched" }));
+      const [typed, echoed, batched] = ptyAdapter.processes;
+      duringCheck = (pid) => {
+        if (pid === typed!.pid) {
+          return manager
+            .write({ threadId: "thread-1", terminalId: "typed", data: "make build\r" })
+            .pipe(Effect.orDie);
+        }
+        if (pid === batched!.pid) {
+          // Still inside the output batch window when the check finishes.
+          return Effect.sync(() => batched!.emitData("make build\r\n"));
+        }
+        return Effect.gen(function* () {
+          echoed!.emitData("make build\r\n");
+          yield* waitFor(
+            Effect.map(getEvents, (events) => events.some((event) => event.type === "output")),
+          );
+        }).pipe(Effect.orDie);
+      };
 
       yield* manager.closeIdle({ threadId: "thread-1" });
 
-      expect(ptyAdapter.processes.map((process) => process.killed)).toEqual([false, false]);
+      expect(closedTerminalIds(yield* getEvents)).toEqual([]);
+      expect(ptyAdapter.processes.map((process) => process.killed)).toEqual([false, false, false]);
     }),
   );
 

@@ -3812,7 +3812,9 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             inspector(session.pid).pipe(
               Effect.flatMap((result) =>
                 result.hasRunningSubprocess ||
-                activityMark(session) !== marks.get(session.terminalId)
+                activityMark(session) !== marks.get(session.terminalId) ||
+                // Output still inside its batch window has not advanced the sequence yet.
+                session.processEventDrainPid !== null
                   ? Effect.void
                   : closeSession(input.threadId, session.terminalId, false),
               ),
