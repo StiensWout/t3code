@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 
 import { APP_DISPLAY_NAME, APP_VERSION } from "../branding";
 import { isElectron } from "../env";
+import { useEnvironmentIdentificationMode } from "../hooks/useSettings";
 import { cn, isMacPlatform } from "../lib/utils";
 import {
   resolveEnvironmentIdentificationPillLabel,
@@ -27,7 +28,7 @@ export function StandaloneSurface({ children }: { readonly children: ReactNode }
       <main className="mx-auto flex w-full max-w-md flex-1 flex-col justify-center px-5 py-12">
         {children}
       </main>
-      <p className="px-5 pb-5 text-center text-[11px] text-muted-foreground/60">
+      <p className="px-5 pb-5 text-center text-2xs text-muted-foreground/60">
         {APP_DISPLAY_NAME} {APP_VERSION}
       </p>
     </div>
@@ -35,22 +36,30 @@ export function StandaloneSurface({ children }: { readonly children: ReactNode }
 }
 
 /**
- * Mirrors the sidebar header: stage art with the brand in white on Dev and
- * Nightly, otherwise a hairline bar with the brand and the stage pill.
+ * Mirrors the sidebar header and its environment identification setting:
+ * stage art with the brand in white on Dev and Nightly, otherwise a hairline
+ * bar with the brand and, in pill mode, the stage pill.
  */
 function StageTopbar() {
   const stageLabel = useEnvironmentStageLabel();
-  const stageVariant = resolveSidebarStageBackdropVariant(stageLabel);
-  const stagePillLabel = stageVariant
-    ? null
-    : resolveEnvironmentIdentificationPillLabel(stageLabel);
+  const environmentIdentificationMode = useEnvironmentIdentificationMode();
+  const stageVariant = resolveSidebarStageBackdropVariant(
+    stageLabel,
+    environmentIdentificationMode === "artwork",
+  );
+  const stagePillLabel =
+    environmentIdentificationMode === "pill"
+      ? resolveEnvironmentIdentificationPillLabel(stageLabel)
+      : null;
 
   return (
     <WorkspacePageHeader
       electron={isElectron}
       className={cn(
         "relative justify-between gap-4 overflow-hidden",
-        isElectron && isMacPlatform(navigator.platform) && "pl-[90px] sm:pl-[90px]",
+        isElectron &&
+          isMacPlatform(navigator.platform) &&
+          "pl-(--desktop-window-controls-inset,90px)",
         stageVariant ? "text-white" : "border-b border-border",
       )}
     >
@@ -90,7 +99,7 @@ export function StandaloneSurfaceHeading({
   return (
     <div className="mb-4">
       <h1 className="text-lg font-semibold tracking-tight">{title}</h1>
-      <p className="mt-1 text-[13px] leading-relaxed text-muted-foreground">{description}</p>
+      <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{description}</p>
     </div>
   );
 }

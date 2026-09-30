@@ -97,7 +97,7 @@ export function PairingRouteSurface({
       <form onSubmit={(event) => void handleSubmit(event)}>
         <StandaloneSurfacePanel>
           <div className="space-y-2 p-4">
-            <label className="text-[13px] font-medium" htmlFor="pairing-token">
+            <label className="text-sm font-medium" htmlFor="pairing-token">
               Pairing token
             </label>
             <Input
@@ -113,7 +113,7 @@ export function PairingRouteSurface({
               value={credential}
             />
             {errorMessage ? (
-              <p className="text-[13px] leading-relaxed text-destructive">{errorMessage}</p>
+              <p className="text-sm leading-relaxed text-destructive">{errorMessage}</p>
             ) : null}
             <div className="flex flex-wrap items-center gap-2 pt-2">
               <Button disabled={isSubmitting} size="sm" type="submit">
@@ -224,12 +224,12 @@ export function HostedPairingRouteSurface() {
       <StandaloneSurfacePanel>
         {request ? (
           <div className="flex items-center justify-between gap-4 px-4 py-3">
-            <span className="text-[13px]">Host</span>
+            <span className="text-sm">Host</span>
             <span className="truncate font-mono text-xs text-muted-foreground">{request.host}</span>
           </div>
         ) : null}
         {status === "error" ? (
-          <p className="px-4 py-3 text-[13px] leading-relaxed text-destructive">
+          <p className="px-4 py-3 text-sm leading-relaxed text-destructive">
             Verify the backend is reachable from this browser, supports CORS for hosted clients, and
             is served over HTTPS when opening this page from HTTPS.
           </p>
