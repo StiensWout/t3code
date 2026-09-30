@@ -179,6 +179,9 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
      by the composer, its context strip and attached banners. */
   --shadow-composer: 0 12px 28px -18px rgb(0 0 0 / 40%);
   --shadow-composer-dark: 0 14px 32px -18px rgb(0 0 0 / 75%);
+  /* Environment artwork cropped into the send button: a light blur so the
+     small crop reads as soft color rather than detail. */
+  --blur-stage-crop: 1.6px;
   /* Dark-mode shade where an attached surface meets the composer: 10px of
      shadow fading away from the seam. Inline, so the offsets resolve on the
      element. below: the context strip under the composer (1rem seam, faint

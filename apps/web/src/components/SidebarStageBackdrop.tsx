@@ -138,7 +138,7 @@ function NightlySkyArt({ compact = false, dissolve = false }: StageArtProps) {
   return (
     <svg
       data-stage-art="nightly"
-      className={cn("h-full w-full", compact && "scale-110 blur-[1.6px]")}
+      className={cn("h-full w-full", compact && "scale-110 blur-stage-crop")}
       fill="none"
       preserveAspectRatio="xMinYMin slice"
       viewBox={compact ? "96 0 8192 96" : STAGE_BACKDROP_VIEW_BOX}
@@ -231,7 +231,7 @@ function DevBlueprintArt({ compact = false, dissolve = false }: StageArtProps) {
   return (
     <svg
       data-stage-art="blueprint"
-      className={cn("h-full w-full", compact && "scale-110 blur-[1.6px]")}
+      className={cn("h-full w-full", compact && "scale-110 blur-stage-crop")}
       fill="none"
       preserveAspectRatio="xMinYMin slice"
       viewBox={compact ? "64 0 8192 96" : STAGE_BACKDROP_VIEW_BOX}
