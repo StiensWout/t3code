@@ -8,6 +8,7 @@ import {
 import * as Option from "effect/Option";
 import {
   getModelSelectionStringOptionValue,
+  getModelSelectionBooleanOptionValue,
   getProviderOptionCurrentValue,
   getProviderOptionDescriptors,
   readCustomModelEntries,
@@ -28,6 +29,34 @@ import {
 
 const CLAUDE = ProviderDriverKind.make("claudeAgent");
 const EMPTY_CAPABILITIES: ModelCapabilities = { optionDescriptors: [] };
+
+/** Resolve the options Claude applies at startup, including catalog defaults. */
+export function resolveClaudeSessionOptions(
+  selection: ModelSelection | undefined,
+  capabilities: ModelCapabilities | undefined,
+) {
+  const descriptors = capabilities
+    ? getProviderOptionDescriptors({ caps: capabilities, selections: selection?.options })
+    : [];
+  const stringOption = (id: string) => {
+    if (capabilities === undefined) return getModelSelectionStringOptionValue(selection, id);
+    const value = getProviderOptionCurrentValue(descriptors.find((option) => option.id === id));
+    return typeof value === "string" ? value : undefined;
+  };
+  const supportsBoolean = (id: string) =>
+    capabilities === undefined ||
+    descriptors.some((option) => option.type === "boolean" && option.id === id);
+  return {
+    effort: stringOption("effort"),
+    contextWindow: stringOption("contextWindow"),
+    fastMode:
+      supportsBoolean("fastMode") &&
+      getModelSelectionBooleanOptionValue(selection, "fastMode") === true,
+    thinking: supportsBoolean("thinking")
+      ? getModelSelectionBooleanOptionValue(selection, "thinking")
+      : undefined,
+  };
+}
 
 export interface ClaudeCatalogModel {
   readonly model: ServerProviderModel;

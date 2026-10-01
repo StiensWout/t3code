@@ -267,6 +267,9 @@ export const makeTestProviderAdapterHarness = (options?: MakeTestProviderAdapter
             : {}),
           status: "ready",
           runtimeMode: input.runtimeMode,
+          ...(input.modelSelection
+            ? { model: input.modelSelection.model, modelSelection: input.modelSelection }
+            : {}),
           threadId,
           cwd: input.cwd,
           resumeCursor: input.resumeCursor ?? { threadId: String(threadId), seed: sessionCount },

@@ -61,9 +61,7 @@ import {
 } from "@t3tools/contracts";
 import {
   applyClaudePromptEffortPrefix,
-  getModelSelectionBooleanOptionValue,
   getModelSelectionStringOptionValue,
-  getProviderOptionDescriptors,
   resolvePromptInjectedEffort,
 } from "@t3tools/shared/model";
 import {
@@ -104,6 +102,7 @@ import {
   resolveClaudeCatalogContextWindowTokens,
   resolveClaudeCatalogEffort,
   resolveClaudeModelSlug,
+  resolveClaudeSessionOptions,
   scopeClaudeModelCatalog,
 } from "../ClaudeModelCatalog.ts";
 import {
@@ -4918,26 +4917,14 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           }
         : undefined;
       const caps = getClaudeCatalogModelCapabilities(modelCatalog, modelSelection?.model);
-      const descriptors = getProviderOptionDescriptors({ caps });
+      const sessionOptions = resolveClaudeSessionOptions(modelSelection, caps);
       const apiModelId = modelSelection
         ? resolveClaudeCatalogApiModelId(modelCatalog, modelSelection)
         : undefined;
       const initialContextWindow = selectedClaudeContextWindow(modelCatalog, modelSelection);
-      const rawEffort = getModelSelectionStringOptionValue(modelSelection, "effort");
-      const effort =
-        resolveClaudeCatalogEffort(modelCatalog, modelSelection?.model, rawEffort) ?? null;
-      const fastModeSupported = descriptors.some(
-        (descriptor) => descriptor.type === "boolean" && descriptor.id === "fastMode",
-      );
-      const thinkingSupported = descriptors.some(
-        (descriptor) => descriptor.type === "boolean" && descriptor.id === "thinking",
-      );
-      const fastMode =
-        getModelSelectionBooleanOptionValue(modelSelection, "fastMode") === true &&
-        fastModeSupported;
-      const thinking = thinkingSupported
-        ? getModelSelectionBooleanOptionValue(modelSelection, "thinking")
-        : undefined;
+      const effort = sessionOptions.effort ?? null;
+      const fastMode = sessionOptions.fastMode;
+      const thinking = sessionOptions.thinking;
       const thinkingDisplayArg = extraArgs["thinking-display"];
       const requestThinkingSummaries = shouldRequestClaudeThinkingSummaries({
         thinking,
@@ -5086,7 +5073,16 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         runtimeMode: input.runtimeMode,
         ...(input.cwd ? { cwd: input.cwd } : {}),
         ...(modelSelection?.model ? { model: modelSelection.model } : {}),
-        ...(modelSelection ? { modelSelection } : {}),
+        ...(modelSelection
+          ? {
+              modelSelection: {
+                ...modelSelection,
+                options: Object.entries(sessionOptions).flatMap(([id, value]) =>
+                  value === undefined ? [] : [{ id, value }],
+                ),
+              },
+            }
+          : {}),
         ...(threadId ? { threadId } : {}),
         resumeCursor: {
           ...(threadId ? { threadId } : {}),

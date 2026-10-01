@@ -10,6 +10,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ProviderSetupError,
+  type ServerProviderModel,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
 import {
@@ -73,6 +74,11 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Clock from "effect/Clock";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ServerActivation } from "../../serverActivation.ts";
+import {
+  SYNTHETIC_CLAUDE_CAPABLE_MODEL,
+  SYNTHETIC_CLAUDE_COLLIDING_ALIAS,
+  SYNTHETIC_CLAUDE_MODEL_CATALOG,
+} from "../../provider/ClaudeModelCatalog.testFixtures.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import * as GitWorkflowService from "../../git/GitWorkflowService.ts";
 
@@ -172,6 +178,7 @@ describe("ProviderCommandReactor", () => {
     readonly initialTitle?: string;
     readonly deferReactorStart?: boolean;
     readonly threadModelSelection?: ModelSelection;
+    readonly providerModels?: ReadonlyArray<ServerProviderModel>;
     readonly sessionModelSwitch?: "unsupported" | "in-session";
     readonly requiresNewThreadForModelChange?: boolean;
     readonly unreadableHistory?: boolean;
@@ -351,6 +358,7 @@ describe("ProviderCommandReactor", () => {
     const providerSnapshots = [
       {
         instanceId: modelSelection.instanceId,
+        ...(input?.providerModels ? { models: input.providerModels } : {}),
         ...(input?.requiresNewThreadForModelChange === true
           ? { requiresNewThreadForModelChange: true }
           : {}),
@@ -3356,6 +3364,49 @@ describe("ProviderCommandReactor", () => {
         expect(harness.startSession).toHaveBeenCalledTimes(1);
         expect(harness.stopSession).not.toHaveBeenCalled();
         expect(harness.interruptTurn).not.toHaveBeenCalled();
+      }),
+  );
+
+  effectIt.effect.each([SYNTHETIC_CLAUDE_CAPABLE_MODEL, SYNTHETIC_CLAUDE_COLLIDING_ALIAS])(
+    "keeps a running Claude session for explicit catalog defaults on %s",
+    (model) =>
+      Effect.gen(function* () {
+        const selection = createModelSelection(
+          ProviderInstanceId.make("claudeAgent"),
+          SYNTHETIC_CLAUDE_CAPABLE_MODEL,
+        );
+        const harness = yield* Effect.promise(() =>
+          createHarness({
+            threadModelSelection: selection,
+            providerModels: SYNTHETIC_CLAUDE_MODEL_CATALOG.models.map((entry) => entry.model),
+            startSessionEffect: (session) => Effect.succeed({ ...session, status: "running" }),
+          }),
+        );
+        const requestedSelection = createModelSelection(selection.instanceId, model, [
+          { id: "effort", value: "high" },
+          { id: "contextWindow", value: "expanded" },
+          { id: "fastMode", value: false },
+        ]);
+        for (const [index, modelSelection] of [selection, requestedSelection].entries()) {
+          yield* harness.engine.dispatch({
+            type: "thread.turn.start",
+            commandId: CommandId.make(`cmd-claude-defaults-${index}`),
+            threadId: ThreadId.make("thread-1"),
+            message: {
+              messageId: asMessageId(`message-claude-defaults-${index}`),
+              role: "user",
+              text: "keep working",
+              attachments: [],
+            },
+            modelSelection,
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            runtimeMode: "approval-required",
+            createdAt: "2026-01-01T00:00:00.000Z",
+          });
+          yield* Effect.promise(harness.drain);
+        }
+        expect(harness.startSession).toHaveBeenCalledTimes(1);
+        expect(harness.sendTurn).toHaveBeenCalledTimes(2);
       }),
   );
 

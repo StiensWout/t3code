@@ -592,7 +592,11 @@ describe("ClaudeAdapterLive", () => {
         createModelSelection(
           ProviderInstanceId.make("claudeAgent"),
           SYNTHETIC_CLAUDE_CAPABLE_MODEL,
-          [{ id: "effort", value: "max" }],
+          [
+            { id: "effort", value: "max" },
+            { id: "contextWindow", value: "expanded" },
+            { id: "fastMode", value: false },
+          ],
         ),
       );
       const sessions = yield* adapter.listSessions();
