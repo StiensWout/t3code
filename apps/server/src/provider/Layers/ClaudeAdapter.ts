@@ -5086,6 +5086,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         runtimeMode: input.runtimeMode,
         ...(input.cwd ? { cwd: input.cwd } : {}),
         ...(modelSelection?.model ? { model: modelSelection.model } : {}),
+        ...(modelSelection ? { modelSelection } : {}),
         ...(threadId ? { threadId } : {}),
         resumeCursor: {
           ...(threadId ? { threadId } : {}),

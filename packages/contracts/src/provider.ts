@@ -42,6 +42,9 @@ export const ProviderSession = Schema.Struct({
   runtimeMode: RuntimeMode,
   cwd: Schema.optional(TrimmedNonEmptyString),
   model: Schema.optional(TrimmedNonEmptyString),
+  // Adapters with session-scoped options expose their startup selection so
+  // restart decisions use the live process, including after recovery.
+  modelSelection: Schema.optional(ModelSelection),
   threadId: ThreadId,
   resumeCursor: Schema.optional(Schema.Unknown),
   activeTurnId: Schema.optional(TurnId),

@@ -16,6 +16,10 @@ import {
 import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
 import { projectComposerContextForProvider } from "@t3tools/shared/composerContextReferences";
 import { isTemporaryWorktreeBranch, WORKTREE_BRANCH_PREFIX } from "@t3tools/shared/git";
+import {
+  getModelSelectionBooleanOptionValue,
+  getModelSelectionStringOptionValue,
+} from "@t3tools/shared/model";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
@@ -121,6 +125,17 @@ const turnStartKeyForEvent = (event: ProviderIntentEvent): string =>
 const HANDLED_TURN_START_KEY_MAX = 10_000;
 const HANDLED_TURN_START_KEY_TTL = Duration.minutes(30);
 const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
+
+// Compare Claude launch options by value, independent of client ordering or
+// unrelated options. Omitted fast mode and explicit false both leave it off.
+function claudeSessionOptions(selection: ModelSelection | undefined) {
+  return {
+    effort: getModelSelectionStringOptionValue(selection, "effort"),
+    contextWindow: getModelSelectionStringOptionValue(selection, "contextWindow"),
+    fastMode: getModelSelectionBooleanOptionValue(selection, "fastMode") === true,
+    thinking: getModelSelectionBooleanOptionValue(selection, "thinking"),
+  };
+}
 
 function providerErrorLabel(value: string | undefined): string {
   const normalized = value?.trim();
@@ -785,11 +800,14 @@ const make = Effect.gen(function* () {
         requestedModelSelection !== undefined &&
         activeSession?.providerInstanceId !== requestedModelSelection.instanceId;
       const shouldRestartForModelChange = modelChanged && sessionModelSwitch === "unsupported";
-      const previousModelSelection = threadModelSelections.get(threadId);
       const shouldRestartForModelSelectionChange =
         preferredProvider === "claudeAgent" &&
         requestedModelSelection !== undefined &&
-        !Equal.equals(previousModelSelection, requestedModelSelection);
+        (modelChanged ||
+          !Equal.equals(
+            claudeSessionOptions(activeSession?.modelSelection),
+            claudeSessionOptions(requestedModelSelection),
+          ));
 
       if (
         !runtimeModeChanged &&

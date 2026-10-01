@@ -153,6 +153,7 @@ function makeFakeCodexAdapter(
           : {}),
         status: "ready",
         runtimeMode: input.runtimeMode,
+        ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
         threadId: input.threadId,
         resumeCursor: input.resumeCursor ?? {
           opaque: `resume-${String(input.threadId)}`,
@@ -2973,6 +2974,13 @@ routing.layer("ProviderServiceLive routing", (it) => {
         assert.equal(startPayload.threadId, initial.threadId);
       }
       assert.equal(routing.claude.sendTurn.mock.calls.length, 1);
+      const sessions = yield* provider.listSessions();
+      assert.deepEqual(
+        sessions.find((session) => session.threadId === initial.threadId)?.modelSelection,
+        createModelSelection(claudeAgentInstanceId, "claude-opus-4-6", [
+          { id: "effort", value: "max" },
+        ]),
+      );
     }),
   );
 
