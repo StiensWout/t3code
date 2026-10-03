@@ -15,6 +15,7 @@ import * as GitManager from "./GitManager.ts";
 import * as GitWorkflowService from "./GitWorkflowService.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
+import * as WorktreeLifecycle from "../vcs/WorktreeLifecycle.ts";
 
 function layer(input: {
   readonly detect: VcsDriverRegistry.VcsDriverRegistry["Service"]["detect"];
@@ -27,6 +28,7 @@ function layer(input: {
     ),
     Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
     Layer.provide(Layer.mock(GitManager.GitManager)({})),
+    Layer.provide(WorktreeLifecycle.layer),
   );
 }
 
@@ -136,6 +138,7 @@ describe("GitWorkflowService", () => {
           status,
         }),
       ),
+      Layer.provide(WorktreeLifecycle.layer),
     );
 
     return Effect.gen(function* () {
