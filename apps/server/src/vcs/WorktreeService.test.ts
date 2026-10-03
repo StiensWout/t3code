@@ -375,8 +375,8 @@ it.effect("keeps a checkout that is switched or committed to during the final ch
     const repositoryRoot = yield* initializeRepository();
     state.projects = [makeProject(repositoryRoot)];
     const worktrees = yield* WorktreeService.WorktreeService;
-    // The policy recheck is the last awaited step before removal, so a change
-    // made inside it lands after every other safety check has passed.
+    // The policy recheck is the last awaited step before the final inspection,
+    // so a change made inside it lands after every earlier check has passed.
     const removeWhile = Effect.fn(function* (name: string, change: ReadonlyArray<string>) {
       const worktreePath = yield* addWorktree(repositoryRoot, name);
       const head = yield* git.resolveCommit({ cwd: worktreePath, revision: "HEAD" });
@@ -402,6 +402,33 @@ it.effect("keeps a checkout that is switched or committed to during the final ch
       yield* removeWhile("late-commit", ["commit", "--allow-empty", "-m", "late work"]),
       { outcome: { outcome: "skipped", reason: "changed" }, kept: true },
     );
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("keeps a checkout that gains an ignored file during the final checks", () => {
+  const { state, layer } = makeHarness();
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const git = yield* GitVcsDriver.GitVcsDriver;
+    const repositoryRoot = yield* initializeRepository();
+    state.projects = [makeProject(repositoryRoot)];
+    const worktreePath = yield* addWorktree(repositoryRoot, "late-secret");
+    const head = yield* git.resolveCommit({ cwd: worktreePath, revision: "HEAD" });
+    const secret = path.join(worktreePath, ".env");
+
+    // Written after the first inspection found no ignored files. The branch
+    // and commit do not move, and Git alone would delete the file.
+    const outcome = yield* (yield* WorktreeService.WorktreeService).removeIfSafe({
+      path: worktreePath,
+      workspaceRoot: repositoryRoot,
+      intent: "policy",
+      expected: { branch: "feature/late-secret", headSha: head.commitSha },
+      recheck: fs.writeFileString(secret, "TOKEN=1\n").pipe(Effect.as(true), Effect.orDie),
+    });
+
+    assert.deepEqual(outcome, { outcome: "skipped", reason: "ignored_files" });
+    assert.isTrue(yield* fs.exists(secret));
   }).pipe(Effect.provide(layer));
 });
 
