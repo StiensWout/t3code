@@ -443,23 +443,6 @@ const make = Effect.gen(function* () {
     ),
   );
 
-  /** The checkout's commit and branch right now, from one Git call. */
-  const readHead = Effect.fn("WorktreeService.readHead")(function* (worktreePath: string) {
-    const result = yield* git.execute({
-      operation: "WorktreeService.readHead",
-      cwd: worktreePath,
-      args: ["rev-parse", "HEAD", "--symbolic-full-name", "HEAD"],
-      env: { LC_ALL: "C" },
-      timeoutMs: 15_000,
-    });
-    const [headSha = null, ref = ""] = result.stdout.trim().split("\n");
-    return {
-      headSha,
-      // A detached HEAD resolves to the literal "HEAD".
-      branch: ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : null,
-    };
-  });
-
   /** The default-ref comparison a checkout needs, measured on its captured commit. */
   const aheadOfDefaultFor = (
     worktreePath: string,
@@ -740,7 +723,7 @@ const make = Effect.gen(function* () {
   /**
    * Runs under the checkout's lease. Git state is read first, then threads,
    * sessions and terminals in one fresh read, then the policy recheck. The
-   * branch and commit are read once more and the removal follows at once.
+   * checkout is inspected once more and the removal follows at once.
    * A turn that committed before the usage read is seen here.
    * One that commits after it waits on this lease in revival and recreates
    * the checkout from its branch.
@@ -799,14 +782,23 @@ const make = Effect.gen(function* () {
       return skipped("ignored_files");
     }
     if (input.intent === "policy" && !(yield* input.recheck)) return skipped("policy_changed");
-    // Every check above judged the branch and commit captured by the
-    // inspection, and the reads since then took time. Another process may
-    // have switched the checkout or committed on a detached HEAD meanwhile,
-    // so this is the last thing read before Git removes it.
+    // Every check above judged the first inspection, and the reads since then
+    // took time. Another process may have switched the checkout, committed,
+    // or written an ignored file meanwhile, and Git would delete that file
+    // without complaint. So the checkout is inspected once more as the last
+    // thing read before removal, and anything unreadable keeps it.
     if (inspection !== null) {
-      const current = yield* readHead(worktreePath);
-      if (current.headSha !== inspection.headSha || current.branch !== inspection.branch) {
+      const latest = yield* inspect(worktreePath);
+      if (latest === null) return skipped("status_unavailable");
+      if (latest.headSha !== inspection.headSha || latest.branch !== inspection.branch) {
         return skipped("changed");
+      }
+      if (latest.changedFileCount > 0) return skipped("dirty");
+      if (
+        latest.ignoredFiles.length > 0 &&
+        !(input.intent === "manual" && input.allowIgnoredFiles === true)
+      ) {
+        return skipped("ignored_files");
       }
     }
 
