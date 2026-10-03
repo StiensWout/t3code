@@ -367,6 +367,44 @@ it.effect("lets cleanup remove an idle open thread's clean worktree with unpushe
   }).pipe(Effect.provide(layer));
 });
 
+it.effect("keeps a checkout that is switched or committed to during the final checks", () => {
+  const { state, layer } = makeHarness();
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const git = yield* GitVcsDriver.GitVcsDriver;
+    const repositoryRoot = yield* initializeRepository();
+    state.projects = [makeProject(repositoryRoot)];
+    const worktrees = yield* WorktreeService.WorktreeService;
+    // The policy recheck is the last awaited step before removal, so a change
+    // made inside it lands after every other safety check has passed.
+    const removeWhile = Effect.fn(function* (name: string, change: ReadonlyArray<string>) {
+      const worktreePath = yield* addWorktree(repositoryRoot, name);
+      const head = yield* git.resolveCommit({ cwd: worktreePath, revision: "HEAD" });
+      const outcome = yield* worktrees.removeIfSafe({
+        path: worktreePath,
+        workspaceRoot: repositoryRoot,
+        intent: "policy",
+        expected: { branch: `feature/${name}`, headSha: head.commitSha },
+        recheck: git
+          .execute({ operation: "WorktreeServiceTest.lateChange", cwd: worktreePath, args: change })
+          .pipe(Effect.as(true), Effect.orDie),
+      });
+      return { outcome, kept: yield* fs.exists(worktreePath) };
+    });
+
+    // Same commit, another branch.
+    assert.deepEqual(yield* removeWhile("late-switch", ["checkout", "-b", "feature/elsewhere"]), {
+      outcome: { outcome: "skipped", reason: "changed" },
+      kept: true,
+    });
+    // Same branch, a new commit.
+    assert.deepEqual(
+      yield* removeWhile("late-commit", ["commit", "--allow-empty", "-m", "late work"]),
+      { outcome: { outcome: "skipped", reason: "changed" }, kept: true },
+    );
+  }).pipe(Effect.provide(layer));
+});
+
 it.effect("keeps cleanup away from ignored files and running threads", () => {
   const { state, layer } = makeHarness();
   return Effect.gen(function* () {

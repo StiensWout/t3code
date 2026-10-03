@@ -597,10 +597,25 @@ export function useThreadActions() {
         );
         return deleteResult;
       }
-      await refreshVcsStatus({
+      const refreshResult = await refreshVcsStatus({
         environmentId: threadRef.environmentId,
         input: { cwd: threadProject.workspaceRoot },
       });
+      if (refreshResult._tag === "Failure") {
+        const error = squashAtomCommandFailure(refreshResult);
+        console.error("Git status refresh failed after worktree deletion", {
+          threadId: threadRef.threadId,
+          projectCwd: threadProject.workspaceRoot,
+          error,
+        });
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Worktree deleted, but Git status refresh failed",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+      }
       return deleteResult;
     },
     [
