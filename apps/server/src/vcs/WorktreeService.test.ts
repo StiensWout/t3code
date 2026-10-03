@@ -215,6 +215,44 @@ it.effect("deletes ignored files only when the request opts in", () => {
   }).pipe(Effect.provide(layer));
 });
 
+it.effect("reads and removes a worktree with hundreds of ignored files", () => {
+  const { state, layer } = makeHarness();
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const repositoryRoot = yield* initializeRepository();
+    state.projects = [makeProject(repositoryRoot)];
+    // A file pattern lists every match, unlike an ignored directory.
+    yield* fs.writeFileString(path.join(repositoryRoot, ".git", "info", "exclude"), "*.log\n");
+    const worktreePath = yield* addWorktree(repositoryRoot, "many-logs");
+    const logCount = 400;
+    yield* Effect.forEach(
+      Array.from({ length: logCount }, (_, index) => index),
+      (index) =>
+        fs.writeFileString(
+          path.join(worktreePath, `${String(index).padStart(4, "0")}-${"x".repeat(200)}.log`),
+          "",
+        ),
+      { concurrency: 16 },
+    );
+    const worktrees = yield* WorktreeService.WorktreeService;
+
+    const [listed] = (yield* worktrees.listWorktrees({})).worktrees;
+    assert.deepInclude(listed, {
+      path: worktreePath,
+      ignoredFileCount: logCount,
+      safeToPrune: true,
+      pruneBlockers: [],
+    });
+    // The row carries a sample for the confirmation, not every path.
+    assert.equal(listed?.ignoredFiles.length, 5);
+
+    assert.equal(yield* removeManually(worktreePath), "ignored_files");
+    assert.equal(yield* removeManually(worktreePath, { allowIgnoredFiles: true }), "removed");
+    assert.isFalse(yield* fs.exists(worktreePath));
+  }).pipe(Effect.provide(layer));
+});
+
 it.effect("refuses the legacy forced removal of a worktree with changes", () => {
   const { state, layer } = makeHarness();
   return Effect.gen(function* () {

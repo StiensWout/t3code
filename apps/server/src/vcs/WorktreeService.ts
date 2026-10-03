@@ -43,7 +43,9 @@ import { storageCleanupActivityAt, worktreeThreadBusy } from "./worktreeThreadSt
 
 const WORKTREE_STATUS_CONCURRENCY = 8;
 const PROJECT_SCAN_CONCURRENCY = 4;
-const STATUS_MAX_OUTPUT_BYTES = 64 * 1024;
+// As large as the other Git metadata reads. A file pattern such as `*.log`
+// lists every match, so a small cap left ordinary worktrees unreadable.
+const STATUS_MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 const IGNORED_FILE_SAMPLE_SIZE = 5;
 
 const SKIP_REASON_MESSAGE: Record<WorktreePruneSkipReason, string> = {
