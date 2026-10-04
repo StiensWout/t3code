@@ -2336,8 +2336,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         attachments: [],
       },
     });
-    return input.harness.offeredMessages[steerOrdinal]?.priority;
+    return input.harness.offeredMessages[steerOrdinal];
   });
+  // A frame of the turn that answers the offered message with this uuid.
+  const echoing = (frame: SDKMessage, uuid: SDKUserMessage["uuid"]) =>
+    claudeSdkFrame({ ...frame, user_message_uuid: uuid, user_message_uuids: [uuid] });
 
   it.effect("steers only a server-created delegated completion with next priority", () =>
     Effect.scoped(
@@ -2368,11 +2371,13 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           },
         ] as const;
         for (const steer of steers) {
-          assert.equal(
-            yield* steerActiveTurn({ harness, turn, message: steer.message }),
-            steer.priority,
-            `${steer.message.createdBy}/${steer.message.creationSource}`,
-          );
+          const offered = yield* steerActiveTurn({ harness, turn, message: steer.message });
+          const sender = `${steer.message.createdBy}/${steer.message.creationSource}`;
+          assert.equal(offered?.priority, steer.priority, sender);
+          // Only a notice can be answered after the turn, so only it carries
+          // a uuid, and never the prompt's.
+          assert.equal(offered?.uuid !== undefined, steer.priority === "next", sender);
+          assert.notEqual(offered?.uuid, harness.offeredMessages[0]?.uuid, sender);
         }
       }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
     ),
@@ -2411,14 +2416,12 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         });
         yield* harness.runtime.startTurn(turn);
         for (const steer of steers) {
-          assert.equal(
-            yield* steerActiveTurn({
-              harness,
-              turn,
-              message: steer === "user" ? userSteer : completionNotice,
-            }),
-            steer === "user" ? "now" : "next",
-          );
+          const offered = yield* steerActiveTurn({
+            harness,
+            turn,
+            message: steer === "user" ? userSteer : completionNotice,
+          });
+          assert.equal(offered?.priority, steer === "user" ? "now" : "next");
         }
         yield* Queue.offer(
           harness.sdkMessages,
@@ -2495,15 +2498,9 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             terminalReason: "aborted_tools",
           }),
         );
-        const terminalized = Exit.isSuccess(
-          yield* awaitUntil(
-            () => harness.terminalEvents().length === 1,
-            "interrupted terminal",
-          ).pipe(Effect.exit),
-        );
+        const terminal = yield* Queue.take(harness.terminalReceipts);
         yield* Deferred.succeed(closeGate, undefined);
-        assert.isTrue(terminalized);
-        assert.equal(harness.terminalEvents()[0]?.status, "interrupted");
+        assert.equal(terminal.status, "interrupted");
         assert.lengthOf(harness.terminalEvents(), 1);
       }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
     ),
@@ -4956,7 +4953,8 @@ describe("ClaudeAdapterV2 background wake turns", () => {
 
   // A `next` notice that arrives during the final reply misses the turn's last
   // tool boundary. Claude answers it in a turn of its own right after the
-  // result: `init`, the reply, then a result with no task-notification origin.
+  // result: `init`, then a reply and a result that echo the notice's uuid and
+  // carry no task-notification origin.
   it.effect("shows a completion notice Claude answers after the turn in one continuation", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -4984,20 +4982,27 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         });
 
         yield* harness.runtime.startTurn(turn);
-        assert.equal(yield* steerActiveTurn({ harness, turn, message: completionNotice }), "next");
+        const notice = yield* steerActiveTurn({ harness, turn, message: completionNotice });
+        assert.equal(notice?.priority, "next");
         yield* Queue.offer(harness.sdkMessages, turnOneResult);
         assert.equal((yield* Queue.take(harness.terminalReceipts)).status, "completed");
 
         yield* harness.offerAndWait(wakeTurnInit);
         assert.lengthOf(harness.continuationRequests, 1);
         yield* harness.offerAndWait(
-          makeAssistantTextFrame({
-            uuid: "00000000-0000-4000-8000-000000000120",
-            text: noticeReply,
-          }),
+          echoing(
+            makeAssistantTextFrame({
+              uuid: "00000000-0000-4000-8000-000000000120",
+              text: noticeReply,
+            }),
+            notice?.uuid,
+          ),
         );
         yield* harness.offerAndWait(
-          makeResultFrame({ uuid: "00000000-0000-4000-8000-000000000121", result: noticeReply }),
+          echoing(
+            makeResultFrame({ uuid: "00000000-0000-4000-8000-000000000121", result: noticeReply }),
+            notice?.uuid,
+          ),
         );
         assert.lengthOf(harness.continuationRequests, 1);
         assert.isTrue(yield* harness.hasPendingBackgroundWork);
@@ -5016,6 +5021,129 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         assert.lengthOf(harness.offeredMessages, 2);
         assert.lengthOf(harness.continuationRequests, 1);
         assert.lengthOf(harness.terminalEvents(), 2);
+        assert.isFalse(yield* harness.hasPendingBackgroundWork);
+      }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+    ),
+  );
+
+  // The same tail turn, with a user message queued behind the turn the notice
+  // was steered into. T3 starts that run while Claude still answers the notice,
+  // so the notice's output arrives with the user's prompt pending.
+  it.effect("keeps a completion notice's reply off the user turn queued behind it", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarness;
+        const now = yield* DateTime.now;
+        const noticeReply = "Read the delegated result.";
+        const userReply = "The build passed.";
+        const shown = (text: string) =>
+          harness.events.flatMap((event) =>
+            event.type === "message.updated" && event.message.text === text ? [event.message] : [],
+          );
+        const runsShowing = (text: string) => [...new Set(shown(text).map((reply) => reply.runId))];
+        const turn = makeClaudeTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now,
+          attemptId: RunAttemptId.make("attempt-claude-notice-race-1"),
+          text: "Summarize the audit.",
+          attachments: [],
+        });
+        const queued = makeClaudeTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now,
+          attemptId: RunAttemptId.make("attempt-claude-notice-race-2"),
+          text: "How is the build going?",
+          attachments: [],
+          providerTurnOrdinal: 2,
+        });
+        const continuation = makeClaudeTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now,
+          attemptId: RunAttemptId.make("attempt-claude-notice-race-3"),
+          text: "Background task completed.",
+          attachments: [],
+          providerTurnOrdinal: 3,
+          messageCreatedBy: "agent",
+          messageCreationSource: "provider",
+        });
+
+        yield* harness.runtime.startTurn(turn);
+        const prompt = harness.offeredMessages[0];
+        // This CLI echoes a prompt on the first frame of the turn answering it.
+        yield* harness.offerAndWait(
+          echoing(
+            makeAssistantTextFrame({
+              uuid: "00000000-0000-4000-8000-000000000130",
+              text: "Audit summary.",
+            }),
+            prompt?.uuid,
+          ),
+        );
+        const notice = yield* steerActiveTurn({ harness, turn, message: completionNotice });
+        yield* Queue.offer(
+          harness.sdkMessages,
+          echoing(
+            makeResultFrame({
+              uuid: "00000000-0000-4000-8000-000000000131",
+              result: "Audit summary.",
+            }),
+            prompt?.uuid,
+          ),
+        );
+        assert.equal((yield* Queue.take(harness.terminalReceipts)).status, "completed");
+
+        yield* harness.offerAndWait(wakeTurnInit);
+        yield* harness.runtime.startTurn(queued);
+        const queuedPrompt = harness.offeredMessages[2];
+        yield* harness.offerAndWait(
+          echoing(
+            makeAssistantTextFrame({
+              uuid: "00000000-0000-4000-8000-000000000132",
+              text: noticeReply,
+            }),
+            notice?.uuid,
+          ),
+        );
+        yield* harness.offerAndWait(
+          echoing(
+            makeResultFrame({ uuid: "00000000-0000-4000-8000-000000000133", result: noticeReply }),
+            notice?.uuid,
+          ),
+        );
+        yield* harness.offerAndWait(
+          echoing(
+            makeAssistantTextFrame({
+              uuid: "00000000-0000-4000-8000-000000000134",
+              text: userReply,
+            }),
+            queuedPrompt?.uuid,
+          ),
+        );
+        yield* harness.offerAndWait(
+          echoing(
+            makeResultFrame({ uuid: "00000000-0000-4000-8000-000000000135", result: userReply }),
+            queuedPrompt?.uuid,
+          ),
+        );
+
+        // The user run ends on its own result, showing its own reply alone.
+        assert.equal((yield* Queue.take(harness.terminalReceipts)).status, "completed");
+        assert.deepEqual(runsShowing(userReply), [queued.runId]);
+        assert.deepEqual(runsShowing(noticeReply), []);
+        assert.isTrue(yield* harness.hasPendingBackgroundWork);
+
+        yield* harness.runtime.startTurn(continuation);
+        assert.equal((yield* Queue.take(harness.terminalReceipts)).status, "completed");
+        assert.deepEqual(runsShowing(noticeReply), [continuation.runId]);
+        assert.equal(new Set(shown(noticeReply).map((reply) => reply.id)).size, 1);
+        assert.deepEqual(runsShowing(userReply), [queued.runId]);
+        // Two prompts and the steered notice; the continuation prompts nothing.
+        assert.lengthOf(harness.offeredMessages, 3);
+        assert.lengthOf(harness.continuationRequests, 1);
+        assert.lengthOf(harness.terminalEvents(), 3);
         assert.isFalse(yield* harness.hasPendingBackgroundWork);
       }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
     ),

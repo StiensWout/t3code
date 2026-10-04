@@ -1356,10 +1356,11 @@ const makeClaudeUserMessageWithAttachments = Effect.fnUntraced(function* (input:
   } satisfies SDKUserMessage;
 });
 
-// Stable per run attempt, so a replayed prompt offer matches its recording.
-// Claude echoes it back as user_message_uuid on the turn that answers it.
-export function claudePromptUuid(attemptId: string): NonNullable<SDKUserMessage["uuid"]> {
-  const hex = NodeCrypto.createHash("sha256").update(`t3-claude-prompt:${attemptId}`).digest("hex");
+// Stable per seed (a prompt's run attempt, a steered notice's message), so a
+// replayed offer matches its recording. Claude echoes it back as
+// user_message_uuid on the turn that answers it.
+export function claudePromptUuid(seed: string): NonNullable<SDKUserMessage["uuid"]> {
+  const hex = NodeCrypto.createHash("sha256").update(`t3-claude-prompt:${seed}`).digest("hex");
   const variant = ((Number.parseInt(hex[16]!, 16) & 0x3) | 0x8).toString(16);
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
@@ -7403,6 +7404,12 @@ export function makeClaudeAdapterV2(
               ),
               attachments: turnInput.message.attachments,
               priority,
+              // Claude may answer a `next` notice in a turn of its own after
+              // this one. That turn echoes this uuid, so it never passes for
+              // the turn answering whichever prompt is offered next.
+              ...(priority === "next"
+                ? { uuid: claudePromptUuid(`steer:${turnInput.message.messageId}`) }
+                : {}),
               attachmentsDir,
               fileSystem,
               skillNames: yield* userInvocableSkillNames(currentTurn.input.runtimePolicy.cwd),
