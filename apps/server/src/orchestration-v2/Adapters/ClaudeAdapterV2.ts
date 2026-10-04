@@ -2373,6 +2373,21 @@ function isClaudeActiveSteeringAbortResult(message: SDKResultMessage): boolean {
   );
 }
 
+// The SDK priority for a message steered into a running turn. Claude ends the
+// turn to deliver a `now` message, and the model sees tool calls it had issued
+// but not started as refused by the user. A delegated-task completion the
+// server steers in interrupts nothing, so it goes in as `next`. Claude reads it
+// at the turn's next tool boundary and every issued call still runs. A notice
+// that lands during the final reply gets a native turn of its own afterwards,
+// which reaches the thread as a continuation run.
+function claudeSteerPriority(message: ProviderAdapter.ProviderAdapterV2TurnMessage) {
+  return message.createdBy === "agent" &&
+    message.creationSource === "server" &&
+    message.delegatedCompletion !== undefined
+    ? "next"
+    : "now";
+}
+
 function isClaudeProviderContinuationTurn(
   input: ProviderAdapter.ProviderAdapterV2TurnInput,
 ): boolean {
@@ -7380,22 +7395,27 @@ export function makeClaudeAdapterV2(
                 detail: `Claude provider turn ${turnInput.providerTurnId} is not the active turn.`,
               });
             }
+            const priority = claudeSteerPriority(turnInput.message);
             const userMessage = yield* makeClaudeUserMessageWithAttachments({
               text: applyClaudePromptEffortPrefix(
                 turnInput.message.text,
                 compileClaudeModelSelection(currentTurn.input.modelSelection).promptEffort,
               ),
               attachments: turnInput.message.attachments,
-              priority: "now",
+              priority,
               attachmentsDir,
               fileSystem,
               skillNames: yield* userInvocableSkillNames(currentTurn.input.runtimePolicy.cwd),
             });
-            yield* Ref.update(steeredTurns, (current) => {
-              const next = new Set(current);
-              next.add(turnInput.providerTurnId);
-              return next;
-            });
+            // Only a `now` message aborts the turn, so only it expects the
+            // abort result that follows.
+            if (priority === "now") {
+              yield* Ref.update(steeredTurns, (current) => {
+                const next = new Set(current);
+                next.add(turnInput.providerTurnId);
+                return next;
+              });
+            }
             yield* existing.query.offer(userMessage);
           },
           (effect, turnInput) =>

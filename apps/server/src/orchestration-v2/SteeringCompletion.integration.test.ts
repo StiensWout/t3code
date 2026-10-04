@@ -27,6 +27,7 @@ import {
   ProviderAdapterSteerRunError,
   type ProviderAdapterV2Event,
   type ProviderAdapterV2Shape,
+  type ProviderAdapterV2SteerInput,
   type ProviderAdapterV2TurnInput,
 } from "./ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
@@ -68,6 +69,7 @@ it.effect.each(
       const steerEntered = yield* Deferred.make<void>();
       const rejectSteer = yield* Deferred.make<void>();
       let steerCalls = 0;
+      const steered: ProviderAdapterV2SteerInput["message"][] = [];
       const capabilities = {
         ...CodexProviderCapabilitiesV2,
         turns: {
@@ -145,6 +147,7 @@ it.effect.each(
               steerTurn: (turn) =>
                 Effect.gen(function* () {
                   steerCalls += 1;
+                  steered.push(turn.message);
                   if (timing === "after delivery") return;
                   yield* Deferred.succeed(steerEntered, undefined);
                   yield* Deferred.await(rejectSteer);
@@ -333,6 +336,11 @@ it.effect.each(
         if (timing === "after delivery") {
           assert.equal(steerCalls, 1);
           assert.equal(started.length, 1);
+          // The adapter is told whose completion it steers in, and nothing for a user steer.
+          assert.deepEqual(
+            steered[0]?.delegatedCompletion,
+            mailbox ? { parentRunId: first.runId, generation: 1, taskIds: [taskId] } : undefined,
+          );
           if (mailbox) {
             const delivered = yield* orchestrator.getThreadProjection(threadId);
             assert.equal(delivered.subagents[0]?.completionDelivery?.state, "delivered");

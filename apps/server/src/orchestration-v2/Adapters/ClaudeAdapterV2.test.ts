@@ -2300,43 +2300,125 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       }).pipe(Effect.scoped, Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
   );
 
-  it.effect.each(
-    (["aborted_tools", "aborted_streaming"] as const).flatMap((terminalReason) =>
-      [true, false].map((steered) => ({ terminalReason, steered })),
-    ),
-  )("handles $terminalReason with active steering=$steered", ({ terminalReason, steered }) =>
+  // What a steered message looks like to the adapter, by who sent it.
+  const userSteer = { createdBy: "user", creationSource: "web" } as const;
+  const completionNotice = {
+    createdBy: "agent",
+    creationSource: "server",
+    delegatedCompletion: {
+      parentRunId: RunId.make("run-completion-parent"),
+      generation: 1,
+      taskIds: [NodeId.make("task-completion-child")],
+    },
+  } as const;
+  const steerActiveTurn = Effect.fnUntraced(function* (input: {
+    readonly harness: Effect.Success<typeof makeWakeHarness>;
+    readonly turn: ProviderAdapterV2TurnInput;
+    readonly message: Pick<
+      ProviderAdapterV2TurnInput["message"],
+      "createdBy" | "creationSource" | "delegatedCompletion"
+    >;
+  }) {
+    const idAllocator = yield* IdAllocator.IdAllocatorV2;
+    const steerOrdinal = input.harness.offeredMessages.length;
+    yield* input.harness.runtime.steerTurn({
+      threadId: input.harness.threadId,
+      runId: input.turn.runId,
+      providerThread: input.harness.providerThread,
+      providerTurnId: idAllocator.derive.providerTurn({
+        driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
+        nativeTurnId: `turn:${input.turn.attemptId}`,
+      }),
+      message: {
+        ...input.message,
+        messageId: MessageId.make(`message-steer-${steerOrdinal}`),
+        text: "Check the delegated work.",
+        attachments: [],
+      },
+    });
+    return input.harness.offeredMessages[steerOrdinal]?.priority;
+  });
+
+  it.effect("steers only a server-created delegated completion with next priority", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const harness = yield* makeWakeHarness;
-        const idAllocator = yield* IdAllocator.IdAllocatorV2;
-        const attemptId = RunAttemptId.make("attempt-steering-abort");
-        const input = makeClaudeTestTurnInput({
+        const turn = makeClaudeTestTurnInput({
           threadId: harness.threadId,
           providerThread: harness.providerThread,
           now: yield* DateTime.now,
-          attemptId,
+          attemptId: RunAttemptId.make("attempt-steer-priority"),
           text: "Audit the settings pages.",
           attachments: [],
         });
-        yield* harness.runtime.startTurn(input);
-        if (steered) {
-          yield* harness.runtime.steerTurn({
-            threadId: harness.threadId,
-            runId: input.runId,
-            providerThread: harness.providerThread,
-            providerTurnId: idAllocator.derive.providerTurn({
-              driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
-              nativeTurnId: `turn:${attemptId}`,
+        yield* harness.runtime.startTurn(turn);
+        const { delegatedCompletion } = completionNotice;
+        const steers = [
+          { message: completionNotice, priority: "next" },
+          { message: userSteer, priority: "now" },
+          // A runtime-question answer.
+          { message: { createdBy: "user", creationSource: "server" }, priority: "now" },
+          // One agent steering another through MCP.
+          { message: { createdBy: "agent", creationSource: "mcp" }, priority: "now" },
+          { message: { createdBy: "agent", creationSource: "server" }, priority: "now" },
+          { message: { ...userSteer, delegatedCompletion }, priority: "now" },
+          {
+            message: { createdBy: "agent", creationSource: "mcp", delegatedCompletion },
+            priority: "now",
+          },
+        ] as const;
+        for (const steer of steers) {
+          assert.equal(
+            yield* steerActiveTurn({ harness, turn, message: steer.message }),
+            steer.priority,
+            `${steer.message.createdBy}/${steer.message.creationSource}`,
+          );
+        }
+      }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+    ),
+  );
+
+  // Claude aborts a turn to deliver a `now` steer, so that abort is expected
+  // and the turn carries on. A `next` notice never aborts: an abort after one
+  // is real, and it leaves an abort a user steer caused expected.
+  it.effect.each(
+    (["aborted_tools", "aborted_streaming"] as const).flatMap((terminalReason) =>
+      (
+        [
+          { steers: [], continues: false },
+          { steers: ["user"], continues: true },
+          { steers: ["notice"], continues: false },
+          { steers: ["user", "notice"], continues: true },
+          { steers: ["notice", "user"], continues: true },
+        ] as const
+      ).map((scenario) => ({
+        ...scenario,
+        terminalReason,
+        steered: scenario.steers.join(" then ") || "nothing",
+      })),
+    ),
+  )("handles $terminalReason after steering $steered", ({ terminalReason, steers, continues }) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarness;
+        const turn = makeClaudeTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId: RunAttemptId.make("attempt-steering-abort"),
+          text: "Audit the settings pages.",
+          attachments: [],
+        });
+        yield* harness.runtime.startTurn(turn);
+        for (const steer of steers) {
+          assert.equal(
+            yield* steerActiveTurn({
+              harness,
+              turn,
+              message: steer === "user" ? userSteer : completionNotice,
             }),
-            message: {
-              createdBy: "user",
-              creationSource: "web",
-              messageId: MessageId.make("message-steering-abort"),
-              text: "Include the hierarchy mock.",
-              attachments: [],
-            },
-          });
-          assert.equal(harness.offeredMessages[1]?.priority, "now");
+            steer === "user" ? "now" : "next",
+          );
         }
         yield* Queue.offer(
           harness.sdkMessages,
@@ -2346,28 +2428,82 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             terminalReason,
           }),
         );
-        if (steered) {
-          yield* Queue.offer(harness.sdkMessages, wakeAssistant);
-          yield* Queue.offer(
-            harness.sdkMessages,
-            makeResultFrame({
-              uuid: "00000000-0000-4000-8000-000000000902",
-              result: "Audit finished after the steer.",
-            }),
-          );
-        }
+        // What Claude sends next belongs to this turn only if the abort did not end it.
+        yield* Queue.offer(harness.sdkMessages, wakeAssistant);
+        yield* Queue.offer(
+          harness.sdkMessages,
+          makeResultFrame({
+            uuid: "00000000-0000-4000-8000-000000000902",
+            result: "Audit finished after the steer.",
+          }),
+        );
         const terminal = yield* Queue.take(harness.terminalReceipts);
-        assert.equal(terminal.status, steered ? "completed" : "interrupted");
-        if (steered) {
-          assert.isTrue(
-            harness.events.some(
-              (event) =>
-                event.type === "turn_item.updated" &&
-                event.turnItem.type === "assistant_message" &&
-                event.turnItem.text === WAKE_ASSISTANT_TEXT,
-            ),
-          );
-        }
+        assert.equal(terminal.status, continues ? "completed" : "interrupted");
+        assert.equal(
+          harness.events.some(
+            (event) =>
+              event.type === "turn_item.updated" &&
+              event.turnItem.type === "assistant_message" &&
+              event.turnItem.text === WAKE_ASSISTANT_TEXT,
+          ),
+          continues,
+        );
+        assert.lengthOf(harness.terminalEvents(), 1);
+      }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+    ),
+  );
+
+  it.effect("ends a steered turn on its abort result once the user stops it", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const closeGate = yield* Deferred.make<void>();
+        const testScope = yield* Scope.Scope;
+        yield* Scope.addFinalizer(testScope, Deferred.succeed(closeGate, undefined));
+        const interruptStarted = yield* Deferred.make<void>();
+        const harness = yield* makeWakeHarnessWithOptions({
+          close: (sdkMessages) =>
+            Deferred.await(closeGate).pipe(Effect.andThen(Queue.shutdown(sdkMessages))),
+          interrupt: Deferred.succeed(interruptStarted, undefined),
+        });
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const turn = makeClaudeTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId: RunAttemptId.make("attempt-steering-stop"),
+          text: "Audit the settings pages.",
+          attachments: [],
+        });
+        yield* harness.runtime.startTurn(turn);
+        yield* steerActiveTurn({ harness, turn, message: userSteer });
+        yield* steerActiveTurn({ harness, turn, message: completionNotice });
+        yield* harness.runtime
+          .interruptTurn({
+            providerThread: harness.providerThread,
+            providerTurnId: idAllocator.derive.providerTurn({
+              driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
+              nativeTurnId: `turn:${turn.attemptId}`,
+            }),
+          })
+          .pipe(Effect.forkScoped);
+        yield* Deferred.await(interruptStarted);
+        yield* Queue.offer(
+          harness.sdkMessages,
+          makeResultFrame({
+            uuid: "00000000-0000-4000-8000-000000000903",
+            result: "",
+            terminalReason: "aborted_tools",
+          }),
+        );
+        const terminalized = Exit.isSuccess(
+          yield* awaitUntil(
+            () => harness.terminalEvents().length === 1,
+            "interrupted terminal",
+          ).pipe(Effect.exit),
+        );
+        yield* Deferred.succeed(closeGate, undefined);
+        assert.isTrue(terminalized);
+        assert.equal(harness.terminalEvents()[0]?.status, "interrupted");
         assert.lengthOf(harness.terminalEvents(), 1);
       }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
     ),
@@ -4814,6 +4950,73 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             (event) => event.type === "message.updated" && event.message.text === WAKE_RESULT_TEXT,
           ),
         );
+      }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+    ),
+  );
+
+  // A `next` notice that arrives during the final reply misses the turn's last
+  // tool boundary. Claude answers it in a turn of its own right after the
+  // result: `init`, the reply, then a result with no task-notification origin.
+  it.effect("shows a completion notice Claude answers after the turn in one continuation", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarness;
+        const now = yield* DateTime.now;
+        const noticeReply = "Read the delegated result.";
+        const turn = makeClaudeTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now,
+          attemptId: RunAttemptId.make("attempt-claude-notice-tail-1"),
+          text: "Summarize the audit.",
+          attachments: [],
+        });
+        const continuation = makeClaudeTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now,
+          attemptId: RunAttemptId.make("attempt-claude-notice-tail-2"),
+          text: "Background task completed.",
+          attachments: [],
+          providerTurnOrdinal: 2,
+          messageCreatedBy: "agent",
+          messageCreationSource: "provider",
+        });
+
+        yield* harness.runtime.startTurn(turn);
+        assert.equal(yield* steerActiveTurn({ harness, turn, message: completionNotice }), "next");
+        yield* Queue.offer(harness.sdkMessages, turnOneResult);
+        assert.equal((yield* Queue.take(harness.terminalReceipts)).status, "completed");
+
+        yield* harness.offerAndWait(wakeTurnInit);
+        assert.lengthOf(harness.continuationRequests, 1);
+        yield* harness.offerAndWait(
+          makeAssistantTextFrame({
+            uuid: "00000000-0000-4000-8000-000000000120",
+            text: noticeReply,
+          }),
+        );
+        yield* harness.offerAndWait(
+          makeResultFrame({ uuid: "00000000-0000-4000-8000-000000000121", result: noticeReply }),
+        );
+        assert.lengthOf(harness.continuationRequests, 1);
+        assert.isTrue(yield* harness.hasPendingBackgroundWork);
+        assert.lengthOf(harness.terminalEvents(), 1);
+
+        yield* harness.runtime.startTurn(continuation);
+        assert.equal((yield* Queue.take(harness.terminalReceipts)).status, "completed");
+        const replies = harness.events.flatMap((event) =>
+          event.type === "message.updated" && event.message.text === noticeReply
+            ? [event.message]
+            : [],
+        );
+        assert.equal(new Set(replies.map((reply) => reply.id)).size, 1);
+        assert.deepEqual([...new Set(replies.map((reply) => reply.runId))], [continuation.runId]);
+        // The prompt and the steered notice; the continuation prompts nothing.
+        assert.lengthOf(harness.offeredMessages, 2);
+        assert.lengthOf(harness.continuationRequests, 1);
+        assert.lengthOf(harness.terminalEvents(), 2);
+        assert.isFalse(yield* harness.hasPendingBackgroundWork);
       }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
     ),
   );
