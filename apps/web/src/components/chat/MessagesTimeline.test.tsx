@@ -2810,5 +2810,61 @@ describe("MessagesTimeline", () => {
         await act(() => renderer?.unmount());
       }
     });
+
+    it("keeps every page toggled before the timeline repaints", async () => {
+      vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+      vi.stubGlobal("requestAnimationFrame", () => 0);
+      vi.stubGlobal("cancelAnimationFrame", () => {});
+      const toggledThreadKey = "environment-local:thread-html-batched";
+      const otherThreadKey = "environment-local:thread-html-batched-other";
+      const props = buildProps();
+      const timelineEntries = [
+        htmlRenderEntry,
+        {
+          ...htmlRenderEntry,
+          id: "render-item-second",
+          htmlRender: { ...htmlRenderEntry.htmlRender, attachmentId: "render-table.html" },
+        },
+      ];
+      const timeline = (routeThreadKey: string) => (
+        <MessagesTimeline
+          {...props}
+          routeThreadKey={routeThreadKey}
+          timelineEntries={timelineEntries}
+        />
+      );
+      let renderer: ReactTestRenderer | undefined;
+      // One act is one commit, so every click lands before the first one repaints.
+      const clickAll = (expanded: boolean) =>
+        act(() => {
+          for (const button of buttons(renderer!, expanded)) button.props.onClick(click);
+        });
+      const switchAwayAndBack = async () => {
+        await act(() => renderer!.update(timeline(otherThreadKey)));
+        await act(() => renderer!.update(timeline(toggledThreadKey)));
+      };
+      try {
+        await act(() => {
+          renderer = create(timeline(toggledThreadKey));
+        });
+        expect(buttons(renderer!, true)).toHaveLength(2);
+
+        await clickAll(true);
+        expect(pageFrames(renderer!)).toHaveLength(0);
+        expect(buttons(renderer!, false)).toHaveLength(2);
+        await switchAwayAndBack();
+        expect(pageFrames(renderer!)).toHaveLength(0);
+        expect(buttons(renderer!, false)).toHaveLength(2);
+
+        await clickAll(false);
+        expect(pageFrames(renderer!)).toHaveLength(2);
+        expect(buttons(renderer!, false)).toHaveLength(0);
+        await switchAwayAndBack();
+        expect(pageFrames(renderer!)).toHaveLength(2);
+        expect(buttons(renderer!, false)).toHaveLength(0);
+      } finally {
+        await act(() => renderer?.unmount());
+      }
+    });
   });
 });

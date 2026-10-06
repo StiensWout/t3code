@@ -748,7 +748,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       workGroupViewState,
     ],
   );
-  // The committed value, so the toggle below reads it without changing identity.
+  // The latest value, so the toggle below reads it without changing identity.
+  // The toggle advances it before React commits, so toggles batched into one
+  // commit build on each other.
   const disclosuresRef = useRef(disclosures);
   useLayoutEffect(() => {
     disclosuresRef.current = disclosures;
@@ -766,6 +768,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       } else {
         collapsedHtmlRenders.delete(rowId);
       }
+      const next = { ...current, collapsedHtmlRenders };
+      disclosuresRef.current = next;
       setCollapsedHtmlRenderIds(collapsedHtmlRenders);
       // The scroll handler saves disclosures on the next frame. Save this one
       // now, or a thread switch before that frame restores its old state.
@@ -777,7 +781,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           scrollOffset: 0,
           atEnd: true,
         }),
-        disclosures: { ...current, collapsedHtmlRenders },
+        disclosures: next,
       });
     },
     [listIdentityKey, suspendEndScrollMaintenanceForDisclosure],
