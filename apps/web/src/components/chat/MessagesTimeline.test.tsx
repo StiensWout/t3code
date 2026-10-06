@@ -2770,25 +2770,13 @@ describe("MessagesTimeline", () => {
       }
     });
 
-    it("keeps minimized pages with their thread across thread switches", async () => {
+    it("keeps a toggled page with its thread across an immediate thread switch", async () => {
       vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+      // No frame runs and nothing scrolls, so only the toggle itself can save the state.
       vi.stubGlobal("requestAnimationFrame", () => 0);
       vi.stubGlobal("cancelAnimationFrame", () => {});
-      const { rememberTimelinePosition } = await import("./timelineScrollAnchoring");
-      const minimizedThreadKey = "environment-local:thread-html-minimized";
-      rememberTimelinePosition(minimizedThreadKey, {
-        rowId: htmlRenderEntry.id,
-        offsetWithinRow: 0,
-        scrollOffset: 0,
-        atEnd: true,
-        disclosures: {
-          runs: new Set(),
-          workGroups: new Set(),
-          attempts: new Set(),
-          collapsedHtmlRenders: new Set([htmlRenderEntry.id]),
-          workGroupState: { scrollPositions: new Map(), expandedEntries: new Set() },
-        },
-      });
+      const toggledThreadKey = "environment-local:thread-html-toggled";
+      const otherThreadKey = "environment-local:thread-html-other";
       const props = buildProps();
       const timeline = (routeThreadKey: string) => (
         <MessagesTimeline
@@ -2800,19 +2788,24 @@ describe("MessagesTimeline", () => {
       let renderer: ReactTestRenderer | undefined;
       try {
         await act(() => {
-          renderer = create(timeline(minimizedThreadKey));
+          renderer = create(timeline(toggledThreadKey));
         });
-        expect(pageFrames(renderer!)).toHaveLength(0);
-        expect(buttons(renderer!, false)).toHaveLength(1);
+        await act(() => buttons(renderer!, true)[0]!.props.onClick(click));
 
         // The same item id in another thread is that thread's own page.
-        await act(() => renderer!.update(timeline("environment-local:thread-html-other")));
+        await act(() => renderer!.update(timeline(otherThreadKey)));
         expect(pageFrames(renderer!)).toHaveLength(1);
         expect(buttons(renderer!, false)).toHaveLength(0);
 
-        await act(() => renderer!.update(timeline(minimizedThreadKey)));
+        await act(() => renderer!.update(timeline(toggledThreadKey)));
         expect(pageFrames(renderer!)).toHaveLength(0);
         expect(buttons(renderer!, false)).toHaveLength(1);
+
+        await act(() => buttons(renderer!, false)[0]!.props.onClick(click));
+        await act(() => renderer!.update(timeline(otherThreadKey)));
+        await act(() => renderer!.update(timeline(toggledThreadKey)));
+        expect(pageFrames(renderer!)).toHaveLength(1);
+        expect(buttons(renderer!, false)).toHaveLength(0);
       } finally {
         await act(() => renderer?.unmount());
       }

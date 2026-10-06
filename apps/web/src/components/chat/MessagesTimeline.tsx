@@ -731,23 +731,56 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     },
     [suspendEndScrollMaintenanceForDisclosure],
   );
+  // What the position cache keeps for this thread besides its scroll anchor.
+  const disclosures = useMemo(
+    () => ({
+      runs: paintedExpandedRunIds,
+      workGroups: paintedExpandedWorkGroupIds,
+      attempts: paintedExpandedAttemptIds,
+      collapsedHtmlRenders: paintedCollapsedHtmlRenderIds,
+      workGroupState: workGroupViewState,
+    }),
+    [
+      paintedExpandedRunIds,
+      paintedExpandedWorkGroupIds,
+      paintedExpandedAttemptIds,
+      paintedCollapsedHtmlRenderIds,
+      workGroupViewState,
+    ],
+  );
+  // The committed value, so the toggle below reads it without changing identity.
+  const disclosuresRef = useRef(disclosures);
+  useLayoutEffect(() => {
+    disclosuresRef.current = disclosures;
+  }, [disclosures]);
   // The row passes its target state, so this callback (and the shared row
   // context holding it) keeps its identity across toggles.
   const onSetHtmlRenderCollapsed = useCallback(
     (rowId: string, collapsed: boolean) => {
       suspendEndScrollMaintenanceForDisclosure(rowId, collapsed);
-      setCollapsedHtmlRenderIds((existing) => {
-        if (existing.has(rowId) === collapsed) return existing;
-        const next = new Set(existing);
-        if (collapsed) {
-          next.add(rowId);
-        } else {
-          next.delete(rowId);
-        }
-        return next;
+      const current = disclosuresRef.current;
+      if (current.collapsedHtmlRenders.has(rowId) === collapsed) return;
+      const collapsedHtmlRenders = new Set(current.collapsedHtmlRenders);
+      if (collapsed) {
+        collapsedHtmlRenders.add(rowId);
+      } else {
+        collapsedHtmlRenders.delete(rowId);
+      }
+      setCollapsedHtmlRenderIds(collapsedHtmlRenders);
+      // The scroll handler saves disclosures on the next frame. Save this one
+      // now, or a thread switch before that frame restores its old state.
+      rememberTimelinePosition(listIdentityKey, {
+        // A thread with no saved position opened at its end.
+        ...(readTimelinePosition(listIdentityKey) ?? {
+          rowId,
+          offsetWithinRow: 0,
+          scrollOffset: 0,
+          atEnd: true,
+        }),
+        disclosures: { ...current, collapsedHtmlRenders },
       });
     },
-    [suspendEndScrollMaintenanceForDisclosure],
+    [listIdentityKey, suspendEndScrollMaintenanceForDisclosure],
   );
 
   // An in-session interrupt leaves its turn expanded so the user keeps their
@@ -1072,13 +1105,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           offsetWithinRow: element.getBoundingClientRect().top - row.getBoundingClientRect().top,
           scrollOffset: element.scrollTop,
           atEnd: isAtEnd,
-          disclosures: {
-            runs: paintedExpandedRunIds,
-            workGroups: paintedExpandedWorkGroupIds,
-            attempts: paintedExpandedAttemptIds,
-            collapsedHtmlRenders: paintedCollapsedHtmlRenderIds,
-            workGroupState: workGroupViewState,
-          },
+          disclosures,
         });
       }
     }
@@ -1125,11 +1152,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     );
   }, [
     citationPositioning,
-    paintedExpandedRunIds,
-    paintedExpandedWorkGroupIds,
-    paintedExpandedAttemptIds,
-    paintedCollapsedHtmlRenderIds,
-    workGroupViewState,
+    disclosures,
     rows,
     listIdentityKey,
     restoringThreadPosition,
