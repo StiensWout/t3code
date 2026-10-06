@@ -2717,4 +2717,105 @@ describe("MessagesTimeline", () => {
       await act(() => renderer?.unmount());
     }
   });
+
+  describe("HTML renders", () => {
+    const htmlRenderEntry = {
+      id: "render-item",
+      kind: "html-render" as const,
+      createdAt: MESSAGE_CREATED_AT,
+      runId: null,
+      htmlRender: { attachmentId: "render-chart.html", title: "Quarterly chart", height: 320 },
+    };
+    const click = { nativeEvent: new Event("click") };
+    const buttons = (renderer: ReactTestRenderer, expanded: boolean) =>
+      renderer.root.findAll(
+        (node) => node.type === "button" && node.props["aria-expanded"] === expanded,
+      );
+    // The page reserves its frame's height; the title row that replaces it does not.
+    const pageFrames = (renderer: ReactTestRenderer) =>
+      renderer.root.findAll((node) => node.type === "div" && node.props.style?.height === 320);
+
+    it("minimizes a page to its title row and shows it again from that row", async () => {
+      vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+      vi.stubGlobal("requestAnimationFrame", () => 0);
+      vi.stubGlobal("cancelAnimationFrame", () => {});
+      let renderer: ReactTestRenderer | undefined;
+      try {
+        await act(() => {
+          renderer = create(
+            <MessagesTimeline
+              {...buildProps()}
+              routeThreadKey="environment-local:thread-html-toggle"
+              timelineEntries={[htmlRenderEntry]}
+            />,
+          );
+        });
+        expect(pageFrames(renderer!)).toHaveLength(1);
+        expect(buttons(renderer!, false)).toHaveLength(0);
+
+        await act(() => buttons(renderer!, true)[0]!.props.onClick(click));
+        expect(pageFrames(renderer!)).toHaveLength(0);
+        const titleRow = buttons(renderer!, false)[0]!;
+        expect(JSON.stringify(renderer!.toJSON())).toContain("Quarterly chart");
+        // Opening the page elsewhere stays available while it is minimized.
+        expect(renderer!.root.findAllByProps({ "aria-label": "Open in panel" })).not.toHaveLength(
+          0,
+        );
+
+        await act(() => titleRow.props.onClick(click));
+        expect(pageFrames(renderer!)).toHaveLength(1);
+        expect(buttons(renderer!, false)).toHaveLength(0);
+      } finally {
+        await act(() => renderer?.unmount());
+      }
+    });
+
+    it("keeps minimized pages with their thread across thread switches", async () => {
+      vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+      vi.stubGlobal("requestAnimationFrame", () => 0);
+      vi.stubGlobal("cancelAnimationFrame", () => {});
+      const { rememberTimelinePosition } = await import("./timelineScrollAnchoring");
+      const minimizedThreadKey = "environment-local:thread-html-minimized";
+      rememberTimelinePosition(minimizedThreadKey, {
+        rowId: htmlRenderEntry.id,
+        offsetWithinRow: 0,
+        scrollOffset: 0,
+        atEnd: true,
+        disclosures: {
+          runs: new Set(),
+          workGroups: new Set(),
+          attempts: new Set(),
+          collapsedHtmlRenders: new Set([htmlRenderEntry.id]),
+          workGroupState: { scrollPositions: new Map(), expandedEntries: new Set() },
+        },
+      });
+      const props = buildProps();
+      const timeline = (routeThreadKey: string) => (
+        <MessagesTimeline
+          {...props}
+          routeThreadKey={routeThreadKey}
+          timelineEntries={[htmlRenderEntry]}
+        />
+      );
+      let renderer: ReactTestRenderer | undefined;
+      try {
+        await act(() => {
+          renderer = create(timeline(minimizedThreadKey));
+        });
+        expect(pageFrames(renderer!)).toHaveLength(0);
+        expect(buttons(renderer!, false)).toHaveLength(1);
+
+        // The same item id in another thread is that thread's own page.
+        await act(() => renderer!.update(timeline("environment-local:thread-html-other")));
+        expect(pageFrames(renderer!)).toHaveLength(1);
+        expect(buttons(renderer!, false)).toHaveLength(0);
+
+        await act(() => renderer!.update(timeline(minimizedThreadKey)));
+        expect(pageFrames(renderer!)).toHaveLength(0);
+        expect(buttons(renderer!, false)).toHaveLength(1);
+      } finally {
+        await act(() => renderer?.unmount());
+      }
+    });
+  });
 });
