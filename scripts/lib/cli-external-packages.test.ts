@@ -87,6 +87,7 @@ describe("selectCliRuntimeExternalDependencies", () => {
         "@cursor/sdk",
         "@ff-labs/fff-node",
         "@napi-rs/keyring",
+        "jsonc-parser",
         "node-pty",
         "playwright-core",
         "zod",
