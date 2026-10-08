@@ -1449,7 +1449,12 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         const turnStartEntryId = turnWalk.userEntryIds.at(-1);
         // Only a branch walked to its root lists every survivor; a partial or
         // cyclic walk would roll back runs that are still in the conversation.
-        const branch = rewound ? walkPiBranch(tree.entries, listing.leafId, null) : undefined;
+        // A replaced session has a different tree. Only an old leaf still in
+        // this tree proves an in-session rewind rather than a session switch.
+        const branch =
+          rewound && previousLeaf !== null && tree.entries.has(previousLeaf)
+            ? walkPiBranch(tree.entries, listing.leafId, null)
+            : undefined;
         return {
           // Without a trustworthy cursor the walk spans more than one turn, so
           // its earliest user entry belongs to an earlier turn. Keep the

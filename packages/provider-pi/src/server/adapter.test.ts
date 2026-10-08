@@ -2241,6 +2241,52 @@ describe("PiAdapterV2", () => {
       }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
+  it.effect("does not reconcile a replacement session tree as a native rewind", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      fake.queueEntries({
+        entries: [{ type: "model_change", id: "old-leaf", parentId: null }],
+        leafId: "old-leaf",
+      });
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      const finish = Effect.fnUntraced(function* () {
+        yield* startTurn(runtime, providerThread);
+        yield* fake.takeRequest("prompt");
+        yield* fake.emit({ type: "response", command: "prompt", success: true });
+        yield* fake.emit({ type: "agent_start" });
+        yield* fake.emit({ type: "agent_settled" });
+        const update = yield* takeEvent(
+          (event) =>
+            event.type === "provider_thread.updated" && event.providerThread.status === "idle",
+        );
+        yield* takeEvent((event) => event.type === "turn.terminal");
+        assert.isUndefined(
+          update.type === "provider_thread.updated" ? update.retainedNativeTurnIds : null,
+        );
+      });
+      // A failed cursor read is followed by a full listing from a new session.
+      fake.queueEntries({ entries: [] });
+      yield* finish();
+      fake.queueEntries({
+        entries: [
+          {
+            type: "message",
+            id: "new-user",
+            parentId: null,
+            message: { role: "user", content: [] },
+          },
+        ],
+        leafId: "new-user",
+      });
+      yield* finish();
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
   it.effect("rolls back past turns that left nothing in the session tree", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakePi;
