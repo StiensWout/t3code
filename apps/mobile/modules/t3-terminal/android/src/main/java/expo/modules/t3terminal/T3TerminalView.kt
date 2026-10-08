@@ -51,11 +51,8 @@ class T3TerminalView(context: Context, appContext: AppContext) : ExpoView(contex
   private var snapshotScheduled = false
   private val snapshotFrame = Runnable {
     snapshotScheduled = false
-    if (!isAttachedToWindow || !isShown || windowVisibility != VISIBLE ||
-      isCleanedUp
-    ) {
-      return@Runnable
-    }
+    if (isCleanedUp || !isAttachedToWindow) return@Runnable
+    if (!isShown || windowVisibility != VISIBLE) return@Runnable
     if (!snapshotPending) return@Runnable
     snapshotPending = false
     if (terminalHandle != 0L) {
@@ -433,12 +430,8 @@ class T3TerminalView(context: Context, appContext: AppContext) : ExpoView(contex
   }
 
   private fun scheduleSnapshot() {
-    if (!snapshotPending || snapshotScheduled || !isAttachedToWindow || !isShown ||
-      windowVisibility != VISIBLE ||
-      isCleanedUp
-    ) {
-      return
-    }
+    if (!snapshotPending || snapshotScheduled || isCleanedUp) return
+    if (!isAttachedToWindow || !isShown || windowVisibility != VISIBLE) return
     snapshotScheduled = true
     postOnAnimation(snapshotFrame)
   }
