@@ -51,11 +51,17 @@ class T3TerminalView(context: Context, appContext: AppContext) : ExpoView(contex
   private var snapshotScheduled = false
   private val snapshotFrame = Runnable {
     snapshotScheduled = false
-    if (!isAttachedToWindow || !isShown || windowVisibility != VISIBLE || isCleanedUp) return@Runnable
+    if (!isAttachedToWindow || !isShown || windowVisibility != VISIBLE ||
+      isCleanedUp
+    ) {
+      return@Runnable
+    }
     if (!snapshotPending) return@Runnable
     snapshotPending = false
     if (terminalHandle != 0L) {
-      TerminalFrame.decode(GhosttyBridge.nativeSnapshot(terminalHandle))?.let(terminalCanvas::setFrame)
+      TerminalFrame.decode(
+        GhosttyBridge.nativeSnapshot(terminalHandle)
+      )?.let(terminalCanvas::setFrame)
     }
   }
   private var terminalHandle = 0L
@@ -414,7 +420,9 @@ class T3TerminalView(context: Context, appContext: AppContext) : ExpoView(contex
     snapshotScheduled = false
     snapshotPending = false
     if (terminalHandle == 0L || isCleanedUp) return
-    TerminalFrame.decode(GhosttyBridge.nativeSnapshot(terminalHandle))?.let(terminalCanvas::setFrame)
+    TerminalFrame.decode(
+      GhosttyBridge.nativeSnapshot(terminalHandle)
+    )?.let(terminalCanvas::setFrame)
   }
 
   // Parse output and deliver PTY replies immediately; only materialize output once per visible frame.
@@ -425,7 +433,12 @@ class T3TerminalView(context: Context, appContext: AppContext) : ExpoView(contex
   }
 
   private fun scheduleSnapshot() {
-    if (!snapshotPending || snapshotScheduled || !isAttachedToWindow || !isShown || windowVisibility != VISIBLE || isCleanedUp) return
+    if (!snapshotPending || snapshotScheduled || !isAttachedToWindow || !isShown ||
+      windowVisibility != VISIBLE ||
+      isCleanedUp
+    ) {
+      return
+    }
     snapshotScheduled = true
     postOnAnimation(snapshotFrame)
   }
