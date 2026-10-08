@@ -30,8 +30,10 @@ import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 
 import * as ServerConfig from "../../config.ts";
+import * as ProviderContinuationRequests from "../ProviderContinuationRequests.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import * as IdAllocator from "../IdAllocator.ts";
 import {
@@ -40,7 +42,12 @@ import {
   type ProviderAdapterV2SessionRuntime,
 } from "../ProviderAdapter.ts";
 import { handoffBudget } from "../ContextHandoffBudget.ts";
-import { makePiAdapterV2, PI_PROVIDER } from "./PiAdapterV2.ts";
+import {
+  makePiAdapterV2,
+  PiAdapterV2Driver,
+  PI_PROVIDER,
+  type PiAdapterV2Options,
+} from "./PiAdapterV2.ts";
 import { makePiRpcConnection, type PiRpcRecord } from "./PiRpc.ts";
 
 const layerServerConfig = ServerConfig.layerTest(process.cwd(), {
@@ -310,22 +317,44 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
   } satisfies FakePi;
 });
 
-const makeAdapter = Effect.fnUntraced(function* (fake: FakePi, launchArgs = "", forkFake?: FakePi) {
+const makeAdapter = Effect.fnUntraced(function* (
+  fake: FakePi,
+  launchArgs = "",
+  forkFake?: FakePi,
+  continuationRequests?: PiAdapterV2Options["continuationRequests"],
+) {
   const idAllocator = yield* IdAllocator.IdAllocatorV2;
   const serverConfig = yield* ServerConfig.ServerConfig;
   const fileSystem = yield* FileSystem.FileSystem;
+  const spawner =
+    forkFake === undefined
+      ? fake.spawner
+      : ChildProcessSpawner.make((command) =>
+          ChildProcess.isStandardCommand(command) && command.args.includes("--fork")
+            ? forkFake.spawner.spawn(command)
+            : fake.spawner.spawn(command),
+        );
+  if (continuationRequests !== undefined) {
+    return yield* PiAdapterV2Driver.create({
+      instanceId: PI_INSTANCE_ID,
+      displayName: undefined,
+      enabled: true,
+      environment: [],
+      config: { enabled: true, binaryPath: "pi", launchArgs, customModels: [] },
+    }).pipe(
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      Effect.provideService(HostProcessEnvironment, {}),
+      Effect.provideService(ProviderContinuationRequests.ProviderContinuationRequests, {
+        ...continuationRequests,
+        take: Effect.never,
+      }),
+    );
+  }
   return makePiAdapterV2({
     instanceId: PI_INSTANCE_ID,
     settings: { enabled: true, binaryPath: "pi", launchArgs, customModels: [] },
     environment: {},
-    spawner:
-      forkFake === undefined
-        ? fake.spawner
-        : ChildProcessSpawner.make((command) =>
-            ChildProcess.isStandardCommand(command) && command.args.includes("--fork")
-              ? forkFake.spawner.spawn(command)
-              : fake.spawner.spawn(command),
-          ),
+    spawner,
     fileSystem,
     idAllocator,
     serverConfig,
@@ -338,8 +367,9 @@ const openRuntime = Effect.fnUntraced(function* (
   threadId = THREAD_ID,
   providerSessionId = SESSION_ID,
   forkFake?: FakePi,
+  continuationRequests?: PiAdapterV2Options["continuationRequests"],
 ) {
-  const adapter = yield* makeAdapter(fake, "", forkFake);
+  const adapter = yield* makeAdapter(fake, "", forkFake, continuationRequests);
   const runtime = yield* adapter.openSession({
     threadId,
     providerSessionId,
@@ -397,6 +427,7 @@ const startTurn = Effect.fnUntraced(function* (
   selection?: ModelSelection,
   runOrdinal = 1,
   threadId = THREAD_ID,
+  continuation = false,
 ) {
   const appThread = yield* makeAppThread(model, threadId);
   const runId = RunId.make(`run:${threadId}:${runOrdinal}`);
@@ -413,8 +444,8 @@ const startTurn = Effect.fnUntraced(function* (
       messageId: `message:${threadId}:${runOrdinal}` as never,
       text,
       attachments,
-      createdBy: "user",
-      creationSource: "web",
+      createdBy: continuation ? "agent" : "user",
+      creationSource: continuation ? "provider" : "web",
     },
     modelSelection: selection ?? modelSelection(model),
     runtimePolicy,
@@ -461,6 +492,341 @@ const expectModelFailure = (errorMessage: string) =>
   }).pipe(Effect.scoped, Effect.provide(layerTest));
 
 describe("PiAdapterV2", () => {
+  it.effect("adopts a completed native wake without sending a synthetic prompt", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const offers =
+        yield* Queue.unbounded<ProviderContinuationRequests.ProviderContinuationRequest>();
+      const { runtime, takeEvent } = yield* openRuntime(
+        fake,
+        "default",
+        THREAD_ID,
+        SESSION_ID,
+        undefined,
+        {
+          offer: (request) => Queue.offer(offers, request).pipe(Effect.asVoid),
+        },
+      );
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* fake.emit({ type: "agent_start" });
+      const offer = yield* Queue.take(offers).pipe(
+        Effect.raceFirst(
+          takeEvent(
+            (event) =>
+              event.type === "provider_session.updated" && event.providerSession.status === "error",
+          ).pipe(
+            Effect.andThen(Effect.sync(() => assert.fail("Pi killed a routable native wake"))),
+          ),
+        ),
+      );
+      assert.equal(offer.threadId, THREAD_ID);
+      assert.equal(offer.providerThreadId, providerThread.id);
+      assert.equal(offer.delivery, "adapter_buffered");
+      assert.isTrue(yield* runtime.hasPendingBackgroundWork!);
+      let dispatchCommitted = false;
+      yield* offer.dispatchIfCurrent!(
+        Effect.sync(() => {
+          dispatchCommitted = true;
+        }),
+      );
+      assert.isTrue(dispatchCommitted);
+      assert.isTrue(yield* runtime.hasPendingBackgroundWork!);
+      yield* fake.emit({ type: "message_start", message: { role: "assistant" } });
+      yield* fake.emit({
+        type: "message_update",
+        assistantMessageEvent: {
+          type: "text_delta",
+          contentIndex: 0,
+          delta: "Background review finished",
+        },
+      });
+      yield* fake.emit({ type: "message_end", message: { role: "assistant" } });
+      yield* fake.emit({ type: "agent_settled" });
+      yield* takeEvent(
+        (event) =>
+          event.type === "provider_session.updated" && event.providerSession.status === "ready",
+      );
+      assert.isTrue(yield* runtime.hasPendingBackgroundWork!);
+      yield* startTurn(
+        runtime,
+        providerThread,
+        "default",
+        [],
+        "Synthetic wake",
+        undefined,
+        1,
+        THREAD_ID,
+        true,
+      );
+      const message = yield* takeEvent((event) => event.type === "message.updated");
+      assert.equal(
+        message.type === "message.updated" && message.message.text,
+        "Background review finished",
+      );
+      yield* takeEvent((event) => event.type === "turn.terminal");
+      assert.equal(fake.allRequests().filter((request) => request["type"] === "prompt").length, 0);
+      assert.isFalse(yield* runtime.hasPendingBackgroundWork!);
+      let dispatched = false;
+      yield* offer.dispatchIfCurrent!(
+        Effect.sync(() => {
+          dispatched = true;
+        }),
+      );
+      assert.isFalse(dispatched);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect.each([false, true])(
+    "a user prompt takes the wake without premature settlement, native wake settled=%s",
+    (settled) =>
+      Effect.gen(function* () {
+        const fake = yield* makeFakePi;
+        const offers =
+          yield* Queue.unbounded<ProviderContinuationRequests.ProviderContinuationRequest>();
+        const { runtime, takeEvent } = yield* openRuntime(
+          fake,
+          "default",
+          THREAD_ID,
+          SESSION_ID,
+          undefined,
+          {
+            offer: (request) => Queue.offer(offers, request).pipe(Effect.asVoid),
+          },
+        );
+        const providerThread = yield* runtime.ensureThread({
+          threadId: THREAD_ID,
+          modelSelection: modelSelection("default"),
+          runtimePolicy,
+        });
+        yield* fake.emit({ type: "agent_start" });
+        const offer = yield* Queue.take(offers);
+        if (settled) {
+          yield* fake.emit({ type: "agent_settled" });
+          yield* takeEvent(
+            (event) =>
+              event.type === "provider_session.updated" && event.providerSession.status === "ready",
+          );
+        }
+        yield* startTurn(runtime, providerThread);
+        const prompt = yield* fake.takeRequest("prompt");
+        assert.equal(prompt["message"], "Hello pi");
+        assert.equal(prompt["streamingBehavior"], "steer");
+        yield* fake.emit({ type: "response", command: "prompt", success: true });
+        yield* fake.emit({ type: "agent_start" });
+        yield* fake.emit({ type: "message_start", message: { role: "assistant" } });
+        yield* fake.emit({
+          type: "message_update",
+          assistantMessageEvent: {
+            type: "text_end",
+            contentIndex: 0,
+            content: "User prompt completed",
+          },
+        });
+        yield* fake.emit({ type: "agent_settled" });
+        const message = yield* takeEvent(
+          (event) =>
+            event.type === "message.updated" && event.message.text === "User prompt completed",
+        );
+        assert.isTrue(message.type === "message.updated" && message.message.runId !== null);
+        yield* takeEvent((event) => event.type === "turn.terminal");
+        let dispatched = false;
+        yield* offer.dispatchIfCurrent!(
+          Effect.sync(() => {
+            dispatched = true;
+          }),
+        );
+        assert.isFalse(dispatched);
+      }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("defers a wake's late settlement until the joined user prompt is acknowledged", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const offers =
+        yield* Queue.unbounded<ProviderContinuationRequests.ProviderContinuationRequest>();
+      const { runtime, takeEvent } = yield* openRuntime(
+        fake,
+        "default",
+        THREAD_ID,
+        SESSION_ID,
+        undefined,
+        {
+          offer: (request) => Queue.offer(offers, request).pipe(Effect.asVoid),
+        },
+      );
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* fake.emit({ type: "agent_start" });
+      yield* Queue.take(offers);
+      yield* startTurn(runtime, providerThread);
+      yield* fake.takeRequest("prompt");
+      yield* fake.emit({ type: "agent_settled" });
+      yield* fake.emit({
+        type: "extension_ui_request",
+        method: "notify",
+        message: "Ordering barrier",
+      });
+      yield* takeEvent(
+        (event) =>
+          event.type === "turn_item.updated" &&
+          event.turnItem.type === "dynamic_tool" &&
+          event.turnItem.toolName === "notify",
+      );
+      assert.equal(runtime.providerSession.status, "running");
+      fake.queueState({ isStreaming: true });
+      yield* fake.emit({ type: "response", command: "prompt", success: true });
+      yield* fake.takeRequest("get_state");
+      yield* fake.emit({ type: "agent_start" });
+      yield* fake.emit({ type: "agent_settled" });
+      yield* takeEvent((event) => event.type === "turn.terminal");
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("settles a command-only user prompt after taking a completed wake", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const offers =
+        yield* Queue.unbounded<ProviderContinuationRequests.ProviderContinuationRequest>();
+      const { runtime, takeEvent } = yield* openRuntime(
+        fake,
+        "default",
+        THREAD_ID,
+        SESSION_ID,
+        undefined,
+        {
+          offer: (request) => Queue.offer(offers, request).pipe(Effect.asVoid),
+        },
+      );
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* fake.emit({ type: "agent_start" });
+      yield* Queue.take(offers);
+      yield* fake.emit({ type: "agent_settled" });
+      yield* takeEvent(
+        (event) =>
+          event.type === "provider_session.updated" && event.providerSession.status === "ready",
+      );
+      yield* startTurn(runtime, providerThread, "default", [], "/hello");
+      yield* fake.takeRequest("prompt");
+      yield* fake.emit({ type: "response", command: "prompt", success: true });
+      yield* takeEvent((event) => event.type === "turn.terminal");
+      yield* startTurn(
+        runtime,
+        providerThread,
+        "default",
+        [],
+        "Stale continuation",
+        undefined,
+        2,
+        THREAD_ID,
+        true,
+      );
+      yield* takeEvent((event) => event.type === "turn.terminal");
+      assert.equal(fake.allRequests().filter((request) => request["type"] === "prompt").length, 1);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("keeps a pending wake on its thread and lets Stop retire its process", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const offers =
+        yield* Queue.unbounded<ProviderContinuationRequests.ProviderContinuationRequest>();
+      const { runtime, takeEvent } = yield* openRuntime(
+        fake,
+        "default",
+        THREAD_ID,
+        SESSION_ID,
+        undefined,
+        {
+          offer: (request) => Queue.offer(offers, request).pipe(Effect.asVoid),
+        },
+      );
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* fake.emit({ type: "agent_start" });
+      const offer = yield* Queue.take(offers);
+      assert.isTrue(yield* runtime.hasPendingBackgroundWorkForThread!(providerThread));
+      const otherThread = {
+        ...providerThread,
+        appThreadId: ThreadId.make("other-thread"),
+        id: ProviderThreadId.make("other-provider-thread"),
+      };
+      assert.isFalse(yield* runtime.hasPendingBackgroundWorkForThread!(otherThread));
+      const failure = yield* runtime
+        .resumeThread({ providerThread: otherThread })
+        .pipe(Effect.flip);
+      assert.equal(failure._tag, "ProviderAdapterResumeThreadError");
+      yield* runtime.interruptTurn({
+        providerThread,
+        providerTurnId: ProviderTurnId.make("settled-turn"),
+        requestRuntimeRestart: true,
+      });
+      yield* takeEvent(
+        (event) =>
+          event.type === "provider_session.updated" && event.providerSession.status === "stopped",
+      );
+      assert.isFalse(yield* runtime.hasPendingBackgroundWork!);
+      let dispatched = false;
+      yield* offer.dispatchIfCurrent!(
+        Effect.sync(() => {
+          dispatched = true;
+        }),
+      );
+      assert.isFalse(dispatched);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("an archived wake stops unowned execution and invalidates its offer", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const offers =
+        yield* Queue.unbounded<ProviderContinuationRequests.ProviderContinuationRequest>();
+      const { runtime, takeEvent } = yield* openRuntime(
+        fake,
+        "default",
+        THREAD_ID,
+        SESSION_ID,
+        undefined,
+        {
+          offer: (request) => Queue.offer(offers, request).pipe(Effect.asVoid),
+        },
+      );
+      yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* fake.emit({ type: "agent_start" });
+      const offer = yield* Queue.take(offers);
+      yield* offer.clearIfCurrent!();
+      yield* takeEvent(
+        (event) =>
+          event.type === "provider_session.updated" && event.providerSession.status === "stopped",
+      );
+      assert.isFalse(yield* runtime.hasPendingBackgroundWork!);
+      let dispatched = false;
+      yield* offer.dispatchIfCurrent!(
+        Effect.sync(() => {
+          dispatched = true;
+        }),
+      );
+      assert.isFalse(dispatched);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
   it.effect("stops provider-initiated work that has no T3 turn owner", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakePi;
