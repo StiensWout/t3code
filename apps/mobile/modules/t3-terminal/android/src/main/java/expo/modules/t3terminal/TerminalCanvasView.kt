@@ -179,9 +179,10 @@ internal class TerminalCanvasView(context: Context) : View(context) {
     val previous = frame
     frame = value
     if (rowBitmaps.size != value.rows) resetRowCache(value.rows)
-    if (value.full || previous == null || previous.cols != value.cols ||
-      previous.background != value.background ||
-      previous.cursorColor != value.cursorColor
+    if (value.full || previous == null) {
+      rowsToPaint.fill(true)
+    } else if (previous.cols != value.cols ||
+      previous.background != value.background || previous.cursorColor != value.cursorColor
     ) {
       rowsToPaint.fill(true)
     } else {

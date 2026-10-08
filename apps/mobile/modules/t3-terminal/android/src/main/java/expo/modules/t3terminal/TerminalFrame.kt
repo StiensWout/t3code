@@ -50,10 +50,7 @@ internal data class TerminalFrame(
       val cursorColor = buffer.int
       if (cols !in 1..400 || rows !in 1..200) return null
       val count = buffer.short.toInt() and 0xFFFF
-      if (count > rows || (full && count != rows)) return null
-      if (!full && (previous == null || previous.cols != cols || previous.rows != rows)) return null
-      val cells = arrayOfNulls<TerminalRow>(rows)
-      if (!full) previous!!.cells.copyInto(cells)
+      val cells = prepareGrid(previous, cols, rows, count, full) ?: return null
       val dirtyRows = IntArray(count)
       val seen = BooleanArray(rows)
       for (entry in 0 until count) {
@@ -62,23 +59,7 @@ internal data class TerminalFrame(
         if (row >= rows || seen[row]) return null
         seen[row] = true
         dirtyRows[entry] = row
-        val foregrounds = IntArray(cols)
-        val backgrounds = IntArray(cols)
-        val flags = IntArray(cols)
-        val text = Array(cols) { "" }
-        for (col in 0 until cols) {
-          if (buffer.remaining() < CELL_HEADER_BYTES) return null
-          foregrounds[col] = buffer.int
-          backgrounds[col] = buffer.int
-          flags[col] = buffer.short.toInt() and 0xFFFF
-          val length = buffer.short.toInt() and 0xFFFF
-          if (buffer.remaining() < length) return null
-          if (length > 0) {
-            text[col] = String(bytes, buffer.position(), length, Charsets.UTF_8)
-            buffer.position(buffer.position() + length)
-          }
-        }
-        cells[row] = TerminalRow(foregrounds, backgrounds, flags, text)
+        cells[row] = decodeRow(buffer, cols) ?: return null
       }
       if (buffer.hasRemaining()) return null
       return TerminalFrame(
@@ -96,6 +77,51 @@ internal data class TerminalFrame(
         dirtyRows = dirtyRows,
         full = full,
       )
+    }
+
+    private fun prepareGrid(
+      previous: TerminalFrame?,
+      cols: Int,
+      rows: Int,
+      count: Int,
+      full: Boolean
+    ): Array<TerminalRow?>? {
+      if (count > rows || (full && count != rows)) return null
+      return when {
+        full -> arrayOfNulls(rows)
+        previous == null -> null
+        previous.cols != cols || previous.rows != rows -> null
+        else -> {
+          val cells = arrayOfNulls<TerminalRow>(rows)
+          previous.cells.copyInto(cells)
+          cells
+        }
+      }
+    }
+
+    private fun decodeRow(buffer: ByteBuffer, cols: Int): TerminalRow? {
+      val row = TerminalRow(IntArray(cols), IntArray(cols), IntArray(cols), Array(cols) { "" })
+      for (col in 0 until cols) {
+        if (!decodeCell(buffer, row, col)) return null
+      }
+      return row
+    }
+
+    private fun decodeCell(buffer: ByteBuffer, row: TerminalRow, col: Int): Boolean {
+      if (buffer.remaining() < CELL_HEADER_BYTES) return false
+      row.foregrounds[col] = buffer.int
+      row.backgrounds[col] = buffer.int
+      row.flags[col] = buffer.short.toInt() and 0xFFFF
+      val length = buffer.short.toInt() and 0xFFFF
+      return if (buffer.remaining() >= length) {
+        if (length > 0) {
+          row.text[col] = String(buffer.array(), buffer.position(), length, Charsets.UTF_8)
+          buffer.position(buffer.position() + length)
+        }
+        true
+      } else {
+        false
+      }
     }
   }
 }
