@@ -1,9 +1,9 @@
 /**
  * Source for the T3-owned Pi extension that consumes T3's HTTP MCP server.
  *
- * Pi core has no MCP client. This file is TypeScript that Pi itself loads via
- * `--extension`. It is written to a cache path at session open so packaged
- * AppImage builds do not need a sibling .ts file next to the bundled server.
+ * Pi 0.99+ owns the MCP client and on-demand tool discovery. Older versions
+ * use the HTTP bridge below. Pi loads this TypeScript via `--extension`; the
+ * server writes it to a cache so packaged builds need no sibling .ts file.
  *
  * Do not import t3code modules from the string body. The Pi process resolves
  * `@earendil-works/pi-coding-agent` and `typebox` from the user's pi install.
@@ -261,6 +261,24 @@ export default async function t3McpExtension(pi: ExtensionAPI) {
     return;
   }
 
+  // This API arrived with native MCP and tool exposure in Pi 0.99. Checking
+  // the API preserves support for older installs without a version probe.
+  let nativeMcp = "registerMcpServer" in pi && typeof pi.registerMcpServer === "function";
+  if (nativeMcp) {
+    pi.registerMcpServer("t3-code", {
+      url: endpoint,
+      headers: { authorization: token.startsWith("Bearer ") ? token : \`Bearer \${token}\` },
+      exposure: "deferred",
+      // Orchestration can discover models and manage child work immediately.
+      // Pi activates tool_search so every other tool stays discoverable.
+      toolExposure: {
+        orchestrator_capabilities: "direct",
+        delegate_task: "direct",
+        task_status: "direct",
+      },
+    });
+  }
+
   const client = createMcpClient(endpoint, token);
   let started: Promise<void> | undefined;
 
@@ -278,10 +296,6 @@ export default async function t3McpExtension(pi: ExtensionAPI) {
           name: registeredName,
           label: name,
           description,
-          promptSnippet: description.split("\\n")[0] ?? name,
-          promptGuidelines: [
-            \`Use \${registeredName} from the t3-code MCP server when the user asks for T3 orchestration that this tool covers.\`,
-          ],
           parameters: jsonSchemaToTypebox(tool.inputSchema),
           async execute(_toolCallId, params, signal) {
             const result = await client.callTool(
@@ -306,13 +320,22 @@ export default async function t3McpExtension(pi: ExtensionAPI) {
     return attempt;
   };
 
-  // Await here so tools exist before session_start and the first prompt.
-  // session_start is a retry if the process later reloads the extension.
-  // Best effort during extension load. A failed first connection is retried
-  // below on session_start instead of pinning this process to the failure.
-  await ensureStarted().catch(() => undefined);
+  // Older Pi needs its tools before session_start and the first prompt.
+  // A failed load-time connection is retried at session_start. Native Pi
+  // owns readiness, discovery, and connection teardown for its MCP client.
+  if (!nativeMcp) await ensureStarted().catch(() => undefined);
 
   pi.on("session_start", async (_event, ctx) => {
+    if (nativeMcp) {
+      // These built-ins can be disabled or replaced independently of the API.
+      // Check their source, not connection readiness: Pi starts connecting in
+      // session_start and waits in its own before_agent_start hook.
+      const hasMcp = pi.getCommands().some((command) => command.sourceInfo?.path === "builtin:mcp");
+      const hasToolSearch = pi.getAllTools().some((tool) => tool.sourceInfo?.path === "builtin:tool-search");
+      if (hasMcp && hasToolSearch) return;
+      pi.unregisterMcpServer("t3-code");
+      nativeMcp = false;
+    }
     try {
       await ensureStarted();
     } catch (error) {
