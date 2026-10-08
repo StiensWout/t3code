@@ -904,7 +904,7 @@ function ComposerPromptEditorTiptapInner(props: ComposerPromptEditorProps) {
     value,
     cursor: initialCursor,
     expandedCursor: initialExpandedCursor,
-    contextIds: collectInlineContextIds(value),
+    contextIds: literalText ? [] : collectInlineContextIds(value),
   });
   const selectionRangeRef = useRef({ start: initialExpandedCursor, end: initialExpandedCursor });
   const isApplyingControlledUpdateRef = useRef(false);
@@ -933,6 +933,8 @@ function ComposerPromptEditorTiptapInner(props: ComposerPromptEditorProps) {
   const handleEditorChange = useCallback(
     (updated: TiptapEditor) => {
       const map = serializeEditorDoc(updated.state.doc);
+      // Literal answers hold no chips, so reference-shaped text is not a context.
+      const contextIds = literalText ? [] : map.contextIds;
       const { from, to } = updated.state.selection;
       const fromFlat = pmToFlat(map, from);
       const toFlat = pmToFlat(map, to);
@@ -954,8 +956,8 @@ function ComposerPromptEditorTiptapInner(props: ComposerPromptEditorProps) {
         previousSnapshot.value === nextValue &&
         previousSnapshot.cursor === nextCursor &&
         previousSnapshot.expandedCursor === nextExpandedCursor &&
-        previousSnapshot.contextIds.length === map.contextIds.length &&
-        previousSnapshot.contextIds.every((id, index) => id === map.contextIds[index])
+        previousSnapshot.contextIds.length === contextIds.length &&
+        previousSnapshot.contextIds.every((id, index) => id === contextIds[index])
       );
       if (isApplyingControlledUpdateRef.current) return;
       if (!snapshotChanged) {
@@ -974,7 +976,7 @@ function ComposerPromptEditorTiptapInner(props: ComposerPromptEditorProps) {
         value: nextValue,
         cursor: nextCursor,
         expandedCursor: nextExpandedCursor,
-        contextIds: map.contextIds,
+        contextIds,
       };
       // A fence holds no chips, so nothing in it should summon the mention or
       // command menu: `@` in code is a decorator, not a file. Suppressing the
@@ -986,13 +988,7 @@ function ComposerPromptEditorTiptapInner(props: ComposerPromptEditorProps) {
         inCodeBlock ||
         isCollapsedCursorAdjacentToInlineToken(nextValue, nextCursor, "left") ||
         isCollapsedCursorAdjacentToInlineToken(nextValue, nextCursor, "right");
-      onChangeRef.current(
-        nextValue,
-        nextCursor,
-        nextExpandedCursor,
-        suppressTrigger,
-        map.contextIds,
-      );
+      onChangeRef.current(nextValue, nextCursor, nextExpandedCursor, suppressTrigger, contextIds);
     },
     [clampEditorCursor, literalText],
   );
@@ -1500,7 +1496,7 @@ function ComposerPromptEditorTiptapInner(props: ComposerPromptEditorProps) {
       value: map.value,
       cursor: clampEditorCursor(map.value, flatToCollapsed(map, fromFlat)),
       expandedCursor: Math.max(0, Math.min(map.value.length, flatToMarkdown(map, fromFlat))),
-      contextIds: map.contextIds,
+      contextIds: literalText ? [] : map.contextIds,
     };
     const toFlat = pmToFlat(map, to);
     selectionRangeRef.current = {
@@ -1509,7 +1505,7 @@ function ComposerPromptEditorTiptapInner(props: ComposerPromptEditorProps) {
     };
     snapshotRef.current = next;
     return next;
-  }, [clampEditorCursor, editor]);
+  }, [clampEditorCursor, editor, literalText]);
 
   // Controlled value/cursor from the store (history recall, chip insertion…).
   useLayoutEffect(() => {
