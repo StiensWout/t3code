@@ -1131,11 +1131,11 @@ export class GhosttyTerminalSurface {
       primaryModifier &&
       (event.key === "Home" || event.key === "End");
     if ((pageHistory || jumpHistory) && !this.core.isAlternateScreen()) {
-      event.preventDefault();
-      event.stopPropagation();
-      this.suppressedKeyCodes.add(event.code);
       const state = this.readScrollbarState();
       if (state !== null) {
+        event.preventDefault();
+        event.stopPropagation();
+        this.suppressedKeyCodes.add(event.code);
         const delta =
           event.key === "Home"
             ? -state.offset
@@ -1143,8 +1143,8 @@ export class GhosttyTerminalSurface {
               ? state.total - state.len - state.offset
               : Math.max(1, state.len) * (event.key === "PageUp" ? -1 : 1);
         this.scrollViewport(delta);
+        return;
       }
-      return;
     }
     if (isTerminalCopyShortcut(event) && this.hasSelection()) {
       // A plain Ctrl+C/Cmd+C fires the browser's native copy event, caught in

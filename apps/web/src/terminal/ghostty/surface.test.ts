@@ -283,6 +283,25 @@ describe("GhosttyTerminalSurface visibility", () => {
     },
   );
 
+  it("forwards navigation presses and releases when scrollback state is unavailable", async () => {
+    vi.stubGlobal("navigator", { platform: "Linux x86_64" });
+    const harness = createHarness();
+    const surface = await harness.create({ beforeKey: () => true });
+    surface.write("history\x1b[>31u");
+    vi.spyOn(GhosttyTerminalCore.prototype, "scrollbarState").mockReturnValue(null);
+
+    for (const [name, modifiers] of [
+      ["PageUp", { shiftKey: true }],
+      ["Home", { ctrlKey: true, shiftKey: true }],
+    ] as const) {
+      key(surface, name, name, modifiers);
+      key(surface, name, name, modifiers, "keyup");
+    }
+    expect(harness.onData).toHaveBeenCalledTimes(4);
+    expect(harness.onData.mock.calls[1]?.[0]).toContain(":3");
+    expect(harness.onData.mock.calls[3]?.[0]).toContain(":3");
+  });
+
   it("selects full history and keeps selection coordinates available outside the viewport", async () => {
     vi.stubGlobal("navigator", { platform: "Linux x86_64" });
     const harness = createHarness();
