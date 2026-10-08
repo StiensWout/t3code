@@ -25,7 +25,8 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import { HttpServerRequest, HttpServerResponse } from "effect/http";
 import { parse as parseToml } from "smol-toml";
-import { parse as parseJsonc, type ParseError } from "jsonc-parser";
+import * as NodeModule from "node:module";
+import type { ParseError } from "jsonc-parser";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -36,6 +37,11 @@ import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import * as McpOAuthClient from "./McpOAuthClient.ts";
 import * as ManagedMcpHttp from "./ManagedMcpHttp.ts";
 import type { ManagedMcpRuntimeConfig } from "./ManagedMcpRuntime.ts";
+
+// JSONC has disk-backed UMD modules, including in the single executable.
+const { parse: parseJsonc } = NodeModule.createRequire(import.meta.url)(
+  "jsonc-parser",
+) as typeof import("jsonc-parser");
 
 const Catalog = Schema.Struct({ revision: Schema.Number, servers: Schema.Array(ManagedMcpServer) });
 const decodeCatalog = Schema.decodeUnknownEffect(Schema.fromJsonString(Catalog));

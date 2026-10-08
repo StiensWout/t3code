@@ -692,7 +692,7 @@ function acpMcpContext(threadId: ThreadId | null, self: SelfInvocation): AcpMcpC
     .filter((server) => server.enabled)
     .map((server) => {
       if (server.transport.type === "stdio") {
-        const config = managedMcpStdio(server.transport);
+        const config = managedMcpStdio(server.transport, self);
         return {
           name: managedMcpName(server.id),
           command: config.command,

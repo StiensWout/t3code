@@ -17,7 +17,11 @@ if (
   })
 ) {
   const command = process.argv[2];
-  if (command === "acp-mcp-bridge" || command === "acp-mcp-call") {
+  if (command === "managed-mcp-stdio") {
+    const { runManagedMcpStdio } =
+      await import("./orchestration-v2/Adapters/managedMcpInjection.ts");
+    runManagedMcpStdio(process.argv.slice(3));
+  } else if (command === "acp-mcp-bridge" || command === "acp-mcp-call") {
     const { runAcpMcpCliFastPath } = await import("./mcp/AcpMcpStdioBridge.ts");
     await runAcpMcpCliFastPath(command, process.argv.slice(3));
   } else {

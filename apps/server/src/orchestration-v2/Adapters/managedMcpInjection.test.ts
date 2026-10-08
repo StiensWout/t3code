@@ -4,6 +4,7 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodeUtil from "node:util";
+import * as NodeURL from "node:url";
 import { describe, it, assert } from "@effect/vitest";
 import { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 
@@ -19,18 +20,24 @@ describe("managed MCP provider configuration", () => {
   it("runs a cwd-specific stdio server with literal arguments and its configured environment", async () => {
     const cwd = NodeFS.realpathSync(NodeOS.tmpdir());
     const values = ["argument with spaces", "$(must-stay-literal)", 'quote"value', "semi;colon"];
-    const config = managedMcpStdio({
-      type: "stdio",
-      command: process.execPath,
-      args: [
-        "-e",
-        "process.stdout.write(JSON.stringify({ cwd: process.cwd(), args: process.argv.slice(1), key: process.env.MCP_TEST_KEY }))",
-        "--",
-        ...values,
-      ],
-      env: { MCP_TEST_KEY: "fixture-key" },
-      cwd,
-    });
+    const config = managedMcpStdio(
+      {
+        type: "stdio",
+        command: process.execPath,
+        args: [
+          "-e",
+          "process.stdout.write(JSON.stringify({ cwd: process.cwd(), args: process.argv.slice(1), key: process.env.MCP_TEST_KEY }))",
+          "--",
+          ...values,
+        ],
+        env: { MCP_TEST_KEY: "fixture-key" },
+        cwd,
+      },
+      {
+        command: process.execPath,
+        entrypoint: NodeURL.fileURLToPath(new URL("../../bin.ts", import.meta.url)),
+      },
+    );
     const result = await NodeUtil.promisify(NodeChildProcess.execFile)(
       config.command,
       config.args,
@@ -39,6 +46,15 @@ describe("managed MCP provider configuration", () => {
       },
     );
     assert.deepEqual(JSON.parse(result.stdout), { cwd, args: values, key: "fixture-key" });
+  });
+
+  it("launches a cwd-specific server as a subcommand of the standalone executable", () => {
+    const config = managedMcpStdio(
+      { type: "stdio", command: "fixture", args: ["argument with spaces"], env: {}, cwd: "/tmp" },
+      { command: "/usr/local/bin/t3", entrypoint: undefined },
+    );
+    assert.equal(config.command, "/usr/local/bin/t3");
+    assert.deepEqual(config.args, ["managed-mcp-stdio", "/tmp", "fixture", "argument with spaces"]);
   });
 
   it("adds assigned transports beside T3 tools without preapproving third-party tools", () => {
