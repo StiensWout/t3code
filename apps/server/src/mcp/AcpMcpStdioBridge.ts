@@ -45,6 +45,7 @@ const MCP_PROTOCOL_VERSION = "2025-06-18";
 export interface AcpMcpStdioBridgeOptions {
   readonly endpoint: string;
   readonly authorization: string;
+  readonly headers?: Readonly<Record<string, string>>;
   readonly input: NodeJS.ReadableStream;
   readonly output: { write(chunk: string): unknown };
   readonly fetchImplementation?: (url: string, init?: RequestInit) => Promise<Response>;
@@ -146,6 +147,7 @@ export function callAcpMcpTool(
           try: () =>
             fetchImplementation(options.endpoint, {
               method: "POST",
+              redirect: "manual",
               headers: {
                 "content-type": "application/json",
                 accept: "application/json, text/event-stream",
@@ -250,10 +252,14 @@ export function runAcpMcpStdioBridge(options: AcpMcpStdioBridgeOptions): Effect.
           try: () =>
             fetchImplementation(options.endpoint, {
               method: "POST",
+              redirect: "manual",
               headers: {
+                ...Object.fromEntries(new Headers(options.headers)),
                 "content-type": "application/json",
                 accept: "application/json, text/event-stream",
-                authorization: options.authorization,
+                ...(options.authorization.length === 0
+                  ? {}
+                  : { authorization: options.authorization }),
                 ...(sessionId === null ? {} : { "mcp-session-id": sessionId }),
                 ...(protocolVersion === null ? {} : { "mcp-protocol-version": protocolVersion }),
               },
@@ -368,17 +374,42 @@ export async function runAcpMcpCliFastPath(
   args: ReadonlyArray<string>,
 ): Promise<void> {
   const endpoint = process.env.T3_ACP_MCP_ENDPOINT;
-  const authorization = process.env.T3_ACP_MCP_AUTHORIZATION;
+  const serializedHeaders =
+    command === "acp-mcp-bridge" ? process.env.T3_ACP_MCP_HEADERS : undefined;
+  // Managed HTTP servers own their headers, even if an agent inherited T3's bearer.
+  const authorization = serializedHeaders === undefined ? process.env.T3_ACP_MCP_AUTHORIZATION : "";
   if (endpoint === undefined || authorization === undefined) {
     process.stderr.write(`${command} requires T3_ACP_MCP_ENDPOINT and T3_ACP_MCP_AUTHORIZATION.\n`);
     process.exitCode = 2;
     return;
   }
   if (command === "acp-mcp-bridge") {
+    let headers: Record<string, string> | undefined;
+    if (serializedHeaders !== undefined) {
+      try {
+        const value: unknown = JSON.parse(serializedHeaders);
+        if (
+          typeof value !== "object" ||
+          value === null ||
+          Array.isArray(value) ||
+          !Object.values(value).every((entry) => typeof entry === "string")
+        ) {
+          throw new Error("Invalid HTTP headers");
+        }
+        headers = value as Record<string, string>;
+      } catch {
+        process.stderr.write(
+          "acp-mcp-bridge requires T3_ACP_MCP_HEADERS to be an object of strings.\n",
+        );
+        process.exitCode = 2;
+        return;
+      }
+    }
     await Effect.runPromise(
       runAcpMcpStdioBridge({
         endpoint,
         authorization,
+        ...(headers === undefined ? {} : { headers }),
         input: process.stdin,
         output: process.stdout,
       }),

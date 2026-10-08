@@ -9,7 +9,9 @@ import {
   T3_MCP_BEARER_ENV,
   T3_MCP_URL_ENV,
   T3_PI_RUNTIME_MODE_ENV,
+  T3_MANAGED_MCP_ENV,
 } from "./piT3McpExtensionSource.ts";
+import { managedMcpName } from "./managedMcpInjection.ts";
 
 const RESERVED_PI_LAUNCH_ARGUMENTS = new Set([
   "--continue",
@@ -291,6 +293,7 @@ export function buildPiRpcLaunch(input: {
   // credentials inherited from the server or a parent provider process.
   delete environment[T3_MCP_URL_ENV];
   delete environment[T3_MCP_BEARER_ENV];
+  delete environment[T3_MANAGED_MCP_ENV];
 
   return {
     args,
@@ -308,6 +311,18 @@ export function buildPiRpcLaunch(input: {
             [T3_MCP_BEARER_ENV]: bearerTokenFromAuthorizationHeader(
               input.mcpSession.authorizationHeader,
             ),
+            ...(input.mcpSession.managedMcp === undefined
+              ? {}
+              : {
+                  [T3_MANAGED_MCP_ENV]: JSON.stringify(
+                    input.mcpSession.managedMcp.servers
+                      .filter((server) => server.enabled)
+                      .map((server) => ({
+                        name: managedMcpName(server.id),
+                        transport: server.transport,
+                      })),
+                  ),
+                }),
           }
         : {}),
     },

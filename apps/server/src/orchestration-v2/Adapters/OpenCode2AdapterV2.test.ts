@@ -49,6 +49,7 @@ import * as ProviderContinuationRequests from "../ProviderContinuationRequests.t
 import { OPENCODE_PROVIDER } from "./OpenCodeAdapterV2.ts";
 import { OPENCODE_2_STILL_STOPPING, t3McpServerName } from "./OpenCode2AdapterV2.ts";
 import { openCode2ReplayRuntime } from "./OpenCode2AdapterV2.testkit.ts";
+import { openCodeManagedMcpName } from "./managedMcpInjection.ts";
 
 const SESSION = "ses_f148ca2deffeJcwCnRQtb0YFNX";
 const WORK = "/work/opencode2";
@@ -156,7 +157,7 @@ const withInstructions = (
       ].includes(String(entry.frame.type)),
   );
   // T3's MCP server is added before the entry that describes it.
-  const after = entries.findIndex(
+  const after = entries.findLastIndex(
     (entry, index) =>
       index < first &&
       entry.type === "emit_inbound" &&
@@ -2676,6 +2677,174 @@ describe("OpenCode2 adapter", () => {
       assert.deepEqual(statuses, ["pending", "cancelled"]);
       assert.deepInclude(collected.at(-1), { type: "turn.terminal", status: "completed" });
     }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "keeps managed assignments separate for app threads sharing an OpenCode 2 session",
+    () =>
+      Effect.gen(function* () {
+        const siblingId = ThreadId.make("thread:opencode2-other");
+        const nativeSibling = "ses_managed_sibling";
+        const base = {
+          environmentId: EnvironmentId.make("environment:opencode2-adapter"),
+          providerSessionId: "mcp:opencode2-managed",
+          providerInstanceId: instanceId,
+          endpoint: "http://127.0.0.1:3773/mcp",
+          authorizationHeader: "Bearer fixture",
+          browserToolsAvailable: false,
+        };
+        const transport = { type: "http" as const, url: "https://mcp.example.test", headers: {} };
+        McpProviderSession.setMcpProviderSession({
+          ...base,
+          threadId,
+          managedMcp: { revision: 1, servers: [{ id: "assigned", enabled: true, transport }] },
+        });
+        McpProviderSession.setMcpProviderSession({
+          ...base,
+          threadId: siblingId,
+          managedMcp: { revision: 2, servers: [{ id: "assigned", enabled: false, transport }] },
+        });
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            McpProviderSession.clearMcpProviderSession(threadId);
+            McpProviderSession.clearMcpProviderSession(siblingId);
+          }),
+        );
+        const { runtime, thread } = yield* resumed([
+          out("session.update", {
+            sessionID: SESSION,
+            permissions: [
+              ...t3Rules,
+              {
+                action: `${openCodeManagedMcpName("assigned", threadId)}_*`,
+                resource: "*",
+                effect: "allow",
+              },
+            ],
+          }),
+          reply("session.update", null),
+          out("session.get", { sessionID: nativeSibling }),
+          replyData("session.get", sessionInfo({ id: nativeSibling })),
+          out("permission.list", { sessionID: nativeSibling }),
+          replyData("permission.list", []),
+          out("session.form.list", { sessionID: nativeSibling }),
+          replyData("session.form.list", []),
+          out("session.update", {
+            sessionID: nativeSibling,
+            permissions: [
+              { action: "*", resource: "*", effect: "allow" },
+              { action: "t3-code-*", resource: "*", effect: "deny" },
+              { action: "t3-code-thread_opencode2-other_*", resource: "*", effect: "allow" },
+            ],
+          }),
+          reply("session.update", null),
+        ]);
+        const sibling = yield* runtime.resumeThread({
+          threadId: siblingId,
+          modelSelection: bigPickle,
+          runtimePolicy: policy(),
+          providerThread: {
+            ...thread,
+            id: ProviderThreadId.make("provider-thread:managed-sibling"),
+            appThreadId: siblingId,
+            nativeThreadRef: {
+              driver: OPENCODE_PROVIDER,
+              nativeId: nativeSibling,
+              strength: "strong",
+            },
+          },
+        });
+        assert.equal(sibling.appThreadId, siblingId);
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect.each(["ready", "failure"] as const)(
+    "keeps OpenCode 2 turns usable and cleans up a managed MCP after %s registration",
+    (registration) =>
+      Effect.gen(function* () {
+        McpProviderSession.setMcpProviderSession({
+          environmentId: EnvironmentId.make("environment:opencode2-adapter"),
+          threadId,
+          providerSessionId: "mcp:opencode2-managed",
+          providerInstanceId: instanceId,
+          endpoint: "http://127.0.0.1:3773/mcp",
+          authorizationHeader: "Bearer thread-credential",
+          browserToolsAvailable: false,
+          managedMcp: {
+            revision: 1,
+            servers: [
+              {
+                id: "github-production",
+                enabled: true,
+                transport: {
+                  type: "http",
+                  url: "https://mcp.example.test",
+                  headers: { "X-Key": "fixture" },
+                },
+              },
+              {
+                id: "disabled",
+                enabled: false,
+                transport: { type: "stdio", command: "must-not-spawn", args: [], env: {} },
+              },
+            ],
+          },
+        });
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => McpProviderSession.clearMcpProviderSession(threadId)),
+        );
+        const managed = openCodeManagedMcpName("github-production", threadId);
+        assert.isAtMost(`${managed}_create_pull_request_review`.length, 64);
+        const own = "t3-code-thread_opencode2-adapter";
+        const { runtime, thread } = yield* resumed([
+          out("session.update", {
+            sessionID: SESSION,
+            permissions: [...t3Rules, { action: `${managed}_*`, resource: "*", effect: "allow" }],
+          }),
+          reply("session.update", null),
+          out("mcp.add", {
+            server: managed,
+            "location[directory]": WORK,
+            config: {
+              type: "remote",
+              url: "https://mcp.example.test",
+              headers: { "X-Key": "fixture" },
+              oauth: false,
+            },
+          }),
+          reply(
+            "mcp.add",
+            registration === "ready"
+              ? null
+              : {
+                  status: 500,
+                  body: { _tag: "UnknownError", message: "managed MCP unavailable" },
+                },
+          ),
+          out("mcp.add", {
+            server: own,
+            "location[directory]": WORK,
+            config: {
+              type: "remote",
+              url: "http://127.0.0.1:3773/mcp",
+              headers: { Authorization: "Bearer thread-credential" },
+              oauth: false,
+            },
+          }),
+          reply("mcp.add", null),
+          out("session.prompt", { sessionID: SESSION, text: "<any>" }),
+          promptAccepted,
+          event("session.execution.succeeded", { sessionID: SESSION }),
+          out("mcp.remove", { server: own, "location[directory]": WORK }),
+          reply("mcp.remove", null),
+          out("mcp.remove", { server: managed, "location[directory]": WORK }),
+          reply("mcp.remove", null),
+        ]);
+        const terminal = yield* terminalOf(runtime).pipe(Effect.forkScoped);
+        yield* runtime.startTurn(turnInput(thread));
+        assert.equal((yield* Fiber.join(terminal))?.status, "completed");
+        yield* runtime.unloadThread!({ providerThread: thread });
+      }).pipe(Effect.scoped),
   );
 
   it.effect(

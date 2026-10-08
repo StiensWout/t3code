@@ -1,4 +1,5 @@
 import type { ReactElement } from "react";
+import type { McpManagementUiSession } from "@t3tools/client-runtime/state/mcpManagementUiSession";
 import {
   DEFAULT_UNIFIED_SETTINGS,
   EnvironmentId,
@@ -7,7 +8,7 @@ import {
   type ServerProvider,
   type UnifiedSettings,
 } from "@t3tools/contracts";
-import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { visitElements } from "../../test/reactElementTree";
 import { reactHookHarness as hooks } from "../../test/reactHookHarness";
@@ -45,6 +46,8 @@ const settingsSearchState = vi.hoisted(() => ({
   effects: [] as Array<() => void>,
 }));
 
+const mcpUiFixture = vi.hoisted(() => ({ reset: () => {}, dispose: () => {} }));
+
 vi.mock("react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react")>();
   const { reactHookHarness } = await import("../../test/reactHookHarness");
@@ -75,6 +78,33 @@ vi.mock("react/compiler-runtime", async () => {
 vi.mock("@effect/atom-react", () => ({
   useAtomValue: () => atoms.providers,
 }));
+
+// Routing tests invoke the panel directly; retain the real feature state without React context.
+vi.mock("../../state/mcpManagement", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../state/mcpManagement")>();
+  const { AtomRegistry } = await import("effect/reactivity");
+  let registry = AtomRegistry.make();
+  mcpUiFixture.reset = () => {
+    registry.dispose();
+    registry = AtomRegistry.make();
+  };
+  mcpUiFixture.dispose = () => registry.dispose();
+  return {
+    ...actual,
+    useMcpManagementUiSessionsCleanup: () => {},
+    useMcpManagementUiSession: (environmentId: EnvironmentId) => ({
+      read: () => actual.mcpManagementUiSessions.read(registry, environmentId),
+      field: <K extends keyof McpManagementUiSession>(key: K) => [
+        actual.mcpManagementUiSessions.read(registry, environmentId)[key],
+        (
+          next:
+            | McpManagementUiSession[K]
+            | ((previous: McpManagementUiSession[K]) => McpManagementUiSession[K]),
+        ) => actual.mcpManagementUiSessions.setField(registry, environmentId, key, next),
+      ],
+    }),
+  };
+});
 
 vi.mock("../../state/server", () => ({
   EMPTY_SERVER_PROVIDERS: [],
@@ -212,7 +242,9 @@ async function flushPromises(): Promise<void> {
 }
 
 describe("EnvironmentProviderSettings routing", () => {
+  afterAll(() => mcpUiFixture.dispose());
   beforeEach(() => {
+    mcpUiFixture.reset();
     hooks.reset();
     atoms.providers = null;
     settingsState.value = DEFAULT_UNIFIED_SETTINGS;

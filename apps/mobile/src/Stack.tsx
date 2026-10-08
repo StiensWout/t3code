@@ -237,7 +237,7 @@ const SettingsContentStack = createV5SheetStackNavigator({
     SettingsProviderAccounts: createNativeStackScreen({
       screen: SettingsProviderAccountsRouteScreen,
       linking: "provider-accounts",
-      options: { title: "Provider accounts" },
+      options: { title: "Providers" },
     }),
     SettingsEnvironmentMaintenance: createNativeStackScreen({
       screen: SettingsEnvironmentMaintenanceRouteScreen,

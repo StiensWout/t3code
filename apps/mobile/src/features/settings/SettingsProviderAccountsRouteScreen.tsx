@@ -1,3 +1,6 @@
+import { useAtomValue } from "@effect/atom-react";
+import { useNavigation, usePreventRemove } from "@react-navigation/native";
+import { hasMcpManagementDraft } from "@t3tools/client-runtime/state/mcpManagementUiSession";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -5,12 +8,32 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import type { ProviderAuthResponse, ServerProvider } from "@t3tools/contracts";
 import { useRef, useState } from "react";
-import { Alert, Linking, Pressable, ScrollView, TextInput, View } from "react-native";
+import {
+  Alert,
+  Keyboard,
+  Linking,
+  Platform,
+  Pressable,
+  ScrollView,
+  TextInput,
+  View,
+  type ScrollViewInstance,
+} from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { McpManagementSection } from "./McpManagementSection";
 import { AppText as Text } from "../../components/AppText";
 import { ScreenScrollView } from "../../components/ScreenScrollView";
+import { SegmentedControl } from "../../components/SegmentedControl";
+import { useNativeColumnLayoutMetrics } from "../../native/native-layout-metrics";
 import { useEnvironmentQuery } from "../../state/query";
+import { appAtomRegistry } from "../../state/atom-registry";
+import {
+  mcpManagementUiSessions,
+  useMcpManagementUiSessionsCleanup,
+} from "../../state/mcpManagement";
+import { NativeStackScreenOptions } from "../../native/StackHeader";
+import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { SettingsActionRow } from "./components/SettingsActionRow";
@@ -23,46 +46,151 @@ import { SettingsSection } from "./components/SettingsSection";
 import { useSettingsEnvironmentFilter, type SettingsTarget } from "./settings-environment-filter";
 
 export function SettingsProviderAccountsRouteScreen() {
+  useMcpManagementUiSessionsCleanup();
+  const navigation = useNavigation();
+  const sessions = useAtomValue(mcpManagementUiSessions.sessionsAtom);
+  const updating = [...sessions.values()].some((session) => session.pending);
+  const preventRemove = updating || [...sessions.values()].some(hasMcpManagementDraft);
+  usePreventRemove(preventRemove, ({ data }) => {
+    if (updating) {
+      Alert.alert("Updating MCP settings", "Wait for the update to finish before leaving.");
+      return;
+    }
+    Alert.alert("Discard changes?", "Your unsaved MCP changes will be lost.", [
+      { text: "Keep editing", style: "cancel" },
+      {
+        text: "Discard changes",
+        style: "destructive",
+        onPress: () => {
+          mcpManagementUiSessions.discardDrafts(appAtomRegistry);
+          navigation.dispatch(data.action);
+        },
+      },
+    ]);
+  });
+  const [view, setView] = useState<"accounts" | "mcps">("accounts");
   const { selectedTargets } = useSettingsEnvironmentFilter();
   const insets = useSafeAreaInsets();
+  const nativeColumnMetrics = useNativeColumnLayoutMetrics();
+  // UIKit's automatic header inset is absent from the JS scroll event's contentInset.
+  const navigationTopInset =
+    Platform.OS === "ios" ? (nativeColumnMetrics?.safeArea.top ?? insets.top) : 0;
+  const scroll = useRef<ScrollViewInstance>(null);
+  const environmentOffsets = useRef(new Map<string, number>());
+  const pendingEnvironmentScroll = useRef<string | null>(null);
   return (
     <>
       <SettingsEnvironmentFilterHeader />
-      <SettingsScreen title="Provider accounts" trailing={<AndroidSettingsEnvironmentFilter />}>
+      <SettingsScreen title="Providers" trailing={<AndroidSettingsEnvironmentFilter />}>
+        {Platform.OS === "ios" ? (
+          <NativeStackScreenOptions
+            options={{
+              headerBackVisible: false,
+              gestureEnabled: !preventRemove,
+              unstable_headerLeftItems: () => [
+                withNativeGlassHeaderItem({
+                  type: "button",
+                  label: "",
+                  accessibilityLabel: "Back",
+                  icon: { type: "sfSymbol", name: "chevron.backward" },
+                  onPress: () => navigation.goBack(),
+                }),
+              ],
+            }}
+          />
+        ) : null}
         <ScreenScrollView
+          ref={scroll}
           className="flex-1"
           contentInsetAdjustmentBehavior="automatic"
+          automaticallyAdjustKeyboardInsets
+          keyboardDismissMode="on-drag"
+          keyboardShouldPersistTaps="handled"
+          onContentSizeChange={() => {
+            const environmentId = pendingEnvironmentScroll.current;
+            if (environmentId === null || !scroll.current) return;
+            pendingEnvironmentScroll.current = null;
+            if (!selectedTargets.some((target) => target.environmentId === environmentId)) return;
+            // Wait for the replacement pane, and keep its heading below native navigation.
+            scroll.current.scrollTo({
+              y: Math.max(
+                -navigationTopInset,
+                (environmentOffsets.current.get(environmentId) ?? 0) - navigationTopInset - 8,
+              ),
+              animated: false,
+            });
+          }}
           contentContainerClassName="gap-6 px-5 pt-4"
           contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
         >
+          <SegmentedControl
+            options={[
+              { value: "accounts", label: "Accounts" },
+              { value: "mcps", label: "MCPs" },
+            ]}
+            selected={view}
+            role="tab"
+            onSelect={(value) => {
+              pendingEnvironmentScroll.current = null;
+              Keyboard.dismiss();
+              setView(value);
+              scroll.current?.scrollTo({ y: -navigationTopInset, animated: false });
+            }}
+          />
           {selectedTargets.length === 0 ? (
             <Text className="text-foreground-muted">Select a connected environment.</Text>
           ) : (
             selectedTargets.map((environment) => (
-              <SettingsSection key={environment.environmentId} title={environment.label}>
-                {environment.serverConfig.providers
-                  .filter(
-                    (provider) =>
-                      provider.setup?.canAuthenticate ||
-                      (provider.driver === "acpRegistry" && provider.installed),
+              <View
+                key={environment.environmentId}
+                className="gap-2"
+                onLayout={(event) =>
+                  environmentOffsets.current.set(
+                    environment.environmentId,
+                    event.nativeEvent.layout.y,
                   )
-                  .map((provider) => (
-                    <ProviderAccount
-                      key={provider.instanceId}
-                      environment={environment}
-                      provider={provider}
+                }
+              >
+                {view === "mcps" ? (
+                  <>
+                    <Text className="px-2 text-sm font-t3-medium text-foreground-muted">
+                      {environment.label}
+                    </Text>
+                    <McpManagementSection
+                      environmentId={environment.environmentId}
+                      onNavigate={() => {
+                        Keyboard.dismiss();
+                        pendingEnvironmentScroll.current = environment.environmentId;
+                      }}
                     />
-                  ))}
-                {!environment.serverConfig.providers.some(
-                  (provider) =>
-                    provider.setup?.canAuthenticate ||
-                    (provider.driver === "acpRegistry" && provider.installed),
-                ) ? (
-                  <Text className="p-4 text-foreground-muted">
-                    Configure a provider with in-app sign-in in web or desktop Settings.
-                  </Text>
-                ) : null}
-              </SettingsSection>
+                  </>
+                ) : (
+                  <SettingsSection title={environment.label}>
+                    {environment.serverConfig.providers
+                      .filter(
+                        (provider) =>
+                          provider.setup?.canAuthenticate ||
+                          (provider.driver === "acpRegistry" && provider.installed),
+                      )
+                      .map((provider) => (
+                        <ProviderAccount
+                          key={provider.instanceId}
+                          environment={environment}
+                          provider={provider}
+                        />
+                      ))}
+                    {!environment.serverConfig.providers.some(
+                      (provider) =>
+                        provider.setup?.canAuthenticate ||
+                        (provider.driver === "acpRegistry" && provider.installed),
+                    ) ? (
+                      <Text className="p-4 text-foreground-muted">
+                        Configure a provider with in-app sign-in in web or desktop Settings.
+                      </Text>
+                    ) : null}
+                  </SettingsSection>
+                )}
+              </View>
             ))
           )}
         </ScreenScrollView>

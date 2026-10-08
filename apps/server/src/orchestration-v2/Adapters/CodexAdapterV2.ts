@@ -1,3 +1,4 @@
+import { managedMcpName } from "./managedMcpInjection.ts";
 import { revertCodexThread } from "../../provider/CodexThreadRevert.ts";
 import { historyResponseItems } from "../ContextHandoffBudget.ts";
 import { makeProviderTextDeltaCoalescer } from "./ProviderTextDeltaCoalescer.ts";
@@ -1336,6 +1337,24 @@ export function codexThreadRuntimeParams(input: {
         ? {}
         : {
             mcp_servers: {
+              ...Object.fromEntries(
+                (mcpSession.managedMcp?.servers ?? []).map((server) => [
+                  managedMcpName(server.id),
+                  {
+                    enabled: server.enabled,
+                    ...(server.transport.type === "http"
+                      ? { url: server.transport.url, http_headers: { ...server.transport.headers } }
+                      : {
+                          command: server.transport.command,
+                          args: [...server.transport.args],
+                          env: { ...server.transport.env },
+                          ...(server.transport.cwd === undefined
+                            ? {}
+                            : { cwd: server.transport.cwd }),
+                        }),
+                  },
+                ]),
+              ),
               "t3-code": {
                 url: mcpSession.endpoint,
                 http_headers: {

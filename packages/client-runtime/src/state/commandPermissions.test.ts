@@ -8,6 +8,7 @@ import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 import {
   AuthOrchestrationOperateScope,
+  AuthProvidersManageScope,
   AuthSourceControlWriteScope,
   ThreadId,
   EnvironmentId,
@@ -260,4 +261,47 @@ it.effect("rejects protected unary and streamed RPCs outside a guarded command",
     expect(streamed._tag).toBe("EnvironmentAuthorizationError");
     expect(writes).toBe(0);
   }),
+);
+
+it.effect("requires provider management on the destination for MCP configuration and sign-in", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const registry = yield* setup;
+      const methods = [
+        WS_METHODS.mcpManagementUpsert,
+        WS_METHODS.mcpManagementRemove,
+        WS_METHODS.mcpManagementSetEnabled,
+        WS_METHODS.mcpManagementCopy,
+        WS_METHODS.mcpManagementImportPreview,
+        WS_METHODS.mcpManagementOAuthStart,
+        WS_METHODS.mcpManagementOAuthComplete,
+        WS_METHODS.mcpManagementOAuthCancel,
+        WS_METHODS.mcpManagementOAuthLogout,
+      ] as const;
+      registry.set(sessions(env), AsyncResult.success(grant(true)));
+      registry.set(sessions(other), AsyncResult.success(grant(false)));
+      for (const method of methods) {
+        const permission = createCommandPermissions(runtime, method);
+        expect(registry.get(permission.permissionAtom(env))).toBe(false);
+        const denied = yield* permission.authorize(registry, env).pipe(Effect.flip);
+        expect(denied.requiredPermission).toBe(AuthProvidersManageScope);
+      }
+      registry.set(
+        sessions(env),
+        AsyncResult.success({
+          ...grant(false),
+          scopes: [AuthProvidersManageScope],
+          permissions: [AuthProvidersManageScope],
+        }),
+      );
+      for (const method of methods) {
+        const permission = createCommandPermissions(runtime, method);
+        expect(registry.get(permission.permissionAtom(env))).toBe(true);
+        yield* permission.authorize(registry, env);
+        expect(registry.get(permission.permissionAtom(other))).toBe(false);
+        const denied = yield* permission.authorize(registry, other).pipe(Effect.flip);
+        expect(denied.requiredPermission).toBe(AuthProvidersManageScope);
+      }
+    }),
+  ),
 );

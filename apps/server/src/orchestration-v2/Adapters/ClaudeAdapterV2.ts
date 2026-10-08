@@ -1,4 +1,5 @@
 import { makeProviderTextDeltaCoalescer } from "./ProviderTextDeltaCoalescer.ts";
+import { managedMcpName, managedMcpStdio } from "./managedMcpInjection.ts";
 import {
   dynamicToolTitle,
   formatReadToolLabel,
@@ -961,20 +962,50 @@ export function claudeMcpQueryOverrides(input: {
   readonly threadId: ThreadId;
   readonly readOnlySandbox: boolean;
   readonly allowedTools?: ReadonlyArray<string>;
+  readonly disallowedTools?: ReadonlyArray<string>;
 }): {
   readonly allowedTools?: ReadonlyArray<string>;
+  readonly disallowedTools?: ReadonlyArray<string>;
   readonly mcpServers?: ClaudeQueryOptions["mcpServers"];
 } {
   const session = McpProviderSession.readMcpProviderSession(input.threadId);
   if (session === undefined) {
-    return input.allowedTools === undefined ? {} : { allowedTools: input.allowedTools };
+    return {
+      ...(input.allowedTools === undefined ? {} : { allowedTools: input.allowedTools }),
+      ...(input.disallowedTools === undefined ? {} : { disallowedTools: input.disallowedTools }),
+    };
   }
   const mcpAllowedTools = input.readOnlySandbox
     ? CLAUDE_READ_ONLY_T3_MCP_ALLOWED_TOOLS
     : [CLAUDE_T3_MCP_TOOL_WILDCARD];
+  // Native resumes can retain tool history. Block disabled names at launch,
+  // without a status request that would delay or fail unrelated queries.
+  const disallowedTools = Array.from(
+    new Set([
+      ...(input.disallowedTools ?? []),
+      ...(session.managedMcp?.servers ?? [])
+        .filter((server) => !server.enabled)
+        .map((server) => `mcp__${managedMcpName(server.id)}__*`),
+    ]),
+  );
   return {
+    ...(disallowedTools.length === 0 ? {} : { disallowedTools }),
     allowedTools: Array.from(new Set([...(input.allowedTools ?? []), ...mcpAllowedTools])),
     mcpServers: {
+      ...Object.fromEntries(
+        (session.managedMcp?.servers ?? [])
+          .filter((server) => server.enabled)
+          .map((server) => [
+            managedMcpName(server.id),
+            server.transport.type === "http"
+              ? {
+                  type: "http" as const,
+                  url: server.transport.url,
+                  headers: { ...server.transport.headers },
+                }
+              : { type: "stdio" as const, ...managedMcpStdio(server.transport) },
+          ]),
+      ),
       "t3-code": {
         type: "http",
         url: session.endpoint,
@@ -1612,6 +1643,7 @@ export function claudeEffectiveQueryPolicyKey(
   queryPolicy: ClaudeRuntimeQueryPolicy,
   mcpOverrides: {
     readonly allowedTools?: ReadonlyArray<string>;
+    readonly disallowedTools?: ReadonlyArray<string>;
     readonly mcpServers?: ClaudeQueryOptions["mcpServers"];
   },
 ): string {
@@ -1623,6 +1655,7 @@ export function claudeEffectiveQueryPolicyKey(
         : { allowedTools: mcpOverrides.allowedTools }),
     }),
     mcpServers: mcpOverrides.mcpServers,
+    disallowedTools: mcpOverrides.disallowedTools,
   });
 }
 

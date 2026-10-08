@@ -3,6 +3,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
   EnvironmentId,
+  McpManagementError,
   type ModelSelection,
   type OrchestrationV2AppThread,
   type OrchestrationV2DomainEvent,
@@ -35,6 +36,8 @@ import { HttpServer } from "effect/http";
 import { ProviderWorkspaceMissingError } from "../provider/Errors.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ProjectService from "../project/ProjectService.ts";
+import * as McpManagement from "../mcpManagement/McpManagement.ts";
+import type { ManagedMcpRuntimeConfig } from "../mcpManagement/ManagedMcpRuntime.ts";
 import * as McpProviderSession from "../mcp/McpProviderSession.ts";
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
@@ -477,6 +480,7 @@ function layerTest(input: {
   readonly scopeCloseReached?: Deferred.Deferred<void>;
   readonly serverSettingsLayer?: ReturnType<typeof ServerSettings.layerTest>;
   readonly projectServiceLayer?: Layer.Layer<ProjectService.ProjectService>;
+  readonly managedMcpLayer?: Layer.Layer<McpManagement.McpManagement>;
 }) {
   const layerConfiguredEventSink =
     input.flakyReleaseWrites !== undefined
@@ -542,6 +546,7 @@ function layerTest(input: {
           layerTestStores,
           ...(input.serverSettingsLayer === undefined ? [] : [input.serverSettingsLayer]),
           ...(input.projectServiceLayer === undefined ? [] : [input.projectServiceLayer]),
+          ...(input.managedMcpLayer === undefined ? [] : [input.managedMcpLayer]),
         ),
       ),
     ),
@@ -588,6 +593,46 @@ const layerPausingMcpRegistry = (pause: {
       });
     }),
   ).pipe(Layer.provide(layerTestMcpRegistry));
+
+function layerManagedMcpTest(
+  input: Pick<McpManagement.McpManagement["Service"], "resolveSession" | "releaseSession"> & {
+    readonly list?: McpManagement.McpManagement["Service"]["list"];
+  },
+) {
+  const unused = () => Effect.die("Unused MCP management operation in provider session test.");
+  return Layer.succeed(McpManagement.McpManagement, {
+    list: unused(),
+    subscribe: Stream.die("Unused MCP management subscription in provider session test."),
+    upsert: unused,
+    remove: unused,
+    setEnabled: unused,
+    copy: unused,
+    importPreview: unused,
+    startOAuth: unused,
+    completeOAuth: unused,
+    completeOAuthRedirect: unused,
+    cancelOAuth: unused,
+    logoutOAuth: unused,
+    forward: unused,
+    ...input,
+  });
+}
+
+const managedMcpConfig = {
+  revision: 3,
+  servers: [
+    {
+      id: "docs",
+      enabled: true,
+      transport: {
+        type: "stdio",
+        command: "docs-mcp",
+        args: ["--read-only"],
+        env: { API_TOKEN: "resolved-token" },
+      },
+    },
+  ],
+} satisfies ManagedMcpRuntimeConfig;
 
 function makeBrowserAccessProject(projectId: ProjectId): Project {
   return {
@@ -4593,5 +4638,413 @@ it.effect(
         projectExists: false,
       });
       assert.isFalse(denied?.capabilities?.has("device"));
+    }),
+);
+
+it.effect(
+  "ProviderSessionManagerV2 resolves managed MCPs before adapter open and releases them on close",
+  () =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      const mcpConfigs = yield* Ref.make<
+        ReadonlyArray<McpProviderSession.McpProviderSessionConfig | undefined>
+      >([]);
+      const resolved = yield* Ref.make<ReadonlyArray<McpProviderSession.McpProviderSessionConfig>>(
+        [],
+      );
+      const released = yield* Ref.make<
+        ReadonlyArray<{ threadId: ThreadId; credentialId?: string }>
+      >([]);
+      const effect = Effect.gen(function* () {
+        const eventSink = yield* EventSink.EventSinkV2;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+        const registry = yield* McpSessionRegistry.McpSessionRegistry;
+        const threadId = ThreadId.make("thread-managed-mcp-before-open");
+        const providerSessionId = yield* idAllocator.allocate.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+          threadId,
+        });
+        const now = yield* DateTime.now;
+        yield* eventSink.write({
+          events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
+        });
+        yield* manager.open({ threadId, providerSessionId, modelSelection, runtimePolicy });
+        const config = (yield* Ref.get(mcpConfigs))[0];
+        assert.isDefined(config);
+        assert.deepEqual(config?.managedMcp, managedMcpConfig);
+        assert.equal((yield* Ref.get(resolved))[0]?.providerSessionId, config?.providerSessionId);
+        assert.equal((yield* Ref.get(resolved))[0]?.providerInstanceId, modelSelection.instanceId);
+        const token = config!.authorizationHeader.replace(/^Bearer\s+/, "");
+        assert.isDefined(yield* registry.resolve(token));
+        assert.deepEqual(yield* Ref.get(released), []);
+        yield* manager.close(providerSessionId);
+        assert.isUndefined(yield* registry.resolve(token));
+        assert.deepEqual(yield* Ref.get(released), [
+          { threadId, credentialId: config?.providerSessionId },
+        ]);
+      });
+      yield* effect.pipe(
+        Effect.provide(
+          layerTest({
+            state,
+            mcpConfigs,
+            idleTimeoutMs: 60_000,
+            managedMcpLayer: layerManagedMcpTest({
+              resolveSession: (config) =>
+                Ref.update(resolved, (configs) => [...configs, config]).pipe(
+                  Effect.as(managedMcpConfig),
+                ),
+              releaseSession: (threadId, credentialId) =>
+                Ref.update(released, (entries) => [
+                  ...entries,
+                  { threadId, ...(credentialId === undefined ? {} : { credentialId }) },
+                ]),
+            }),
+          }),
+        ),
+      );
+    }),
+);
+
+it.effect(
+  "ProviderSessionManagerV2 keeps managed MCP settings frozen while reusing a running credential",
+  () =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      const mcpConfigs = yield* Ref.make<
+        ReadonlyArray<McpProviderSession.McpProviderSessionConfig | undefined>
+      >([]);
+      const current = yield* Ref.make<ManagedMcpRuntimeConfig>(managedMcpConfig);
+      const released = yield* Ref.make<
+        ReadonlyArray<{ threadId: ThreadId; credentialId?: string }>
+      >([]);
+      const effect = Effect.gen(function* () {
+        const eventSink = yield* EventSink.EventSinkV2;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+        const registry = yield* McpSessionRegistry.McpSessionRegistry;
+        const threadId = ThreadId.make("thread-managed-mcp-frozen");
+        const providerSessionId = yield* idAllocator.allocate.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+          threadId,
+        });
+        const nextSessionId = yield* idAllocator.allocate.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+          threadId,
+        });
+        const now = yield* DateTime.now;
+        yield* eventSink.write({
+          events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
+        });
+        yield* manager.open({ threadId, providerSessionId, modelSelection, runtimePolicy });
+        const original = (yield* Ref.get(mcpConfigs))[0];
+        assert.isDefined(original);
+        yield* Ref.set(current, { revision: 4, servers: [] });
+        yield* manager.detach({ threadId, providerSessionId, detail: "Workspace changed." });
+        yield* manager.open({
+          threadId,
+          providerSessionId: nextSessionId,
+          modelSelection,
+          runtimePolicy,
+        });
+        const reused = (yield* Ref.get(mcpConfigs))[1];
+        assert.equal(reused?.providerSessionId, original?.providerSessionId);
+        assert.deepEqual(reused?.managedMcp, managedMcpConfig);
+        const token = original!.authorizationHeader.replace(/^Bearer\s+/, "");
+        yield* manager.close(providerSessionId);
+        assert.isDefined(yield* registry.resolve(token));
+        assert.deepEqual(yield* Ref.get(released), []);
+        yield* manager.close(nextSessionId);
+        assert.isUndefined(yield* registry.resolve(token));
+        assert.deepEqual(yield* Ref.get(released), [
+          { threadId, credentialId: original?.providerSessionId },
+        ]);
+      });
+      yield* effect.pipe(
+        Effect.provide(
+          layerTest({
+            state,
+            mcpConfigs,
+            idleTimeoutMs: 60_000,
+            managedMcpLayer: layerManagedMcpTest({
+              resolveSession: () => Ref.get(current),
+              releaseSession: (threadId, credentialId) =>
+                Ref.update(released, (entries) => [
+                  ...entries,
+                  { threadId, ...(credentialId === undefined ? {} : { credentialId }) },
+                ]),
+            }),
+          }),
+        ),
+      );
+    }),
+);
+
+it.effect(
+  "ProviderSessionManagerV2 revokes credentials and managed MCP leases when adapter open fails",
+  () =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      const mcpConfigs = yield* Ref.make<
+        ReadonlyArray<McpProviderSession.McpProviderSessionConfig | undefined>
+      >([]);
+      const released = yield* Ref.make<
+        ReadonlyArray<{ threadId: ThreadId; credentialId?: string }>
+      >([]);
+      const effect = Effect.gen(function* () {
+        const eventSink = yield* EventSink.EventSinkV2;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+        const registry = yield* McpSessionRegistry.McpSessionRegistry;
+        const threadId = ThreadId.make("thread-managed-mcp-failed-open");
+        const providerSessionId = yield* idAllocator.allocate.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+          threadId,
+        });
+        const now = yield* DateTime.now;
+        yield* eventSink.write({
+          events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
+        });
+        const result = yield* manager
+          .open({ threadId, providerSessionId, modelSelection, runtimePolicy })
+          .pipe(Effect.exit);
+        assert.isTrue(Exit.isFailure(result));
+        const config = (yield* Ref.get(mcpConfigs))[0];
+        assert.isDefined(config);
+        assert.deepEqual(config?.managedMcp, managedMcpConfig);
+        assert.isUndefined(
+          yield* registry.resolve(config!.authorizationHeader.replace(/^Bearer\s+/, "")),
+        );
+        assert.isTrue(Option.isNone(yield* manager.get(providerSessionId)));
+        assert.deepEqual(yield* Ref.get(released), [
+          { threadId, credentialId: config?.providerSessionId },
+        ]);
+      });
+      yield* effect.pipe(
+        Effect.provide(
+          layerTest({
+            state,
+            mcpConfigs,
+            idleTimeoutMs: 60_000,
+            spawnBeforeOpen: true,
+            beforeOpen: () => Effect.die("Provider handshake failed."),
+            managedMcpLayer: layerManagedMcpTest({
+              resolveSession: () => Effect.succeed(managedMcpConfig),
+              releaseSession: (threadId, credentialId) =>
+                Ref.update(released, (entries) => [
+                  ...entries,
+                  { threadId, ...(credentialId === undefined ? {} : { credentialId }) },
+                ]),
+            }),
+          }),
+        ),
+      );
+    }),
+);
+
+it.effect(
+  "ProviderSessionManagerV2 releases managed MCP leases when a provider handshake is cancelled",
+  () =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      const mcpConfigs = yield* Ref.make<
+        ReadonlyArray<McpProviderSession.McpProviderSessionConfig | undefined>
+      >([]);
+      const released = yield* Ref.make<
+        ReadonlyArray<{ threadId: ThreadId; credentialId?: string }>
+      >([]);
+      const handshakeStarted = yield* Deferred.make<void>();
+      const effect = Effect.gen(function* () {
+        const eventSink = yield* EventSink.EventSinkV2;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+        const registry = yield* McpSessionRegistry.McpSessionRegistry;
+        const threadId = ThreadId.make("thread-managed-mcp-cancelled-open");
+        const providerSessionId = yield* idAllocator.allocate.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+          threadId,
+        });
+        const now = yield* DateTime.now;
+        yield* eventSink.write({
+          events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
+        });
+        const opening = yield* manager
+          .open({ threadId, providerSessionId, modelSelection, runtimePolicy })
+          .pipe(Effect.forkScoped);
+        yield* Deferred.await(handshakeStarted);
+        const config = (yield* Ref.get(mcpConfigs))[0];
+        assert.isDefined(config);
+        const token = config!.authorizationHeader.replace(/^Bearer\s+/, "");
+        assert.isDefined(yield* registry.resolve(token));
+        yield* Fiber.interrupt(opening);
+        assert.isUndefined(yield* registry.resolve(token));
+        assert.isTrue(Option.isNone(yield* manager.get(providerSessionId)));
+        assert.deepEqual(yield* Ref.get(released), [
+          { threadId, credentialId: config?.providerSessionId },
+        ]);
+      });
+      yield* effect.pipe(
+        Effect.provide(
+          layerTest({
+            state,
+            mcpConfigs,
+            idleTimeoutMs: 60_000,
+            spawnBeforeOpen: true,
+            beforeOpen: () =>
+              Deferred.succeed(handshakeStarted, undefined).pipe(Effect.andThen(Effect.never)),
+            managedMcpLayer: layerManagedMcpTest({
+              resolveSession: () => Effect.succeed(managedMcpConfig),
+              releaseSession: (threadId, credentialId) =>
+                Ref.update(released, (entries) => [
+                  ...entries,
+                  { threadId, ...(credentialId === undefined ? {} : { credentialId }) },
+                ]),
+            }),
+          }),
+        ),
+      );
+    }),
+);
+
+it.effect(
+  "ProviderSessionManagerV2 revokes an issued credential when managed MCP resolution fails",
+  () =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      const resolved = yield* Ref.make<ReadonlyArray<McpProviderSession.McpProviderSessionConfig>>(
+        [],
+      );
+      const released = yield* Ref.make<
+        ReadonlyArray<{ threadId: ThreadId; credentialId?: string }>
+      >([]);
+      const effect = Effect.gen(function* () {
+        const eventSink = yield* EventSink.EventSinkV2;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+        const registry = yield* McpSessionRegistry.McpSessionRegistry;
+        const threadId = ThreadId.make("thread-managed-mcp-resolution-failed");
+        const providerSessionId = yield* idAllocator.allocate.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+          threadId,
+        });
+        const now = yield* DateTime.now;
+        yield* eventSink.write({
+          events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
+        });
+        const result = yield* manager
+          .open({ threadId, providerSessionId, modelSelection, runtimePolicy })
+          .pipe(Effect.exit);
+        assert.isTrue(Exit.isFailure(result));
+        const config = (yield* Ref.get(resolved))[0];
+        assert.isDefined(config);
+        assert.isUndefined(
+          yield* registry.resolve(config!.authorizationHeader.replace(/^Bearer\s+/, "")),
+        );
+        assert.equal((yield* Ref.get(state)).openCount, 0);
+        assert.deepEqual(yield* Ref.get(released), [
+          { threadId, credentialId: config?.providerSessionId },
+        ]);
+      });
+      yield* effect.pipe(
+        Effect.provide(
+          layerTest({
+            state,
+            idleTimeoutMs: 60_000,
+            managedMcpLayer: layerManagedMcpTest({
+              resolveSession: (config) =>
+                Ref.update(resolved, (configs) => [...configs, config]).pipe(
+                  Effect.andThen(
+                    Effect.fail(
+                      new McpManagementError({ operation: "resolve-session", reason: "storage" }),
+                    ),
+                  ),
+                ),
+              releaseSession: (threadId, credentialId) =>
+                Ref.update(released, (entries) => [
+                  ...entries,
+                  { threadId, ...(credentialId === undefined ? {} : { credentialId }) },
+                ]),
+            }),
+          }),
+        ),
+      );
+    }),
+);
+
+it.effect(
+  "ProviderSessionManagerV2 drops the old managed MCP snapshot when a credential rotates",
+  () =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      const mcpConfigs = yield* Ref.make<
+        ReadonlyArray<McpProviderSession.McpProviderSessionConfig | undefined>
+      >([]);
+      const leases = yield* Ref.make<ReadonlyArray<McpProviderSession.McpProviderSessionConfig>>(
+        [],
+      );
+      const managedLayer = layerManagedMcpTest({
+        list: Ref.get(leases).pipe(
+          Effect.map((configs) => ({
+            revision: 0,
+            servers: [],
+            providers: [],
+            sessions: configs.map((config) => ({
+              threadId: config.threadId,
+              providerInstanceId: config.providerInstanceId,
+              revision: 0,
+            })),
+          })),
+        ),
+        resolveSession: (config) =>
+          Ref.update(leases, (configs) => [...configs, config]).pipe(Effect.as(managedMcpConfig)),
+        releaseSession: (threadId, credentialId) =>
+          Ref.update(leases, (configs) =>
+            configs.filter(
+              (config) =>
+                config.threadId !== threadId ||
+                (credentialId !== undefined && config.providerSessionId !== credentialId),
+            ),
+          ),
+      });
+      yield* Effect.gen(function* () {
+        const eventSink = yield* EventSink.EventSinkV2;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+        const registry = yield* McpSessionRegistry.McpSessionRegistry;
+        const catalog = yield* McpManagement.McpManagement;
+        const threadId = ThreadId.make("thread-managed-mcp-rotated");
+        const first = yield* idAllocator.allocate.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+          threadId,
+        });
+        const second = yield* idAllocator.allocate.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+          threadId,
+        });
+        yield* eventSink.write({
+          events: [
+            yield* makeThreadCreatedEvent({ idAllocator, threadId, now: yield* DateTime.now }),
+          ],
+        });
+        yield* manager.open({ threadId, providerSessionId: first, modelSelection, runtimePolicy });
+        const firstConfig = (yield* Ref.get(mcpConfigs)).at(-1)!;
+        yield* registry.revokeProviderSession(firstConfig.providerSessionId);
+        yield* manager.open({ threadId, providerSessionId: second, modelSelection, runtimePolicy });
+        const secondConfig = (yield* Ref.get(mcpConfigs)).at(-1)!;
+        assert.notEqual(firstConfig.providerSessionId, secondConfig.providerSessionId);
+        assert.equal((yield* catalog.list).sessions.length, 1);
+        yield* manager.close(first);
+        assert.equal((yield* catalog.list).sessions.length, 1);
+        yield* manager.close(second);
+        assert.deepEqual((yield* catalog.list).sessions, []);
+      }).pipe(
+        Effect.provide(
+          Layer.merge(
+            layerTest({ state, mcpConfigs, idleTimeoutMs: 60_000, managedMcpLayer: managedLayer }),
+            managedLayer,
+          ),
+        ),
+      );
     }),
 );

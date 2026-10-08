@@ -180,7 +180,7 @@ function SettingsIndexSections() {
       <SettingsSection title="Server settings">
         <SettingsRow
           icon="person.crop.circle"
-          label="Provider accounts"
+          label="Providers"
           target="SettingsProviderAccounts"
           disabled={noServerTargets}
         />

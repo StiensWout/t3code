@@ -1,4 +1,8 @@
 import type { RelayManagedEndpointRuntimeConfig } from "@t3tools/contracts/relay";
+import * as McpManagement from "./mcpManagement/McpManagement.ts";
+import * as McpOAuthClient from "./mcpManagement/McpOAuthClient.ts";
+import * as ManagedMcpHttp from "./mcpManagement/ManagedMcpHttp.ts";
+import * as ManagedMcpRoutes from "./mcpManagement/ManagedMcpRoutes.ts";
 import * as Clock from "effect/Clock";
 import * as Random from "effect/Random";
 import * as Semaphore from "effect/Semaphore";
@@ -197,6 +201,14 @@ const layerPtyAdapter = NodePtyAdapter.layer;
 const layerServerSettings = ServerSettings.layer.pipe(
   Layer.provide(ServerSecretStore.layer),
   Layer.provideMerge(SqlitePersistence.layerConfig),
+);
+
+// The catalog, OAuth grants, and session snapshots are shared by RPCs, tools, and adapters.
+const layerMcpManagement = McpManagement.layer.pipe(
+  Layer.provide(McpOAuthClient.layer),
+  Layer.provide(ManagedMcpHttp.layer),
+  Layer.provide(layerServerSettings),
+  Layer.provide(ServerSecretStore.layer),
 );
 
 const layerNativeTelemetry = NativeTelemetryClient.layer.pipe(
@@ -676,6 +688,7 @@ const layerMakeRoutes = Layer.mergeAll(
     ServerBrowserStream.routeLayer,
     ServerHttp.layerStaticAndDevRoute,
     Ws.layer,
+    ManagedMcpRoutes.layer,
   ),
   // The MCP session registry is provided globally (shared with V2 provider
   // sessions) rather than inline here. The orchestrator toolkit resolves
@@ -1060,6 +1073,7 @@ const layerMakeServer = Layer.unwrap(
       // The connect routes and the startup/shutdown link work share one instance.
       Layer.provide(CloudLink.layer),
       Layer.provideMerge(layerRuntimeServices),
+      Layer.provideMerge(layerMcpManagement),
       Layer.provideMerge(
         McpSessionRegistry.layer.pipe(
           Layer.provide(ServerEnvironment.layer.pipe(Layer.provide(ServerSecretStore.layer))),

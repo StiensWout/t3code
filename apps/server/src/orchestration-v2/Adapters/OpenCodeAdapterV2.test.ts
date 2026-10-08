@@ -3,6 +3,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { OpencodeClient, ToolPart } from "@opencode-ai/sdk/v2";
 import {
   CheckpointId,
+  EnvironmentId,
   NodeId,
   OpenCodeSettings,
   ProjectId,
@@ -35,6 +36,8 @@ import * as ServerConfig from "../../config.ts";
 import type { EventNdjsonLogger } from "../../provider/EventNdjsonLogger.ts";
 import type { OpenCodeRuntimeShape } from "../../provider/opencodeRuntime.ts";
 import * as IdAllocator from "../IdAllocator.ts";
+import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import { openCodeManagedMcpName } from "./managedMcpInjection.ts";
 
 import {
   advanceOpenCodePromptAdmission,
@@ -116,6 +119,216 @@ function runtimePolicy(
   });
 }
 
+it.effect.each(["ready", "failure", "timeout"] as const)(
+  "keeps OpenCode 1 usable and cleans up a managed MCP after %s registration",
+  (registration) =>
+    Effect.gen(function* () {
+      const suffix = "managed-mcp";
+      const threadId = ThreadId.make(`thread-opencode-${suffix}`);
+      const instanceId = ProviderInstanceId.make(`opencode-${suffix}`);
+      McpProviderSession.setMcpProviderSession({
+        environmentId: EnvironmentId.make("managed-opencode"),
+        threadId,
+        providerSessionId: "managed-opencode",
+        providerInstanceId: instanceId,
+        endpoint: "http://127.0.0.1:1/t3",
+        authorizationHeader: "Bearer t3-fixture",
+        browserToolsAvailable: false,
+        managedMcp: {
+          revision: 1,
+          servers: [
+            {
+              id: "github-production",
+              enabled: true,
+              transport: {
+                type: "http",
+                url: "https://mcp.example.test",
+                headers: { "X-Key": "fixture-key" },
+              },
+            },
+            {
+              id: "disabled",
+              enabled: false,
+              transport: { type: "stdio", command: "must-not-start", args: [], env: {} },
+            },
+          ],
+        },
+      });
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => McpProviderSession.clearMcpProviderSession(threadId)),
+      );
+      const addStarted = promiseGate<void>();
+      const prompted = promiseGate<void>();
+      let addSignal: AbortSignal | undefined;
+      const registrations: Array<unknown> = [];
+      const permissions: Array<unknown> = [];
+      const disconnected: string[] = [];
+      const stream = asyncEventStream();
+      const client = {
+        event: {
+          subscribe: async (_input: unknown, options: { signal: AbortSignal }) => {
+            options.signal.addEventListener("abort", () => stream.close(), { once: true });
+            return { stream: stream.stream };
+          },
+        },
+        mcp: {
+          add: async (input: { name: string }, options?: { signal?: AbortSignal }) => {
+            registrations.push(input);
+            if (input.name !== "t3-code") {
+              addSignal = options?.signal;
+              addStarted.resolve();
+              if (registration === "failure") throw new Error("managed MCP unavailable");
+              if (registration === "timeout") return new Promise(() => {});
+            }
+            return { data: true };
+          },
+          disconnect: async (input: { name: string }) => {
+            disconnected.push(input.name);
+            return { data: true };
+          },
+        },
+        session: {
+          create: async (input: unknown) => {
+            permissions.push(input);
+            return { data: { id: "ses_managed", time: { created: 1, updated: 1 } } };
+          },
+          promptAsync: async () => {
+            prompted.resolve();
+            return { data: true };
+          },
+        },
+      };
+      const opening = yield* makeOpenCodeRuntimeHarness(suffix, "ses_managed", client, {
+        external: false,
+      }).pipe(
+        Effect.tap((harness) => harness.startTurn()),
+        Effect.tap(() => Effect.promise(() => prompted.promise)),
+        Effect.scoped,
+        Effect.forkScoped,
+      );
+      yield* Effect.promise(() => addStarted.promise);
+      if (registration === "timeout") yield* TestClock.adjust("20 seconds");
+      const harness = yield* Fiber.join(opening);
+      assert.equal(harness.providerThread.nativeThreadRef?.nativeId, "ses_managed");
+      if (registration === "timeout") assert.isTrue(addSignal?.aborted);
+      const name = openCodeManagedMcpName("github-production", threadId);
+      assert.isAtMost(`${name}_create_pull_request_review`.length, 64);
+      assert.equal(name, openCodeManagedMcpName("github-production", threadId));
+      assert.notEqual(name, openCodeManagedMcpName("github-preview", threadId));
+      assert.notEqual(name, openCodeManagedMcpName("github-production", "sibling"));
+      assert.deepEqual(registrations, [
+        {
+          name,
+          config: {
+            type: "remote",
+            url: "https://mcp.example.test",
+            headers: { "X-Key": "fixture-key" },
+            oauth: false,
+          },
+        },
+        {
+          name: "t3-code",
+          config: {
+            type: "remote",
+            url: "http://127.0.0.1:1/t3",
+            headers: { Authorization: "Bearer t3-fixture" },
+            oauth: false,
+          },
+        },
+      ]);
+      assert.deepEqual(permissions, [
+        {
+          permission: [
+            { permission: "*", pattern: "*", action: "allow" },
+            { permission: "t3-code-m-*", pattern: "*", action: "deny" },
+            ...(registration === "ready"
+              ? [{ permission: `${name}_*`, pattern: "*", action: "allow" }]
+              : []),
+          ],
+        },
+      ]);
+      assert.deepEqual(disconnected, [name]);
+    }).pipe(Effect.provide(IdAllocator.layer), Effect.scoped),
+);
+
+it.effect.each(["empty", "disabled"] as const)(
+  "resumes with a %s managed catalog while preserving native grants when empty",
+  (catalog) =>
+    Effect.gen(function* () {
+      const suffix = `resume-${catalog}-catalog`;
+      const threadId = ThreadId.make(`thread-opencode-${suffix}`);
+      const instanceId = ProviderInstanceId.make(`opencode-${suffix}`);
+      McpProviderSession.setMcpProviderSession({
+        environmentId: EnvironmentId.make("managed-opencode"),
+        threadId,
+        providerSessionId: "managed-opencode",
+        providerInstanceId: instanceId,
+        endpoint: "http://127.0.0.1:1/t3",
+        authorizationHeader: "Bearer t3-fixture",
+        browserToolsAvailable: false,
+        managedMcp: {
+          revision: 1,
+          servers:
+            catalog === "empty"
+              ? []
+              : [
+                  {
+                    id: "disabled",
+                    enabled: false,
+                    transport: { type: "stdio", command: "must-not-start", args: [], env: {} },
+                  },
+                ],
+        },
+      });
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => McpProviderSession.clearMcpProviderSession(threadId)),
+      );
+      const nativeRules = [{ permission: "bash", pattern: "approved command", action: "allow" }];
+      let storedRules: unknown = nativeRules;
+      let updates = 0;
+      const stream = asyncEventStream();
+      const native = { id: "ses_resume_catalog", time: { created: 1, updated: 1 } };
+      const harness = yield* makeOpenCodeRuntimeHarness(
+        suffix,
+        native.id,
+        {
+          event: {
+            subscribe: async (_input: unknown, options: { signal: AbortSignal }) => {
+              options.signal.addEventListener("abort", () => stream.close(), { once: true });
+              return { stream: stream.stream };
+            },
+          },
+          mcp: { add: async () => ({ data: true }) },
+          session: {
+            create: async () => ({ data: native }),
+            get: async () => ({ data: { ...native, permission: storedRules } }),
+            update: async (input: { permission: unknown }) => {
+              updates++;
+              storedRules = input.permission;
+              return { data: native };
+            },
+          },
+        },
+        { external: false },
+      );
+      const resumed = yield* harness.runtime.resumeThread({
+        providerThread: harness.providerThread,
+        runtimePolicy: harness.policy,
+      });
+      assert.equal(resumed.nativeThreadRef?.nativeId, native.id);
+      assert.equal(updates, catalog === "empty" ? 0 : 1);
+      assert.deepEqual(
+        storedRules,
+        catalog === "empty"
+          ? nativeRules
+          : [
+              { permission: "*", pattern: "*", action: "allow" },
+              { permission: "t3-code-m-*", pattern: "*", action: "deny" },
+            ],
+      );
+    }).pipe(Effect.provide(IdAllocator.layer), Effect.scoped),
+);
+
 function permissionAction(rules: ReturnType<typeof openCodePermissionRules>, permission: string) {
   return rules.findLast((rule) => rule.permission === "*" || rule.permission === permission)
     ?.action;
@@ -146,6 +359,7 @@ const makeOpenCodeRuntimeHarness = Effect.fn("makeOpenCodeRuntimeHarness")(funct
   suffix: string,
   nativeSessionId: string,
   client: object,
+  options?: { readonly external?: boolean },
 ) {
   const idAllocator = yield* IdAllocator.IdAllocatorV2;
   const instanceId = ProviderInstanceId.make(`opencode-${suffix}`);
@@ -161,7 +375,12 @@ const makeOpenCodeRuntimeHarness = Effect.fn("makeOpenCodeRuntimeHarness")(funct
     settings: OPEN_CODE_TEST_SETTINGS,
     environment: {},
     runtime: {
-      connectToOpenCodeServer: () => Effect.succeed({ url: "http://test.invalid", external: true }),
+      connectToOpenCodeServer: () =>
+        Effect.succeed({
+          url: "http://test.invalid",
+          external: options?.external ?? true,
+          exitCode: null,
+        }),
       createOpenCodeSdkClient: () => client,
     } as unknown as OpenCodeRuntimeShape,
     idAllocator,

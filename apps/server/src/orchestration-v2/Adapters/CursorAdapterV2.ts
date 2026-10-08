@@ -1,3 +1,4 @@
+import { managedMcpName } from "./managedMcpInjection.ts";
 import type {
   AgentMessage,
   AgentOptions,
@@ -208,6 +209,26 @@ export function cursorMcpServers(threadId: ThreadId): Record<string, McpServerCo
     return undefined;
   }
   return {
+    ...Object.fromEntries(
+      (session.managedMcp?.servers ?? [])
+        .filter((server) => server.enabled)
+        .map((server) => [
+          managedMcpName(server.id),
+          server.transport.type === "http"
+            ? {
+                type: "http" as const,
+                url: server.transport.url,
+                headers: { ...server.transport.headers },
+              }
+            : {
+                type: "stdio" as const,
+                command: server.transport.command,
+                args: [...server.transport.args],
+                env: { ...server.transport.env },
+                ...(server.transport.cwd === undefined ? {} : { cwd: server.transport.cwd }),
+              },
+        ]),
+    ),
     "t3-code": {
       type: "http",
       url: session.endpoint,

@@ -374,7 +374,11 @@ export const layerOtlpTracesProxyRoute = HttpRouter.add(
   ),
 );
 
-const UNTRACED_REQUEST_PATHS: ReadonlySet<string> = new Set([OTLP_TRACES_PROXY_PATH]);
+const UNTRACED_REQUEST_PATHS: ReadonlySet<string> = new Set([
+  OTLP_TRACES_PROXY_PATH,
+  "/oauth/managed-mcp/callback",
+  "/auth/mcp-callback",
+]);
 
 // Skips the HTTP server span for UNTRACED_REQUEST_PATHS. That span starts
 // before routing, so a route handler cannot skip it. TracerDisabledWhen is one

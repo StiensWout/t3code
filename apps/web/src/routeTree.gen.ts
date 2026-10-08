@@ -32,6 +32,7 @@ import { Route as SettingsConnectionsRouteImport } from './routes/settings.conne
 import { Route as SettingsArchivedRouteImport } from './routes/settings.archived'
 import { Route as SettingsAppearanceRouteImport } from './routes/settings.appearance'
 import { Route as ProjectsProjectKeyRouteImport } from './routes/projects.$projectKey'
+import { Route as AuthMcpCallbackRouteImport } from './routes/auth.mcp-callback'
 import { Route as ChatPullRequestsRouteImport } from './routes/_chat.pull-requests'
 import { Route as ChatDraftDraftIdRouteImport } from './routes/_chat.draft.$draftId'
 import { Route as ChatEnvironmentIdThreadIdRouteImport } from './routes/_chat.$environmentId.$threadId'
@@ -151,6 +152,11 @@ const ProjectsProjectKeyRoute = ProjectsProjectKeyRouteImport.update({
   path: '/projects/$projectKey',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AuthMcpCallbackRoute = AuthMcpCallbackRouteImport.update({
+  id: '/auth/mcp-callback',
+  path: '/auth/mcp-callback',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ChatPullRequestsRoute = ChatPullRequestsRouteImport.update({
   id: '/pull-requests',
   path: '/pull-requests',
@@ -177,6 +183,7 @@ export interface FileRoutesByFullPath {
   '/usage': typeof UsageRoute
   '/welcome': typeof WelcomeRoute
   '/pull-requests': typeof ChatPullRequestsRoute
+  '/auth/mcp-callback': typeof AuthMcpCallbackRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/archived': typeof SettingsArchivedRoute
@@ -203,6 +210,7 @@ export interface FileRoutesByTo {
   '/usage': typeof UsageRoute
   '/welcome': typeof WelcomeRoute
   '/pull-requests': typeof ChatPullRequestsRoute
+  '/auth/mcp-callback': typeof AuthMcpCallbackRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/archived': typeof SettingsArchivedRoute
@@ -232,6 +240,7 @@ export interface FileRoutesById {
   '/usage': typeof UsageRoute
   '/welcome': typeof WelcomeRoute
   '/_chat/pull-requests': typeof ChatPullRequestsRoute
+  '/auth/mcp-callback': typeof AuthMcpCallbackRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/archived': typeof SettingsArchivedRoute
@@ -262,6 +271,7 @@ export interface FileRouteTypes {
     | '/usage'
     | '/welcome'
     | '/pull-requests'
+    | '/auth/mcp-callback'
     | '/projects/$projectKey'
     | '/settings/appearance'
     | '/settings/archived'
@@ -288,6 +298,7 @@ export interface FileRouteTypes {
     | '/usage'
     | '/welcome'
     | '/pull-requests'
+    | '/auth/mcp-callback'
     | '/projects/$projectKey'
     | '/settings/appearance'
     | '/settings/archived'
@@ -316,6 +327,7 @@ export interface FileRouteTypes {
     | '/usage'
     | '/welcome'
     | '/_chat/pull-requests'
+    | '/auth/mcp-callback'
     | '/projects/$projectKey'
     | '/settings/appearance'
     | '/settings/archived'
@@ -344,6 +356,7 @@ export interface RootRouteChildren {
   SettingsRoute: typeof SettingsRouteWithChildren
   UsageRoute: typeof UsageRoute
   WelcomeRoute: typeof WelcomeRoute
+  AuthMcpCallbackRoute: typeof AuthMcpCallbackRoute
   ProjectsProjectKeyRoute: typeof ProjectsProjectKeyRoute
 }
 
@@ -510,6 +523,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ProjectsProjectKeyRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/auth/mcp-callback': {
+      id: '/auth/mcp-callback'
+      path: '/auth/mcp-callback'
+      fullPath: '/auth/mcp-callback'
+      preLoaderRoute: typeof AuthMcpCallbackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/_chat/pull-requests': {
       id: '/_chat/pull-requests'
       path: '/pull-requests'
@@ -596,6 +616,7 @@ const rootRouteChildren: RootRouteChildren = {
   SettingsRoute: SettingsRouteWithChildren,
   UsageRoute: UsageRoute,
   WelcomeRoute: WelcomeRoute,
+  AuthMcpCallbackRoute: AuthMcpCallbackRoute,
   ProjectsProjectKeyRoute: ProjectsProjectKeyRoute,
 }
 export const routeTree = rootRouteImport

@@ -14,6 +14,8 @@ export function SettingsRow(props: {
   readonly disabled?: boolean;
   readonly icon: SymbolName;
   readonly label: string;
+  /** Let dynamic titles truncate while keeping the trailing value readable. */
+  readonly truncateLabel?: boolean;
   readonly value?: string;
   readonly valuePosition?: "below" | "trailing";
   readonly target?: SettingsSheetTarget;
@@ -68,10 +70,17 @@ export function SettingsRow(props: {
         weight="regular"
       />
       <>
-        <Text className="shrink-0 text-lg text-foreground" numberOfLines={1}>
+        <Text
+          className={cn(
+            "text-lg text-foreground",
+            props.truncateLabel ? "min-w-0 flex-1" : "shrink-0",
+          )}
+          numberOfLines={1}
+          ellipsizeMode="tail"
+        >
           {props.label}
         </Text>
-        <View className="min-w-0 flex-1 items-end">
+        <View className={cn("min-w-0 items-end", props.truncateLabel ? "shrink-0" : "flex-1")}>
           {props.value ? (
             <Text
               className="max-w-[180px] text-right text-base text-foreground-muted"

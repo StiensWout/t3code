@@ -600,6 +600,16 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "mcp-servers",
+    title: "MCP servers",
+    to: "/settings/providers",
+    searchTerms: [
+      "model context protocol tools servers add import copy toggle stdio HTTP OAuth authentication",
+    ],
+    providerSettingsOnly: true,
+    scope: "environment",
+  },
+  {
     id: "usage-providers",
     title: "Usage providers",
     to: "/settings/providers",

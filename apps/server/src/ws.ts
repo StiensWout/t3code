@@ -175,6 +175,7 @@ import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServerSettings from "./serverSettings.ts";
+import * as McpManagement from "./mcpManagement/McpManagement.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import { withTerminalOutputWindow } from "./terminal/OutputProtocol.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
@@ -1282,6 +1283,7 @@ const layerWsRpc = (
       const config = yield* ServerConfig.ServerConfig;
       const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
       const serverSettings = yield* ServerSettings.ServerSettingsService;
+      const mcpManagement = yield* McpManagement.McpManagement;
       const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
@@ -2319,6 +2321,17 @@ const layerWsRpc = (
             );
             return { outcome };
           }),
+        [WS_METHODS.mcpManagementList]: () => mcpManagement.list,
+        [WS_METHODS.mcpManagementSubscribe]: () => mcpManagement.subscribe,
+        [WS_METHODS.mcpManagementUpsert]: (input) => mcpManagement.upsert(input),
+        [WS_METHODS.mcpManagementRemove]: (input) => mcpManagement.remove(input),
+        [WS_METHODS.mcpManagementSetEnabled]: (input) => mcpManagement.setEnabled(input),
+        [WS_METHODS.mcpManagementCopy]: (input) => mcpManagement.copy(input),
+        [WS_METHODS.mcpManagementImportPreview]: (input) => mcpManagement.importPreview(input),
+        [WS_METHODS.mcpManagementOAuthStart]: (input) => mcpManagement.startOAuth(input),
+        [WS_METHODS.mcpManagementOAuthComplete]: (input) => mcpManagement.completeOAuth(input),
+        [WS_METHODS.mcpManagementOAuthCancel]: (input) => mcpManagement.cancelOAuth(input),
+        [WS_METHODS.mcpManagementOAuthLogout]: (input) => mcpManagement.logoutOAuth(input.id),
         [WS_METHODS.providerAuthStart]: (input) => providerAuth.start(input, currentSessionId),
         [WS_METHODS.providerAuthRespond]: (input) =>
           Effect.annotateCurrentSpan({ instanceId: input.instanceId }).pipe(

@@ -399,6 +399,18 @@
       "types": "./src/mcpApps/host.ts",
       "default": "./src/mcpApps/host.ts"
     },
+    "./state/mcpManagementUiSession": {
+      "types": "./src/state/mcpManagementUiSession.ts",
+      "default": "./src/state/mcpManagementUiSession.ts"
+    },
+    "./state/mcpManagementDraft": {
+      "types": "./src/state/mcpManagementDraft.ts",
+      "default": "./src/state/mcpManagementDraft.ts"
+    },
+    "./state/mcp-management": {
+      "types": "./src/state/mcpManagement.ts",
+      "default": "./src/state/mcpManagement.ts"
+    },
     "./state/mcp-apps": {
       "types": "./src/state/mcpApps.ts",
       "default": "./src/state/mcpApps.ts"

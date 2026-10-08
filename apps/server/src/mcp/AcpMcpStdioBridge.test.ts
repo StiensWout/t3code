@@ -2,6 +2,8 @@
 // schema-free passthrough.
 // @effect-diagnostics nodeBuiltinImport:off globalTimers:off
 import * as NodeStream from "node:stream";
+import * as NodeHttp from "node:http";
+import * as NodeChildProcess from "node:child_process";
 
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -9,13 +11,18 @@ import * as Fiber from "effect/Fiber";
 
 import { AcpMcpBridgeError, callAcpMcpTool, runAcpMcpStdioBridge } from "./AcpMcpStdioBridge.ts";
 
-function makeHarness(responder: (request: Request) => Promise<Response> | Response) {
+function makeHarness(
+  responder: (request: Request) => Promise<Response> | Response,
+  credentials: { authorization: string; headers?: Record<string, string> } = {
+    authorization: "Bearer bridge-test",
+  },
+) {
   const input = new NodeStream.PassThrough();
   const written: Array<string> = [];
   const requests: Array<{ readonly headers: Headers; readonly body: string }> = [];
   const bridge = runAcpMcpStdioBridge({
     endpoint: "http://127.0.0.1:1/mcp",
-    authorization: "Bearer bridge-test",
+    ...credentials,
     input,
     output: {
       write: (chunk: string) => {
@@ -31,7 +38,141 @@ function makeHarness(responder: (request: Request) => Promise<Response> | Respon
   return { input, written, requests, bridge };
 }
 
+async function listenFixture(handler: NodeHttp.RequestListener) {
+  const server = NodeHttp.createServer(handler);
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (address === null || typeof address === "string") throw new Error("Missing fixture address");
+  return { server, url: `http://127.0.0.1:${address.port}` };
+}
+
+function closeFixture(server: NodeHttp.Server) {
+  server.closeAllConnections();
+  return new Promise<void>((resolve, reject) =>
+    server.close((error) => (error ? reject(error) : resolve())),
+  );
+}
+
 describe("AcpMcpStdioBridge", () => {
+  it.each(["configured", "empty", "native"] as const)(
+    "keeps inherited T3 credentials separate from %s bridge headers",
+    async (headers) => {
+      const requests: NodeHttp.IncomingHttpHeaders[] = [];
+      const fixture = await listenFixture((request, response) => {
+        requests.push(request.headers);
+        request.resume();
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { tools: [] } }));
+      });
+      try {
+        const output = await new Promise<string>((resolve, reject) => {
+          const child = NodeChildProcess.execFile(
+            process.execPath,
+            [
+              "--experimental-strip-types",
+              "--input-type=module",
+              "--eval",
+              `import { runAcpMcpCliFastPath } from ${JSON.stringify(new URL("./AcpMcpStdioBridge.ts", import.meta.url).href)}; await runAcpMcpCliFastPath("acp-mcp-bridge", []);`,
+            ],
+            {
+              env: {
+                ...process.env,
+                T3_ACP_MCP_ENDPOINT: `${fixture.url}/mcp`,
+                T3_ACP_MCP_AUTHORIZATION: "Bearer inherited-thread-token",
+                T3_ACP_MCP_HEADERS:
+                  headers === "native"
+                    ? undefined
+                    : JSON.stringify(
+                        headers === "configured" ? { "X-Api-Key": "managed-key" } : {},
+                      ),
+              },
+            },
+            (error, stdout) => (error ? reject(error) : resolve(stdout)),
+          );
+          child.stdin?.end(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) + "\n");
+        });
+        expect(JSON.parse(output)).toMatchObject({ id: 1, result: { tools: [] } });
+        expect(requests).toHaveLength(1);
+        expect(requests[0]?.authorization).toBe(
+          headers === "native" ? "Bearer inherited-thread-token" : undefined,
+        );
+        expect(requests[0]?.["x-api-key"]).toBe(
+          headers === "configured" ? "managed-key" : undefined,
+        );
+      } finally {
+        await closeFixture(fixture.server);
+      }
+    },
+  );
+
+  it.effect(
+    "rejects HTTP redirects without sending managed headers or request bodies to the target",
+    () =>
+      Effect.gen(function* () {
+        const redirectedRequests: Array<NodeHttp.IncomingHttpHeaders> = [];
+        const target = yield* Effect.acquireRelease(
+          Effect.promise(() =>
+            listenFixture((request, response) => {
+              redirectedRequests.push(request.headers);
+              request.resume();
+              response.writeHead(200, { "content-type": "application/json" });
+              response.end(JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }));
+            }),
+          ),
+          ({ server }) => Effect.promise(() => closeFixture(server)),
+        );
+        const origin = yield* Effect.acquireRelease(
+          Effect.promise(() =>
+            listenFixture((request, response) => {
+              request.resume();
+              response.writeHead(307, { location: `${target.url}/collect` });
+              response.end();
+            }),
+          ),
+          ({ server }) => Effect.promise(() => closeFixture(server)),
+        );
+        const input = new NodeStream.PassThrough();
+        const written: string[] = [];
+        const bridge = yield* runAcpMcpStdioBridge({
+          endpoint: `${origin.url}/mcp`,
+          authorization: "",
+          headers: { "X-Api-Key": "fixture-secret", authorization: "Bearer fixture-token" },
+          input,
+          output: { write: (chunk) => written.push(chunk) },
+        }).pipe(Effect.forkChild);
+        input.end(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            method: "tools/call",
+            params: { name: "private", arguments: { secret: "fixture-body" } },
+          }) + "\n",
+        );
+        yield* Fiber.join(bridge);
+        expect(JSON.parse(written[0]!)).toMatchObject({ id: 1, error: { code: -32603 } });
+        expect(written[0]).toContain("HTTP 307");
+        expect(redirectedRequests).toEqual([]);
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect("forwards managed HTTP headers without inserting T3's bearer credential", () =>
+    Effect.gen(function* () {
+      const { input, requests, written, bridge } = makeHarness(
+        () =>
+          new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { tools: [] } }), {
+            headers: { "content-type": "application/json" },
+          }),
+        { authorization: "", headers: { "X-Api-Key": "managed-key" } },
+      );
+      const fiber = yield* Effect.forkChild(bridge);
+      input.end(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) + "\n");
+      yield* Fiber.join(fiber);
+      expect(requests[0]?.headers.get("x-api-key")).toBe("managed-key");
+      expect(requests[0]?.headers.has("authorization")).toBe(false);
+      expect(JSON.parse(written[0]!)).toMatchObject({ id: 1, result: { tools: [] } });
+    }),
+  );
+
   it.effect("preserves the original transport failure as the typed error cause", () =>
     Effect.gen(function* () {
       const source = new Error("fetch failed");

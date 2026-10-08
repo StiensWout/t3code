@@ -1,3 +1,18 @@
+import {
+  McpManagementError,
+  McpManagementSnapshot,
+  McpUpsertInput,
+  McpRemoveInput,
+  McpSetEnabledInput,
+  McpCopyInput,
+  McpImportPreviewInput,
+  McpImportPreviewResult,
+  McpOAuthStartInput,
+  McpOAuthStartResult,
+  McpOAuthCompleteInput,
+  McpOAuthCancelInput,
+  McpOAuthLogoutInput,
+} from "./mcpManagement.ts";
 import { OrchestrationDispatchCommandError } from "./orchestrationDispatch.ts";
 import {
   McpAppCallToolInput,
@@ -376,6 +391,19 @@ export const WS_METHODS = {
   assetsPersistChatAttachments: "assets.persistChatAttachments",
   attachmentsCreateUploadUrl: "attachments.createUploadUrl",
   attachmentsDelete: "attachments.delete",
+
+  // Environment-owned MCP configuration and authentication
+  mcpManagementList: "mcpManagement.list",
+  mcpManagementSubscribe: "mcpManagement.subscribe",
+  mcpManagementUpsert: "mcpManagement.upsert",
+  mcpManagementRemove: "mcpManagement.remove",
+  mcpManagementSetEnabled: "mcpManagement.setEnabled",
+  mcpManagementCopy: "mcpManagement.copy",
+  mcpManagementImportPreview: "mcpManagement.importPreview",
+  mcpManagementOAuthStart: "mcpManagement.oAuthStart",
+  mcpManagementOAuthComplete: "mcpManagement.oAuthComplete",
+  mcpManagementOAuthCancel: "mcpManagement.oAuthCancel",
+  mcpManagementOAuthLogout: "mcpManagement.oAuthLogout",
 
   // MCP Apps methods
   mcpAppsCallTool: "mcpApps.callTool",
@@ -1780,7 +1808,75 @@ export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthori
   { error: EnvironmentAuthorizationError },
 ) {}
 
+const WsMcpManagementListRpc = Rpc.make(WS_METHODS.mcpManagementList, {
+  payload: Schema.Struct({}),
+  success: McpManagementSnapshot,
+  error: Schema.Union([McpManagementError, EnvironmentAuthorizationError]),
+});
+const WsMcpManagementSubscribeRpc = Rpc.make(WS_METHODS.mcpManagementSubscribe, {
+  payload: Schema.Struct({}),
+  success: McpManagementSnapshot,
+  error: Schema.Union([McpManagementError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+const WsMcpManagementUpsertRpc = Rpc.make(WS_METHODS.mcpManagementUpsert, {
+  payload: McpUpsertInput,
+  success: McpManagementSnapshot,
+  error: Schema.Union([McpManagementError, EnvironmentAuthorizationError]),
+});
+const WsMcpManagementRemoveRpc = Rpc.make(WS_METHODS.mcpManagementRemove, {
+  payload: McpRemoveInput,
+  success: McpManagementSnapshot,
+  error: Schema.Union([McpManagementError, EnvironmentAuthorizationError]),
+});
+const WsMcpManagementSetEnabledRpc = Rpc.make(WS_METHODS.mcpManagementSetEnabled, {
+  payload: McpSetEnabledInput,
+  success: McpManagementSnapshot,
+  error: Schema.Union([McpManagementError, EnvironmentAuthorizationError]),
+});
+const WsMcpManagementCopyRpc = Rpc.make(WS_METHODS.mcpManagementCopy, {
+  payload: McpCopyInput,
+  success: McpManagementSnapshot,
+  error: Schema.Union([McpManagementError, EnvironmentAuthorizationError]),
+});
+const WsMcpManagementImportPreviewRpc = Rpc.make(WS_METHODS.mcpManagementImportPreview, {
+  payload: McpImportPreviewInput,
+  success: McpImportPreviewResult,
+  error: Schema.Union([McpManagementError, EnvironmentAuthorizationError]),
+});
+const WsMcpManagementOAuthStartRpc = Rpc.make(WS_METHODS.mcpManagementOAuthStart, {
+  payload: McpOAuthStartInput,
+  success: McpOAuthStartResult,
+  error: Schema.Union([McpManagementError, EnvironmentAuthorizationError]),
+});
+const WsMcpManagementOAuthCompleteRpc = Rpc.make(WS_METHODS.mcpManagementOAuthComplete, {
+  payload: McpOAuthCompleteInput,
+  success: McpManagementSnapshot,
+  error: Schema.Union([McpManagementError, EnvironmentAuthorizationError]),
+});
+const WsMcpManagementOAuthCancelRpc = Rpc.make(WS_METHODS.mcpManagementOAuthCancel, {
+  payload: McpOAuthCancelInput,
+  success: McpManagementSnapshot,
+  error: Schema.Union([McpManagementError, EnvironmentAuthorizationError]),
+});
+const WsMcpManagementOAuthLogoutRpc = Rpc.make(WS_METHODS.mcpManagementOAuthLogout, {
+  payload: McpOAuthLogoutInput,
+  success: McpManagementSnapshot,
+  error: Schema.Union([McpManagementError, EnvironmentAuthorizationError]),
+});
+
 export const WsRpcGroup = RpcGroup.make(
+  WsMcpManagementListRpc,
+  WsMcpManagementSubscribeRpc,
+  WsMcpManagementUpsertRpc,
+  WsMcpManagementRemoveRpc,
+  WsMcpManagementSetEnabledRpc,
+  WsMcpManagementCopyRpc,
+  WsMcpManagementImportPreviewRpc,
+  WsMcpManagementOAuthStartRpc,
+  WsMcpManagementOAuthCompleteRpc,
+  WsMcpManagementOAuthCancelRpc,
+  WsMcpManagementOAuthLogoutRpc,
   WsServerProbeRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,

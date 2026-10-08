@@ -1,4 +1,5 @@
 import type { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import type { ManagedMcpRuntimeConfig } from "../mcpManagement/ManagedMcpRuntime.ts";
 
 export interface McpProviderSessionConfig {
   readonly environmentId: EnvironmentId;
@@ -7,6 +8,8 @@ export interface McpProviderSessionConfig {
   readonly providerInstanceId: ProviderInstanceId;
   readonly endpoint: string;
   readonly authorizationHeader: string;
+  /** Catalog assignment and resolved credentials frozen when this session opens. */
+  readonly managedMcp?: ManagedMcpRuntimeConfig;
   /**
    * Whether this credential includes the "preview" capability. Adapters read
    * it to keep developer instructions truthful: when the user withholds agent

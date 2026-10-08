@@ -53,9 +53,11 @@ import { ChildProcessSpawner } from "effect/process";
 import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpProtocol from "effect-acp/protocol";
 import type * as EffectAcpSchema from "effect-acp/compat";
+import * as AcpWireSchema from "effect-acp/schema";
 
 import * as ServerConfig from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import { managedMcpName } from "./managedMcpInjection.ts";
 import * as AcpSessionRuntime from "../../provider/acp/AcpSessionRuntime.ts";
 import {
   extractXAiAcpSubagentEndNotice,
@@ -107,6 +109,7 @@ const layerServerConfig = ServerConfig.layerTest(process.cwd(), {
 const layerTest = Layer.mergeAll(NodeServices.layer, IdAllocator.layer, layerServerConfig);
 const ACP_TEST_DRIVER = ProviderDriverKind.make("acp-test");
 const decodeUnknownJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
+const decodeMcpEnvironment = Schema.decodeUnknownEffect(Schema.Array(AcpWireSchema.EnvVariable));
 
 describe("acpProjectedCommandExitCode", () => {
   const successOutput = { type: "Bash", exit_code: 0 };
@@ -731,6 +734,35 @@ describe("AcpAdapterV2", () => {
         endpoint: "http://127.0.0.1:43123/mcp",
         authorizationHeader: "Bearer self-contained-mcp-bridge-token",
         browserToolsAvailable: false,
+        managedMcp: {
+          revision: 1,
+          servers: [
+            {
+              id: "managed-http",
+              enabled: true,
+              transport: {
+                type: "http",
+                url: "https://mcp.example.test",
+                headers: { "X-Key": "fixture-key" },
+              },
+            },
+            {
+              id: "managed-stdio",
+              enabled: true,
+              transport: {
+                type: "stdio",
+                command: "mcp-fixture",
+                args: ["--test"],
+                env: { TEST: "1" },
+              },
+            },
+            {
+              id: "managed-off",
+              enabled: false,
+              transport: { type: "stdio", command: "must-not-run", args: [], env: {} },
+            },
+          ],
+        },
       });
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => {
@@ -777,6 +809,58 @@ describe("AcpAdapterV2", () => {
       assert.deepEqual(mcpServer.args, ["acp-mcp-bridge"]);
       assert.equal(runtimeInput?.processEnvironment?.T3_ACP_MCP_NODE, process.execPath);
       assert.equal(runtimeInput?.processEnvironment?.T3_ACP_MCP_ENTRYPOINT, undefined);
+      assert.equal(runtimeInput?.mcpServers.length, 3);
+      assert.deepInclude(runtimeInput?.mcpServers[1], {
+        name: managedMcpName("managed-http"),
+        command: process.execPath,
+        args: ["acp-mcp-bridge"],
+        env: [
+          { name: "ELECTRON_RUN_AS_NODE", value: "1" },
+          { name: "T3_ACP_MCP_ENDPOINT", value: "https://mcp.example.test" },
+          { name: "T3_ACP_MCP_AUTHORIZATION", value: "" },
+          { name: "T3_ACP_MCP_HEADERS", value: '{"X-Key":"fixture-key"}' },
+        ],
+      });
+      assert.deepEqual(runtimeInput?.mcpServers[2], {
+        name: managedMcpName("managed-stdio"),
+        command: "mcp-fixture",
+        args: ["--test"],
+        env: [
+          { name: "TEST", value: "1" },
+          { name: "T3_ACP_MCP_AUTHORIZATION", value: "" },
+        ],
+      });
+      assert.deepEqual(runtimeInput?.acpMcpServers?.slice(1), runtimeInput?.mcpServers.slice(1));
+      const managedStdio = runtimeInput?.mcpServers[2];
+      if (managedStdio === undefined || !("command" in managedStdio)) {
+        return yield* Effect.die("ACP runtime must receive the managed stdio server");
+      }
+      const managedEnvironment = yield* decodeMcpEnvironment(managedStdio.env);
+      // Simulate the agent launching an MCP child with its own environment
+      // inherited first and the supplied server variables applied afterwards.
+      const inherited = {
+        ...process.env,
+        ...runtimeInput?.processEnvironment,
+        ...Object.fromEntries(managedEnvironment.map(({ name, value }) => [name, value])),
+      };
+      const output = yield* Effect.promise(
+        () =>
+          new Promise<string>((resolve, reject) => {
+            NodeChildProcess.execFile(
+              process.execPath,
+              [
+                "-e",
+                "process.stdout.write(JSON.stringify({authorization:process.env.T3_ACP_MCP_AUTHORIZATION,key:process.env.TEST}))",
+              ],
+              { env: inherited },
+              (error, stdout) => {
+                if (error) reject(error);
+                else resolve(stdout);
+              },
+            );
+          }),
+      );
+      assert.deepEqual(JSON.parse(output), { authorization: "", key: "1" });
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 

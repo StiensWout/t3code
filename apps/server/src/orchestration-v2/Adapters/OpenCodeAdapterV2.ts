@@ -10,6 +10,7 @@ import type {
   ToolPart,
 } from "@opencode-ai/sdk/v2";
 import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
+import { openCodeManagedMcpName, managedMcpStdio } from "./managedMcpInjection.ts";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { causeErrorTag } from "@t3tools/shared/observability";
 import {
@@ -734,8 +735,8 @@ function permissionRuleEquals(
 export function openCodeChildPermissionRules(
   runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
   nativeChildRules: PermissionRuleset,
+  parentRules: PermissionRuleset = openCodePermissionRules(runtimePolicy),
 ): PermissionRuleset {
-  const parentRules = openCodePermissionRules(runtimePolicy);
   const inheritedRules = parentRules.filter(
     (rule) => rule.permission === "external_directory" || rule.action === "deny",
   );
@@ -973,6 +974,81 @@ export function makeOpenCodeAdapterV2(
         });
 
         const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
+        const managedServers = mcpSession?.managedMcp?.servers ?? [];
+        const hasManagedServers = managedServers.length > 0;
+        if (connection.external && managedServers.some((server) => server.enabled)) {
+          return yield* Effect.fail(
+            new OpenCodeRuntime.OpenCodeRuntimeError({
+              operation: "mcp.add",
+              detail:
+                "Managed MCP servers require a T3 Code-owned OpenCode process. Remove the external server URL in provider settings.",
+            }),
+          );
+        }
+        const managedRegistrations: string[] = [];
+        const availableManagedServers: string[] = [];
+        yield* Effect.addFinalizer(() =>
+          Effect.forEach(
+            managedRegistrations,
+            (name) =>
+              OpenCodeRuntime.runOpenCodeSdk("mcp.disconnect", (signal) =>
+                client.mcp.disconnect({ name }, { signal }),
+              ).pipe(Effect.timeout("5 seconds"), Effect.ignore({ log: true })),
+            { discard: true },
+          ),
+        );
+        for (const server of managedServers) {
+          if (!server.enabled) continue;
+          const name = openCodeManagedMcpName(server.id, input.threadId);
+          const config =
+            server.transport.type === "http"
+              ? {
+                  type: "remote" as const,
+                  url: server.transport.url,
+                  headers: { ...server.transport.headers },
+                  oauth: false as const,
+                }
+              : (() => {
+                  const stdio = managedMcpStdio(server.transport);
+                  return {
+                    type: "local" as const,
+                    command: [stdio.command, ...stdio.args],
+                    environment: stdio.env,
+                  };
+                })();
+          // The server can register before its response fails or times out.
+          // Own cleanup from the attempt, while granting only successful adds.
+          managedRegistrations.push(name);
+          const added = yield* OpenCodeRuntime.runOpenCodeSdk("mcp.add", (signal) =>
+            client.mcp.add({ name, config }, { signal }),
+          ).pipe(
+            Effect.timeout("20 seconds"),
+            Effect.as(true),
+            Effect.catch(() =>
+              Effect.logWarning(`Could not add managed MCP server ${server.id} to OpenCode.`).pipe(
+                Effect.as(false),
+              ),
+            ),
+          );
+          if (added) availableManagedServers.push(name);
+        }
+        const permissionRules = (
+          policy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
+        ): PermissionRuleset => [
+          ...openCodePermissionRules(policy),
+          ...(hasManagedServers
+            ? [{ permission: "t3-code-m-*", pattern: "*", action: "deny" as const }]
+            : []),
+          ...availableManagedServers.map((name) => ({
+            permission: `${name}_*`,
+            pattern: "*",
+            action: policy.runtimeMode === "full-access" ? ("allow" as const) : ("ask" as const),
+          })),
+        ];
+        const managedModes = new Map<
+          string,
+          ProviderAdapter.ProviderAdapterV2RuntimePolicy["runtimeMode"]
+        >();
         const hasT3Mcp = mcpSession !== undefined && !connection.external;
         const orchestrationSystemPrompt = t3OrchestrationSystemPrompt(hasT3Mcp);
         if (hasT3Mcp) {
@@ -1415,6 +1491,7 @@ export function makeOpenCodeAdapterV2(
             const childPermission = openCodeChildPermissionRules(
               turn.runtimePolicy,
               nativeChildSession.permission ?? [],
+              permissionRules(turn.runtimePolicy),
             );
             yield* sdkCall(
               "session.update",
@@ -3050,13 +3127,14 @@ export function makeOpenCodeAdapterV2(
               // session.create leaves it unset (SessionPrompt.ensureTitle).
               const response = yield* sdkCall(
                 "session.create",
-                { permission: openCodePermissionRules(threadInput.runtimePolicy) },
+                { permission: permissionRules(threadInput.runtimePolicy) },
                 () =>
                   client.session.create({
-                    permission: openCodePermissionRules(threadInput.runtimePolicy),
+                    permission: permissionRules(threadInput.runtimePolicy),
                   }),
               );
               const nativeSession = unwrapData("session.create", response);
+              managedModes.set(nativeSession.id, threadInput.runtimePolicy.runtimeMode);
               const createdAt = yield* DateTime.now;
               const created = makeProviderThread({
                 idAllocator,
@@ -3100,6 +3178,16 @@ export function makeOpenCodeAdapterV2(
                 client.session.get({ sessionID: sessionId }),
               );
               const nativeSession = unwrapData("session.get", response);
+              if (hasManagedServers) {
+                const policy = threadInput.runtimePolicy ?? input.runtimePolicy;
+                yield* sdkCall("session.update", { sessionID: sessionId }, () =>
+                  client.session.update({
+                    sessionID: sessionId,
+                    permission: permissionRules(policy),
+                  }),
+                );
+                managedModes.set(sessionId, policy.runtimeMode);
+              }
               const resumedAt = yield* DateTime.now;
               const providerThread = {
                 ...threadInput.providerThread,
@@ -3141,6 +3229,18 @@ export function makeOpenCodeAdapterV2(
                 return yield* protocolError(
                   `OpenCode provider thread ${turnInput.providerThread.id} already has an active turn`,
                 );
+              }
+              if (
+                hasManagedServers &&
+                managedModes.get(sessionId) !== turnInput.runtimePolicy.runtimeMode
+              ) {
+                yield* sdkCall("session.update", { sessionID: sessionId }, () =>
+                  client.session.update({
+                    sessionID: sessionId,
+                    permission: permissionRules(turnInput.runtimePolicy),
+                  }),
+                );
+                managedModes.set(sessionId, turnInput.runtimePolicy.runtimeMode);
               }
               const parsedModel = OpenCodeRuntime.parseOpenCodeModelSlug(
                 turnInput.modelSelection.model,
@@ -3618,7 +3718,7 @@ export function makeOpenCodeAdapterV2(
                 yield* sdkCall("session.update", { sessionID: fork.id }, () =>
                   client.session.update({
                     sessionID: fork.id,
-                    permission: openCodePermissionRules(input.runtimePolicy),
+                    permission: permissionRules(input.runtimePolicy),
                   }),
                 );
                 retainedThread = {

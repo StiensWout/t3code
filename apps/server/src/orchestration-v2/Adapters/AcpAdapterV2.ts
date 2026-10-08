@@ -65,6 +65,7 @@ import {
 } from "../../mcp/AcpMcpOverAcpBridge.ts";
 import { mcpToolPresentation } from "../../provider/McpToolPresentation.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import { managedMcpName, managedMcpStdio } from "./managedMcpInjection.ts";
 import {
   applyAcpAgentTerminalUpdate,
   acpContentBlockDisplayText,
@@ -687,6 +688,34 @@ function acpMcpContext(threadId: ThreadId | null, self: SelfInvocation): AcpMcpC
   if (session === undefined) {
     return { servers: [], acpServers: [] };
   }
+  const managedServers = (session.managedMcp?.servers ?? [])
+    .filter((server) => server.enabled)
+    .map((server) => {
+      if (server.transport.type === "stdio") {
+        const config = managedMcpStdio(server.transport);
+        return {
+          name: managedMcpName(server.id),
+          command: config.command,
+          args: config.args,
+          // The host agent uses this credential for T3's bridge fallback.
+          // Managed children must not inherit that thread credential.
+          env: Object.entries({ ...config.env, T3_ACP_MCP_AUTHORIZATION: "" }).map(
+            ([name, value]) => ({ name, value }),
+          ),
+        };
+      }
+      return {
+        name: managedMcpName(server.id),
+        command: self.command,
+        args: [...selfInvocationArgs(self, ["acp-mcp-bridge"])],
+        env: [
+          { name: "ELECTRON_RUN_AS_NODE", value: "1" },
+          { name: "T3_ACP_MCP_ENDPOINT", value: server.transport.url },
+          { name: "T3_ACP_MCP_AUTHORIZATION", value: "" },
+          { name: "T3_ACP_MCP_HEADERS", value: JSON.stringify(server.transport.headers) },
+        ],
+      };
+    });
   // Stdio is ACP's required baseline MCP transport. Agents that advertise
   // optional http support still routinely fail to wire injected http servers
   // through to their backend (codex-acp 1.2.0 and pi-acp both drop them), so
@@ -705,8 +734,9 @@ function acpMcpContext(threadId: ThreadId | null, self: SelfInvocation): AcpMcpC
           { name: "T3_ACP_MCP_AUTHORIZATION", value: session.authorizationHeader },
         ],
       },
+      ...managedServers,
     ],
-    acpServers: [{ type: "acp", name: "t3-code", serverId: "t3-code" }],
+    acpServers: [{ type: "acp", name: "t3-code", serverId: "t3-code" }, ...managedServers],
     endpoint: session.endpoint,
     authorization: session.authorizationHeader,
     processEnvironment: {
