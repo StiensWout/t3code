@@ -1607,6 +1607,7 @@ describe("PiAdapterV2", () => {
       if (event.type !== "turn_item.updated" || event.turnItem.type !== "user_input_request")
         return;
       assert.equal(event.turnItem.questions[0]?.initialAnswer, prefill);
+      assert.deepEqual(event.turnItem.questions[0]?.options, []);
       assert.equal(event.turnItem.questions[0]?.question, "Commit message");
       const edited = "  fix(server): edited commit message\n\n";
       yield* runtime.respondToRuntimeRequest({
@@ -1616,6 +1617,28 @@ describe("PiAdapterV2", () => {
       const response = yield* fake.takeRequest("extension_ui_response");
       assert.equal(response["value"], edited);
       assert.isUndefined(response["cancelled"]);
+      yield* fake.emit({
+        type: "extension_ui_request",
+        id: "ui-editor-cleared",
+        method: "editor",
+        title: "Commit message",
+        prefill,
+      });
+      const cleared = yield* takeEvent(
+        (event) =>
+          event.type === "turn_item.updated" &&
+          event.turnItem.type === "user_input_request" &&
+          event.turnItem.questions.some((question) => question.id === "ui-editor-cleared"),
+      );
+      if (cleared.type !== "turn_item.updated" || cleared.turnItem.type !== "user_input_request")
+        return;
+      yield* runtime.respondToRuntimeRequest({
+        requestId: cleared.turnItem.requestId,
+        answers: { "ui-editor-cleared": "" },
+      });
+      const emptyResponse = yield* fake.takeRequest("extension_ui_response");
+      assert.equal(emptyResponse["value"], "");
+      assert.isUndefined(emptyResponse["cancelled"]);
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 

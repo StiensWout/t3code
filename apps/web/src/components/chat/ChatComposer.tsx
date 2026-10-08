@@ -1577,6 +1577,7 @@ export interface ChatComposerProps {
     customAnswer: string;
     activeQuestion: {
       id: string;
+      initialAnswer?: string | undefined;
       multiSelect?: boolean | undefined;
       allowCustomAnswer?: boolean | undefined;
     } | null;
@@ -3499,12 +3500,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
     promptRef.current = nextCustomAnswer;
     const { cursor, trigger } = composerStateAtPromptEnd(nextCustomAnswer);
-    setComposerCursor(cursor);
-    resetComposerTrigger(trigger);
+    const literalAnswer = activePendingProgress?.activeQuestion?.initialAnswer !== undefined;
+    setComposerCursor(literalAnswer ? nextCustomAnswer.length : cursor);
+    resetComposerTrigger(literalAnswer ? null : trigger);
     setComposerHighlightedItemId(null);
   }, [
     activePendingProgress?.customAnswer,
     activePendingProgress?.activeQuestion?.id,
+    activePendingProgress?.activeQuestion?.initialAnswer,
     activePendingUserInput?.requestId,
     prompt,
     promptRef,
@@ -5990,6 +5993,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     bypassAutoAttachment: boolean,
     selectionOverride?: { start: number; end: number },
   ): boolean => {
+    // Editor answers keep pasted text in the answer, regardless of paste size.
+    if (activePendingProgress?.activeQuestion?.initialAnswer !== undefined) return false;
     const questionCanAttach =
       pendingUserInputs.length === 0 ||
       (supportsQuestionAttachments &&
@@ -7400,6 +7405,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     }
                     editorRef={composerEditorRef}
                     richTextEnabled={settings.composerRichTextEnabled}
+                    literalText={activePendingProgress?.activeQuestion?.initialAnswer !== undefined}
                     value={
                       isComposerApprovalState
                         ? ""

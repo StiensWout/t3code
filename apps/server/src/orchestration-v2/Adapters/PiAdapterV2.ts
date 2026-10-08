@@ -2912,13 +2912,15 @@ function piQuestion(
       ? event["options"]
           .filter((option): option is string => typeof option === "string")
           .map((option) => ({ label: option || "Empty value", description: option, value: option }))
-      : [
-          {
-            label: "Submit empty value",
-            description: "Send an empty string to the extension.",
-            value: "",
-          },
-        ];
+      : method === "editor"
+        ? []
+        : [
+            {
+              label: "Submit empty value",
+              description: "Send an empty string to the extension.",
+              value: "",
+            },
+          ];
   const question = recordString(event, "message") ?? recordString(event, "placeholder") ?? title;
   return {
     id: questionId,
