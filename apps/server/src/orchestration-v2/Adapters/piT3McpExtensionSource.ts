@@ -314,8 +314,9 @@ export default async function t3McpExtension(pi: ExtensionAPI) {
     return attempt;
   };
 
-  // Register before session_start, when Pi's MCP builtin registers configured
-  // servers. Our bridge owns the fixed T3 namespace and current credentials.
+  // CLI extensions load before builtins, and Pi keeps the first registration
+  // of a tool name. Register now so the bridge owns the T3 namespace even when
+  // mcp.json configures it; retry a failed connection at session_start.
   await ensureStarted().catch(() => undefined);
 
   pi.on("session_start", async (_event, ctx) => {
