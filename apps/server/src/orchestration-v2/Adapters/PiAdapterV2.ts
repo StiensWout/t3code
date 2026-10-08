@@ -1582,11 +1582,16 @@ export function makePiAdapterV2(
       });
 
       const handleSessionEvent = Effect.fnUntraced(function* (event: PiRpcRecord) {
-        // Startup dialogs stay session-scoped. Once native execution begins,
-        // its output and dialogs belong to the turn that claims this buffer.
+        // Model-selection hooks can await a dialog before startTurn can claim
+        // a wake. Keep interactive requests session-scoped until a turn owns
+        // them; buffer native output and notifications for that turn.
+        const interactiveUiRequest =
+          event["type"] === "extension_ui_request" &&
+          ["select", "confirm", "input", "editor"].includes(String(event["method"]));
         if (
           threadState?.activeTurn === null &&
           pendingWake !== null &&
+          !interactiveUiRequest &&
           !String(event["type"]).startsWith("t3.") &&
           event["type"] !== "response"
         ) {

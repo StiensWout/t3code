@@ -96,6 +96,8 @@ interface FakePi {
   /** Reject the next `get_state` request. */
   readonly failNextState: () => void;
   readonly deferNextLifecycle: (type: "switch_session" | "new_session") => void;
+  /** Hold a model-select extension hook until its UI request is answered. */
+  readonly deferNextModelSelection: () => void;
   readonly queueModels: (models: ReadonlyArray<unknown>) => void;
   readonly vetoNextNewSession: () => void;
   /** Every request received by the fake process. */
@@ -298,6 +300,9 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
     deferNextLifecycle: (type) => {
       deferredLifecycle = type;
     },
+    deferNextModelSelection: () => {
+      deferredLifecycle = "set_model";
+    },
     queueModels: (value) => {
       models = value;
     },
@@ -492,6 +497,81 @@ const expectModelFailure = (errorMessage: string) =>
   }).pipe(Effect.scoped, Effect.provide(layerTest));
 
 describe("PiAdapterV2", () => {
+  it.effect("answers model-selection dialogs before a user turn claims a native wake", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const offers =
+        yield* Queue.unbounded<ProviderContinuationRequests.ProviderContinuationRequest>();
+      const { runtime, takeEvent } = yield* openRuntime(
+        fake,
+        "default",
+        THREAD_ID,
+        SESSION_ID,
+        undefined,
+        { offer: (request) => Queue.offer(offers, request).pipe(Effect.asVoid) },
+      );
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* fake.emit({ type: "agent_start" });
+      yield* Queue.take(offers);
+      const requests: Array<Extract<ProviderAdapterV2Event, { type: "runtime_request.updated" }>> =
+        [];
+      fake.deferNextModelSelection();
+      const starting = yield* startTurn(
+        runtime,
+        providerThread,
+        "default",
+        [],
+        "Continue the review",
+        modelSelection("xai/grok-4.6"),
+      ).pipe(Effect.forkScoped);
+      const modelRequest = yield* fake.takeRequest("set_model");
+      yield* fake.emit({
+        type: "extension_ui_request",
+        id: "model-selection-dialog",
+        method: "confirm",
+        title: "Use this model?",
+      });
+      yield* fake.emit({ type: "agent_settled" });
+      yield* takeEvent((event) => {
+        if (event.type === "runtime_request.updated") requests.push(event);
+        return (
+          event.type === "provider_session.updated" && event.providerSession.status === "ready"
+        );
+      });
+      const dialog = requests[0]?.runtimeRequest;
+      assert.isDefined(dialog, "Pi buffered the dialog needed to finish model selection");
+      assert.equal(requests[0]?.threadId, THREAD_ID);
+      assert.isNull(dialog!.providerTurnId);
+      yield* runtime.respondToRuntimeRequest({ requestId: dialog!.id, decision: "accept" });
+      const response = yield* fake.takeRequest("extension_ui_response");
+      assert.equal(response["id"], "model-selection-dialog");
+      assert.isTrue(response["confirmed"]);
+      yield* fake.emit({
+        type: "response",
+        id: modelRequest["id"],
+        command: "set_model",
+        success: true,
+        data: { provider: "xai", id: "grok-4.6" },
+      });
+      yield* Fiber.join(starting);
+      const prompt = yield* fake.takeRequest("prompt");
+      assert.equal(prompt["message"], "Continue the review");
+      assert.equal(prompt["streamingBehavior"], "steer");
+      const resolved = yield* takeEvent(
+        (event) =>
+          event.type === "runtime_request.updated" && event.runtimeRequest.id === dialog!.id,
+      );
+      assert.isTrue(
+        resolved.type === "runtime_request.updated" &&
+          resolved.runtimeRequest.status === "resolved",
+      );
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
   it.effect("adopts a completed native wake without sending a synthetic prompt", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakePi;
