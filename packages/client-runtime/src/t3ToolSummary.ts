@@ -329,6 +329,12 @@ export function summarizeT3ToolCalls(
     case "environment-update":
       label = phrase("Updated", "update", `environment preferences ${times}`);
       break;
+    case "mcp-read":
+      label = phrase("Checked", "check", `MCP configuration ${times}`);
+      break;
+    case "mcp-update":
+      label = phrase("Updated", "update", `MCP configuration ${times}`);
+      break;
     case "attachment-prepare":
       label = phrase(
         "Prepared",
