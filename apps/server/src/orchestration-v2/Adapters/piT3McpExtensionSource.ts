@@ -1,8 +1,8 @@
 /**
  * Source for the T3-owned Pi extension that consumes T3's HTTP MCP server.
  *
- * Pi 0.99+ owns the MCP client and on-demand tool discovery. Older versions
- * use the HTTP bridge below. Pi loads this TypeScript via `--extension`; the
+ * Pi 0.99+ discovers optional HTTP bridge tools on demand. Older versions
+ * keep them directly available. Pi loads this TypeScript via `--extension`; the
  * server writes it to a cache so packaged builds need no sibling .ts file.
  *
  * Do not import t3code modules from the string body. The Pi process resolves
@@ -31,7 +31,7 @@ const TOKEN_ENV = ${JSON.stringify(T3_MCP_BEARER_ENV)};
 const RUNTIME_MODE_ENV = ${JSON.stringify(T3_PI_RUNTIME_MODE_ENV)};
 const ORCHESTRATION_INSTRUCTIONS = ${JSON.stringify(T3_CODE_ORCHESTRATION_INSTRUCTIONS.trim())};
 const PROTOCOL = "2025-06-18";
-const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
+const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls", "tool_search"]);
 const FILE_CHANGE_TOOLS = new Set(${JSON.stringify(PI_FILE_CHANGE_TOOLS)});
 
 type RuntimeMode = "approval-required" | "auto-accept-edits" | "auto" | "full-access";
@@ -261,57 +261,51 @@ export default async function t3McpExtension(pi: ExtensionAPI) {
     return;
   }
 
-  // This API arrived with native MCP and tool exposure in Pi 0.99. Checking
-  // the API preserves support for older installs without a version probe.
-  let nativeMcp = "registerMcpServer" in pi && typeof pi.registerMcpServer === "function";
-  if (nativeMcp) {
-    pi.registerMcpServer("t3-code", {
-      url: endpoint,
-      headers: { authorization: token.startsWith("Bearer ") ? token : \`Bearer \${token}\` },
-      exposure: "deferred",
-      // Orchestration can discover models and manage child work immediately.
-      // Pi activates tool_search so every other tool stays discoverable.
-      toolExposure: {
-        orchestrator_capabilities: "direct",
-        delegate_task: "direct",
-        task_status: "direct",
-      },
-    });
-  }
+  // Tool exposure arrived with registerMcpServer in Pi 0.99. Keep the HTTP
+  // bridge as the credential owner: mcp.json overrides native registrations.
+  const supportsExposure = "registerMcpServer" in pi && typeof pi.registerMcpServer === "function";
+  const directTools = new Set(["orchestrator_capabilities", "delegate_task", "task_status"]);
+  let deferOptionalTools = supportsExposure;
+  let catalog: ReadonlyArray<McpTool> = [];
 
   const client = createMcpClient(endpoint, token);
   let started: Promise<void> | undefined;
+
+  const registerTools = () => {
+    for (const tool of catalog) {
+      const name = tool.name;
+      pi.registerTool({
+        name: \`mcp__t3_code__\${name}\`,
+        label: name,
+        description: tool.description ?? name,
+        parameters: jsonSchemaToTypebox(tool.inputSchema),
+        ...(supportsExposure ? {
+          exposure: deferOptionalTools && !directTools.has(name) ? "deferred" as const : "direct" as const,
+        } : {}),
+        async execute(_toolCallId, params, signal) {
+          const result = await client.callTool(
+            name,
+            (params ?? {}) as Record<string, unknown>,
+            signal,
+          );
+          const text = formatMcpContent(result);
+          return {
+            content: [{ type: "text", text }],
+            details: { server: "t3-code", tool: name },
+            ...(isMcpToolError(result) ? { isError: true } : {}),
+          };
+        },
+      });
+    }
+  };
 
   const ensureStarted = () => {
     if (started !== undefined) return started;
     const attempt = (async () => {
       const signal = AbortSignal.timeout(10_000);
       await client.connect(signal);
-      const tools = await client.listTools(signal);
-      for (const tool of tools) {
-        const name = tool.name;
-        const registeredName = \`mcp__t3-code__\${name}\`;
-        const description = tool.description ?? name;
-        pi.registerTool({
-          name: registeredName,
-          label: name,
-          description,
-          parameters: jsonSchemaToTypebox(tool.inputSchema),
-          async execute(_toolCallId, params, signal) {
-            const result = await client.callTool(
-              name,
-              (params ?? {}) as Record<string, unknown>,
-              signal,
-            );
-            const text = formatMcpContent(result);
-            return {
-              content: [{ type: "text", text }],
-              details: { server: "t3-code", tool: name },
-              ...(isMcpToolError(result) ? { isError: true } : {}),
-            };
-          },
-        });
-      }
+      catalog = await client.listTools(signal);
+      registerTools();
     })();
     started = attempt;
     void attempt.catch(() => {
@@ -320,21 +314,21 @@ export default async function t3McpExtension(pi: ExtensionAPI) {
     return attempt;
   };
 
-  // Older Pi needs its tools before session_start and the first prompt.
-  // A failed load-time connection is retried at session_start. Native Pi
-  // owns readiness, discovery, and connection teardown for its MCP client.
-  if (!nativeMcp) await ensureStarted().catch(() => undefined);
+  // Register before session_start, when Pi's MCP builtin registers configured
+  // servers. Our bridge owns the fixed T3 namespace and current credentials.
+  await ensureStarted().catch(() => undefined);
 
   pi.on("session_start", async (_event, ctx) => {
-    if (nativeMcp) {
-      // These built-ins can be disabled or replaced independently of the API.
-      // Check their source, not connection readiness: Pi starts connecting in
-      // session_start and waits in its own before_agent_start hook.
-      const hasMcp = pi.getCommands().some((command) => command.sourceInfo?.path === "builtin:mcp");
-      const hasToolSearch = pi.getAllTools().some((tool) => tool.sourceInfo?.path === "builtin:tool-search");
-      if (hasMcp && hasToolSearch) return;
-      pi.unregisterMcpServer("t3-code");
-      nativeMcp = false;
+    if (supportsExposure) {
+      // A disabled or replaced search builtin cannot discover deferred tools.
+      const hasToolSearch = pi.getAllTools().some((tool) => tool.name === "tool_search" && tool.sourceInfo?.path === "builtin:tool-search");
+      deferOptionalTools = hasToolSearch;
+      if (hasToolSearch) {
+        const active = pi.getActiveTools();
+        if (!active.includes("tool_search")) pi.setActiveTools([...active, "tool_search"]);
+      } else {
+        registerTools();
+      }
     }
     try {
       await ensureStarted();
