@@ -1578,6 +1578,7 @@ export function makePiAdapterV2(
         if (pendingWake !== wake || threadState !== wake.state || closed) return;
         pendingWake = null;
         stopRequested = true;
+        yield* cancelPendingPrompts(yield* DateTime.now);
         yield* connection.terminate;
       });
 
@@ -2036,6 +2037,7 @@ export function makePiAdapterV2(
               // closes the provider stream cleanly; only an unexpected death
               // is surfaced as an event-stream failure.
               const state = threadState;
+              const hadPendingWake = pendingWake !== null;
               pendingWake = null;
               const interrupted = state?.activeTurn?.interrupted === true;
               if (state?.activeTurn != null) {
@@ -2047,6 +2049,8 @@ export function makePiAdapterV2(
                       class: "transport_error",
                     });
                 yield* finalizeTurn(state, false);
+              } else if (hadPendingWake) {
+                yield* cancelPendingPrompts(yield* DateTime.now);
               }
               if (unsolicitedActivityDetected) {
                 yield* updateProviderSession("error", PI_UNSOLICITED_ACTIVITY_ERROR);

@@ -697,6 +697,23 @@ describe("PiAdapterV2", () => {
         assert.equal(prompt["streamingBehavior"], "steer");
         yield* fake.emit({ type: "response", command: "prompt", success: true });
         yield* fake.emit({ type: "agent_start" });
+        yield* fake.emit({
+          type: "extension_ui_request",
+          id: "owned-dialog",
+          method: "confirm",
+          title: "Continue?",
+        });
+        const dialog = yield* takeEvent((event) => event.type === "runtime_request.updated");
+        assert.isTrue(dialog.type === "runtime_request.updated");
+        if (dialog.type !== "runtime_request.updated") return;
+        assert.isNotNull(dialog.runtimeRequest.providerTurnId);
+        yield* offer.clearIfCurrent!();
+        yield* runtime.respondToRuntimeRequest({
+          requestId: dialog.runtimeRequest.id,
+          decision: "accept",
+        });
+        const response = yield* fake.takeRequest("extension_ui_response");
+        assert.isTrue(response["confirmed"]);
         yield* fake.emit({ type: "message_start", message: { role: "assistant" } });
         yield* fake.emit({
           type: "message_update",
@@ -869,42 +886,82 @@ describe("PiAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
-  it.effect("an archived wake stops unowned execution and invalidates its offer", () =>
-    Effect.gen(function* () {
-      const fake = yield* makeFakePi;
-      const offers =
-        yield* Queue.unbounded<ProviderContinuationRequests.ProviderContinuationRequest>();
-      const { runtime, takeEvent } = yield* openRuntime(
-        fake,
-        "default",
-        THREAD_ID,
-        SESSION_ID,
-        undefined,
-        {
-          offer: (request) => Queue.offer(offers, request).pipe(Effect.asVoid),
-        },
-      );
-      yield* runtime.ensureThread({
-        threadId: THREAD_ID,
-        modelSelection: modelSelection("default"),
-        runtimePolicy,
-      });
-      yield* fake.emit({ type: "agent_start" });
-      const offer = yield* Queue.take(offers);
-      yield* offer.clearIfCurrent!();
-      yield* takeEvent(
-        (event) =>
-          event.type === "provider_session.updated" && event.providerSession.status === "stopped",
-      );
-      assert.isFalse(yield* runtime.hasPendingBackgroundWork!);
-      let dispatched = false;
-      yield* offer.dispatchIfCurrent!(
-        Effect.sync(() => {
-          dispatched = true;
-        }),
-      );
-      assert.isFalse(dispatched);
-    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  it.effect.each(["archive", "stop", "transport death"] as const)(
+    "retiring a wake by %s cancels visible dialogs and invalidates its offer",
+    (retirement) =>
+      Effect.gen(function* () {
+        const fake = yield* makeFakePi;
+        const offers =
+          yield* Queue.unbounded<ProviderContinuationRequests.ProviderContinuationRequest>();
+        const { runtime, takeEvent } = yield* openRuntime(
+          fake,
+          "default",
+          THREAD_ID,
+          SESSION_ID,
+          undefined,
+          {
+            offer: (request) => Queue.offer(offers, request).pipe(Effect.asVoid),
+          },
+        );
+        const providerThread = yield* runtime.ensureThread({
+          threadId: THREAD_ID,
+          modelSelection: modelSelection("default"),
+          runtimePolicy,
+        });
+        yield* fake.emit({ type: "agent_start" });
+        const offer = yield* Queue.take(offers);
+        yield* fake.emit({
+          type: "extension_ui_request",
+          id: "wake-dialog",
+          method: "confirm",
+          title: "Continue background work?",
+        });
+        const dialog = yield* takeEvent((event) => event.type === "runtime_request.updated");
+        assert.isTrue(dialog.type === "runtime_request.updated");
+        if (dialog.type !== "runtime_request.updated") return;
+        assert.isNull(dialog.runtimeRequest.providerTurnId);
+        if (retirement === "archive") yield* offer.clearIfCurrent!();
+        else if (retirement === "stop") {
+          yield* runtime.interruptTurn({
+            providerThread,
+            providerTurnId: ProviderTurnId.make("settled-turn"),
+            requestRuntimeRestart: true,
+          });
+        } else yield* fake.closeStdout;
+        let requestCancelled = false;
+        let nodeCancelled = false;
+        let itemCancelled = false;
+        yield* takeEvent((event) => {
+          if (
+            event.type === "runtime_request.updated" &&
+            event.runtimeRequest.id === dialog.runtimeRequest.id
+          )
+            requestCancelled = event.runtimeRequest.status === "cancelled";
+          if (event.type === "node.updated" && event.node.id === dialog.runtimeRequest.nodeId)
+            nodeCancelled = event.node.status === "cancelled";
+          if (
+            event.type === "turn_item.updated" &&
+            event.turnItem.nodeId === dialog.runtimeRequest.nodeId
+          )
+            itemCancelled = event.turnItem.status === "cancelled";
+          return (
+            event.type === "provider_session.updated" &&
+            event.providerSession.status ===
+              (retirement === "transport death" ? "error" : "stopped")
+          );
+        });
+        assert.isTrue(requestCancelled, "Retired wake left a pending runtime request");
+        assert.isTrue(nodeCancelled);
+        assert.isTrue(itemCancelled);
+        assert.isFalse(yield* runtime.hasPendingBackgroundWork!);
+        let dispatched = false;
+        yield* offer.dispatchIfCurrent!(
+          Effect.sync(() => {
+            dispatched = true;
+          }),
+        );
+        assert.isFalse(dispatched);
+      }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
   it.effect("stops provider-initiated work that has no T3 turn owner", () =>
