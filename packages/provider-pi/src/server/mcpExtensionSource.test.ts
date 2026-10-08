@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off -- Pi extensions run outside Effect; these tests exercise their native filesystem boundary.
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 import * as NodeOS from "node:os";
@@ -403,7 +404,6 @@ async function loadInputHook(commands: ReadonlyArray<SkillCommand>) {
   assert.isDefined(hook);
   return hook as InputHook;
 }
-
 
 describe("Pi skill references", () => {
   it("loads every selected skill once while preserving inline prose, whitespace, and images", async () => {
