@@ -337,6 +337,8 @@ interface ActivePiTurn {
   activeCompaction: PiCompactionState | null;
   activeProviderRetry: PiProviderRetryState | null;
   failure: ReturnType<typeof makeProviderFailure> | null;
+  /** Native retry can recover its work without accepting a rejected joining prompt. */
+  rejectedPromptFailure: ReturnType<typeof makeProviderFailure> | null;
   /** Session-tree refs read just before Stop terminates Pi, when no read is possible later. */
   stopTreeRefs?: PiTurnTreeRefs | null;
 }
@@ -1457,7 +1459,7 @@ export function makePiAdapterV2(
         const tokenUsage = readUsage
           ? yield* readTokenUsage(turn.latestCompactionAfterTokens, completedAt)
           : undefined;
-        const failure = turn.interrupted ? null : turn.failure;
+        const failure = turn.interrupted ? null : (turn.rejectedPromptFailure ?? turn.failure);
         yield* emit({
           type: "provider_turn.updated",
           driver: PI_PROVIDER,
@@ -1960,11 +1962,18 @@ export function makePiAdapterV2(
                   ? turn
                   : null;
             if (failedTurn !== null) {
-              failedTurn.failure = makeProviderFailure({
+              const failure = makeProviderFailure({
                 message: recordString(event, "error") ?? "Pi rejected the prompt.",
                 class: "provider_error",
               });
-              if (state !== null) yield* finalizeTurn(state);
+              if (failedTurn.adoptedWake && command === "prompt") {
+                failedTurn.rejectedPromptFailure = failure;
+                failedTurn.settleWhenIdle = true;
+                yield* scheduleSettleProbe(failedTurn, true);
+              } else {
+                failedTurn.failure = failure;
+                if (state !== null) yield* finalizeTurn(state);
+              }
             }
             return;
           }
@@ -2471,6 +2480,7 @@ export function makePiAdapterV2(
               activeCompaction: null,
               activeProviderRetry: null,
               failure: null,
+              rejectedPromptFailure: null,
             };
             // Only the install/send/start-event boundary excludes the event
             // pump. Earlier correlated requests must leave the pump free so
@@ -2808,6 +2818,9 @@ export function makePiAdapterV2(
             }
             if (state.activeTurn !== null) {
               return yield* protocolError("Cannot roll back while a Pi turn is active");
+            }
+            if (pendingWake !== null) {
+              return yield* protocolError("Cannot roll back while native Pi work awaits a turn");
             }
             // `fork(entryId)` re-roots the active branch before that user
             // message, so the rollback boundary is the first user entry of

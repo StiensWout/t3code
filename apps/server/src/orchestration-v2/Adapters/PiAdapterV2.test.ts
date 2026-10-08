@@ -1,6 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  CheckpointId,
   EnvironmentId,
   NodeId,
   ProviderInstanceId,
@@ -497,6 +498,169 @@ const expectModelFailure = (errorMessage: string) =>
   }).pipe(Effect.scoped, Effect.provide(layerTest));
 
 describe("PiAdapterV2", () => {
+  it.effect("retains native wake ownership when a joining user prompt is rejected", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const offers =
+        yield* Queue.unbounded<ProviderContinuationRequests.ProviderContinuationRequest>();
+      const { runtime, takeEvent } = yield* openRuntime(
+        fake,
+        "default",
+        THREAD_ID,
+        SESSION_ID,
+        undefined,
+        {
+          offer: (request) => Queue.offer(offers, request).pipe(Effect.asVoid),
+        },
+      );
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* fake.takeRequest("get_state");
+      yield* fake.emit({ type: "agent_start" });
+      yield* Queue.take(offers);
+      yield* fake.emit({ type: "agent_settled" });
+      yield* fake.emit({ type: "compaction_start", reason: "manual" });
+      yield* startTurn(runtime, providerThread);
+      yield* fake.takeRequest("prompt");
+      const rejection = "Cannot submit a prompt while compaction is in progress.";
+      yield* fake.emit({ type: "response", command: "prompt", success: false, error: rejection });
+      yield* fake.emit({
+        type: "extension_ui_request",
+        id: "native-compaction-dialog",
+        method: "confirm",
+        title: "Continue native work?",
+      });
+      const dialog = yield* takeEvent((event) => event.type === "runtime_request.updated");
+      assert.isTrue(dialog.type === "runtime_request.updated");
+      if (dialog.type !== "runtime_request.updated") return;
+      assert.isNotNull(dialog.runtimeRequest.providerTurnId);
+      yield* runtime.respondToRuntimeRequest({
+        requestId: dialog.runtimeRequest.id,
+        decision: "accept",
+      });
+      yield* fake.takeRequest("extension_ui_response");
+      fake.queueState({ isStreaming: true });
+      yield* fake.emit({
+        type: "compaction_end",
+        result: { summary: "Native compaction finished" },
+        willRetry: true,
+      });
+      yield* fake.emit({ type: "agent_start" });
+      yield* fake.emit({ type: "message_start", message: { role: "assistant" } });
+      yield* fake.emit({
+        type: "message_update",
+        assistantMessageEvent: {
+          type: "text_end",
+          contentIndex: 0,
+          content: "Native work completed",
+        },
+      });
+      const message = yield* takeEvent((event) => event.type === "message.updated");
+      assert.isTrue(message.type === "message.updated" && message.message.runId !== null);
+      yield* fake.takeRequest("get_state");
+      yield* fake.emit({ type: "agent_settled" });
+      const terminal = yield* takeEvent((event) => event.type === "turn.terminal");
+      assert.isTrue(
+        terminal.type === "turn.terminal" &&
+          terminal.status === "failed" &&
+          terminal.failure.message === rejection,
+      );
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("rejects rollback while native wake output is awaiting ownership", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const offers =
+        yield* Queue.unbounded<ProviderContinuationRequests.ProviderContinuationRequest>();
+      const { runtime, takeEvent } = yield* openRuntime(
+        fake,
+        "default",
+        THREAD_ID,
+        SESSION_ID,
+        undefined,
+        {
+          offer: (request) => Queue.offer(offers, request).pipe(Effect.asVoid),
+        },
+      );
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* fake.emit({ type: "agent_start" });
+      yield* Queue.take(offers);
+      yield* fake.emit({ type: "message_start", message: { role: "assistant" } });
+      yield* fake.emit({
+        type: "message_update",
+        assistantMessageEvent: {
+          type: "text_end",
+          contentIndex: 0,
+          content: "Current branch wake output",
+        },
+      });
+      yield* fake.emit({ type: "agent_settled" });
+      yield* takeEvent(
+        (event) =>
+          event.type === "provider_session.updated" && event.providerSession.status === "ready",
+      );
+      const rolledBack = yield* runtime
+        .rollbackThread({
+          providerThread,
+          target: {
+            type: "thread_start",
+            checkpointId: CheckpointId.make("checkpoint-start"),
+            appRunOrdinal: 0,
+          },
+          providerThreadTurns: [
+            {
+              id: ProviderTurnId.make("previous-turn"),
+              providerThreadId: providerThread.id,
+              nodeId: NodeId.make("previous-node"),
+              runAttemptId: null,
+              nativeTurnRef: {
+                driver: PI_PROVIDER,
+                nativeId: "user-before-wake",
+                strength: "strong",
+              },
+              ordinal: 1,
+              status: "completed",
+              startedAt: providerThread.createdAt,
+              completedAt: providerThread.createdAt,
+            },
+          ],
+        })
+        .pipe(Effect.result);
+      assert.equal(
+        rolledBack._tag,
+        "Failure",
+        "Rollback changed the native session while its wake was still buffered",
+      );
+      assert.isFalse(fake.allRequests().some((request) => request["type"] === "fork"));
+      assert.isTrue(yield* runtime.hasPendingBackgroundWork!);
+      yield* startTurn(
+        runtime,
+        providerThread,
+        "default",
+        [],
+        "Synthetic wake",
+        undefined,
+        1,
+        THREAD_ID,
+        true,
+      );
+      const message = yield* takeEvent((event) => event.type === "message.updated");
+      assert.equal(
+        message.type === "message.updated" && message.message.text,
+        "Current branch wake output",
+      );
+      yield* takeEvent((event) => event.type === "turn.terminal");
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
   it.effect("answers model-selection dialogs before a user turn claims a native wake", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakePi;
