@@ -461,13 +461,14 @@ Java_expo_modules_t3terminal_GhosttyBridge_nativeSnapshot(JNIEnv* env, jclass,
       ++written_rows;
       continue;
     }
-    cells.U16(written_rows);
-    ++changed_rows;
     if (ghostty_render_state_row_get(session->row_iterator,
                                      GHOSTTY_RENDER_STATE_ROW_DATA_CELLS,
                                      &session->row_cells) != GHOSTTY_SUCCESS) {
-      break;
+      session->snapshot_full = true;
+      return env->NewByteArray(0);
     }
+    cells.U16(written_rows);
+    ++changed_rows;
 
     uint16_t written_cols = 0;
     while (written_cols < cols && ghostty_render_state_row_cells_next(session->row_cells)) {

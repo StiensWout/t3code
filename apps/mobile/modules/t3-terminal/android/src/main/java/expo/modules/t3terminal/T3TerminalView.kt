@@ -399,7 +399,9 @@ class T3TerminalView(context: Context, appContext: AppContext) : ExpoView(contex
   }
 
   private fun snapshotFrame(): TerminalFrame? {
-    val next = TerminalFrame.decode(GhosttyBridge.nativeSnapshot(terminalHandle), terminalFrame) ?: return null
+    val next =
+      TerminalFrame.decode(GhosttyBridge.nativeSnapshot(terminalHandle), terminalFrame)
+        ?: return null
     terminalFrame = next
     terminalCanvas.setFrame(next)
     return next

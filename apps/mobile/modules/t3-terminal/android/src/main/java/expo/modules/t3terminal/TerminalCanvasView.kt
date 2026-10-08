@@ -179,7 +179,10 @@ internal class TerminalCanvasView(context: Context) : View(context) {
     val previous = frame
     frame = value
     if (rowBitmaps.size != value.rows) resetRowCache(value.rows)
-    if (value.full || previous == null || previous.cols != value.cols || previous.background != value.background || previous.cursorColor != value.cursorColor) {
+    if (value.full || previous == null || previous.cols != value.cols ||
+      previous.background != value.background ||
+      previous.cursorColor != value.cursorColor
+    ) {
       rowsToPaint.fill(true)
     } else {
       for (row in value.dirtyRows) rowsToPaint[row] = true
@@ -249,32 +252,32 @@ internal class TerminalCanvasView(context: Context) : View(context) {
   }
 
   private fun paintRow(canvas: Canvas, currentFrame: TerminalFrame, row: Int) {
-      val top = 0f
-      val bottom = top + cellHeightPx
-      for (column in 0 until currentFrame.cols) {
-        val left = contentPadding + column * cellWidthPx
-        val right = left + cellWidthPx
-        val background = currentFrame.cells[row].backgrounds[column]
-        val flags = currentFrame.cells[row].flags[column]
-        paint.style = Paint.Style.FILL
-        paint.color = if (flags and FLAG_SELECTED != 0) {
-          blend(currentFrame.cursorColor, background, 0.32f)
-        } else {
-          background
-        }
-        if (paint.color != currentFrame.background || flags and FLAG_SELECTED != 0) {
-          canvas.drawRect(left, top, right + 0.5f, bottom + 0.5f, paint)
-        }
+    val top = 0f
+    val bottom = top + cellHeightPx
+    for (column in 0 until currentFrame.cols) {
+      val left = contentPadding + column * cellWidthPx
+      val right = left + cellWidthPx
+      val background = currentFrame.cells[row].backgrounds[column]
+      val flags = currentFrame.cells[row].flags[column]
+      paint.style = Paint.Style.FILL
+      paint.color = if (flags and FLAG_SELECTED != 0) {
+        blend(currentFrame.cursorColor, background, 0.32f)
+      } else {
+        background
+      }
+      if (paint.color != currentFrame.background || flags and FLAG_SELECTED != 0) {
+        canvas.drawRect(left, top, right + 0.5f, bottom + 0.5f, paint)
+      }
 
-        val text = currentFrame.cells[row].text[column]
-        if (text.isNotEmpty() && flags and FLAG_INVISIBLE == 0) {
-          configureTextPaint(flags, currentFrame.cells[row].foregrounds[column])
-          canvas.drawText(text, left, top + baselineOffsetPx, paint)
-          if (flags and FLAG_OVERLINE != 0) {
-            canvas.drawRect(left, top + 1f, right, top + max(2f, density), paint)
-          }
+      val text = currentFrame.cells[row].text[column]
+      if (text.isNotEmpty() && flags and FLAG_INVISIBLE == 0) {
+        configureTextPaint(flags, currentFrame.cells[row].foregrounds[column])
+        canvas.drawText(text, left, top + baselineOffsetPx, paint)
+        if (flags and FLAG_OVERLINE != 0) {
+          canvas.drawRect(left, top + 1f, right, top + max(2f, density), paint)
         }
       }
+    }
   }
 
   private fun resetRowCache(rows: Int = rowBitmaps.size) {
@@ -373,7 +376,10 @@ internal class TerminalCanvasView(context: Context) : View(context) {
         canvas.drawRect(left, top, right, bottom, paint)
         val text = currentFrame.cells[currentFrame.cursorY].text[currentFrame.cursorX]
         if (text.isNotEmpty()) {
-          configureTextPaint(currentFrame.cells[currentFrame.cursorY].flags[currentFrame.cursorX], currentFrame.background)
+          configureTextPaint(
+            currentFrame.cells[currentFrame.cursorY].flags[currentFrame.cursorX],
+            currentFrame.background
+          )
           canvas.drawText(text, left, top + baselineOffsetPx, paint)
         }
       }
@@ -513,7 +519,10 @@ internal class TerminalCanvasView(context: Context) : View(context) {
     var first = -1
     var last = -1
     for (index in 0 until totalCells) {
-      if (currentFrame.cells[index / currentFrame.cols].flags[index % currentFrame.cols] and FLAG_SELECTED != 0) {
+      if (currentFrame.cells[index / currentFrame.cols].flags[index % currentFrame.cols] and
+        FLAG_SELECTED !=
+        0
+      ) {
         if (first < 0) first = index
         last = index
       }

@@ -7,7 +7,7 @@ internal data class TerminalRow(
   val foregrounds: IntArray,
   val backgrounds: IntArray,
   val flags: IntArray,
-  val text: Array<String>,
+  val text: Array<String>
 )
 
 internal data class TerminalFrame(
@@ -23,7 +23,7 @@ internal data class TerminalFrame(
   val cursorColor: Int,
   val cells: Array<TerminalRow>,
   val dirtyRows: IntArray,
-  val full: Boolean,
+  val full: Boolean
 ) {
   companion object {
     private const val MAGIC = 0x54563354
