@@ -272,30 +272,35 @@ export default async function t3McpExtension(pi: ExtensionAPI) {
   let started: Promise<void> | undefined;
 
   const registerTools = () => {
+    // Preserve public names for saved loadouts and tool selectors. Hidden
+    // canonical names reserve ownership against Pi's configured MCP servers.
+    const prefixes = supportsExposure ? ["mcp__t3-code__", "mcp__t3_code__"] : ["mcp__t3-code__"];
     for (const tool of catalog) {
       const name = tool.name;
-      pi.registerTool({
-        name: \`mcp__t3_code__\${name}\`,
-        label: name,
-        description: tool.description ?? name,
-        parameters: jsonSchemaToTypebox(tool.inputSchema),
-        ...(supportsExposure ? {
-          exposure: deferOptionalTools && !directTools.has(name) ? "deferred" as const : "direct" as const,
-        } : {}),
-        async execute(_toolCallId, params, signal) {
-          const result = await client.callTool(
-            name,
-            (params ?? {}) as Record<string, unknown>,
-            signal,
-          );
-          const text = formatMcpContent(result);
-          return {
-            content: [{ type: "text", text }],
-            details: { server: "t3-code", tool: name },
-            ...(isMcpToolError(result) ? { isError: true } : {}),
-          };
-        },
-      });
+      for (const prefix of prefixes) {
+        const exposure = prefix === "mcp__t3_code__" ? "hidden" :
+          deferOptionalTools && !directTools.has(name) ? "deferred" : "direct";
+        pi.registerTool({
+          name: \`\${prefix}\${name}\`,
+          label: name,
+          description: tool.description ?? name,
+          parameters: jsonSchemaToTypebox(tool.inputSchema),
+          ...(supportsExposure ? { exposure } : {}),
+          async execute(_toolCallId, params, signal) {
+            const result = await client.callTool(
+              name,
+              (params ?? {}) as Record<string, unknown>,
+              signal,
+            );
+            const text = formatMcpContent(result);
+            return {
+              content: [{ type: "text", text }],
+              details: { server: "t3-code", tool: name },
+              ...(isMcpToolError(result) ? { isError: true } : {}),
+            };
+          },
+        });
+      }
     }
   };
 
@@ -319,18 +324,23 @@ export default async function t3McpExtension(pi: ExtensionAPI) {
   // mcp.json configures it; retry a failed connection at session_start.
   await ensureStarted().catch(() => undefined);
 
-  pi.on("session_start", async (_event, ctx) => {
-    if (supportsExposure) {
-      // A disabled or replaced search builtin cannot discover deferred tools.
-      const hasToolSearch = pi.getAllTools().some((tool) => tool.name === "tool_search" && tool.sourceInfo?.path === "builtin:tool-search");
-      deferOptionalTools = hasToolSearch;
-      if (hasToolSearch) {
-        const active = pi.getActiveTools();
-        if (!active.includes("tool_search")) pi.setActiveTools([...active, "tool_search"]);
-      } else {
-        registerTools();
-      }
+  const reconcileDiscovery = () => {
+    if (!supportsExposure) return;
+    // A disabled or replaced search builtin cannot discover deferred tools.
+    const hasToolSearch = pi.getAllTools().some((tool) => tool.name === "tool_search" && tool.sourceInfo?.path === "builtin:tool-search");
+    deferOptionalTools = hasToolSearch;
+    if (hasToolSearch) {
+      const active = pi.getActiveTools();
+      if (!active.includes("tool_search")) pi.setActiveTools([...active, "tool_search"]);
+    } else {
+      registerTools();
     }
+  };
+
+  // Tree navigation restores its saved loadout after session_start.
+  pi.on("session_tree", reconcileDiscovery);
+  pi.on("session_start", async (_event, ctx) => {
+    reconcileDiscovery();
     try {
       await ensureStarted();
     } catch (error) {

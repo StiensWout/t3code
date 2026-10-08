@@ -35,6 +35,7 @@ async function loadMcpBridge(
     readonly modern?: boolean;
     readonly toolSearchAvailable?: boolean;
     readonly toolSearchDisabled?: boolean;
+    readonly allowsTool?: (name: string) => boolean;
   } = {},
 ) {
   const handlers = new Map<string, AgentStartHook>();
@@ -89,16 +90,19 @@ async function loadMcpBridge(
     pi: {
       on: (name: string, handler: AgentStartHook) => handlers.set(name, handler),
       registerTool: (tool: RegisteredTool) => {
+        if (options.allowsTool && !options.allowsTool(tool.name)) return;
         const index = tools.findIndex((current) => current.name === tool.name);
         if (index === -1) tools.push(tool);
         else tools[index] = tool;
       },
       getActiveTools: () => activeTools,
       setActiveTools: (names: string[]) => {
-        activeTools = names;
+        activeTools = names.filter((name) => options.allowsTool?.(name) ?? true);
       },
       getAllTools: () =>
-        options.toolSearchAvailable && !options.toolSearchDisabled
+        options.toolSearchAvailable &&
+        !options.toolSearchDisabled &&
+        (options.allowsTool?.("tool_search") ?? true)
           ? [{ name: "tool_search", sourceInfo: { path: "builtin:tool-search" } }]
           : [],
       ...(options.modern
@@ -110,7 +114,17 @@ async function loadMcpBridge(
         : {}),
     },
   });
-  return { handlers, tools, requests, servers, transports, getActiveTools: () => activeTools };
+  return {
+    handlers,
+    tools,
+    requests,
+    servers,
+    transports,
+    getActiveTools: () => activeTools,
+    restoreActiveTools: (names: string[]) => {
+      activeTools = names;
+    },
+  };
 }
 
 describe("Pi MCP tool exposure", () => {
@@ -128,18 +142,31 @@ describe("Pi MCP tool exposure", () => {
     );
     assert.include(prompt.systemPrompt, "orchestrator_capabilities");
     assert.equal(bridge.servers.length, 0);
-    assert.equal(bridge.tools.length, 4);
+    assert.equal(bridge.tools.length, 8);
     assert.deepEqual(bridge.getActiveTools(), ["read", "tool_search"]);
     assert.deepEqual(
-      bridge.tools.map((tool) => [tool.name, tool.exposure]),
+      bridge.tools
+        .filter((tool) => tool.exposure !== "hidden")
+        .map((tool) => [tool.name, tool.exposure]),
       [
-        ["mcp__t3_code__orchestrator_capabilities", "direct"],
-        ["mcp__t3_code__delegate_task", "direct"],
-        ["mcp__t3_code__task_status", "direct"],
-        ["mcp__t3_code__preview_snapshot", "deferred"],
+        ["mcp__t3-code__orchestrator_capabilities", "direct"],
+        ["mcp__t3-code__delegate_task", "direct"],
+        ["mcp__t3-code__task_status", "direct"],
+        ["mcp__t3-code__preview_snapshot", "deferred"],
       ],
     );
-    const result = await bridge.tools[3]!.execute("call-1", { depth: 2 });
+    assert.deepEqual(
+      bridge.tools.filter((tool) => tool.exposure === "hidden").map((tool) => tool.name),
+      [
+        "mcp__t3_code__orchestrator_capabilities",
+        "mcp__t3_code__delegate_task",
+        "mcp__t3_code__task_status",
+        "mcp__t3_code__preview_snapshot",
+      ],
+    );
+    const result = await bridge.tools
+      .find((tool) => tool.name === "mcp__t3-code__preview_snapshot")!
+      .execute("call-1", { depth: 2 });
     assert.equal(result.content[0]?.text, "browser snapshot");
     assert.equal(bridge.requests.at(-1)?.method, "tools/call");
   });
@@ -156,11 +183,13 @@ describe("Pi MCP tool exposure", () => {
         const start = bridge.handlers.get("session_start");
         await start!({ systemPrompt: "Pi system prompt" }, { ui: { notify: () => undefined } });
       }
-      assert.equal(bridge.tools.length, 4);
+      assert.equal(bridge.tools.filter((tool) => tool.exposure !== "hidden").length, 4);
       assert.isTrue(
-        bridge.tools.every((tool) => tool.exposure === undefined || tool.exposure === "direct"),
+        bridge.tools
+          .filter((tool) => tool.exposure !== "hidden")
+          .every((tool) => tool.exposure === undefined || tool.exposure === "direct"),
       );
-      const tool = bridge.tools.find((tool) => tool.name === "mcp__t3_code__preview_snapshot");
+      const tool = bridge.tools.find((tool) => tool.name === "mcp__t3-code__preview_snapshot");
       assert.isDefined(tool);
       const controller = new AbortController();
       const result = await tool!.execute("call-1", { depth: 2 }, controller.signal);
@@ -176,6 +205,59 @@ describe("Pi MCP tool exposure", () => {
       });
       assert.isUndefined(tool?.promptSnippet);
       assert.isUndefined(tool?.promptGuidelines);
+    },
+  );
+
+  it("preserves legacy wildcard tool selection", async () => {
+    const bridge = await loadMcpBridge({
+      modern: true,
+      toolSearchAvailable: true,
+      allowsTool: (name) =>
+        name === "read" || name === "tool_search" || name.startsWith("mcp__t3-code__"),
+    });
+    await bridge.handlers.get("session_start")!(
+      { systemPrompt: "" },
+      { ui: { notify: () => undefined } },
+    );
+    assert.equal(bridge.tools.length, 4);
+    assert.equal(bridge.tools.filter((tool) => tool.exposure === "direct").length, 3);
+    const tool = bridge.tools.find((tool) => tool.name === "mcp__t3-code__preview_snapshot");
+    assert.isDefined(tool);
+    assert.equal((await tool!.execute("selected", {})).content[0]?.text, "browser snapshot");
+  });
+
+  it.each([false, true])(
+    "reconciles tree loadouts while honoring search exclusion: %s",
+    async (excludeSearch) => {
+      const bridge = await loadMcpBridge({
+        modern: true,
+        toolSearchAvailable: true,
+        allowsTool: (name) =>
+          name !== "mcp__t3-code__delegate_task" && (!excludeSearch || name !== "tool_search"),
+      });
+      await bridge.handlers.get("session_start")!(
+        { systemPrompt: "" },
+        { ui: { notify: () => undefined } },
+      );
+      bridge.restoreActiveTools([
+        "read",
+        "mcp__t3-code__task_status",
+        "mcp__t3-code__preview_snapshot",
+      ]);
+      const tree = bridge.handlers.get("session_tree");
+      assert.isDefined(tree);
+      await tree!({ systemPrompt: "" }, { ui: { notify: () => undefined } });
+      assert.deepEqual(bridge.getActiveTools(), [
+        "read",
+        "mcp__t3-code__task_status",
+        "mcp__t3-code__preview_snapshot",
+        ...(!excludeSearch ? ["tool_search"] : []),
+      ]);
+      assert.isFalse(
+        bridge.tools.some(
+          (tool) => tool.exposure !== "hidden" && tool.name.endsWith("__delegate_task"),
+        ),
+      );
     },
   );
 });
@@ -215,9 +297,9 @@ describe("Pi tool discovery permissions", () => {
       await toolCall!({ toolName: "tool_search", input: { query: "preview_snapshot" } }, ctx),
     );
     assert.equal(confirmations.length, 0);
-    const result = await toolCall!({ toolName: "mcp__t3_code__preview_snapshot", input: {} }, ctx);
+    const result = await toolCall!({ toolName: "mcp__t3-code__preview_snapshot", input: {} }, ctx);
     assert.equal(result?.block, true);
-    assert.deepEqual(confirmations, ["Allow mcp__t3_code__preview_snapshot?"]);
+    assert.deepEqual(confirmations, ["Allow mcp__t3-code__preview_snapshot?"]);
   });
 });
 
