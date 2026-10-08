@@ -2203,7 +2203,7 @@ describe("PiAdapterV2", () => {
             strength: "strong",
           });
           assert.isUndefined(promptC.retained);
-        }).pipe(Effect.scoped, Effect.provide(testLayer)),
+        }).pipe(Effect.scoped, Effect.provide(layerTest)),
     );
   }
 
@@ -2245,7 +2245,7 @@ describe("PiAdapterV2", () => {
         assert.isUndefined(
           thread.type === "provider_thread.updated" ? thread.retainedNativeTurnIds : null,
         );
-      }).pipe(Effect.scoped, Effect.provide(testLayer)),
+      }).pipe(Effect.scoped, Effect.provide(layerTest)),
     );
   }
 
@@ -2293,7 +2293,7 @@ describe("PiAdapterV2", () => {
       // Pi re-roots before the first later turn that left entries.
       yield* rollBackToFirst([turn(1, "u1"), turn(2, null), turn(3, "u3")]);
       assert.deepEqual(forkedEntries(), ["u3"]);
-    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
   it.effect("settles a command-only prompt from its deferred ack and idle probe", () =>
