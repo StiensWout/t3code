@@ -269,6 +269,7 @@ describe("Pi tool discovery permissions", () => {
       ctx: { ui: { confirm: (title: string, detail: string) => Promise<boolean> } },
     ) => Promise<{ block: true; reason: string } | undefined>;
     let toolCall: ToolCallHook | undefined;
+    let searchPath = "builtin:tool-search";
     const source = NodeModule.stripTypeScriptTypes(
       PI_T3_MCP_EXTENSION_SOURCE.replace('import { Type } from "typebox";', "").replace(
         "export default async function",
@@ -281,6 +282,7 @@ describe("Pi tool discovery permissions", () => {
         on: (name: string, handler: ToolCallHook) => {
           if (name === "tool_call") toolCall = handler;
         },
+        getAllTools: () => [{ name: "tool_search", sourceInfo: { path: searchPath } }],
       },
     });
     assert.isDefined(toolCall);
@@ -300,6 +302,12 @@ describe("Pi tool discovery permissions", () => {
     const result = await toolCall!({ toolName: "mcp__t3-code__preview_snapshot", input: {} }, ctx);
     assert.equal(result?.block, true);
     assert.deepEqual(confirmations, ["Allow mcp__t3-code__preview_snapshot?"]);
+
+    // An extension that replaces the search builtin is not known to be read-only.
+    searchPath = "/extensions/custom-search.ts";
+    const replaced = await toolCall!({ toolName: "tool_search", input: {} }, ctx);
+    assert.equal(replaced?.block, true);
+    assert.equal(confirmations.at(-1), "Allow tool_search?");
   });
 });
 

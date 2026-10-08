@@ -31,7 +31,7 @@ const TOKEN_ENV = ${JSON.stringify(T3_MCP_BEARER_ENV)};
 const RUNTIME_MODE_ENV = ${JSON.stringify(T3_PI_RUNTIME_MODE_ENV)};
 const ORCHESTRATION_INSTRUCTIONS = ${JSON.stringify(T3_CODE_ORCHESTRATION_INSTRUCTIONS.trim())};
 const PROTOCOL = "2025-06-18";
-const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls", "tool_search"]);
+const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
 const FILE_CHANGE_TOOLS = new Set(${JSON.stringify(PI_FILE_CHANGE_TOOLS)});
 
 type RuntimeMode = "approval-required" | "auto-accept-edits" | "auto" | "full-access";
@@ -234,9 +234,18 @@ export default async function t3McpExtension(pi: ExtensionAPI) {
   // Pi deliberately leaves permission policy to extensions. T3's injected
   // bridge uses Pi's public blocking tool hook so the shared runtime modes
   // keep their normal meaning without replacing or shadowing Pi's runtime.
+  // Only Pi's own search is known to be read-only. An extension that replaces
+  // it keeps the name, and cannot discover deferred tools either.
+  const hasBuiltinToolSearch = () =>
+    typeof pi.getAllTools === "function" &&
+    pi.getAllTools().some((tool) => tool.name === "tool_search" && tool.sourceInfo?.path === "builtin:tool-search");
+
   pi.on("tool_call", async (event, ctx) => {
     const mode = runtimeMode();
-    if (mode === "full-access" || READ_ONLY_TOOLS.has(event.toolName)) return;
+    if (mode === "full-access") return;
+    if (event.toolName === "tool_search" ? hasBuiltinToolSearch() : READ_ONLY_TOOLS.has(event.toolName)) {
+      return;
+    }
     if (mode === "auto-accept-edits" && FILE_CHANGE_TOOLS.has(event.toolName)) {
       return;
     }
@@ -327,13 +336,13 @@ export default async function t3McpExtension(pi: ExtensionAPI) {
   const reconcileDiscovery = () => {
     if (!supportsExposure) return;
     // A disabled or replaced search builtin cannot discover deferred tools.
-    const hasToolSearch = pi.getAllTools().some((tool) => tool.name === "tool_search" && tool.sourceInfo?.path === "builtin:tool-search");
+    const hasToolSearch = hasBuiltinToolSearch();
+    const exposureChanged = deferOptionalTools !== hasToolSearch;
     deferOptionalTools = hasToolSearch;
+    if (exposureChanged) registerTools();
     if (hasToolSearch) {
       const active = pi.getActiveTools();
       if (!active.includes("tool_search")) pi.setActiveTools([...active, "tool_search"]);
-    } else {
-      registerTools();
     }
   };
 
