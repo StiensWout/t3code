@@ -24,11 +24,14 @@ internal class TerminalBufferStream {
   data class Update(val reset: Boolean, val data: String)
 
   fun apply(write: TerminalBufferWriteRecord): Update? {
-    if (write.generation < generation || write.offset < 0) return null
     val reset = write.generation > generation
-    if (reset && write.offset != 0L) return null
-    if (!reset && write.offset > offset) return null
-    if (!reset && write.data.length.toLong() <= offset - write.offset) return null
+    val accepted = when {
+      write.generation < generation -> false
+      write.offset < 0 -> false
+      reset -> write.offset == 0L
+      else -> write.offset <= offset && write.data.length.toLong() > offset - write.offset
+    }
+    if (!accepted) return null
     if (reset) {
       generation = write.generation
       replay.clear()

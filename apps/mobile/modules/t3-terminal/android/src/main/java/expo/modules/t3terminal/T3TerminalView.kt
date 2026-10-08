@@ -386,8 +386,12 @@ class T3TerminalView(context: Context, appContext: AppContext) : ExpoView(contex
         GhosttyBridge.nativeFeed(terminalHandle, stream.buffer.toByteArray(Charsets.UTF_8))
         streamReplayed = true
       }
-      return
+    } else {
+      feedLegacyBuffer()
     }
+  }
+
+  private fun feedLegacyBuffer() {
     if (terminalHandle == 0L || initialBuffer == fedBuffer) return
     if (!initialBuffer.startsWith(fedBuffer)) {
       recreateTerminal()
