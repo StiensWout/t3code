@@ -5,7 +5,9 @@ import expo.modules.kotlin.records.Record
 
 class TerminalBufferWriteRecord : Record {
   @Field var generation: Int = 0
+
   @Field var offset: Long = 0
+
   @Field var data: String = ""
 }
 

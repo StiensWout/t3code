@@ -1,6 +1,9 @@
 package expo.modules.t3terminal
 
-import org.junit.Assert.*
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TerminalBufferStreamTest {
@@ -35,9 +38,13 @@ class TerminalBufferStreamTest {
     assertNull(stream.apply(write(1, 0, "late old output")))
     assertNull(stream.apply(write(3, 1, "gap")))
     assertEquals(TerminalBufferStream.Update(false, "new"), stream.apply(write(2, 0, "new")))
-    assertEquals(TerminalBufferStream.Update(true, "replacement"), stream.apply(write(3, 0, "replacement")))
+    assertEquals(
+      TerminalBufferStream.Update(true, "replacement"),
+      stream.apply(write(3, 0, "replacement"))
+    )
     assertEquals("replacement", stream.buffer)
   }
+
   @Test fun boundsReplayWhileContinuingTheAbsoluteCursor() {
     val stream = TerminalBufferStream()
     stream.apply(write(1, 0, "x".repeat(512 * 1024)))

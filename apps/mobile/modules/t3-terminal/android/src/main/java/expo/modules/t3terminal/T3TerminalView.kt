@@ -415,7 +415,9 @@ class T3TerminalView(context: Context, appContext: AppContext) : ExpoView(contex
       createTerminal()
       feedPendingBuffer()
     } else if (terminalHandle != 0L && update.data.isNotEmpty()) {
-      emitResponse(GhosttyBridge.nativeFeed(terminalHandle, update.data.toByteArray(Charsets.UTF_8)))
+      emitResponse(
+        GhosttyBridge.nativeFeed(terminalHandle, update.data.toByteArray(Charsets.UTF_8))
+      )
       if (terminalCanvas.hasActiveSelection()) {
         GhosttyBridge.nativeClearSelection(terminalHandle)
         terminalCanvas.resetSelectionState()
