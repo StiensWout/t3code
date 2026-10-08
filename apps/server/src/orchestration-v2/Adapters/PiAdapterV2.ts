@@ -48,6 +48,7 @@ import {
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Option from "effect/Option";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -495,11 +496,20 @@ export function makePiAdapterV2(
       // turn attaches. The guard remains for sessions with no routable owner.
       let unsolicitedActivityDetected = false;
       let pendingWake: PiWake | null = null;
+      let rollbackBarrier: Deferred.Deferred<
+        void,
+        ProviderAdapter.ProviderAdapterProtocolError
+      > | null = null;
       let closed = false;
       yield* Effect.addFinalizer(() =>
-        Effect.sync(() => {
+        Effect.gen(function* () {
           closed = true;
           pendingWake = null;
+          if (rollbackBarrier !== null)
+            yield* Deferred.fail(
+              rollbackBarrier,
+              protocolError("Pi session closed during rollback"),
+            );
         }),
       );
       let appliedModel: string | null = null;
@@ -1616,6 +1626,10 @@ export function makePiAdapterV2(
             ) {
               const wake: PiWake = { state, events: [event] };
               pendingWake = wake;
+              if (rollbackBarrier !== null) {
+                yield* stopPendingWake(wake);
+                return;
+              }
               yield* updateProviderSession("running", null);
               yield* options.continuationRequests
                 .offer({
@@ -1986,6 +2000,11 @@ export function makePiAdapterV2(
             }
             return;
           }
+          case "t3.rollback_barrier": {
+            if (rollbackBarrier !== null && event["barrier"] === rollbackBarrier)
+              yield* Deferred.succeed(rollbackBarrier, undefined);
+            return;
+          }
           case "t3.settle_probe": {
             // New work increments the generation before the pump can consume
             // a stale idle snapshot, so only a current snapshot may settle.
@@ -2046,6 +2065,11 @@ export function makePiAdapterV2(
               // closes the provider stream cleanly; only an unexpected death
               // is surfaced as an event-stream failure.
               const state = threadState;
+              if (rollbackBarrier !== null)
+                yield* Deferred.fail(
+                  rollbackBarrier,
+                  protocolError("Pi transport closed during rollback"),
+                );
               const hadPendingWake = pendingWake !== null;
               pendingWake = null;
               const interrupted = state?.activeTurn?.interrupted === true;
@@ -2103,6 +2127,8 @@ export function makePiAdapterV2(
         threadInput: ProviderAdapter.ProviderAdapterV2EnsureThreadInput,
         publish = true,
       ) {
+        if (rollbackBarrier !== null)
+          return yield* protocolError("Cannot register a Pi thread during rollback");
         if (threadState !== null && threadState.activeTurn !== null) {
           return yield* protocolError("Cannot register a Pi thread while a turn is active");
         }
@@ -2391,6 +2417,8 @@ export function makePiAdapterV2(
           }),
         startTurn: (turnInput) =>
           Effect.gen(function* () {
+            if (rollbackBarrier !== null)
+              return yield* protocolError("Cannot start a Pi turn during rollback");
             const state = threadState;
             if (state === null) {
               return yield* protocolError("Pi session has no registered thread");
@@ -2487,7 +2515,15 @@ export function makePiAdapterV2(
             // project trust, login, and session-switch dialogs can be shown
             // and answered instead of deadlocking the caller.
             yield* Effect.gen(function* () {
-              if (threadState !== state || state.activeTurn !== null || closed || stopRequested) {
+              if (
+                threadState !== state ||
+                state.activeTurn !== null ||
+                closed ||
+                stopRequested ||
+                rollbackBarrier !== null ||
+                state.providerThread.nativeThreadRef?.nativeId !==
+                  turnInput.providerThread.nativeThreadRef?.nativeId
+              ) {
                 return yield* protocolError("Pi turn ownership changed before it could start");
               }
               const wake = pendingWake?.state === state ? pendingWake : null;
@@ -2833,42 +2869,94 @@ export function makePiAdapterV2(
             if (forkEntryId === undefined) {
               return yield* protocolError("Pi rollback target has no captured session-tree entry");
             }
-            const forkData = yield* lifecycleRequest({ type: "fork", entryId: forkEntryId });
-            if (recordField(forkData, "cancelled") === true) {
-              return yield* protocolError("A Pi extension cancelled the session fork");
-            }
-            // Pi fork replaces the session file, including for rollback. Persist
-            // its new identity before any later request can fail or restart.
-            // An interrupted read leaves the identity just as unknown as a failed one.
-            const forkState = yield* request({ type: "get_state" }).pipe(
-              Effect.onError(() =>
-                Effect.sync(() => {
-                  threadState = null;
+            return yield* Effect.acquireUseRelease(
+              sessionEventPermit.withPermits(1)(
+                Effect.gen(function* () {
+                  if (
+                    rollbackBarrier !== null ||
+                    threadState !== state ||
+                    state.activeTurn !== null ||
+                    pendingWake !== null ||
+                    closed ||
+                    stopRequested
+                  )
+                    return yield* protocolError(
+                      "Pi rollback ownership changed before its fork could start",
+                    );
+                  const barrier = yield* Deferred.make<
+                    void,
+                    ProviderAdapter.ProviderAdapterProtocolError
+                  >();
+                  rollbackBarrier = barrier;
+                  return barrier;
                 }),
               ),
+              (barrier) =>
+                Effect.gen(function* () {
+                  const forkData = yield* lifecycleRequest({ type: "fork", entryId: forkEntryId });
+                  if (recordField(forkData, "cancelled") === true)
+                    return yield* protocolError("A Pi extension cancelled the session fork");
+                  const forkState = yield* request({ type: "get_state" }).pipe(
+                    Effect.onError(() =>
+                      Effect.sync(() => {
+                        threadState = null;
+                      }),
+                    ),
+                  );
+                  const forkSessionFile = recordString(forkState, "sessionFile");
+                  if (forkSessionFile === undefined) {
+                    threadState = null;
+                    return yield* protocolError("Pi fork did not return a persisted session file");
+                  }
+                  const entriesData = yield* request({ type: "get_entries" }).pipe(
+                    Effect.orElseSucceed(() => undefined),
+                  );
+                  const leafId = recordString(entriesData, "leafId") ?? null;
+                  // RPC responses bypass the pump. Drain preceding native events
+                  // before deciding whether this fork can replace their binding.
+                  const queued = yield* Queue.offer(connection.events, {
+                    type: "t3.rollback_barrier",
+                    barrier,
+                  });
+                  if (!queued) return yield* protocolError("Pi transport closed during rollback");
+                  yield* Deferred.await(barrier);
+                  return yield* sessionEventPermit.withPermits(1)(
+                    Effect.gen(function* () {
+                      if (pendingWake !== null) {
+                        yield* stopPendingWake(pendingWake);
+                        return yield* protocolError(
+                          "Native Pi work started while rollback was changing the session",
+                        );
+                      }
+                      if (
+                        threadState !== state ||
+                        state.activeTurn !== null ||
+                        closed ||
+                        stopRequested
+                      )
+                        return yield* protocolError(
+                          "Pi rollback ownership changed during its fork",
+                        );
+                      lastNativeThreadId = forkSessionFile;
+                      appliedModel = null;
+                      appliedThinking = null;
+                      appliedSessionName = null;
+                      lastKnownLeaf = leafId;
+                      leafCursorStale = entriesData === undefined;
+                      yield* updateProviderThread(state, {
+                        nativeThreadRef: providerRef(forkSessionFile),
+                        nativeConversationHeadRef: leafId === null ? null : providerRef(leafId),
+                      });
+                      rollbackBarrier = null;
+                      return piThreadSnapshot(state.providerThread);
+                    }),
+                  );
+                }).pipe(Effect.onInterrupt(() => connection.terminate)),
+              (barrier) =>
+                Effect.sync(() => {
+                  if (rollbackBarrier === barrier) rollbackBarrier = null;
+                }),
             );
-            const forkSessionFile = recordString(forkState, "sessionFile");
-            if (forkSessionFile === undefined) {
-              threadState = null;
-              return yield* protocolError("Pi fork did not return a persisted session file");
-            }
-            lastNativeThreadId = forkSessionFile;
-            appliedModel = null;
-            appliedThinking = null;
-            appliedSessionName = null;
-            yield* updateProviderThread(state, { nativeThreadRef: providerRef(forkSessionFile) });
-            const entriesData = yield* request({ type: "get_entries" }).pipe(
-              Effect.orElseSucceed(() => undefined),
-            );
-            const leafId = recordString(entriesData, "leafId") ?? null;
-            lastKnownLeaf = leafId;
-            // The fork re-baselined the tree, so the cursor is trustworthy
-            // again unless this listing itself failed.
-            leafCursorStale = entriesData === undefined;
-            yield* updateProviderThread(state, {
-              nativeConversationHeadRef: leafId === null ? null : providerRef(leafId),
-            });
-            return piThreadSnapshot(state.providerThread);
           }).pipe(
             Effect.mapError(
               (cause) =>
