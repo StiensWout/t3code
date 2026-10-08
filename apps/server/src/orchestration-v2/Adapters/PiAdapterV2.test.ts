@@ -1583,6 +1583,42 @@ describe("PiAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
+  it.effect("keeps the complete editor prefill editable and returns exact edited text", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      const prefill = `  fix(server): retain full editor content\n\n${"detail\n".repeat(500)}  `;
+      yield* fake.emit({
+        type: "extension_ui_request",
+        id: "ui-editor",
+        method: "editor",
+        title: "Commit message",
+        prefill,
+      });
+      const event = yield* takeEvent(
+        (event) =>
+          event.type === "turn_item.updated" && event.turnItem.type === "user_input_request",
+      );
+      if (event.type !== "turn_item.updated" || event.turnItem.type !== "user_input_request")
+        return;
+      assert.equal(event.turnItem.questions[0]?.initialAnswer, prefill);
+      assert.equal(event.turnItem.questions[0]?.question, "Commit message");
+      const edited = "  fix(server): edited commit message\n\n";
+      yield* runtime.respondToRuntimeRequest({
+        requestId: event.turnItem.requestId,
+        answers: { "ui-editor": edited },
+      });
+      const response = yield* fake.takeRequest("extension_ui_response");
+      assert.equal(response["value"], edited);
+      assert.isUndefined(response["cancelled"]);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
   it.effect("raises bridge edit confirmations as file-change approvals", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakePi;
