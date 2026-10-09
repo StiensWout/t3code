@@ -126,12 +126,15 @@ function deriveRepositoryScopedKey(
 export function deriveLogicalProjectKey(
   project: Pick<
     EnvironmentProject,
-    "environmentId" | "id" | "workspaceRoot" | "repositoryIdentity"
+    "environmentId" | "id" | "workspaceRoot" | "repositoryIdentity" | "projectCollectionId"
   >,
   options?: {
     readonly groupingMode?: SidebarProjectGroupingMode;
   },
 ): string {
+  if (project.projectCollectionId) {
+    return `collection:${project.environmentId}:${project.projectCollectionId}`;
+  }
   const groupingMode = options?.groupingMode ?? "repository";
   if (groupingMode === "separate") {
     return derivePhysicalProjectKey(project);
@@ -147,7 +150,7 @@ export function deriveLogicalProjectKey(
 export function deriveLogicalProjectKeyFromSettings(
   project: Pick<
     EnvironmentProject,
-    "environmentId" | "id" | "workspaceRoot" | "repositoryIdentity"
+    "environmentId" | "id" | "workspaceRoot" | "repositoryIdentity" | "projectCollectionId"
   >,
   settings: ProjectGroupingSettings,
 ): string {
@@ -197,6 +200,7 @@ export interface ProjectGroupMember<TProject extends EnvironmentProject = Enviro
 export interface ProjectGroup<TProject extends EnvironmentProject = EnvironmentProject> {
   readonly key: string;
   readonly label: string;
+  readonly projectCollectionId: TProject["projectCollectionId"];
   readonly representative: TProject;
   readonly members: ReadonlyArray<ProjectGroupMember<TProject>>;
   readonly memberProjectRefs: ReadonlyArray<ScopedProjectRef>;
@@ -273,9 +277,12 @@ export function buildProjectGroups<TProject extends EnvironmentProject>(input: {
       shouldReplacePhysicalProjectWinner(current, candidate) ? candidate : current,
     );
     const identitySource = selectProjectIdentitySource(physicalProjects, winner);
-    const logicalKey = deriveLogicalProjectKey(identitySource, {
-      groupingMode: resolveProjectGroupingMode(winner, input.settings),
-    });
+    const logicalKey = deriveLogicalProjectKey(
+      winner.projectCollectionId ? winner : identitySource,
+      {
+        groupingMode: resolveProjectGroupingMode(winner, input.settings),
+      },
+    );
     logicalKeyByPhysicalKey.set(physicalProjectKey, logicalKey);
     const member = { physicalProjectKey, project: winner };
     const existing = groupedMembers.get(logicalKey);
@@ -313,6 +320,7 @@ export function buildProjectGroups<TProject extends EnvironmentProject>(input: {
         : null) ?? members[0]!.project;
     return {
       key,
+      projectCollectionId: representative.projectCollectionId ?? null,
       label:
         members.length > 1
           ? deriveProjectGroupLabel({

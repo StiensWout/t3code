@@ -2499,7 +2499,8 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             </span>
             {project.groupedProjectCount > 1 ? (
               <span className="shrink-0 text-secondary-label text-3xs">
-                {project.groupedProjectCount} projects
+                {project.groupedProjectCount}{" "}
+                {project.isRepositoryCollection ? "repos" : "projects"}
               </span>
             ) : null}
           </span>

@@ -7,6 +7,7 @@ import {
   EventId,
   IsoDateTime,
   NonNegativeInt,
+  ProjectCollectionId,
   ProjectId,
   ProviderItemId,
   TrimmedNonEmptyString,
@@ -44,6 +45,7 @@ export const ApplicationProjectCreatedPayload = Schema.Struct({
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
+  projectCollectionId: Schema.optional(Schema.NullOr(ProjectCollectionId)),
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   defaultModelSelection: Schema.NullOr(ModelSelection),
   // Per-project override for where new threads start; optional so persisted
@@ -62,6 +64,7 @@ export const ApplicationProjectMetaUpdatedPayload = Schema.Struct({
   projectId: ProjectId,
   title: Schema.optional(TrimmedNonEmptyString),
   workspaceRoot: Schema.optional(TrimmedNonEmptyString),
+  projectCollectionId: Schema.optional(Schema.NullOr(ProjectCollectionId)),
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
   // Absent = leave unchanged; null = clear the override.

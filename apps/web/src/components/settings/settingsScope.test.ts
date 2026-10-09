@@ -50,6 +50,7 @@ function group(
       projectId: project.id,
     })),
     groupedProjectCount: members.length,
+    isRepositoryCollection: false,
     environmentPresence: "mixed",
     allRemoteMembersAreDesktopLocal: false,
     allRemoteMembersAreWsl: false,

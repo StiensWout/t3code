@@ -161,6 +161,7 @@ vi.mock("../state/entities", () => ({
       id: "project-remote",
       environmentId: "environment-ssh",
       workspaceRoot: "/remote/project",
+      projectCollectionId: "collection-remote",
       defaultThreadEnvMode: null,
       defaultModelSelection: null,
     },
@@ -211,7 +212,7 @@ describe.each([
         "remote-project",
         projectRef,
         opened!.draftId,
-        expect.objectContaining({ runtimeMode }),
+        expect.objectContaining({ focusedProjectId: null, runtimeMode }),
       );
     },
   );

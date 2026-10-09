@@ -38,6 +38,8 @@ import {
   type EnvironmentMachineKind,
   type FilesystemBrowseResult,
   type ProjectId,
+  ProjectCollectionId,
+  type ScopedProjectRef,
   type SourceControlDiscoveryResult,
   type SourceControlProviderKind,
   type SourceControlRepositoryInfo,
@@ -144,6 +146,7 @@ import {
   isMacPlatform,
   isWindowsPlatform,
   newProjectId,
+  randomUUID,
 } from "../lib/utils";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { buildThreadRouteParams, resolveThreadRouteTarget } from "../threadRoutes";
@@ -221,12 +224,32 @@ import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore"
 import {
   buildSidebarProjectPickerEntries,
   buildSidebarProjectSnapshots,
+  projectRepositoryLabel,
 } from "../sidebarProjectGrouping";
 import type { Project } from "../types";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { readPullRequestListPreferences } from "~/components/pullRequest/pullRequestListPreferences";
 
 const EMPTY_BROWSE_ENTRIES: FilesystemBrowseResult["entries"] = [];
+
+interface ProjectBuilderMember {
+  readonly projectRef: ScopedProjectRef;
+  readonly label: string;
+  readonly workspaceRoot: string;
+}
+
+interface ProjectBuilderState {
+  readonly kind: "new" | "existing";
+  readonly environmentId: EnvironmentId;
+  readonly projectCollectionId: ProjectCollectionId;
+  readonly title: string | null;
+  readonly members: ReadonlyArray<ProjectBuilderMember>;
+  readonly excludedProjectRefs: ReadonlyArray<ScopedProjectRef>;
+  readonly faviconPath: string | null;
+  readonly projectIcon: Project["projectIcon"];
+}
+
+const PROJECT_BUILDER_VIEW = "project-builder";
 
 function getEnvironmentBrowsePlatform(os: string | null | undefined): string {
   if (os === "windows") {
@@ -247,6 +270,7 @@ interface AddProjectEnvironmentOption {
   readonly machine: EnvironmentMachineKind;
   readonly isPrimary: boolean;
   readonly isConnected: boolean;
+  readonly supportsProjectCollections: boolean;
   readonly status: string;
 }
 
@@ -483,6 +507,10 @@ export function CommandPalette({ children }: { children: ReactNode }) {
     [],
   );
   const openAddProject = useCallback(() => dispatch({ _tag: "OpenAddProject" }), []);
+  const openAddRepository = useCallback(
+    (projectRef: ScopedProjectRef) => dispatch({ _tag: "OpenAddRepository", projectRef }),
+    [],
+  );
   const openNewThreadIn = useCallback(() => dispatch({ _tag: "OpenNewThreadIn" }), []);
   const clearOpenIntent = useCallback(() => dispatch({ _tag: "ClearOpenIntent" }), []);
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
@@ -602,6 +630,8 @@ export function CommandPalette({ children }: { children: ReactNode }) {
           openNewThreadIn();
         } else if (detail.open === "add-project") {
           openAddProject();
+        } else if (detail.open === "add-repository" && detail.projectRef) {
+          openAddRepository(detail.projectRef);
         } else if (detail.query !== undefined) {
           dispatch({
             _tag: "OpenSearch",
@@ -612,7 +642,7 @@ export function CommandPalette({ children }: { children: ReactNode }) {
           setOpen(true);
         }
       }),
-    [openAddProject, openNewThreadIn, setOpen],
+    [openAddProject, openAddRepository, openNewThreadIn, setOpen],
   );
 
   return (
@@ -717,6 +747,9 @@ function OpenCommandPaletteDialog(props: {
   }
   const clientSettings = useClientSettings();
   const createProject = useAtomCommand(projectEnvironment.create, {
+    reportFailure: false,
+  });
+  const updateProject = useAtomCommand(projectEnvironment.update, {
     reportFailure: false,
   });
   const { scratchEnvironmentId, scratchWorkspaceRootFor, startScratchThread } = useScratchProject();
@@ -885,6 +918,7 @@ function OpenCommandPaletteDialog(props: {
   // State lags a render behind, so a repeated Enter could start a second create.
   const newProjectSubmittingRef = useRef(false);
   const createNewProject = useNewProject();
+  const [projectBuilder, setProjectBuilder] = useState<ProjectBuilderState | null>(null);
   const cloneLookupGeneration = useRef(0);
   const [isRemoteProjectLookingUp, setIsRemoteProjectLookingUp] = useState(false);
   const [isRemoteProjectCloning, setIsRemoteProjectCloning] = useState(false);
@@ -1013,6 +1047,8 @@ function OpenCommandPaletteDialog(props: {
           isPrimary,
           machine: resolveEnvironmentMachineKind(environment.serverConfig),
           isConnected: canCreateProjectInEnvironment(environment.connection.phase),
+          supportsProjectCollections:
+            environment.serverConfig?.environment.capabilities.projectCollections === true,
           status: connectionStatusText(environment.connection),
         };
       });
@@ -1524,6 +1560,9 @@ function OpenCommandPaletteDialog(props: {
     setNewProjectFlow(null);
     if (viewStack.length <= 1) {
       setAddProjectEnvironmentId(null);
+      if (currentView?.groups[0]?.value === PROJECT_BUILDER_VIEW) {
+        setProjectBuilder(null);
+      }
     } else if (newProjectFlow?.sourcesEnvironmentId) {
       // The machine switcher may have moved off the sources view's machine.
       setAddProjectEnvironmentId(newProjectFlow.sourcesEnvironmentId);
@@ -1639,8 +1678,10 @@ function OpenCommandPaletteDialog(props: {
           kind: "action",
           value: `action:add-project:${environmentId}:new`,
           searchTerms: ["new project", "create", "empty", "repository", "git init"],
-          title: "New project",
-          description: "Start a new Git repository from a name",
+          title: projectBuilder ? "New repository" : "New project",
+          description: projectBuilder
+            ? "Create a new Git repository in this project"
+            : "Start a new Git repository from a name",
           icon: <FolderGit2Icon className={ITEM_ICON_CLASS} />,
           keepOpen: true,
           run: async () => {
@@ -1722,6 +1763,7 @@ function OpenCommandPaletteDialog(props: {
     [
       newProjectsRootFor,
       openSourceControlSettings,
+      projectBuilder,
       startAddProjectBrowse,
       startAddProjectClone,
       startNewProject,
@@ -1763,6 +1805,121 @@ function OpenCommandPaletteDialog(props: {
       sourceControlDiscovery.data,
     ],
   );
+
+  const showProjectBuilderSummary = useCallback(() => {
+    setAddProjectCloneFlow(null);
+    setNewProjectFlow(null);
+    setViewStack([
+      {
+        addonIcon: <FolderPlusIcon className={ADDON_ICON_CLASS} />,
+        groups: [{ value: PROJECT_BUILDER_VIEW, label: "", items: [] }],
+      },
+    ]);
+    setHighlightedItemValue(null);
+    setQuery("");
+  }, []);
+
+  const startNewProjectBuilder = useCallback(
+    (environmentId: EnvironmentId, title: string) => {
+      setAddProjectEnvironmentId(environmentId);
+      setProjectBuilder({
+        kind: "new",
+        environmentId,
+        projectCollectionId: ProjectCollectionId.make(randomUUID()),
+        title,
+        members: [],
+        excludedProjectRefs: [],
+        faviconPath: null,
+        projectIcon: null,
+      });
+      showProjectBuilderSummary();
+    },
+    [showProjectBuilderSummary],
+  );
+
+  const startAddRepositoryToProject = useCallback(
+    (projectRef: ScopedProjectRef) => {
+      const project = projects.find(
+        (candidate) =>
+          candidate.environmentId === projectRef.environmentId &&
+          candidate.id === projectRef.projectId,
+      );
+      if (!project) {
+        toastManager.add({ type: "error", title: "Project is no longer available" });
+        return;
+      }
+      const environment = environments.find(
+        (candidate) => candidate.environmentId === project.environmentId,
+      );
+      if (environment?.serverConfig?.environment.capabilities.projectCollections !== true) {
+        toastManager.add({
+          type: "error",
+          title: "Update this environment to add repositories",
+        });
+        return;
+      }
+      const group = projectGroups.find((candidate) =>
+        candidate.memberProjectRefs.some(
+          (memberRef) =>
+            memberRef.environmentId === projectRef.environmentId &&
+            memberRef.projectId === projectRef.projectId,
+        ),
+      );
+      const members = group?.isRepositoryCollection ? group.memberProjects : [project];
+      if (members.some((member) => member.environmentId !== project.environmentId)) {
+        toastManager.add({
+          type: "error",
+          title: "Repositories must use one environment",
+          description: "Choose a checkout on the same environment and try again.",
+        });
+        return;
+      }
+      const representative = members.find((member) => member.id === project.id) ?? project;
+      setProjectBuilder({
+        kind: "existing",
+        environmentId: project.environmentId,
+        projectCollectionId: group?.projectCollectionId ?? ProjectCollectionId.make(randomUUID()),
+        title: group?.isRepositoryCollection ? group.displayName : project.title,
+        members: members.map((member) => ({
+          projectRef: scopeProjectRef(member.environmentId, member.id),
+          label: projectRepositoryLabel(member),
+          workspaceRoot: member.workspaceRoot,
+        })),
+        excludedProjectRefs: group?.memberProjectRefs ?? [
+          scopeProjectRef(project.environmentId, project.id),
+        ],
+        faviconPath: representative.faviconPath ?? null,
+        projectIcon: representative.projectIcon ?? null,
+      });
+      showProjectBuilderSummary();
+      void startAddProjectSourceSelection(project.environmentId);
+    },
+    [
+      environments,
+      projectGroups,
+      projects,
+      showProjectBuilderSummary,
+      startAddProjectSourceSelection,
+    ],
+  );
+
+  const finishProjectBuilder = useCallback(async () => {
+    const first = projectBuilder?.members[0];
+    if (!first) return;
+    setOpen(false);
+    await waitForProject(first.projectRef, 3_000).catch(() => null);
+    const navigationResult = await settlePromise(() => handleNewThread(first.projectRef));
+    if (navigationResult._tag === "Failure") {
+      const error = squashAtomCommandFailure(navigationResult);
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Failed to open project",
+          description: error instanceof Error ? error.message : "An error occurred.",
+        }),
+      );
+    }
+  }, [handleNewThread, projectBuilder?.members, setOpen]);
 
   const buildEnvironmentItem = (
     option: AddProjectEnvironmentOption,
@@ -1808,6 +1965,7 @@ function OpenCommandPaletteDialog(props: {
   );
 
   const openAddProjectFlow = useCallback(() => {
+    setProjectBuilder(null);
     // With no connected environment there is nothing to browse, so the only
     // useful next step is connecting one.
     if (addProjectEnvironmentOptions.length === 0) {
@@ -1828,6 +1986,7 @@ function OpenCommandPaletteDialog(props: {
   }, [
     addProjectEnvironmentGroups,
     addProjectEnvironmentOptions.length,
+    addProjectEnvironmentOptions,
     defaultAddProjectEnvironmentId,
     navigate,
     pushPaletteView,
@@ -1838,6 +1997,7 @@ function OpenCommandPaletteDialog(props: {
   // New project starts on this device (options list it first); the name step
   // lists the other machines when there is a choice.
   const openNewProjectFlow = () => {
+    setProjectBuilder(null);
     const firstOption = newProjectEnvironmentOptions[0];
     if (firstOption) startNewProject(firstOption.environmentId, null);
   };
@@ -1849,6 +2009,7 @@ function OpenCommandPaletteDialog(props: {
     setIsRemoteProjectLookingUp(false);
     setAddProjectCloneFlow(null);
     setNewProjectFlow(null);
+    setProjectBuilder(null);
     setViewStack([]);
     setLinkedThreadSearch(openIntent);
     setQuery(openIntent.query);
@@ -1864,6 +2025,12 @@ function OpenCommandPaletteDialog(props: {
   }, [clearOpenIntent, openAddProjectFlow, openIntent]);
 
   useLayoutEffect(() => {
+    if (openIntent?.kind !== "add-repository") return;
+    clearOpenIntent();
+    startAddRepositoryToProject(openIntent.projectRef);
+  }, [clearOpenIntent, openIntent, startAddRepositoryToProject]);
+
+  useLayoutEffect(() => {
     if (openIntent?.kind !== "new-thread-in" || projectThreadItems.length === 0) {
       return;
     }
@@ -1871,6 +2038,7 @@ function OpenCommandPaletteDialog(props: {
     browseNavigation.invalidate();
     setAddProjectCloneFlow(null);
     setNewProjectFlow(null);
+    setProjectBuilder(null);
     setViewStack([]);
     setQuery("");
     // projectThreadItems already lists the current project first.
@@ -2104,6 +2272,41 @@ function OpenCommandPaletteDialog(props: {
     },
   });
 
+  const contextualRepositoryProject =
+    contextualProjectRef === null
+      ? null
+      : (projects.find(
+          (project) =>
+            project.environmentId === contextualProjectRef.environmentId &&
+            project.id === contextualProjectRef.projectId,
+        ) ?? null);
+  const contextualRepositoryEnvironmentSupportsCollections =
+    contextualProjectRef !== null &&
+    environments.find(
+      (environment) => environment.environmentId === contextualProjectRef.environmentId,
+    )?.serverConfig?.environment.capabilities.projectCollections === true;
+  if (
+    contextualProjectRef !== null &&
+    contextualRepositoryProject !== null &&
+    contextualRepositoryEnvironmentSupportsCollections &&
+    !isScratchProject(
+      contextualRepositoryProject,
+      scratchWorkspaceRootFor(contextualProjectRef.environmentId),
+    )
+  ) {
+    actionItems.push({
+      kind: "action",
+      value: "action:add-repository",
+      searchTerms: ["add repository", "repo", "multi repo", "project"],
+      title: "Add repository to current project",
+      icon: <FolderPlusIcon className={ITEM_ICON_CLASS} />,
+      keepOpen: true,
+      run: async () => {
+        startAddRepositoryToProject(contextualProjectRef);
+      },
+    });
+  }
+
   if (wslAddProjectEnvironmentOption) {
     actionItems.push({
       kind: "action",
@@ -2329,21 +2532,76 @@ function OpenCommandPaletteDialog(props: {
       });
     },
   }));
+  const projectBuilderGroups: CommandPaletteView["groups"] = projectBuilder?.title
+    ? [
+        ...(projectBuilder.members.length > 0
+          ? [
+              {
+                value: "project-builder:repositories",
+                label: "Repositories",
+                items: projectBuilder.members.map((member): CommandPaletteActionItem => ({
+                  kind: "action",
+                  value: `project-builder:repository:${member.projectRef.environmentId}:${member.projectRef.projectId}`,
+                  searchTerms: [member.label, member.workspaceRoot],
+                  title: member.label,
+                  description: member.workspaceRoot,
+                  icon: <FolderIcon className={ITEM_ICON_CLASS} />,
+                  disabled: true,
+                  run: async () => {},
+                })),
+              },
+            ]
+          : []),
+        {
+          value: "project-builder:actions",
+          label: projectBuilder.members.length > 0 ? "Project" : "Repositories",
+          items: [
+            {
+              kind: "action",
+              value: "project-builder:add-repository",
+              searchTerms: ["add repository", "repo", "folder", "clone"],
+              title: "Add repository",
+              description: "Local folder, Git URL, or connected provider",
+              icon: <FolderPlusIcon className={ITEM_ICON_CLASS} />,
+              keepOpen: true,
+              run: async () => {
+                await startAddProjectSourceSelection(projectBuilder.environmentId);
+              },
+            },
+            ...(projectBuilder.kind === "new" && projectBuilder.members.length > 0
+              ? [
+                  {
+                    kind: "action" as const,
+                    value: "project-builder:finish",
+                    searchTerms: ["open project", "finish", "done"],
+                    title: "Open project",
+                    description: `${projectBuilder.members.length} ${projectBuilder.members.length === 1 ? "repository" : "repositories"}`,
+                    icon: <FolderGit2Icon className={ITEM_ICON_CLASS} />,
+                    run: finishProjectBuilder,
+                  },
+                ]
+              : []),
+          ],
+        },
+      ]
+    : [];
   const sourceSelectionViewValue =
     addProjectEnvironmentId === null ? null : `sources:${addProjectEnvironmentId}`;
   const activeGroups =
-    addProjectEnvironmentId !== null &&
-    currentView !== null &&
-    currentView.groups[0]?.value === sourceSelectionViewValue
-      ? buildAddProjectSourceGroups(
-          addProjectEnvironmentId,
-          buildAddProjectRemoteSourceReadiness(sourceControlDiscovery.data),
-        )
-      : currentView?.groups[0]?.value === "themes"
-        ? changeThemeItem.groups
-        : currentView?.groups[0]?.value === "appearance"
-          ? changeAppearanceItem.groups
-          : (currentView?.groups ?? rootGroups);
+    currentView?.groups[0]?.value === PROJECT_BUILDER_VIEW && projectBuilder !== null
+      ? projectBuilderGroups
+      : addProjectEnvironmentId !== null &&
+          currentView !== null &&
+          currentView.groups[0]?.value === sourceSelectionViewValue
+        ? buildAddProjectSourceGroups(
+            addProjectEnvironmentId,
+            buildAddProjectRemoteSourceReadiness(sourceControlDiscovery.data),
+          )
+        : currentView?.groups[0]?.value === "themes"
+          ? changeThemeItem.groups
+          : currentView?.groups[0]?.value === "appearance"
+            ? changeAppearanceItem.groups
+            : (currentView?.groups ?? rootGroups);
 
   const filteredGroups = filterCommandPaletteGroups({
     activeGroups,
@@ -2366,6 +2624,114 @@ function OpenCommandPaletteDialog(props: {
           })
         : allThreadItems,
   });
+
+  const addProjectToBuilder = useCallback(
+    async (member: ProjectBuilderMember): Promise<boolean> => {
+      const builder = projectBuilder;
+      if (!builder) return false;
+      if (member.projectRef.environmentId !== builder.environmentId) {
+        toastManager.add({
+          type: "error",
+          title: "Repository is on another environment",
+          description: "A multi-repo project currently keeps all repositories on one environment.",
+        });
+        return false;
+      }
+      const memberKey = `${member.projectRef.environmentId}:${member.projectRef.projectId}`;
+      if (
+        builder.members.some(
+          (candidate) =>
+            `${candidate.projectRef.environmentId}:${candidate.projectRef.projectId}` === memberKey,
+        ) ||
+        builder.excludedProjectRefs.some(
+          (candidate) => `${candidate.environmentId}:${candidate.projectId}` === memberKey,
+        )
+      ) {
+        toastManager.add({ title: `${member.label} is already in this project` });
+        return false;
+      }
+      const candidateProject = projects.find(
+        (candidate) =>
+          candidate.environmentId === member.projectRef.environmentId &&
+          candidate.id === member.projectRef.projectId,
+      );
+      if (
+        candidateProject?.projectCollectionId &&
+        candidateProject.projectCollectionId !== builder.projectCollectionId
+      ) {
+        toastManager.add({
+          type: "error",
+          title: "Repository already belongs to another project",
+          description: "Separate it from that project before adding it here.",
+        });
+        return false;
+      }
+
+      const updateMember = async (target: ScopedProjectRef, includeSharedAppearance: boolean) => {
+        const result = await updateProject({
+          environmentId: target.environmentId,
+          input: {
+            projectId: target.projectId,
+            projectCollectionId: builder.projectCollectionId,
+            title: builder.title ?? member.label,
+            ...(includeSharedAppearance
+              ? {
+                  faviconPath: builder.faviconPath,
+                  projectIcon: builder.projectIcon ?? null,
+                }
+              : {}),
+          },
+        });
+        if (result._tag === "Failure") {
+          if (!isAtomCommandInterrupted(result)) {
+            const error = squashAtomCommandFailure(result);
+            toastManager.add(
+              stackedThreadToast({
+                type: "error",
+                title: "Failed to add repository",
+                description: error instanceof Error ? error.message : "An error occurred.",
+              }),
+            );
+          }
+          return false;
+        }
+        return true;
+      };
+
+      for (const existing of builder.members) {
+        const project = projects.find(
+          (candidate) =>
+            candidate.environmentId === existing.projectRef.environmentId &&
+            candidate.id === existing.projectRef.projectId,
+        );
+        if (
+          project?.projectCollectionId !== builder.projectCollectionId ||
+          project.title !== builder.title
+        ) {
+          if (!(await updateMember(existing.projectRef, false))) return false;
+        }
+      }
+      if (!(await updateMember(member.projectRef, true))) return false;
+
+      setProjectBuilder((current) =>
+        current?.projectCollectionId === builder.projectCollectionId
+          ? { ...current, members: [...current.members, member] }
+          : current,
+      );
+      if (builder.kind === "existing") {
+        setOpen(false);
+        toastManager.add({
+          type: "success",
+          title: `Added ${member.label}`,
+          description: builder.title ?? undefined,
+        });
+      } else {
+        showProjectBuilderSummary();
+      }
+      return true;
+    },
+    [projectBuilder, projects, setOpen, showProjectBuilderSummary, updateProject],
+  );
 
   const handleAddProjectForEnvironment = useCallback(
     async (input: {
@@ -2419,6 +2785,14 @@ function OpenCommandPaletteDialog(props: {
         cwd,
       );
       if (existing) {
+        if (projectBuilder) {
+          await addProjectToBuilder({
+            projectRef: scopeProjectRef(existing.environmentId, existing.id),
+            label: projectRepositoryLabel(existing),
+            workspaceRoot: existing.workspaceRoot,
+          });
+          return;
+        }
         const latestThread = getLatestThreadForProject(
           threads.filter((thread) => thread.environmentId === existing.environmentId),
           existing.id,
@@ -2466,8 +2840,9 @@ function OpenCommandPaletteDialog(props: {
         environmentId: input.environmentId,
         input: {
           projectId,
-          title: inferProjectTitleFromPath(cwd),
+          title: projectBuilder?.title ?? inferProjectTitleFromPath(cwd),
           workspaceRoot: cwd,
+          ...(projectBuilder ? { projectCollectionId: projectBuilder.projectCollectionId } : {}),
           createWorkspaceRootIfMissing: true,
           defaultModelSelection: null,
         },
@@ -2483,6 +2858,15 @@ function OpenCommandPaletteDialog(props: {
             }),
           );
         }
+        return;
+      }
+
+      if (projectBuilder) {
+        await addProjectToBuilder({
+          projectRef: scopeProjectRef(input.environmentId, projectId),
+          label: inferProjectTitleFromPath(cwd),
+          workspaceRoot: cwd,
+        });
         return;
       }
 
@@ -2504,10 +2888,12 @@ function OpenCommandPaletteDialog(props: {
     },
     [
       handleNewThread,
+      addProjectToBuilder,
       createProject,
       environments,
       navigate,
       primaryEnvironmentId,
+      projectBuilder,
       projects,
       providers,
       setOpen,
@@ -2554,8 +2940,18 @@ function OpenCommandPaletteDialog(props: {
         environmentId: newProjectFlow.environmentId,
         name: newProjectName,
         github: newProjectPublishesToGitHub ? newProjectGitHubTarget : null,
+        openThread: projectBuilder === null,
       });
-      if (created) setOpen(false);
+      if (!created) return;
+      if (projectBuilder) {
+        await addProjectToBuilder({
+          projectRef: scopeProjectRef(newProjectFlow.environmentId, created.projectId),
+          label: newProjectName,
+          workspaceRoot: created.workspaceRoot,
+        });
+      } else {
+        setOpen(false);
+      }
     } finally {
       newProjectSubmittingRef.current = false;
       setIsCreatingNewProject(false);
@@ -2733,7 +3129,7 @@ function OpenCommandPaletteDialog(props: {
       environmentId: addProjectCloneFlow.environmentId,
       input: {
         projectId,
-        title: inferProjectTitleFromPath(destinationPath),
+        title: projectBuilder?.title ?? inferProjectTitleFromPath(destinationPath),
         createdAt: new Date().toISOString(),
         remoteUrl: addProjectCloneFlow.remoteUrl,
         destinationPath,
@@ -2752,12 +3148,22 @@ function OpenCommandPaletteDialog(props: {
       }
       return;
     }
-    setOpen(false);
     const projectRef = scopeProjectRef(addProjectCloneFlow.environmentId, projectId);
     // The create event usually lands before this call returns; give the shell
     // stream a moment so the draft opens with its project resolved instead of
     // flashing the project picker.
     await waitForProject(projectRef, 3_000).catch(() => null);
+    if (projectBuilder) {
+      await addProjectToBuilder({
+        projectRef,
+        label: getCloneDirectoryName(
+          addProjectCloneFlow.repository?.nameWithOwner ?? addProjectCloneFlow.remoteUrl,
+        ),
+        workspaceRoot: destinationPath,
+      });
+      return;
+    }
+    setOpen(false);
     const navigationResult = await settlePromise(() => handleNewThread(projectRef));
     if (navigationResult._tag === "Failure") {
       const error = squashAtomCommandFailure(navigationResult);
@@ -2921,6 +3327,28 @@ function OpenCommandPaletteDialog(props: {
               : {}),
           })),
         };
+  const newProjectMultiRepoGroup: CommandPaletteView["groups"][number] | null =
+    newProjectFlow === null || selectedNewProjectEnvironment?.supportsProjectCollections !== true
+      ? null
+      : {
+          value: "new-project-multi-repo",
+          label: "",
+          items: [
+            {
+              kind: "action",
+              value: "new-project:add-repositories",
+              searchTerms: [],
+              title: "Add multiple repositories",
+              description: "Local folders, Git URLs, or connected providers",
+              icon: <FolderPlusIcon className={ITEM_ICON_CLASS} />,
+              disabled: newProjectName.length === 0 || isCreatingNewProject,
+              keepOpen: true,
+              run: async () => {
+                startNewProjectBuilder(newProjectFlow.environmentId, newProjectName);
+              },
+            },
+          ],
+        };
   const newProjectExistingGroup: CommandPaletteView["groups"][number] | null =
     newProjectFlow === null
       ? null
@@ -2982,6 +3410,7 @@ function OpenCommandPaletteDialog(props: {
     displayedGroups = [
       ...(newProjectMachineGroup ? [newProjectMachineGroup] : []),
       ...newProjectOptionGroups,
+      ...(newProjectMultiRepoGroup ? [newProjectMultiRepoGroup] : []),
       ...(newProjectExistingGroup ? [newProjectExistingGroup] : []),
     ];
   } else if (addProjectCloneFlow?.step === "repository") {
@@ -2993,7 +3422,7 @@ function OpenCommandPaletteDialog(props: {
   }
   const resultRows = buildCommandPaletteRows(displayedGroups);
   const autoHighlightsFirstRow =
-    !isBrowsing && !isRemoteProjectCloneFlow && newProjectFlow === null;
+    !isBrowsing && !isRemoteProjectCloneFlow && newProjectFlow === null && projectBuilder === null;
 
   const inputPlaceholder =
     newProjectFlow !== null
@@ -3519,6 +3948,20 @@ function OpenCommandPaletteDialog(props: {
       showBackHint={isSubmenu}
       value={query}
     >
+      {projectBuilder?.title ? (
+        <div className="p-2 pb-0">
+          <div className="flex min-h-8 items-center gap-2 rounded-sm px-2 py-1.5">
+            <FolderGit2Icon className={ITEM_ICON_CLASS} />
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span className="truncate text-foreground text-sm">{projectBuilder.title}</span>
+              <span className="truncate text-muted-foreground/85 text-xs">
+                {projectBuilder.members.length}{" "}
+                {projectBuilder.members.length === 1 ? "repository" : "repositories"}
+              </span>
+            </span>
+          </div>
+        </div>
+      ) : null}
       {newProjectPathPreview !== null ? (
         <div className="p-2 pb-0">
           <div className="flex min-h-8 items-center gap-2 rounded-sm px-2 py-1.5">

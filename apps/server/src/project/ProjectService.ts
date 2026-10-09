@@ -161,10 +161,13 @@ export const make = Effect.gen(function* () {
   const toProject = (
     row: ProjectStore.ProjectRow,
     enrichment: ProjectEnrichmentService.ProjectEnrichment | null,
+    workspaceRoots: ReadonlyArray<string>,
   ): Project => ({
     id: row.projectId,
     title: row.title,
     workspaceRoot: row.workspaceRoot,
+    workspaceRoots: [...workspaceRoots],
+    projectCollectionId: row.projectCollectionId,
     repositoryIdentity: enrichment?.repositoryIdentity ?? null,
     faviconPath: row.faviconPath ?? enrichment?.faviconPath ?? null,
     defaultModelSelection: row.defaultModelSelection,
@@ -177,12 +180,49 @@ export const make = Effect.gen(function* () {
     deletedAt: row.deletedAt,
   });
 
-  const hydrate = Effect.fn("ProjectService.hydrate")(function* (row: ProjectStore.ProjectRow) {
+  const workspaceRootsByCollection = (rows: ReadonlyArray<ProjectStore.ProjectRow>) => {
+    const roots = new Map<string, string[]>();
+    for (const row of rows) {
+      if (row.projectCollectionId === null) continue;
+      const existing = roots.get(row.projectCollectionId);
+      if (existing) existing.push(row.workspaceRoot);
+      else roots.set(row.projectCollectionId, [row.workspaceRoot]);
+    }
+    return roots;
+  };
+
+  const workspaceRootsFor = Effect.fn("ProjectService.workspaceRootsFor")(function* (
+    row: ProjectStore.ProjectRow,
+  ) {
+    if (row.projectCollectionId === null) return [row.workspaceRoot];
+    const rows = yield* projects
+      .list()
+      .pipe(
+        Effect.mapError(
+          (cause) => new ProjectOperationError({ operation: "list-projects", cause }),
+        ),
+      );
+    return [
+      row.workspaceRoot,
+      ...rows
+        .filter(
+          (candidate) =>
+            candidate.projectCollectionId === row.projectCollectionId &&
+            candidate.projectId !== row.projectId,
+        )
+        .map((candidate) => candidate.workspaceRoot),
+    ];
+  });
+
+  const hydrate = Effect.fn("ProjectService.hydrate")(function* (
+    row: ProjectStore.ProjectRow,
+    workspaceRoots?: ReadonlyArray<string>,
+  ) {
     const enrichment =
       row.deletedAt === null
         ? yield* projectEnrichment.getAvailable(row.workspaceRoot)
         : yield* projectEnrichment.peek(row.workspaceRoot);
-    return toProject(row, enrichment);
+    return toProject(row, enrichment, workspaceRoots ?? (yield* workspaceRootsFor(row)));
   });
 
   const readRow = (projectId: ProjectId, options?: { readonly includeDeleted?: boolean }) =>
@@ -347,6 +387,9 @@ export const make = Effect.gen(function* () {
         projectId: input.projectId,
         title: input.title,
         workspaceRoot,
+        ...(input.projectCollectionId === undefined
+          ? {}
+          : { projectCollectionId: input.projectCollectionId }),
         ...(input.scripts === undefined ? {} : { scripts: input.scripts }),
       });
       yield* projectEnrichment.invalidate([workspaceRoot]);
@@ -374,6 +417,9 @@ export const make = Effect.gen(function* () {
         projectId: input.projectId,
         ...(input.title === undefined ? {} : { title: input.title }),
         ...(workspaceRoot === previousRoot ? {} : { workspaceRoot }),
+        ...(input.projectCollectionId === undefined
+          ? {}
+          : { projectCollectionId: input.projectCollectionId }),
         ...(input.defaultModelSelection === undefined
           ? {}
           : { defaultModelSelection: input.defaultModelSelection }),
@@ -505,10 +551,11 @@ export const make = Effect.gen(function* () {
     },
   );
 
-  const enrichShell = (shell: OrchestrationProjectShell) =>
+  const enrichShell = (shell: OrchestrationProjectShell, workspaceRoots: ReadonlyArray<string>) =>
     projectEnrichment.getAvailable(shell.workspaceRoot).pipe(
       Effect.map((enrichment) => ({
         ...shell,
+        workspaceRoots: [...workspaceRoots],
         repositoryIdentity: enrichment.repositoryIdentity,
       })),
     );
@@ -522,7 +569,14 @@ export const make = Effect.gen(function* () {
             (cause) => new ProjectOperationError({ operation: "read-project", projectId, cause }),
           ),
         );
-      return Option.isNone(shell) ? shell : Option.some(yield* enrichShell(shell.value));
+      if (Option.isNone(shell)) return shell;
+      const row = yield* readRow(projectId);
+      return Option.some(
+        yield* enrichShell(
+          shell.value,
+          Option.isSome(row) ? yield* workspaceRootsFor(row.value) : [shell.value.workspaceRoot],
+        ),
+      );
     },
   );
 
@@ -536,7 +590,25 @@ export const make = Effect.gen(function* () {
           (cause) => new ProjectOperationError({ operation: "list-projects", cause }),
         ),
       );
-    return yield* Effect.forEach(shells, enrichShell, { concurrency: 16 });
+    const rows = yield* projects
+      .list()
+      .pipe(
+        Effect.mapError(
+          (cause) => new ProjectOperationError({ operation: "list-projects", cause }),
+        ),
+      );
+    const rootsByCollection = workspaceRootsByCollection(rows);
+    return yield* Effect.forEach(
+      shells,
+      (shell) =>
+        enrichShell(
+          shell,
+          shell.projectCollectionId
+            ? (rootsByCollection.get(shell.projectCollectionId) ?? [shell.workspaceRoot])
+            : [shell.workspaceRoot],
+        ),
+      { concurrency: 16 },
+    );
   });
 
   const snapshot = Effect.gen(function* () {
@@ -547,7 +619,18 @@ export const make = Effect.gen(function* () {
           (cause) => new ProjectOperationError({ operation: "list-projects", cause }),
         ),
       );
-    const hydrated = yield* Effect.forEach(rows, hydrate, { concurrency: 8 });
+    const rootsByCollection = workspaceRootsByCollection(rows);
+    const hydrated = yield* Effect.forEach(
+      rows,
+      (row) =>
+        hydrate(
+          row,
+          row.projectCollectionId
+            ? (rootsByCollection.get(row.projectCollectionId) ?? [row.workspaceRoot])
+            : [row.workspaceRoot],
+        ),
+      { concurrency: 8 },
+    );
     return {
       projects: hydrated,
       updatedAt: DateTime.formatIso(yield* DateTime.now),

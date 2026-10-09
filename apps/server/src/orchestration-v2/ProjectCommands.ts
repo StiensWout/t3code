@@ -4,6 +4,7 @@ import {
   MAX_SCRIPT_ID_LENGTH,
   type ModelSelection,
   type ProjectIconOverride,
+  type ProjectCollectionId,
   ProjectId,
   type ProjectScript,
   SCRIPT_RUN_COMMAND_PATTERN,
@@ -22,6 +23,7 @@ export interface ProjectCreateCommand {
   readonly projectId: ProjectId;
   readonly title: string;
   readonly workspaceRoot: string;
+  readonly projectCollectionId?: ProjectCollectionId | null;
   readonly scripts?: ReadonlyArray<ProjectScript>;
 }
 
@@ -31,6 +33,7 @@ export interface ProjectMetaUpdateCommand {
   readonly projectId: ProjectId;
   readonly title?: string;
   readonly workspaceRoot?: string;
+  readonly projectCollectionId?: ProjectCollectionId | null;
   readonly defaultModelSelection?: ModelSelection | null;
   readonly defaultThreadEnvMode?: ThreadEnvMode | null;
   readonly autoPull?: boolean;
@@ -168,6 +171,7 @@ export function planProjectCommand(input: {
           projectId: command.projectId,
           title: command.title,
           workspaceRoot: command.workspaceRoot,
+          projectCollectionId: command.projectCollectionId ?? null,
           // Project creation has no user model choice. Older clients sent an
           // automatic seed, but only a metadata update records an explicit default.
           defaultModelSelection: null,
@@ -213,6 +217,9 @@ export function planProjectCommand(input: {
           projectId: command.projectId,
           ...(command.title === undefined ? {} : { title: command.title }),
           ...(command.workspaceRoot === undefined ? {} : { workspaceRoot: command.workspaceRoot }),
+          ...(command.projectCollectionId === undefined
+            ? {}
+            : { projectCollectionId: command.projectCollectionId }),
           ...(command.defaultModelSelection === undefined
             ? {}
             : { defaultModelSelection: command.defaultModelSelection }),

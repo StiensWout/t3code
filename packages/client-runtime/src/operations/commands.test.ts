@@ -9,6 +9,7 @@ import {
   ORCHESTRATION_V2_WS_METHODS,
   PlanId,
   ProjectId,
+  ProjectCollectionId,
   ProviderInstanceId,
   RunId,
   RuntimeRequestId,
@@ -178,9 +179,11 @@ describe("V2 environment commands", () => {
       const projects: ProjectMutation[] = [];
       const supervisor = yield* makeSupervisor({ commands: [], projects });
       const projectId = ProjectId.make("project-1");
+      const projectCollectionId = ProjectCollectionId.make("collection-1");
       const projectIcon = { kind: "emoji", emoji: "🌲" } as const;
       yield* updateProject({
         projectId,
+        projectCollectionId,
         autoPull: true,
         projectIcon,
         faviconPath: "/workspace/project/icon.png",
@@ -188,6 +191,7 @@ describe("V2 environment commands", () => {
       }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
       yield* updateProject({
         projectId,
+        projectCollectionId: null,
         autoPull: false,
         projectIcon: null,
         faviconPath: null,
@@ -199,6 +203,7 @@ describe("V2 environment commands", () => {
           type: "project.update",
           commandId: "00000000-0000-4000-8000-000000000000",
           projectId,
+          projectCollectionId,
           autoPull: true,
           projectIcon,
           faviconPath: "/workspace/project/icon.png",
@@ -208,6 +213,7 @@ describe("V2 environment commands", () => {
           type: "project.update",
           commandId: "00000000-0000-4000-8000-000000000000",
           projectId,
+          projectCollectionId: null,
           autoPull: false,
           projectIcon: null,
           faviconPath: null,

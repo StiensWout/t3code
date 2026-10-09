@@ -282,6 +282,9 @@ export function makeGrokAcpAdapterFlavor(
           environment: options.environment,
           childProcessSpawner: options.childProcessSpawner,
           runtimeMode: grokLaunchRuntimeMode(runtimePolicy),
+          ...(runtimePolicy.additionalDirectories === undefined
+            ? {}
+            : { additionalDirectories: runtimePolicy.additionalDirectories }),
         })),
     // In its Auto mode Grok decides routine actions itself and only asks about
     // what its classifier blocked, so every prompt it sends goes to the user.

@@ -466,6 +466,30 @@ describe("CodexAdapterV2 runtime policy", () => {
     }),
   );
 
+  it.effect("grants every project repository to workspace-write turns", () =>
+    Effect.gen(function* () {
+      const params = yield* CodexAdapterV2.buildCodexTurnStartParams({
+        nativeThreadId: "native-multi-repository",
+        codexInput: [{ type: "text", text: "test" }],
+        runtimePolicy: {
+          runtimeMode: "auto-accept-edits",
+          interactionMode: "default",
+          cwd: "/workspace/web",
+          additionalDirectories: ["/workspace/api", "/workspace/infra"],
+        },
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5.4",
+        },
+      });
+
+      assert.deepInclude(params.sandboxPolicy, {
+        type: "workspaceWrite",
+        writableRoots: ["/workspace/api", "/workspace/infra"],
+      });
+    }),
+  );
+
   it.effect("sends MCP app model context as untrusted Codex context", () =>
     Effect.gen(function* () {
       const policy = { runtimeMode: "full-access", interactionMode: "default", cwd: null } as const;

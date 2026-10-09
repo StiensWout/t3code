@@ -2,6 +2,7 @@ import { assert, it } from "@effect/vitest";
 import {
   type ModelSelection,
   type OrchestrationV2AppThread,
+  ProjectCollectionId,
   ProjectId,
   ProviderInstanceId,
   type RuntimeMode,
@@ -21,6 +22,7 @@ import * as RuntimePolicy from "./RuntimePolicy.ts";
 
 const projectId = ProjectId.make("project:runtime-policy");
 const providerInstanceId = ProviderInstanceId.make("codex");
+const projectCollectionId = ProjectCollectionId.make("collection:runtime-policy");
 const modelSelection = {
   instanceId: providerInstanceId,
   model: "gpt-5.5",
@@ -94,6 +96,7 @@ const layerTest = RuntimePolicy.layerFromProjectStore.pipe(
             projectId,
             title: "Project",
             workspaceRoot: "/project-root",
+            projectCollectionId,
             defaultModelSelection: null,
             defaultThreadEnvMode: null,
             autoPull: false,
@@ -105,6 +108,39 @@ const layerTest = RuntimePolicy.layerFromProjectStore.pipe(
             deletedAt: null,
           }),
         ),
+      list: () =>
+        Effect.succeed([
+          {
+            projectId,
+            title: "Project",
+            workspaceRoot: "/project-root",
+            projectCollectionId,
+            defaultModelSelection: null,
+            defaultThreadEnvMode: null,
+            autoPull: false,
+            faviconPath: null,
+            projectIcon: null,
+            scripts: [],
+            createdAt: "2026-06-21T00:00:00.000Z",
+            updatedAt: "2026-06-21T00:00:00.000Z",
+            deletedAt: null,
+          },
+          {
+            projectId: ProjectId.make("project:runtime-policy-api"),
+            title: "Project",
+            workspaceRoot: "/api-root",
+            projectCollectionId,
+            defaultModelSelection: null,
+            defaultThreadEnvMode: null,
+            autoPull: false,
+            faviconPath: null,
+            projectIcon: null,
+            scripts: [],
+            createdAt: "2026-06-21T00:00:00.000Z",
+            updatedAt: "2026-06-21T00:00:00.000Z",
+            deletedAt: null,
+          },
+        ]),
     }),
   ),
 );
@@ -119,6 +155,7 @@ it.layer(layerTest)("RuntimePolicyV2", (it) => {
         modelSelection,
       });
       assert.equal(resolved.cwd, "/project-root");
+      assert.deepEqual(resolved.additionalDirectories, ["/api-root"]);
     }),
   );
 
@@ -131,6 +168,7 @@ it.layer(layerTest)("RuntimePolicyV2", (it) => {
         modelSelection,
       });
       assert.equal(resolved.cwd, "/project-worktree");
+      assert.deepEqual(resolved.additionalDirectories, ["/api-root"]);
     }),
   );
 

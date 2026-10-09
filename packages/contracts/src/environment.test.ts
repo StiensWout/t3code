@@ -47,6 +47,16 @@ describe("ExecutionEnvironmentDescriptor", () => {
     expect(decodeDescriptor(descriptor).capabilities.pullRequests).toBeUndefined();
   });
 
+  it("treats project collections as an advertised server capability", () => {
+    expect(decodeDescriptor(descriptor).capabilities.projectCollections).toBeUndefined();
+    expect(
+      decodeDescriptor({
+        ...descriptor,
+        capabilities: { ...descriptor.capabilities, projectCollections: true },
+      }).capabilities.projectCollections,
+    ).toBe(true);
+  });
+
   it("preserves an advertised pull-request capability", () => {
     expect(
       decodeDescriptor({

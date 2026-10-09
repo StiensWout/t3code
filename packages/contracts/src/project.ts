@@ -9,6 +9,7 @@ import {
   IsoDateTime,
   NonNegativeInt,
   PositiveInt,
+  ProjectCollectionId,
   ProjectId,
   TrimmedNonEmptyString,
   TrimmedString,
@@ -166,6 +167,10 @@ export const Project = Schema.Struct({
   id: ProjectId,
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
+  /** Every repository root available to an agent in this logical project. */
+  workspaceRoots: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  /** Explicitly groups repository-backed projects into one product project. */
+  projectCollectionId: Schema.optional(Schema.NullOr(ProjectCollectionId)),
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   faviconPath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   projectIcon: Schema.optional(Schema.NullOr(ReceivedProjectIcon)),
@@ -199,6 +204,7 @@ export type ProjectChange = typeof ProjectChange.Type;
 export const ProjectCreatePayload = Schema.Struct({
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
+  projectCollectionId: Schema.optional(Schema.NullOr(ProjectCollectionId)),
   createWorkspaceRootIfMissing: Schema.optional(Schema.Boolean),
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
   scripts: Schema.optional(Schema.Array(ProjectScript)),
@@ -208,6 +214,7 @@ export type ProjectCreatePayload = typeof ProjectCreatePayload.Type;
 export const ProjectUpdatePayload = Schema.Struct({
   title: Schema.optional(TrimmedNonEmptyString),
   workspaceRoot: Schema.optional(TrimmedNonEmptyString),
+  projectCollectionId: Schema.optional(Schema.NullOr(ProjectCollectionId)),
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
   autoPull: Schema.optional(Schema.Boolean),
   projectIcon: Schema.optional(Schema.NullOr(ProjectIconOverride)),

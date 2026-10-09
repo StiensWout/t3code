@@ -13,6 +13,7 @@ export interface SidebarProjectSnapshot extends Project {
   projectKey: string;
   displayName: string;
   groupedProjectCount: number;
+  isRepositoryCollection: boolean;
   environmentPresence: EnvironmentPresence;
   // True iff every non-primary member of this group lives in a
   // desktop-local environment. The sidebar uses this
@@ -24,6 +25,15 @@ export interface SidebarProjectSnapshot extends Project {
   memberProjects: readonly SidebarProjectGroupMember[];
   memberProjectRefs: readonly ScopedProjectRef[];
   remoteEnvironmentLabels: readonly string[];
+}
+
+export function projectRepositoryLabel(
+  project: Pick<Project, "workspaceRoot" | "repositoryIdentity">,
+): string {
+  const repositoryName = project.repositoryIdentity?.name?.trim();
+  if (repositoryName) return repositoryName;
+  const normalizedRoot = project.workspaceRoot.replace(/[\\/]+$/, "");
+  return normalizedRoot.split(/[\\/]/).at(-1) || project.workspaceRoot;
 }
 
 export function projectGroupsSpanEnvironments(
@@ -122,6 +132,7 @@ export function buildSidebarProjectSnapshots(input: {
       projectKey: group.key,
       displayName: group.label,
       groupedProjectCount: members.length,
+      isRepositoryCollection: group.projectCollectionId != null,
       environmentPresence:
         hasLocal && hasRemote ? "mixed" : hasRemote ? "remote-only" : "local-only",
       allRemoteMembersAreDesktopLocal,

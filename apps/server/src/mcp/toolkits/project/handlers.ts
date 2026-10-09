@@ -157,7 +157,14 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
     Effect.gen(function* () {
       const projects = yield* access;
       const snapshot = yield* projects.snapshot.pipe(Effect.mapError(unavailable));
-      const rows = snapshot.projects.filter((project) => project.deletedAt === null);
+      const seenCollections = new Set<string>();
+      const rows = snapshot.projects.filter((project) => {
+        if (project.deletedAt !== null) return false;
+        if (project.projectCollectionId == null) return true;
+        if (seenCollections.has(project.projectCollectionId)) return false;
+        seenCollections.add(project.projectCollectionId);
+        return true;
+      });
       const start = input.cursor ?? 0,
         end = start + (input.limit ?? 20);
       return { projects: rows.slice(start, end), nextCursor: end < rows.length ? end : null };

@@ -2,6 +2,7 @@ import { assert, describe, it } from "@effect/vitest";
 import {
   CommandId,
   EventId,
+  ProjectCollectionId,
   ProjectId,
   ProviderInstanceId,
   type ModelSelection,
@@ -24,6 +25,7 @@ const row = (overrides: Partial<ProjectRow> = {}): ProjectRow => ({
   projectId,
   title: "Scripts",
   workspaceRoot: "/tmp/scripts",
+  projectCollectionId: null,
   defaultModelSelection: null,
   defaultThreadEnvMode: null,
   autoPull: false,
@@ -107,9 +109,11 @@ describe("planProjectCommand", () => {
 
   it("carries every edited field and omits the rest", () => {
     const scripts = [script("lint")];
+    const projectCollectionId = ProjectCollectionId.make("collection:product");
     const payload = payloadOf(
       update({
         scripts,
+        projectCollectionId,
         defaultThreadEnvMode: "worktree",
         autoPull: true,
         faviconPath: "brand/icon.svg",
@@ -118,6 +122,7 @@ describe("planProjectCommand", () => {
     );
     assert.deepInclude(payload, {
       scripts,
+      projectCollectionId,
       defaultThreadEnvMode: "worktree",
       autoPull: true,
       faviconPath: "brand/icon.svg",
@@ -126,6 +131,7 @@ describe("planProjectCommand", () => {
     const renamed = payloadOf(update({ title: "Renamed" }));
     assert.isFalse("defaultThreadEnvMode" in renamed);
     assert.isNull(payloadOf(update({ defaultThreadEnvMode: null })).defaultThreadEnvMode);
+    assert.isNull(payloadOf(update({ projectCollectionId: null })).projectCollectionId);
   });
 
   it.each(["install-javascript-dependencies", "A", "a.b", "a b", "-a", "a".repeat(25)])(

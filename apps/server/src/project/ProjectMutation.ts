@@ -16,6 +16,9 @@ export const projectMutationOperation = Effect.fn("projectMutationOperation")(fu
         projectId: mutation.projectId,
         title: mutation.title,
         workspaceRoot: mutation.workspaceRoot,
+        ...(mutation.projectCollectionId === undefined
+          ? {}
+          : { projectCollectionId: mutation.projectCollectionId }),
         ...(mutation.createWorkspaceRootIfMissing === undefined
           ? {}
           : { createWorkspaceRootIfMissing: mutation.createWorkspaceRootIfMissing }),
@@ -31,6 +34,9 @@ export const projectMutationOperation = Effect.fn("projectMutationOperation")(fu
         projectId: mutation.projectId,
         ...(mutation.title === undefined ? {} : { title: mutation.title }),
         ...(mutation.workspaceRoot === undefined ? {} : { workspaceRoot: mutation.workspaceRoot }),
+        ...(mutation.projectCollectionId === undefined
+          ? {}
+          : { projectCollectionId: mutation.projectCollectionId }),
         ...(mutation.defaultModelSelection === undefined
           ? {}
           : { defaultModelSelection: mutation.defaultModelSelection }),

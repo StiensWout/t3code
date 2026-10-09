@@ -708,6 +708,14 @@ export function openCodePermissionRules(
     }
   }
 
+  for (const root of runtimePolicy.additionalDirectories ?? []) {
+    rules.push({
+      permission: "external_directory",
+      pattern: `${root.replace(/\/$/, "")}/*`,
+      action: "allow",
+    });
+  }
+
   return rules;
 }
 

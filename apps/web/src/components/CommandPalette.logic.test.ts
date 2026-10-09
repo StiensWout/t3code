@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import type { Project, Thread } from "../types";
 import { makeThreadFixture } from "../test-fixtures";
 import {
@@ -253,6 +254,14 @@ describe("reduceCommandPaletteUiState", () => {
       open: true,
       mode: "command",
       openIntent: { kind: "new-thread-in" },
+    });
+    const projectRef = scopeProjectRef(EnvironmentId.make("local"), ProjectId.make("project-1"));
+    expect(
+      reduceCommandPaletteUiState(filesOpen, { _tag: "OpenAddRepository", projectRef }),
+    ).toEqual({
+      open: true,
+      mode: "command",
+      openIntent: { kind: "add-repository", projectRef },
     });
   });
 

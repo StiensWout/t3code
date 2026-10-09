@@ -2584,6 +2584,17 @@ describe("OpenCodeAdapterV2", () => {
       }),
     );
     assert.equal(permissionAction(approvalRequiredWorkspaceWrite, "edit"), "ask");
+
+    const multiRepository = openCodePermissionRules(
+      runtimePolicy("auto-accept-edits", {
+        additionalDirectories: ["/workspace/api"],
+      }),
+    );
+    assert.deepInclude(multiRepository, {
+      permission: "external_directory",
+      pattern: "/workspace/api/*",
+      action: "allow",
+    });
   });
 
   it("enforces non-interactive sandbox policy through OpenCode permissions", () => {

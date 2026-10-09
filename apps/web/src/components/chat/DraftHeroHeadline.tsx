@@ -1,6 +1,10 @@
 import type { DraftId } from "~/composerDraftStore";
 import { useComposerDraftStore } from "~/composerDraftStore";
-import { resolveEnvironmentMachineKind, type ScopedProjectRef } from "@t3tools/contracts";
+import {
+  type ProjectId,
+  resolveEnvironmentMachineKind,
+  type ScopedProjectRef,
+} from "@t3tools/contracts";
 import { scopedProjectKey, scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { FolderPlusIcon, MessageSquareDashedIcon } from "lucide-react";
@@ -21,6 +25,7 @@ import {
 import {
   buildSidebarProjectPickerEntries,
   buildSidebarProjectSnapshots,
+  projectRepositoryLabel,
   projectGroupsSpanEnvironments,
 } from "~/sidebarProjectGrouping";
 import { useProjects, useThreadShells } from "~/state/entities";
@@ -30,6 +35,8 @@ import { ProjectFavicon } from "../ProjectFavicon";
 import { sortLogicalProjectsForSidebar } from "../Sidebar.logic";
 import {
   Menu,
+  MenuGroup,
+  MenuGroupLabel,
   MenuItem,
   MenuPopup,
   MenuRadioGroup,
@@ -43,6 +50,7 @@ import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 
 // Menu value for "No project"; real entries are keyed by logical project key.
 const NO_PROJECT_VALUE = "no-project";
+const ALL_REPOSITORIES_VALUE = "all-repositories";
 
 interface DraftHeroHeadlineProps {
   readonly draftId: DraftId | null;
@@ -67,6 +75,9 @@ export function DraftHeroHeadline({
   const getComposerDraft = useComposerDraftStore((store) => store.getComposerDraft);
   const applyStickyState = useComposerDraftStore((store) => store.applyStickyState);
   const setModelSelection = useComposerDraftStore((store) => store.setModelSelection);
+  const focusedProjectId = useComposerDraftStore((store) =>
+    draftId === null ? null : (store.draftThreadsByThreadKey[draftId]?.focusedProjectId ?? null),
+  );
   const openAddProject = useCallback(() => openCommandPalette({ open: "add-project" }), []);
   const { scratchEnvironmentId, scratchWorkspaceRootFor, openScratchProject } = useScratchProject();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
@@ -165,6 +176,19 @@ export function DraftHeroHeadline({
   const scratchWorkspaceRoot = scratchWorkspaceRootFor(scratchTargetEnvironmentId);
   const isScratchDraft =
     activeProject !== null && isScratchProject(activeProject, scratchWorkspaceRoot);
+  const canAddRepository =
+    activeProject !== null &&
+    environments.find((environment) => environment.environmentId === activeProject.environmentId)
+      ?.serverConfig?.environment.capabilities.projectCollections === true;
+  const canChooseRepository =
+    activeProjectGroup?.isRepositoryCollection === true &&
+    activeProjectGroup.memberProjects.length > 1 &&
+    activeProject !== null;
+  const focusedRepository =
+    focusedProjectId === null
+      ? null
+      : (activeProjectGroup?.memberProjects.find((member) => member.id === focusedProjectId) ??
+        null);
 
   // The picker can change the draft's target while the no-project home is
   // still being opened; a stale continuation must not retarget it again.
@@ -175,7 +199,11 @@ export function DraftHeroHeadline({
   // Project selection changes the target of the open draft in place. The
   // prompt stays in the same composer session, so the sidebar only gets a
   // draft row if the user later navigates away.
-  const selectProject = (project: (typeof projects)[number], logicalProjectKey: string) => {
+  const selectProject = (
+    project: (typeof projects)[number],
+    logicalProjectKey: string,
+    repositoryFocus: ProjectId | null = null,
+  ) => {
     if (!draftId) {
       return;
     }
@@ -189,6 +217,7 @@ export function DraftHeroHeadline({
       logicalProjectKey,
       scopeProjectRef(project.environmentId, project.id),
       draftId,
+      { focusedProjectId: repositoryFocus },
     );
     if (!hasExplicitComposerModelSelection(currentDraft)) {
       applyStickyState(draftId);
@@ -301,6 +330,73 @@ export function DraftHeroHeadline({
             );
           })}
         </MenuRadioGroup>
+        {canChooseRepository && activeProjectGroup && activeProject ? (
+          <>
+            <MenuSeparator />
+            <MenuGroup>
+              <MenuGroupLabel>Focus repository</MenuGroupLabel>
+              <MenuRadioGroup
+                value={
+                  focusedRepository === null
+                    ? ALL_REPOSITORIES_VALUE
+                    : scopedProjectKey(
+                        scopeProjectRef(focusedRepository.environmentId, focusedRepository.id),
+                      )
+                }
+                onValueChange={(value) => {
+                  if (value === ALL_REPOSITORIES_VALUE) {
+                    const targetProject =
+                      activeProjectGroup.memberProjects.find(
+                        (member) =>
+                          member.environmentId === activeProjectGroup.environmentId &&
+                          member.id === activeProjectGroup.id,
+                      ) ?? activeProjectGroup.memberProjects[0];
+                    if (targetProject && focusedRepository !== null) {
+                      selectProject(targetProject, activeProjectGroup.projectKey);
+                    }
+                    return;
+                  }
+                  const project = activeProjectGroup.memberProjects.find(
+                    (member) =>
+                      scopedProjectKey(scopeProjectRef(member.environmentId, member.id)) === value,
+                  );
+                  if (project && project.id !== focusedProjectId) {
+                    selectProject(project, activeProjectGroup.projectKey, project.id);
+                  }
+                }}
+              >
+                <MenuRadioItem value={ALL_REPOSITORIES_VALUE} closeOnClick>
+                  All repositories
+                </MenuRadioItem>
+                {activeProjectGroup.memberProjects.map((member) => (
+                  <MenuRadioItem
+                    key={member.physicalProjectKey}
+                    value={scopedProjectKey(scopeProjectRef(member.environmentId, member.id))}
+                    closeOnClick
+                  >
+                    {projectRepositoryLabel(member)}
+                  </MenuRadioItem>
+                ))}
+              </MenuRadioGroup>
+            </MenuGroup>
+          </>
+        ) : null}
+        {activeProjectGroup && activeProject && !isScratchDraft && canAddRepository ? (
+          <>
+            <MenuSeparator />
+            <MenuItem
+              onClick={() =>
+                openCommandPalette({
+                  open: "add-repository",
+                  projectRef: scopeProjectRef(activeProject.environmentId, activeProject.id),
+                })
+              }
+            >
+              <FolderPlusIcon />
+              Add repository
+            </MenuItem>
+          </>
+        ) : null}
         {projectPickerEntries.length > 0 ? <MenuSeparator /> : null}
         <MenuItem onClick={openAddProject}>
           <FolderPlusIcon />

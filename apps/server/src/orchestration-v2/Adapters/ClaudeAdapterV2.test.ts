@@ -160,6 +160,21 @@ function makeClaudeTestTurnInput(input: {
 }
 
 describe("ClaudeAdapterV2 runtime query policy", () => {
+  it("opens the whole logical project as one multi-root workspace", () => {
+    const options = ClaudeAdapterV2.makeClaudeQueryOptions({
+      modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+      nativeThreadId: "multi-repository",
+      resume: false,
+      cwd: "/workspace/web",
+      additionalDirectories: ["/workspace/api", "/workspace/infra"],
+    });
+    assert.deepEqual(options.additionalDirectories, [
+      "/workspace/web",
+      "/workspace/api",
+      "/workspace/infra",
+    ]);
+  });
+
   it.each([false, true])("requests thinking summaries with resume=%s", (resume) => {
     const options = ClaudeAdapterV2.makeClaudeQueryOptions({
       modelSelection: CLAUDE_TEST_MODEL_SELECTION,

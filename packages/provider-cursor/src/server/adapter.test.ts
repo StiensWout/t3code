@@ -854,6 +854,23 @@ describe("CursorAdapterV2", () => {
     }
   });
 
+  it("opens every logical project repository as a Cursor workspace folder", () => {
+    const options = makeCursorAgentOptions({
+      modelSelection: {
+        instanceId: ProviderInstanceId.make("cursor"),
+        model: "composer-2.5",
+      },
+      runtimePolicy: {
+        runtimeMode: "auto-accept-edits",
+        interactionMode: "default",
+        cwd: "/workspace/web",
+        additionalDirectories: ["/workspace/api", "/workspace/infra"],
+      },
+      threadId: ThreadId.make("thread-cursor-multi-repository"),
+    });
+    assert.deepEqual(options.local?.dirs, ["/workspace/api", "/workspace/infra"]);
+  });
+
   it("injects thread-scoped MCP credentials without logging them", () => {
     const threadId = ThreadId.make("thread-cursor-mcp");
     McpProviderSession.setMcpProviderSession({

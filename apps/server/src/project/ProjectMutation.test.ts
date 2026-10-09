@@ -1,5 +1,5 @@
 import { assert, it } from "@effect/vitest";
-import { CommandId, ProjectId, type Project } from "@t3tools/contracts";
+import { CommandId, ProjectCollectionId, ProjectId, type Project } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
 
@@ -7,6 +7,7 @@ import { projectMutationOperation } from "./ProjectMutation.ts";
 import { type ProjectService } from "./ProjectService.ts";
 
 const projectId = ProjectId.make("project:mutation-mapping");
+const projectCollectionId = ProjectCollectionId.make("collection:mutation-mapping");
 const project = {
   id: projectId,
   title: "Mapping",
@@ -41,6 +42,7 @@ it.effect("preserves every project mutation field", () =>
       projectId,
       title: "Created",
       workspaceRoot: "/work/created",
+      projectCollectionId,
       createWorkspaceRootIfMissing: true,
       defaultModelSelection: null,
       scripts: [],
@@ -51,6 +53,7 @@ it.effect("preserves every project mutation field", () =>
       projectId,
       title: "Updated",
       workspaceRoot: "/work/updated",
+      projectCollectionId: null,
       defaultModelSelection: null,
       autoPull: false,
       projectIcon: null,
@@ -71,6 +74,7 @@ it.effect("preserves every project mutation field", () =>
         projectId,
         title: "Created",
         workspaceRoot: "/work/created",
+        projectCollectionId,
         createWorkspaceRootIfMissing: true,
         defaultModelSelection: null,
         scripts: [],
@@ -80,6 +84,7 @@ it.effect("preserves every project mutation field", () =>
         projectId,
         title: "Updated",
         workspaceRoot: "/work/updated",
+        projectCollectionId: null,
         defaultModelSelection: null,
         autoPull: false,
         projectIcon: null,

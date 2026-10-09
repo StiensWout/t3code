@@ -1,6 +1,6 @@
 import { useComposerMenuState } from "../chat/useComposerMenuState";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
-import { AuthOrchestrationOperateScope } from "@t3tools/contracts";
+import { AuthOrchestrationOperateScope, ProjectCollectionId } from "@t3tools/contracts";
 import { useEnvironmentsWithScope, readEnvironmentScope } from "../../state/session";
 import {
   isAtomCommandInterrupted,
@@ -14,13 +14,15 @@ import { AsyncResult } from "effect/reactivity";
 import { type EnvironmentId, type ProjectIconOverride } from "@t3tools/contracts";
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import * as Cause from "effect/Cause";
-import { InfoIcon, Trash2Icon } from "lucide-react";
+import { FolderPlusIcon, InfoIcon, UnlinkIcon, Trash2Icon } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { releaseProjectDraftUploads } from "../../lib/composerDraftUploads";
 import { readLocalApi } from "../../localApi";
+import { randomUUID } from "../../lib/utils";
 import {
+  projectRepositoryLabel,
   type SidebarProjectGroupMember,
   type SidebarProjectSnapshot,
 } from "../../sidebarProjectGrouping";
@@ -31,6 +33,7 @@ import { ProjectFavicon } from "../ProjectFavicon";
 import { Alert, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import {
   SettingResetButton,
@@ -156,6 +159,7 @@ export function ProjectSettingsPanel({
       key={`${selected.projectKey}:${environmentId ?? "all"}:${checkoutKey ?? "all"}`}
       group={scopedGroup}
       hasOtherMembers={members.length < selected.memberProjects.length}
+      availableProjects={groups.flatMap((candidateGroup) => candidateGroup.memberProjects)}
     />
   );
 }
@@ -163,9 +167,11 @@ export function ProjectSettingsPanel({
 function ProjectDetail({
   group,
   hasOtherMembers,
+  availableProjects,
 }: {
   group: SidebarProjectSnapshot;
   hasOtherMembers: boolean;
+  availableProjects: ReadonlyArray<SidebarProjectGroupMember>;
 }) {
   const navigate = useNavigate({ from: "/settings" });
   const primaryEnvironmentId = usePrimaryEnvironmentId();
@@ -173,6 +179,11 @@ function ProjectDetail({
   const environmentById = useMemo(
     () => new Map(environments.map((environment) => [environment.environmentId, environment])),
     [environments],
+  );
+  const supportsProjectCollections = group.memberProjects.every(
+    (member) =>
+      environmentById.get(member.environmentId)?.serverConfig?.environment.capabilities
+        .projectCollections === true,
   );
   const editableIds = useEnvironmentsWithScope(group.memberProjects, AuthOrchestrationOperateScope);
   const canEditGroup = group.memberProjects.every((member) =>
@@ -242,6 +253,7 @@ function ProjectDetail({
         title: string;
         faviconPath: string | null;
         projectIcon: ProjectIconOverride | null;
+        projectCollectionId: ProjectCollectionId | null;
       }>,
       failureTitle: string,
     ): Promise<AtomCommandResult<void, unknown>> => {
@@ -328,6 +340,91 @@ function ProjectDetail({
   );
 
   const hasMultipleCheckouts = group.memberProjects.length > 1;
+  const groupEnvironmentIds = new Set(group.memberProjects.map((member) => member.environmentId));
+  const canManageRepositories =
+    supportsProjectCollections && !hasOtherMembers && groupEnvironmentIds.size === 1;
+  const collectionEnvironmentId = group.memberProjects[0]!.environmentId;
+  const groupMemberKeys = new Set(group.memberProjects.map(memberKey));
+  const repositoryCandidates = availableProjects.filter(
+    (project) =>
+      project.environmentId === collectionEnvironmentId &&
+      !groupMemberKeys.has(memberKey(project)) &&
+      project.projectCollectionId == null,
+  );
+
+  const updateMember = useCallback(
+    async (
+      member: SidebarProjectGroupMember,
+      input: {
+        projectCollectionId: ProjectCollectionId | null;
+        title?: string;
+        faviconPath?: string | null;
+        projectIcon?: ProjectIconOverride | null;
+      },
+      failureTitle: string,
+    ) => {
+      if (checkProjectAccess([member], failureTitle)) return false;
+      const result = mapAtomCommandResult(
+        await updateProject({
+          environmentId: member.environmentId,
+          input: { projectId: member.id, ...input },
+        }),
+        () => undefined,
+      );
+      if (result._tag === "Failure") {
+        reportFailure(failureTitle, result);
+        return false;
+      }
+      return true;
+    },
+    [checkProjectAccess, reportFailure, updateProject],
+  );
+
+  const addRepository = useCallback(
+    async (candidate: SidebarProjectGroupMember) => {
+      const projectCollectionId =
+        group.projectCollectionId ?? ProjectCollectionId.make(randomUUID());
+      const grouped = await updateAllMembers(
+        { projectCollectionId },
+        "Failed to create repository group",
+      );
+      if (grouped._tag === "Failure") return;
+      await updateMember(
+        candidate,
+        {
+          projectCollectionId,
+          title: group.displayName,
+          faviconPath: representative.faviconPath ?? null,
+          projectIcon: representative.projectIcon ?? null,
+        },
+        `Failed to add ${projectRepositoryLabel(candidate)}`,
+      );
+    },
+    [group.displayName, group.projectCollectionId, representative, updateAllMembers, updateMember],
+  );
+
+  const separateRepository = useCallback(
+    async (member: SidebarProjectGroupMember) => {
+      if (
+        !(await updateMember(
+          member,
+          { projectCollectionId: null },
+          "Failed to separate repository",
+        ))
+      ) {
+        return;
+      }
+      const remaining = group.memberProjects.filter((candidate) => candidate.id !== member.id);
+      if (remaining.length === 1) {
+        await updateMember(
+          remaining[0]!,
+          { projectCollectionId: null },
+          "Failed to finish separating repository",
+        );
+      }
+    },
+    [group.memberProjects, updateMember],
+  );
 
   const removeMembers = useCallback(
     async (members: ReadonlyArray<SidebarProjectGroupMember>) => {
@@ -445,6 +542,65 @@ function ProjectDetail({
     </SettingsSection>
   );
 
+  const repositoryChoices = (
+    <SettingsSection title="Repositories">
+      {group.memberProjects.map((member) => (
+        <SettingsRow
+          key={member.physicalProjectKey}
+          title={projectRepositoryLabel(member)}
+          description={member.workspaceRoot}
+          control={
+            group.isRepositoryCollection && group.memberProjects.length > 1 ? (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={!canManageRepositories || !editableIds.has(member.environmentId)}
+                onClick={() => void separateRepository(member)}
+              >
+                <UnlinkIcon />
+                Separate
+              </Button>
+            ) : null
+          }
+        />
+      ))}
+      <SettingsRow
+        title="Add repository"
+        description="Use another repository as part of this project. Agents can work across every repository by default."
+        control={
+          <Menu>
+            <MenuTrigger
+              render={
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={
+                    !canEditGroup || !canManageRepositories || repositoryCandidates.length === 0
+                  }
+                />
+              }
+            >
+              <FolderPlusIcon />
+              Add
+            </MenuTrigger>
+            <MenuPopup align="end">
+              {repositoryCandidates.map((candidate) => (
+                <MenuItem key={memberKey(candidate)} onClick={() => void addRepository(candidate)}>
+                  <span className="min-w-0">
+                    <span className="block truncate">{projectRepositoryLabel(candidate)}</span>
+                    <span className="block truncate text-xs text-muted-foreground">
+                      {candidate.workspaceRoot}
+                    </span>
+                  </span>
+                </MenuItem>
+              ))}
+            </MenuPopup>
+          </Menu>
+        }
+      />
+    </SettingsSection>
+  );
+
   return (
     <>
       <SettingsPageContainer className="gap-6">
@@ -538,6 +694,7 @@ function ProjectDetail({
         </SettingsSection>
         <ProjectDefaultsSettings category="project" />
         <ProjectActionsSettings />
+        {supportsProjectCollections ? repositoryChoices : null}
         {hasMultipleCheckouts ? checkoutChoices : null}
         <SettingsSection title="Danger">
           <SettingsRow

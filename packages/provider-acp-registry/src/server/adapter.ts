@@ -154,6 +154,9 @@ function makeAcpRegistryRuntime(options: AcpRegistryAdapterV2Options) {
       const context = yield* Layer.build(
         AcpSessionRuntime.layer({
           ...runtimeInput,
+          ...(input.runtimePolicy.additionalDirectories === undefined
+            ? {}
+            : { additionalDirectories: input.runtimePolicy.additionalDirectories }),
           spawn:
             processEnvironment === undefined
               ? resolved.spawn

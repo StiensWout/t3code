@@ -126,6 +126,7 @@ import { useSidebarPendingFileDropStore } from "../sidebarPendingFileDropStore";
 import { getProjectOrderKey, selectProjectGroupingSettings } from "../logicalProject";
 import {
   buildSidebarProjectSnapshots,
+  projectRepositoryLabel,
   projectGroupsSpanEnvironments,
   type SidebarProjectSnapshot,
 } from "../sidebarProjectGrouping";
@@ -2567,7 +2568,13 @@ export default function Sidebar() {
       new Map(
         projectGroups.flatMap((group) =>
           group.memberProjects.map(
-            (project) => [`${project.environmentId}:${project.id}`, group.displayName] as const,
+            (project) =>
+              [
+                `${project.environmentId}:${project.id}`,
+                group.isRepositoryCollection
+                  ? `${group.displayName} / ${projectRepositoryLabel(project)}`
+                  : group.displayName,
+              ] as const,
           ),
         ),
       ),

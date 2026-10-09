@@ -4,7 +4,7 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId, ProjectCreateNewResult } from "@t3tools/contracts";
 import { useCallback } from "react";
 
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
@@ -26,7 +26,7 @@ function errorMessage(error: unknown): string {
  * opens a new thread draft in it. With `github`, it also publishes the
  * repository as private, without holding up the draft.
  *
- * Resolves to whether the project was created.
+ * Resolves to the created project, or null when creation failed.
  */
 export function useNewProject() {
   const createNew = useAtomCommand(projectEnvironment.createNew, { reportFailure: false });
@@ -78,7 +78,8 @@ export function useNewProject() {
       readonly environmentId: EnvironmentId;
       readonly name: string;
       readonly github: { readonly account: string | null } | null;
-    }): Promise<boolean> => {
+      readonly openThread?: boolean;
+    }): Promise<ProjectCreateNewResult | null> => {
       const result = await createNew({
         environmentId: input.environmentId,
         input: { name: input.name },
@@ -93,7 +94,7 @@ export function useNewProject() {
             }),
           );
         }
-        return false;
+        return null;
       }
 
       const { projectId, workspaceRoot, commitError } = result.value;
@@ -117,6 +118,8 @@ export function useNewProject() {
         });
       }
 
+      if (input.openThread === false) return result.value;
+
       const projectRef = scopeProjectRef(input.environmentId, projectId);
       // Drafts key off the project's stored path, so wait for the create event
       // to reach the store before opening one.
@@ -130,7 +133,7 @@ export function useNewProject() {
         );
         return null;
       });
-      if (project === null) return true;
+      if (project === null) return result.value;
       await handleNewThread(projectRef).catch((error: unknown) => {
         toastManager.add(
           stackedThreadToast({
@@ -140,7 +143,7 @@ export function useNewProject() {
           }),
         );
       });
-      return true;
+      return result.value;
     },
     [createNew, handleNewThread, publishToGitHub],
   );

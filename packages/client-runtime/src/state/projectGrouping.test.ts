@@ -1,4 +1,4 @@
-import { EnvironmentId, ProjectId } from "@t3tools/contracts";
+import { EnvironmentId, ProjectCollectionId, ProjectId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import type { EnvironmentProject } from "./models.ts";
@@ -117,6 +117,55 @@ function settings(
 }
 
 describe("buildProjectGroups", () => {
+  it("groups different repositories in one environment by explicit collection", () => {
+    const projectCollectionId = ProjectCollectionId.make("product");
+    const apiIdentity = {
+      ...repositoryIdentity,
+      canonicalKey: "github.com/t3tools/api",
+      name: "api",
+      displayName: "API",
+    };
+    const projects = [
+      makeProject("web", "/work/web", { projectCollectionId, title: "Product" }),
+      makeProject("api", "/work/api", {
+        projectCollectionId,
+        repositoryIdentity: apiIdentity,
+        title: "Product",
+      }),
+    ];
+
+    const groups = buildProjectGroups({ projects, settings: settings("separate") });
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.projectCollectionId).toBe(projectCollectionId);
+    expect(groups[0]?.members.map((member) => member.project.id)).toEqual(["web", "api"]);
+  });
+
+  it("scopes explicit collections to one environment", () => {
+    const projectCollectionId = ProjectCollectionId.make("product");
+    const projects = [
+      makeProject("local", "/work/local", { projectCollectionId }),
+      makeProject("remote", "/work/remote", {
+        environmentId: EnvironmentId.make("remote-environment"),
+        projectCollectionId,
+      }),
+    ];
+
+    const groups = buildProjectGroups({ projects, settings: settings("repository") });
+    expect(groups).toHaveLength(2);
+  });
+
+  it("does not pull an uncollected repository sibling into an explicit collection", () => {
+    const projects = [
+      makeProject("collected", "/work/collected", {
+        projectCollectionId: ProjectCollectionId.make("product"),
+      }),
+      makeProject("sibling", "/work/sibling"),
+    ];
+
+    const groups = buildProjectGroups({ projects, settings: settings("repository") });
+    expect(groups).toHaveLength(2);
+  });
+
   it("preserves every physical clone as a selectable member in repository modes", () => {
     const projects = [
       makeProject("t3code", "/work/t3code"),

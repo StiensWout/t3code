@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
-import { ProjectId } from "./baseSchemas.ts";
+import { ProjectCollectionId } from "./baseSchemas.ts";
 import { OrchestrationProjectShell } from "./orchestrationProject.ts";
 
 import {
@@ -133,6 +133,7 @@ describe("shared project payloads", () => {
       autoPull: false,
       defaultModelSelection: null,
       faviconPath: null,
+      projectCollectionId: null,
     });
     const envelope = { commandId: "command", projectId: "project" };
     expect(decodeProjectMutation({ type: "project.create", ...envelope, ...create })).toEqual({
@@ -148,7 +149,13 @@ describe("shared project payloads", () => {
       autoPull: false,
       defaultModelSelection: null,
       faviconPath: null,
+      projectCollectionId: null,
     });
+    expect(
+      decodeProjectUpdatePayload({
+        projectCollectionId: ProjectCollectionId.make("collection-product"),
+      }),
+    ).toEqual({ projectCollectionId: "collection-product" });
     expect(Object.hasOwn(create, "scripts")).toBe(false);
     expect(Object.hasOwn(update, "title")).toBe(false);
     // Internal RPC callers may explicitly supply undefined, as before the extraction.

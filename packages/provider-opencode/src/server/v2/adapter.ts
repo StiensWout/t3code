@@ -410,7 +410,7 @@ type TurnTerminal =
 type Rule = Permission.Rule;
 type RulesPolicy = Pick<
   ProviderAdapter.ProviderAdapterV2RuntimePolicy,
-  "runtimeMode" | "interactionMode"
+  "runtimeMode" | "interactionMode" | "additionalDirectories"
 >;
 type NativeForm = EventOf<"form.created">["data"]["form"];
 
@@ -495,6 +495,11 @@ const sessionRules = (
   // Plan mode writes only its plan, which `paths` allows again. Shell and read
   // are never denied: the free tier refuses sessions whose rules deny them.
   ...(policy.interactionMode === "plan" ? [rule("edit", "deny")] : []),
+  ...(policy.additionalDirectories ?? []).map((root): Rule => ({
+    action: "external_directory",
+    resource: `${root.replace(/\/$/, "")}/*`,
+    effect: "allow",
+  })),
   ...paths,
   ...mcpRules(mcpServerName),
 ];

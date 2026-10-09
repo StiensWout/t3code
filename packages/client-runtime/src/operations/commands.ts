@@ -14,6 +14,7 @@ import {
   type OrchestrationV2CreationSource,
   type PlanId,
   type ProjectId,
+  type ProjectCollectionId,
   type ProjectIconOverride,
   type ProjectScript,
   type ProviderApprovalDecision,
@@ -44,6 +45,7 @@ export interface CreateProjectInput extends CommandMetadata {
   readonly projectId: ProjectId;
   readonly title: string;
   readonly workspaceRoot: string;
+  readonly projectCollectionId?: ProjectCollectionId | null;
   readonly createWorkspaceRootIfMissing?: boolean;
   readonly defaultModelSelection?: ModelSelection | null;
   readonly scripts?: ReadonlyArray<ProjectScript>;
@@ -53,6 +55,7 @@ export interface UpdateProjectInput extends CommandMetadata {
   readonly projectId: ProjectId;
   readonly title?: string;
   readonly workspaceRoot?: string;
+  readonly projectCollectionId?: ProjectCollectionId | null;
   readonly defaultModelSelection?: ModelSelection | null;
   readonly autoPull?: boolean;
   readonly projectIcon?: ProjectIconOverride | null;
@@ -315,6 +318,7 @@ const mutateProject = Effect.fn("EnvironmentCommands.mutateProject")(function* (
         readonly projectId: ProjectId;
         readonly title: string;
         readonly workspaceRoot: string;
+        readonly projectCollectionId?: ProjectCollectionId | null;
         readonly createWorkspaceRootIfMissing?: boolean;
         readonly defaultModelSelection?: ModelSelection | null;
         readonly scripts?: ReadonlyArray<ProjectScript>;
@@ -325,6 +329,7 @@ const mutateProject = Effect.fn("EnvironmentCommands.mutateProject")(function* (
         readonly projectId: ProjectId;
         readonly title?: string;
         readonly workspaceRoot?: string;
+        readonly projectCollectionId?: ProjectCollectionId | null;
         readonly defaultModelSelection?: ModelSelection | null;
         readonly scripts?: ReadonlyArray<ProjectScript>;
       }
@@ -347,6 +352,9 @@ export const createProject = Effect.fn("EnvironmentCommands.createProject")(func
     projectId: input.projectId,
     title: input.title,
     workspaceRoot: input.workspaceRoot,
+    ...(input.projectCollectionId === undefined
+      ? {}
+      : { projectCollectionId: input.projectCollectionId }),
     ...(input.createWorkspaceRootIfMissing === undefined
       ? {}
       : { createWorkspaceRootIfMissing: input.createWorkspaceRootIfMissing }),
@@ -366,6 +374,9 @@ export const updateProject = Effect.fn("EnvironmentCommands.updateProject")(func
     projectId: input.projectId,
     ...(input.title === undefined ? {} : { title: input.title }),
     ...(input.workspaceRoot === undefined ? {} : { workspaceRoot: input.workspaceRoot }),
+    ...(input.projectCollectionId === undefined
+      ? {}
+      : { projectCollectionId: input.projectCollectionId }),
     ...(input.defaultModelSelection === undefined
       ? {}
       : { defaultModelSelection: input.defaultModelSelection }),

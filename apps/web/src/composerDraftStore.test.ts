@@ -1336,6 +1336,33 @@ describe("composerDraftStore project draft thread mapping", () => {
     });
   });
 
+  it("defaults logical projects to all repositories and persists an explicit focus", () => {
+    const store = useComposerDraftStore.getState();
+    const logicalProjectKey = "collection:shared";
+
+    store.setLogicalProjectDraftThreadId(logicalProjectKey, projectRef, draftId, { threadId });
+    expect(store.getDraftSession(draftId)?.focusedProjectId).toBeNull();
+
+    store.setLogicalProjectDraftThreadId(logicalProjectKey, otherProjectRef, draftId, {
+      focusedProjectId: otherProjectId,
+    });
+    expect(store.getDraftSession(draftId)).toMatchObject({
+      projectId: otherProjectId,
+      focusedProjectId: otherProjectId,
+    });
+
+    const persisted = partializeComposerDraftStoreState(useComposerDraftStore.getState());
+    expect(persisted.draftThreadsByThreadKey[draftId]?.focusedProjectId).toBe(otherProjectId);
+
+    store.setLogicalProjectDraftThreadId(logicalProjectKey, projectRef, draftId, {
+      focusedProjectId: null,
+    });
+    expect(store.getDraftSession(draftId)).toMatchObject({
+      projectId,
+      focusedProjectId: null,
+    });
+  });
+
   it("removes a draft's previous project mapping when retargeted in place", () => {
     const store = useComposerDraftStore.getState();
     store.setProjectDraftThreadId(projectRef, draftId, { threadId });

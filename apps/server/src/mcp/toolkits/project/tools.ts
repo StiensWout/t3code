@@ -44,7 +44,7 @@ const shared = {
 const ProjectListTool = Tool.make("t3_project_list", {
   ...shared,
   description:
-    "List registered projects in this environment. Pages use the current project snapshot and may shift between calls.",
+    "List logical projects in this environment. A multi-repository project appears once and includes every agent-accessible workspace root. Pages use the current project snapshot and may shift between calls.",
   parameters: Schema.Struct({
     cursor: Schema.optional(NonNegativeInt),
     limit: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 100 }))),
@@ -59,7 +59,7 @@ const ProjectListTool = Tool.make("t3_project_list", {
 const ProjectReadTool = Tool.make("t3_project_read", {
   ...shared,
   description:
-    "Read a registered project in this environment, including its workspace and saved scripts.",
+    "Read a registered project in this environment, including every agent-accessible workspace root and its saved scripts.",
   parameters: Schema.Struct({ projectId: ProjectId }),
 })
   .annotate(Tool.Readonly, true)

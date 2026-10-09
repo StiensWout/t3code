@@ -320,6 +320,7 @@ const PersistedDraftThreadState = Schema.Struct({
   environmentId: Schema.String,
   projectId: ProjectId,
   logicalProjectKey: Schema.optionalKey(Schema.String),
+  focusedProjectId: Schema.optionalKey(Schema.NullOr(ProjectId)),
   environmentSelection: Schema.optionalKey(Schema.Literals(["auto", "manual"])),
   loadBalancedEnvironmentId: Schema.optionalKey(Schema.NullOr(Schema.String)),
   createdAt: Schema.String,
@@ -452,6 +453,8 @@ export interface DraftSessionState {
   environmentId: EnvironmentId;
   projectId: ProjectId;
   logicalProjectKey: string;
+  /** Null keeps the whole logical project in scope; a project id is an explicit repository focus. */
+  focusedProjectId: ProjectId | null;
   environmentSelection?: "auto" | "manual";
   loadBalancedEnvironmentId?: EnvironmentId | null;
   createdAt: string;
@@ -543,6 +546,7 @@ interface ComposerDraftStoreState {
       interactionMode?: ProviderInteractionMode;
       environmentSelection?: "auto" | "manual";
       loadBalancedEnvironmentId?: EnvironmentId | null;
+      focusedProjectId?: ProjectId | null;
     },
   ) => void;
   /** Creates or updates the draft session tracked for a concrete project ref. */
@@ -560,6 +564,7 @@ interface ComposerDraftStoreState {
       interactionMode?: ProviderInteractionMode;
       environmentSelection?: "auto" | "manual";
       loadBalancedEnvironmentId?: EnvironmentId | null;
+      focusedProjectId?: ProjectId | null;
     },
   ) => void;
   /** Updates mutable draft-session metadata without touching composer content. */
@@ -576,6 +581,7 @@ interface ComposerDraftStoreState {
       interactionMode?: ProviderInteractionMode;
       environmentSelection?: "auto" | "manual";
       loadBalancedEnvironmentId?: EnvironmentId | null;
+      focusedProjectId?: ProjectId | null;
     },
   ) => void;
   clearProjectDraftThreadId: (projectRef: ScopedProjectRef) => void;
@@ -1586,6 +1592,7 @@ function createDraftThreadState(
     interactionMode?: ProviderInteractionMode;
     environmentSelection?: "auto" | "manual";
     loadBalancedEnvironmentId?: EnvironmentId | null;
+    focusedProjectId?: ProjectId | null;
   },
 ): DraftThreadState {
   // A project change (including switching environments within a logical
@@ -1619,6 +1626,12 @@ function createDraftThreadState(
     environmentId: projectRef.environmentId,
     projectId: projectRef.projectId,
     logicalProjectKey,
+    focusedProjectId:
+      options?.focusedProjectId === undefined
+        ? projectChanged
+          ? null
+          : (existingThread?.focusedProjectId ?? null)
+        : options.focusedProjectId,
     ...(environmentSelection ? { environmentSelection } : {}),
     ...(options?.loadBalancedEnvironmentId !== undefined
       ? { loadBalancedEnvironmentId: options.loadBalancedEnvironmentId }
@@ -1663,6 +1676,7 @@ function draftThreadsEqual(left: DraftThreadState | undefined, right: DraftThrea
     left.environmentId === right.environmentId &&
     left.projectId === right.projectId &&
     left.logicalProjectKey === right.logicalProjectKey &&
+    left.focusedProjectId === right.focusedProjectId &&
     left.environmentSelection === right.environmentSelection &&
     left.loadBalancedEnvironmentId === right.loadBalancedEnvironmentId &&
     left.createdAt === right.createdAt &&
@@ -1804,6 +1818,11 @@ function normalizePersistedDraftThreads(
             : parsedThreadRef
               ? projectDraftKey(scopeProjectRef(normalizedEnvironmentId, projectId as ProjectId))
               : threadKeyOrId,
+        focusedProjectId:
+          typeof candidateDraftThread.focusedProjectId === "string" &&
+          candidateDraftThread.focusedProjectId.length > 0
+            ? (candidateDraftThread.focusedProjectId as ProjectId)
+            : null,
         createdAt:
           typeof createdAt === "string" && createdAt.length > 0
             ? createdAt
@@ -2575,6 +2594,7 @@ function toHydratedDraftThreadState(
           persistedDraftThread.projectId,
         ),
       ),
+    focusedProjectId: persistedDraftThread.focusedProjectId ?? null,
     createdAt: persistedDraftThread.createdAt,
     runtimeMode: persistedDraftThread.runtimeMode,
     interactionMode: persistedDraftThread.interactionMode,
@@ -2868,6 +2888,12 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               environmentId: nextProjectRef.environmentId,
               projectId: nextProjectRef.projectId,
               logicalProjectKey: existing.logicalProjectKey,
+              focusedProjectId:
+                options.focusedProjectId === undefined
+                  ? projectChanged
+                    ? null
+                    : existing.focusedProjectId
+                  : options.focusedProjectId,
               ...(environmentSelection ? { environmentSelection } : {}),
               loadBalancedEnvironmentId:
                 options.loadBalancedEnvironmentId === undefined
@@ -2892,6 +2918,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               nextDraftThread.environmentId === existing.environmentId &&
               nextDraftThread.projectId === existing.projectId &&
               nextDraftThread.logicalProjectKey === existing.logicalProjectKey &&
+              nextDraftThread.focusedProjectId === existing.focusedProjectId &&
               nextDraftThread.environmentSelection === existing.environmentSelection &&
               nextDraftThread.loadBalancedEnvironmentId === existing.loadBalancedEnvironmentId &&
               nextDraftThread.createdAt === existing.createdAt &&

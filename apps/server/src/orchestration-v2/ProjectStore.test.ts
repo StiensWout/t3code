@@ -1,5 +1,5 @@
 import { assert, it } from "@effect/vitest";
-import { EventId, ProjectId, ProviderInstanceId } from "@t3tools/contracts";
+import { EventId, ProjectCollectionId, ProjectId, ProviderInstanceId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -49,6 +49,59 @@ it.layer(ProjectStore.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemor
           Option.getOrNull(yield* projects.get(projectId))?.defaultModelSelection,
           modelSelection,
         );
+      }),
+    );
+
+    it.effect("stores and clears explicit project collection membership", () =>
+      Effect.gen(function* () {
+        const projects = yield* ProjectStore.ProjectStoreV2;
+        const projectId = ProjectId.make("project-collection");
+        const projectCollectionId = ProjectCollectionId.make("collection-product");
+        yield* projects.apply({
+          sequence: 1,
+          eventId: EventId.make("event-project-collection-created"),
+          aggregateKind: "project",
+          aggregateId: projectId,
+          occurredAt: "2026-03-24T00:00:00.000Z",
+          commandId: null,
+          causationEventId: null,
+          correlationId: null,
+          metadata: {},
+          type: "project.created",
+          payload: {
+            projectId,
+            title: "Product",
+            workspaceRoot: "/tmp/project-collection",
+            projectCollectionId,
+            defaultModelSelection: null,
+            scripts: [],
+            createdAt: "2026-03-24T00:00:00.000Z",
+            updatedAt: "2026-03-24T00:00:00.000Z",
+          },
+        });
+        assert.strictEqual(
+          Option.getOrNull(yield* projects.get(projectId))?.projectCollectionId,
+          projectCollectionId,
+        );
+
+        yield* projects.apply({
+          sequence: 2,
+          eventId: EventId.make("event-project-collection-cleared"),
+          aggregateKind: "project",
+          aggregateId: projectId,
+          occurredAt: "2026-03-24T00:01:00.000Z",
+          commandId: null,
+          causationEventId: null,
+          correlationId: null,
+          metadata: {},
+          type: "project.meta-updated",
+          payload: {
+            projectId,
+            projectCollectionId: null,
+            updatedAt: "2026-03-24T00:01:00.000Z",
+          },
+        });
+        assert.isNull(Option.getOrNull(yield* projects.get(projectId))?.projectCollectionId);
       }),
     );
   },
