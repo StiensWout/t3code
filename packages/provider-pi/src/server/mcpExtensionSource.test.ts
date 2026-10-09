@@ -417,8 +417,7 @@ describe("Pi skill references", () => {
         { name: "skill:alpha", source: "skill", sourceInfo: { path: alpha } },
         { name: "skill:beta", source: "skill", sourceInfo: { path: beta } },
       ]);
-      const text =
-        "Please use the $alpha philosophy, then $beta and $alpha\n```ts\n  const x = 1;\n```";
+      const text = "Please use ($alpha), then $beta. and $alpha\n```ts\n  const x = 1;\n```";
       const images = [{ type: "image", data: "fixture" }];
       const result = await hook({ text, images }, { ui: { notify: assert.fail } });
       assert.equal(result?.action, "transform");
@@ -436,8 +435,41 @@ describe("Pi skill references", () => {
     const hook = await loadInputHook([
       { name: "skill:alpha", source: "skill", sourceInfo: { path: "/unused" } },
     ]);
-    for (const text of ["Explain $HOME", "/skill:alpha use $alpha", "Hello", "$missing"]) {
+    for (const text of [
+      "Explain $HOME",
+      "/skill:alpha use $alpha",
+      "Hello",
+      "$missing",
+      "$alpha-extra,",
+      "prefix$alpha",
+    ]) {
       assert.isUndefined(await hook({ text }, { ui: { notify: assert.fail } }));
+    }
+  });
+
+  it("loads punctuated references while preserving exact catalog names", async () => {
+    const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "pi-skill-mentions-"));
+    try {
+      const path = NodePath.join(directory, "skill.md");
+      await NodeFSP.writeFile(path, "EXACT_SKILL_INSTRUCTIONS");
+      const hook = await loadInputHook([
+        { name: "skill:alpha", source: "skill", sourceInfo: { path } },
+        { name: "skill:alpha.v2", source: "skill", sourceInfo: { path } },
+        { name: "skill:alpha!", source: "skill", sourceInfo: { path } },
+      ]);
+      for (const [text, name] of [
+        ["Use $alpha, then continue", "alpha"],
+        ["Use ($alpha)", "alpha"],
+        ["Use [$alpha.v2].", "alpha.v2"],
+        ["Use $alpha!", "alpha!"],
+      ] as const) {
+        const result = await hook({ text }, { ui: { notify: assert.fail } });
+        assert.isTrue(result?.text.startsWith(text + "\n\n"));
+        assert.include(result?.text ?? "", "EXACT_SKILL_INSTRUCTIONS");
+        assert.include(result?.text ?? "", `<skill name="${name}"`);
+      }
+    } finally {
+      await NodeFSP.rm(directory, { recursive: true });
     }
   });
 
