@@ -220,18 +220,11 @@ export default async function t3McpExtension(pi: ExtensionAPI) {
     const nativeSkill = /^\\/skill:([^ ]+)(?: |$)/.exec(event.text)?.[1];
     const seen = new Set<string>(nativeSkill === undefined ? [] : [nativeSkill]);
     const blocks: string[] = [];
-    for (const match of event.text.matchAll(/(^|[\\s([{])\\$([^\\s]+)/g)) {
-      const reference = match[2];
-      if (reference === undefined) continue;
-      // Prefer the exact catalog name before treating trailing punctuation as prose.
-      const command =
-        commands.find((candidate) => candidate.name === "skill:" + reference) ??
-        commands.find(
-          (candidate) => candidate.name === "skill:" + reference.replace(/[)\\]},.!?:;]+$/, ""),
-        );
+    for (const match of event.text.matchAll(/(^|\\s)\\$([^\\s]+)(?=\\s|$)/g)) {
+      const name = match[2];
+      if (name === undefined || seen.has(name)) continue;
+      const command = commands.find((candidate) => candidate.name === "skill:" + name);
       if (command === undefined) continue;
-      const name = command.name.slice("skill:".length);
-      if (seen.has(name)) continue;
       seen.add(name);
       const path = command.sourceInfo.path;
       try {
