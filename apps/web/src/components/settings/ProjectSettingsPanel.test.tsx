@@ -207,7 +207,15 @@ import { ProjectSettingsPanel } from "./ProjectSettingsPanel";
 const primaryId = EnvironmentId.make("primary");
 const remoteId = EnvironmentId.make("remote");
 const instanceId = ProviderInstanceId.make("codex");
-const environments = [primaryId, remoteId].map((environmentId) => ({
+const environments: Array<{
+  environmentId: EnvironmentId;
+  label: EnvironmentId;
+  connection: { phase: "connected" };
+  serverConfig: {
+    keybindings: ResolvedKeybindingsConfig;
+    environment?: { capabilities: { projectCollections: boolean } };
+  };
+}> = [primaryId, remoteId].map((environmentId) => ({
   environmentId,
   label: environmentId,
   connection: { phase: "connected" },
@@ -240,6 +248,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   state.registry = AtomRegistry.make();
   state.sessions.clear();
+  for (const environment of environments) delete environment.serverConfig.environment;
   for (const id of [primaryId, remoteId])
     state.sessions.set(id, Atom.make<SessionResult>(writable()).pipe(Atom.keepAlive));
   state.projects = [primaryId, remoteId].map((environmentId) => ({
@@ -473,4 +482,47 @@ describe("project settings permissions", () => {
       expect(state.update).toHaveBeenCalledTimes(allowed ? 2 : 0);
     },
   );
+});
+
+describe("project repository management", () => {
+  it("serializes repository additions while the collection update is pending", async () => {
+    environments[0]!.serverConfig.environment = {
+      capabilities: { projectCollections: true },
+    };
+    state.projects = [
+      state.projects[0]!,
+      {
+        ...state.projects[0]!,
+        id: ProjectId.make("project-api"),
+        title: "API",
+        workspaceRoot: "/work/api",
+        repositoryIdentity: {
+          canonicalKey: "github.com/example/api",
+          locator: {
+            source: "git-remote",
+            remoteName: "origin",
+            remoteUrl: "https://github.com/example/api.git",
+          },
+        },
+      },
+    ];
+    const firstUpdate = deferred<AsyncResult.Success<void>>();
+    state.update.mockReturnValueOnce(firstUpdate.promise);
+    const root = await mountPanel();
+    const addRepository = root.findByProps({ "aria-label": "Add repository api" });
+
+    await act(async () => {
+      addRepository.props.onClick();
+      addRepository.props.onClick();
+    });
+
+    expect(state.update).toHaveBeenCalledOnce();
+    expect(button("Add").props.disabled).toBe(true);
+
+    await act(async () => {
+      firstUpdate.resolve(AsyncResult.success(undefined));
+      await firstUpdate.promise;
+    });
+    expect(state.update).toHaveBeenCalledTimes(2);
+  });
 });

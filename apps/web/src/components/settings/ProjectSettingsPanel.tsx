@@ -182,7 +182,7 @@ function ProjectDetail({
   );
   const supportsProjectCollections = group.memberProjects.every(
     (member) =>
-      environmentById.get(member.environmentId)?.serverConfig?.environment.capabilities
+      environmentById.get(member.environmentId)?.serverConfig?.environment?.capabilities
         .projectCollections === true,
   );
   const editableIds = useEnvironmentsWithScope(group.memberProjects, AuthOrchestrationOperateScope);
@@ -201,6 +201,8 @@ function ProjectDetail({
     reportFailure: false,
   });
   const projectNameEditedRef = useRef(false);
+  const addingRepositoryRef = useRef(false);
+  const [isAddingRepository, setIsAddingRepository] = useState(false);
 
   const faviconPath = representative.faviconPath ?? null;
   const projectIcon = representative.projectIcon ?? null;
@@ -382,23 +384,31 @@ function ProjectDetail({
 
   const addRepository = useCallback(
     async (candidate: SidebarProjectGroupMember) => {
-      const projectCollectionId =
-        group.projectCollectionId ?? ProjectCollectionId.make(randomUUID());
-      const grouped = await updateAllMembers(
-        { projectCollectionId },
-        "Failed to create repository group",
-      );
-      if (grouped._tag === "Failure") return;
-      await updateMember(
-        candidate,
-        {
-          projectCollectionId,
-          title: group.displayName,
-          faviconPath: representative.faviconPath ?? null,
-          projectIcon: representative.projectIcon ?? null,
-        },
-        `Failed to add ${projectRepositoryLabel(candidate)}`,
-      );
+      if (addingRepositoryRef.current) return;
+      addingRepositoryRef.current = true;
+      setIsAddingRepository(true);
+      try {
+        const projectCollectionId =
+          group.projectCollectionId ?? ProjectCollectionId.make(randomUUID());
+        const grouped = await updateAllMembers(
+          { projectCollectionId },
+          "Failed to create repository group",
+        );
+        if (grouped._tag === "Failure") return;
+        await updateMember(
+          candidate,
+          {
+            projectCollectionId,
+            title: group.displayName,
+            faviconPath: representative.faviconPath ?? null,
+            projectIcon: representative.projectIcon ?? null,
+          },
+          `Failed to add ${projectRepositoryLabel(candidate)}`,
+        );
+      } finally {
+        addingRepositoryRef.current = false;
+        setIsAddingRepository(false);
+      }
     },
     [group.displayName, group.projectCollectionId, representative, updateAllMembers, updateMember],
   );
@@ -575,7 +585,10 @@ function ProjectDetail({
                   size="sm"
                   variant="outline"
                   disabled={
-                    !canEditGroup || !canManageRepositories || repositoryCandidates.length === 0
+                    !canEditGroup ||
+                    !canManageRepositories ||
+                    isAddingRepository ||
+                    repositoryCandidates.length === 0
                   }
                 />
               }
@@ -585,7 +598,11 @@ function ProjectDetail({
             </MenuTrigger>
             <MenuPopup align="end">
               {repositoryCandidates.map((candidate) => (
-                <MenuItem key={memberKey(candidate)} onClick={() => void addRepository(candidate)}>
+                <MenuItem
+                  key={memberKey(candidate)}
+                  aria-label={`Add repository ${projectRepositoryLabel(candidate)}`}
+                  onClick={() => void addRepository(candidate)}
+                >
                   <span className="min-w-0">
                     <span className="block truncate">{projectRepositoryLabel(candidate)}</span>
                     <span className="block truncate text-xs text-muted-foreground">

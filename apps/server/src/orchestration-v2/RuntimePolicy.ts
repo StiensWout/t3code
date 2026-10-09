@@ -112,7 +112,10 @@ export const layerFromProjectStore: Layer.Layer<
                 cause,
               }),
           ),
-          Effect.flatMap(
+        );
+        const cwd =
+          input.thread.worktreePath ??
+          (yield* project.pipe(
             Option.match({
               onNone: () =>
                 Effect.fail(
@@ -122,29 +125,28 @@ export const layerFromProjectStore: Layer.Layer<
                     cause: "Project not found.",
                   }),
                 ),
-              onSome: Effect.succeed,
+              onSome: (value) => Effect.succeed(value.workspaceRoot),
             }),
-          ),
-        );
-        const cwd = input.thread.worktreePath ?? project.workspaceRoot;
-        const additionalDirectories = project.projectCollectionId
-          ? (yield* projects.list().pipe(
-              Effect.mapError(
-                (cause) =>
-                  new RuntimePolicyResolveError({
-                    projectId: input.thread.projectId,
-                    providerInstanceId: input.modelSelection.instanceId,
-                    cause,
-                  }),
-              ),
-            ))
-              .filter(
-                (candidate) =>
-                  candidate.projectCollectionId === project.projectCollectionId &&
-                  candidate.projectId !== project.projectId,
-              )
-              .map((candidate) => candidate.workspaceRoot)
-          : [];
+          ));
+        const additionalDirectories =
+          Option.isSome(project) && project.value.projectCollectionId
+            ? (yield* projects.list().pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new RuntimePolicyResolveError({
+                      projectId: input.thread.projectId,
+                      providerInstanceId: input.modelSelection.instanceId,
+                      cause,
+                    }),
+                ),
+              ))
+                .filter(
+                  (candidate) =>
+                    candidate.projectCollectionId === project.value.projectCollectionId &&
+                    candidate.projectId !== project.value.projectId,
+                )
+                .map((candidate) => candidate.workspaceRoot)
+            : [];
         return ProviderAdapterV2RuntimePolicy.make({
           runtimeMode: providerRuntimeMode(input.thread.runtimeMode, supportedRuntimeModes),
           interactionMode: input.thread.interactionMode,

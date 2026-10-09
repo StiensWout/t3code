@@ -278,7 +278,9 @@ export function buildProjectGroups<TProject extends EnvironmentProject>(input: {
     );
     const identitySource = selectProjectIdentitySource(physicalProjects, winner);
     const logicalKey = deriveLogicalProjectKey(
-      winner.projectCollectionId ? winner : identitySource,
+      winner.projectCollectionId
+        ? winner
+        : { ...identitySource, projectCollectionId: winner.projectCollectionId },
       {
         groupingMode: resolveProjectGroupingMode(winner, input.settings),
       },

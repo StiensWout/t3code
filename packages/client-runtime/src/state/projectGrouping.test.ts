@@ -315,6 +315,30 @@ describe("buildProjectGroups", () => {
     expect(groups[0]?.members.map((member) => member.project.id)).toEqual(["fresh", "sibling"]);
   });
 
+  it("does not inherit a stale duplicate's repository collection", () => {
+    const staleCollected = makeProject("stale", "/work/t3code", {
+      projectCollectionId: ProjectCollectionId.make("old-product"),
+      updatedAt: "2026-07-01T00:00:00.000Z",
+    });
+    const freshUncollected = makeProject("fresh", "/work/t3code/", {
+      repositoryIdentity: null,
+      updatedAt: "2026-07-02T00:00:00.000Z",
+    });
+    const oldCollectionMember = makeProject("old-api", "/work/old-api", {
+      projectCollectionId: ProjectCollectionId.make("old-product"),
+    });
+
+    const groups = buildProjectGroups({
+      projects: [staleCollected, freshUncollected, oldCollectionMember],
+      settings: settings("separate"),
+    });
+    expect(groups).toHaveLength(2);
+    expect(groups.map((group) => group.members.map((member) => member.project.id))).toEqual([
+      ["fresh"],
+      ["old-api"],
+    ]);
+  });
+
   it("uses the freshest winner's repository identity when stale duplicates disagree", () => {
     const staleIdentity = {
       ...repositoryIdentity,

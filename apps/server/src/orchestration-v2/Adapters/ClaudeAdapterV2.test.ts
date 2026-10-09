@@ -2442,6 +2442,49 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       ),
   );
 
+  it.effect("reopens the query when the logical project roots change", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarnessWithOptions({ freshQueueOnReopen: true });
+        const now = yield* DateTime.now;
+        const runtimePolicy = (additionalDirectories: ReadonlyArray<string>) =>
+          ProviderAdapterV2RuntimePolicy.make({
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            cwd: "/workspace/web",
+            additionalDirectories,
+          });
+        const turn = (ordinal: number, additionalDirectories: ReadonlyArray<string>) =>
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make(`attempt-workspace-roots:${ordinal}`),
+            text: `Request ${ordinal}`,
+            attachments: [],
+            providerTurnOrdinal: ordinal,
+            runtimePolicy: runtimePolicy(additionalDirectories),
+          });
+
+        yield* harness.runtime.startTurn(turn(1, ["/workspace/api"]));
+        const originalOptions = harness.getOpenedOptions();
+        yield* harness.offerAndWait(turnOneResult);
+        yield* Queue.take(harness.terminalReceipts);
+
+        yield* harness.runtime.startTurn(turn(2, ["/workspace/api", "/workspace/infra"]));
+        assert.lengthOf(harness.processQueues, 2);
+        assert.notStrictEqual(harness.getOpenedOptions(), originalOptions);
+        assert.includeMembers(harness.getOpenedOptions()?.additionalDirectories ?? [], [
+          "/workspace/web",
+          "/workspace/api",
+          "/workspace/infra",
+        ]);
+        yield* Queue.offer(harness.processQueues[1]!, turnOneResult);
+        yield* Queue.take(harness.terminalReceipts);
+      }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+    ),
+  );
+
   it.effect.each(["completed", "interrupted"] as const)(
     "projects Claude thinking blocks when %s",
     (status) =>

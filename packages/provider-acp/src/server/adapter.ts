@@ -259,18 +259,17 @@ export interface AcpAdapterV2Flavor {
    * Opts the session into the ACP client `fs` capability. Agents read and write
    * files themselves under their own permission model unless a flavor sets
    * this. Requests pass the runtime policy guard, then these handlers, which
-   * receive the cwd of the policy active when the request arrives (null when
-   * the session has no workspace). Antigravity sets it and confines requests
-   * to that workspace.
+   * receive the policy active when the request arrives. Antigravity sets it
+   * and confines requests to the logical project's workspace roots.
    */
   readonly clientFileSystem?: {
     readonly readTextFile: (
       request: EffectAcpSchema.ReadTextFileRequest,
-      cwd: string | null,
+      runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
     ) => Effect.Effect<EffectAcpSchema.ReadTextFileResponse, EffectAcpErrors.AcpError>;
     readonly writeTextFile: (
       request: EffectAcpSchema.WriteTextFileRequest,
-      cwd: string | null,
+      runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
     ) => Effect.Effect<EffectAcpSchema.WriteTextFileResponse, EffectAcpErrors.AcpError>;
   };
   /**
@@ -5633,12 +5632,12 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           if (clientFileSystem !== undefined) {
             yield* targetRuntime.handleReadTextFile((request) =>
               clientPolicyContext.pipe(
-                Effect.flatMap(({ policy }) => clientFileSystem.readTextFile(request, policy.cwd)),
+                Effect.flatMap(({ policy }) => clientFileSystem.readTextFile(request, policy)),
               ),
             );
             yield* targetRuntime.handleWriteTextFile((request) =>
               clientPolicyContext.pipe(
-                Effect.flatMap(({ policy }) => clientFileSystem.writeTextFile(request, policy.cwd)),
+                Effect.flatMap(({ policy }) => clientFileSystem.writeTextFile(request, policy)),
               ),
             );
           }

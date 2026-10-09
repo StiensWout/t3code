@@ -15,6 +15,7 @@ import * as Scope from "effect/Scope";
 import * as EffectAcpErrors from "effect-acp/errors";
 
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
+import type { ProviderAdapterV2RuntimePolicy } from "@t3tools/provider-core/server/ProviderAdapter";
 import type { AntigravityAuth } from "../../provider/AntigravityAuth.ts";
 import type * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
 import {
@@ -126,8 +127,13 @@ export function makeAntigravityAcpAdapterFlavor(
   // The attachments dir grant lets the agent read pasted files at the paths
   // the turn text references. It is a leaf directory of uploads. A session
   // without a workspace gets no workspace root rather than the server's cwd.
-  const antigravityClientFileRoots = (cwd: string | null) =>
-    cwd === null ? [options.host.paths.attachmentsDir] : [cwd, options.host.paths.attachmentsDir];
+  const antigravityClientFileRoots = (
+    runtimePolicy: ProviderAdapterV2RuntimePolicy,
+  ): ReadonlyArray<string> => [
+    ...(runtimePolicy.cwd === null ? [] : [runtimePolicy.cwd]),
+    ...(runtimePolicy.additionalDirectories ?? []),
+    options.host.paths.attachmentsDir,
+  ];
   const makeRuntime = (input: AcpAdapterV2RuntimeInput) =>
     Effect.gen(function* () {
       // AcpAdapterV2 owns the runtime scope; sign-in and sign-out stop the
@@ -189,18 +195,18 @@ export function makeAntigravityAcpAdapterFlavor(
       }),
     sessionModeForPolicy: (policy) => antigravityPermissionMode(policy.runtimeMode),
     clientFileSystem: {
-      readTextFile: (request, cwd) =>
+      readTextFile: (request, runtimePolicy) =>
         readAntigravityClientTextFile({
           fileSystem: options.fileSystem,
           path: options.path,
-          allowedRoots: antigravityClientFileRoots(cwd),
+          allowedRoots: antigravityClientFileRoots(runtimePolicy),
           request,
         }),
-      writeTextFile: (request, cwd) =>
+      writeTextFile: (request, runtimePolicy) =>
         writeAntigravityClientTextFile({
           fileSystem: options.fileSystem,
           path: options.path,
-          allowedRoots: antigravityClientFileRoots(cwd),
+          allowedRoots: antigravityClientFileRoots(runtimePolicy),
           request,
         }),
     },
