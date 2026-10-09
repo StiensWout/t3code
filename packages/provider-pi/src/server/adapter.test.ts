@@ -2231,6 +2231,10 @@ describe("PiAdapterV2", () => {
         yield* fake.emit({ type: "response", command: "prompt", success: true });
         yield* fake.emit({ type: "agent_start" });
         yield* fake.emit({ type: "agent_settled" });
+        yield* takeEvent(
+          (event) =>
+            event.type === "provider_turn.updated" && event.providerTurn.status === "completed",
+        );
         const thread = yield* takeEvent(
           (event) =>
             event.type === "provider_thread.updated" && event.providerThread.status === "idle",
@@ -2238,6 +2242,56 @@ describe("PiAdapterV2", () => {
         assert.isUndefined(
           thread.type === "provider_thread.updated" ? thread.retainedNativeTurnIds : null,
         );
+      }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect.each(["missing parent", "invalid parent", "duplicate id"] as const)(
+    "does not reconcile malformed session entries: %s",
+    (malformed) =>
+      Effect.gen(function* () {
+        const fake = yield* makeFakePi;
+        const { runtime, takeEvent } = yield* openRuntime(fake);
+        const root = { type: "model_change", id: "root", parentId: null };
+        fake.queueEntries({ entries: [root], leafId: "root" });
+        const providerThread = yield* runtime.ensureThread({
+          threadId: THREAD_ID,
+          modelSelection: modelSelection("default"),
+          runtimePolicy,
+        });
+        yield* startTurn(runtime, providerThread);
+        yield* fake.takeRequest("prompt");
+        const entry = {
+          type: "message",
+          id: "x",
+          message: { role: "user", content: [] },
+          ...(malformed === "missing parent"
+            ? {}
+            : { parentId: malformed === "invalid parent" ? 42 : null }),
+        };
+        fake.queueEntries({ entries: [], leafId: "x" });
+        fake.queueEntries({
+          entries: [
+            root,
+            entry,
+            ...(malformed === "duplicate id" ? [{ ...entry, parentId: "root" }] : []),
+          ],
+          leafId: "x",
+        });
+        yield* fake.emit({ type: "response", command: "prompt", success: true });
+        yield* fake.emit({ type: "agent_start" });
+        yield* fake.emit({ type: "agent_settled" });
+        yield* takeEvent(
+          (event) =>
+            event.type === "provider_turn.updated" && event.providerTurn.status === "completed",
+        );
+        const thread = yield* takeEvent(
+          (event) =>
+            event.type === "provider_thread.updated" && event.providerThread.status === "idle",
+        );
+        assert.isUndefined(
+          thread.type === "provider_thread.updated" ? thread.retainedNativeTurnIds : null,
+        );
+        yield* takeEvent((event) => event.type === "turn.terminal");
       }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 

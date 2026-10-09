@@ -1405,8 +1405,9 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         request({ type: "get_entries", ...(since === null ? {} : { since }) }, timeoutMs).pipe(
           Effect.map((data) => {
             const leafId = recordField(data, "leafId");
-            return typeof leafId === "string" || leafId === null
-              ? { entries: piSessionEntries(recordField(data, "entries")), leafId }
+            const entries = piSessionEntries(recordField(data, "entries"));
+            return entries !== null && (typeof leafId === "string" || leafId === null)
+              ? { entries, leafId }
               : null;
           }),
           Effect.orElseSucceed(() => null),
@@ -3129,15 +3130,17 @@ interface PiSessionEntry {
   readonly isUserMessage: boolean;
 }
 
-/** Index a `get_entries` listing by entry id. */
-function piSessionEntries(entries: unknown): ReadonlyMap<string, PiSessionEntry> {
+/** Index a `get_entries` listing, rejecting ambiguous ancestry. */
+function piSessionEntries(entries: unknown): ReadonlyMap<string, PiSessionEntry> | null {
   const byId = new Map<string, PiSessionEntry>();
-  if (!Array.isArray(entries)) return byId;
+  if (!Array.isArray(entries)) return null;
   for (const entry of entries) {
     const id = recordString(entry, "id");
-    if (id === undefined) continue;
+    const parentId = recordField(entry, "parentId");
+    if (id === undefined || byId.has(id) || (parentId !== null && typeof parentId !== "string"))
+      return null;
     byId.set(id, {
-      parentId: recordString(entry, "parentId") ?? null,
+      parentId,
       isUserMessage:
         recordField(entry, "type") === "message" &&
         recordString(recordField(entry, "message"), "role") === "user",
