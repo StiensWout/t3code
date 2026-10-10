@@ -310,6 +310,8 @@ interface ActivePiTurn {
    */
   readonly toolStartedAt: Map<string, DateTime.Utc>;
   interrupted: boolean;
+  /** Cancellation of the latest native run; new work can recover before settlement. */
+  nativeAborted: boolean;
   /**
    * Whether any agent run activity was observed. Command-only prompts (pure
    * extension slash commands) never start an agent run and never emit
@@ -1473,19 +1475,16 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         const turn = state.activeTurn;
         if (turn === null) return;
         state.activeTurn = null;
+        const interrupted = turn.interrupted || turn.nativeAborted;
         const completedAt = yield* DateTime.now;
         yield* completeOpenStreamItems(turn);
         if (turn.activeCompaction !== null) {
-          const status = turn.interrupted
-            ? "cancelled"
-            : turn.failure === null
-              ? "completed"
-              : "failed";
+          const status = interrupted ? "cancelled" : turn.failure === null ? "completed" : "failed";
           yield* emitCompaction(turn, turn.activeCompaction, status);
           turn.activeCompaction = null;
         }
         if (turn.activeProviderRetry !== null) {
-          if (turn.interrupted) {
+          if (interrupted) {
             yield* emitProviderRetry(turn, turn.activeProviderRetry, "interrupted", completedAt);
             turn.activeProviderRetry = null;
           } else if (turn.failure === null) {
@@ -1499,7 +1498,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         const tokenUsage = readUsage
           ? yield* readTokenUsage(turn.latestCompactionAfterTokens, completedAt)
           : undefined;
-        const failure = turn.interrupted ? null : (turn.rejectedPromptFailure ?? turn.failure);
+        const failure = interrupted ? null : (turn.rejectedPromptFailure ?? turn.failure);
         yield* emit({
           type: "provider_turn.updated",
           driver: PI_PROVIDER,
@@ -1509,7 +1508,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             ...(treeRefs === null || treeRefs.nativeTurnRef === undefined
               ? {}
               : { nativeTurnRef: treeRefs.nativeTurnRef }),
-            status: turn.interrupted ? "interrupted" : failure !== null ? "failed" : "completed",
+            status: interrupted ? "interrupted" : failure !== null ? "failed" : "completed",
             completedAt,
             ...(tokenUsage === undefined ? {} : { tokenUsage }),
           },
@@ -1578,7 +1577,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             providerThreadId: state.providerThread.id,
             providerTurnId: turn.providerTurn.id,
             runOrdinal: turn.turnInput.runOrdinal,
-            status: turn.interrupted ? "interrupted" : "completed",
+            status: interrupted ? "interrupted" : "completed",
             failure: null,
             threadDisposition: "reusable",
           });
@@ -1698,6 +1697,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               return;
             }
             turn.sawAgentActivity = true;
+            turn.nativeAborted = false;
             turn.settleProbeGeneration += 1;
             return;
           }
@@ -1917,6 +1917,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               return;
             }
             if (turn !== null) {
+              turn.nativeAborted = event["aborted"] === true;
               turn.settleWhenIdle = true;
               turn.settleProbeGeneration += 1;
               // A wake can settle while the newly joined user prompt is still
@@ -2509,6 +2510,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               toolArgs: new Map(),
               toolStartedAt: new Map(),
               interrupted: false,
+              nativeAborted: false,
               sawAgentActivity: false,
               adoptedWake: false,
               promptMayBeCommandOnly:
