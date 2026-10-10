@@ -386,6 +386,49 @@ it.effect(
   },
 );
 
+it.effect("refreshes inventory after cleanup changes a checkout whose removal fails", () => {
+  const { state, layer } = makeHarness();
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const git = yield* GitVcsDriver.GitVcsDriver;
+    const worktrees = yield* WorktreeService.WorktreeService;
+    const repositoryRoot = yield* initializeRepository();
+    state.projects = [makeProject(repositoryRoot)];
+    const worktreePath = yield* addWorktree(repositoryRoot, "partial-cleanup");
+    yield* fs.writeFileString(path.join(worktreePath, ".env"), "local data");
+    yield* fs.writeFileString(path.join(worktreePath, "notes.txt"), "untracked data");
+    const before = yield* worktrees.listWorktrees({});
+    const headSha = (yield* git.resolveCommit({ cwd: worktreePath, revision: "HEAD" })).commitSha;
+    // An external writer changes tracked data after clean succeeds. Git then refuses removal.
+    state.beforeGitRemove = fs
+      .writeFileString(path.join(worktreePath, "README.md"), "new work")
+      .pipe(Effect.orDie);
+    const result = yield* worktrees.removeIfSafe({
+      path: worktreePath,
+      workspaceRoot: repositoryRoot,
+      intent: "policy",
+      keepWhen: "tracked-changes",
+      expected: { branch: "feature/partial-cleanup", headSha },
+      recheck: Effect.succeed(true),
+    });
+    assert.deepInclude(result, { outcome: "skipped", reason: "remove_failed" });
+    assert.isTrue(yield* fs.exists(worktreePath));
+    assert.isFalse(yield* fs.exists(path.join(worktreePath, ".env")));
+    assert.isFalse(yield* fs.exists(path.join(worktreePath, "notes.txt")));
+    const after = yield* worktrees.listWorktrees({});
+    assert.isAbove(after.revision, before.revision);
+    assert.deepInclude(
+      after.worktrees.find((entry) => entry.path === worktreePath),
+      {
+        dirtyFileCount: 1,
+        ignoredFileCount: 0,
+        safeToPrune: false,
+      },
+    );
+  }).pipe(Effect.provide(layer));
+});
+
 it.effect("removes a detached checkout only once its commit is on the default branch", () => {
   const { state, layer } = makeHarness();
   return Effect.gen(function* () {

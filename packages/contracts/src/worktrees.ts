@@ -210,6 +210,8 @@ export const WorktreeMutationErrorStage = Schema.Literals([
   "load_project",
   "project_not_found",
   "run_setup",
+  "setup_exit_nonzero",
+  "setup_readiness_changed",
 ]);
 export type WorktreeMutationErrorStage = typeof WorktreeMutationErrorStage.Type;
 
@@ -223,6 +225,7 @@ export class WorktreeMutationError extends Schema.TaggedError<WorktreeMutationEr
     workspaceRoot: Schema.optional(Schema.NonEmptyString),
     branch: Schema.optional(TrimmedNonEmptyString),
     projectId: Schema.optional(ProjectId),
+    exitCode: Schema.optional(Schema.NullOr(Schema.Number)),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
@@ -268,6 +271,10 @@ export class WorktreeMutationError extends Schema.TaggedError<WorktreeMutationEr
         return `Project '${this.projectId ?? "unknown"}' was not found for this worktree.`;
       case "run_setup":
         return "Failed to run the project setup script after revival.";
+      case "setup_exit_nonzero":
+        return `Project setup exited with ${this.exitCode ?? "no exit code"} after worktree revival.`;
+      case "setup_readiness_changed":
+        return "Worktree readiness changed during project setup. Retry the turn.";
     }
   }
 }

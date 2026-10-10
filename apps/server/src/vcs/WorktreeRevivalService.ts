@@ -58,6 +58,7 @@ function mutationError(
     readonly workspaceRoot?: string;
     readonly branch?: string;
     readonly projectId?: ProjectId;
+    readonly exitCode?: number | null;
   } = {},
 ): WorktreeMutationError {
   return new WorktreeMutationError({
@@ -68,6 +69,7 @@ function mutationError(
     ...(context.workspaceRoot === undefined ? {} : { workspaceRoot: context.workspaceRoot }),
     ...(context.branch === undefined ? {} : { branch: context.branch }),
     ...(context.projectId === undefined ? {} : { projectId: context.projectId }),
+    ...(context.exitCode === undefined ? {} : { exitCode: context.exitCode }),
     ...(cause === undefined ? {} : { cause }),
   });
 }
@@ -558,7 +560,10 @@ const make = Effect.gen(function* () {
       worktreePath,
       Effect.gen(function* () {
         if ((yield* readPendingSetup(input.projectId, worktreePath)) !== token) {
-          return yield* setupFailed("Worktree readiness changed while setup was running.");
+          return yield* mutationError("setup_readiness_changed", undefined, {
+            projectId: input.projectId,
+            path: worktreePath,
+          });
         }
         yield* fs
           .remove(yield* pendingSetupPath(input.projectId, worktreePath))
@@ -592,9 +597,13 @@ const make = Effect.gen(function* () {
     // Awaiting completion also releases the script's terminal subscription.
     const completion = yield* setup.completion;
     if (!setup.async && completion.exitCode !== 0) {
-      return yield* setupFailed(
-        `Setup script exited with ${completion.exitCode ?? "no exit code"}.`,
-      );
+      return yield* mutationError("setup_exit_nonzero", undefined, {
+        projectId: input.projectId,
+        path: worktreePath,
+        workspaceRoot: project.workspaceRoot,
+        branch: input.branch,
+        exitCode: completion.exitCode,
+      });
     }
     if (!setup.async) yield* permitStartup;
   });
@@ -624,14 +633,10 @@ const make = Effect.gen(function* () {
         if (pending !== token) {
           const current = (yield* Ref.get(setupRuns)).get(key);
           if (pending === undefined && current?.token === token) return current.outcome;
-          return yield* mutationError(
-            "run_setup",
-            "Worktree readiness changed before setup started.",
-            {
-              projectId: input.projectId,
-              path: worktreePath,
-            },
-          );
+          return yield* mutationError("setup_readiness_changed", undefined, {
+            projectId: input.projectId,
+            path: worktreePath,
+          });
         }
         const registered = yield* Ref.modify(setupRuns, (runs) => {
           const current = runs.get(key);

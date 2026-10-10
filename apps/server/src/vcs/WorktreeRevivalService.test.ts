@@ -502,8 +502,9 @@ it.effect("fails a revival whose required setup exits non-zero and reruns it nex
       return { error, retry };
     }).pipe(Effect.provide(layer));
 
-    assert.equal(error.stage, "run_setup");
-    assert.equal(error.cause, "Setup script exited with 1.");
+    assert.equal(error.stage, "setup_exit_nonzero");
+    assert.equal(error.exitCode, 1);
+    assert.equal(error.message, "Project setup exited with 1 after worktree revival.");
     assert.deepEqual(retry, { revived: false, generation: 1 });
     assert.deepEqual(exitCodes, []);
   }).pipe(Effect.provide(Layer.mergeAll(serverConfigLiveLayer, NodeServices.layer, gitLayer))),
@@ -559,7 +560,7 @@ it.effect("retries required setup after restart and remembers success on the nex
       service.reviveForThread({ threadId, projectId, worktreePath, branch: "feature/revival" }),
     );
     const error = yield* start.pipe(Effect.flip, Effect.provide(layer));
-    assert.equal(error.stage, "run_setup");
+    assert.equal(error.stage, "setup_exit_nonzero");
     const retry = yield* start.pipe(Effect.provide(Layer.fresh(layer)));
     assert.deepEqual(retry, { revived: false, generation: 0 });
     assert.equal(attempts, 2);
@@ -716,8 +717,11 @@ it.effect("an older setup completion cannot clear a replacement checkout's pendi
       yield* Deferred.await(secondStarted);
       yield* Deferred.succeed(firstFinished, { exitCode: 0, durationMs: 1 });
       const stale = yield* Fiber.join(first).pipe(Effect.flip);
-      assert.equal(stale.stage, "run_setup");
-      assert.equal(stale.cause, "Worktree readiness changed while setup was running.");
+      assert.equal(stale.stage, "setup_readiness_changed");
+      assert.equal(
+        stale.message,
+        "Worktree readiness changed during project setup. Retry the turn.",
+      );
       yield* Fiber.interrupt(second);
     }).pipe(Effect.provide(layer));
     const retry = yield* Effect.flatMap(WorktreeRevivalService.WorktreeRevivalService, (service) =>
@@ -794,8 +798,8 @@ it.live.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         const input = { threadId, projectId, worktreePath, branch: "feature/revival" };
         for (let attempt = 0; attempt < 2; attempt++) {
           const error = yield* revival.reviveForThread(input).pipe(Effect.flip);
-          assert.equal(error.stage, "run_setup");
-          assert.equal(error.cause, "Setup script exited with 1.");
+          assert.equal(error.stage, "setup_exit_nonzero");
+          assert.equal(error.exitCode, 1);
         }
         assert.equal(spawns, 1);
         yield* fs.remove(worktreePath, { recursive: true });
@@ -882,7 +886,7 @@ it.effect(
         ).pipe(Effect.provide(Layer.fresh(layer)));
       yield* start(firstProject.id);
       const error = yield* start(secondProject.id).pipe(Effect.flip);
-      assert.deepInclude(error, { stage: "run_setup" });
+      assert.deepInclude(error, { stage: "setup_exit_nonzero", exitCode: 1 });
       yield* start(secondProject.id);
       yield* start(aliasProject.id);
       yield* start(firstProject.id);

@@ -910,8 +910,12 @@ const make = Effect.gen(function* () {
       }
       yield* git.removeWorktree({ cwd: workspaceRoot, path: worktreePath, force: false });
     }).pipe(
-      Effect.tap(() => gitManager.invalidateStatus(input.workspaceRoot)),
-      Effect.tap(() => lifecycle.markInventoryChanged),
+      // Cleanup can change files even if Git subsequently refuses removal.
+      Effect.ensuring(
+        gitManager
+          .invalidateStatus(input.workspaceRoot)
+          .pipe(Effect.andThen(lifecycle.markInventoryChanged)),
+      ),
       Effect.result,
       Effect.uninterruptible,
     );
