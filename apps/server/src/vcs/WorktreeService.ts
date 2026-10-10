@@ -57,6 +57,7 @@ const SKIP_REASON_MESSAGE: Record<WorktreePruneSkipReason, string> = {
   terminal: "a terminal is open in it",
   open_thread: "a linked thread is still open",
   dirty: "it has uncommitted changes",
+  submodules: "it has submodule repositories; preserve their work and remove it manually",
   unpushed: "it has commits that are not pushed or merged",
   unrestorable_thread: "a linked thread could not get this checkout back",
   status_unavailable: "its Git status could not be read",
@@ -120,7 +121,7 @@ interface ProjectGroup {
   readonly projects: ReadonlyArray<ProjectReference>;
 }
 
-/** One `git status` read of a checkout. */
+/** One `git status` read of a checkout, plus its submodules. */
 interface WorktreeInspection {
   readonly headSha: string | null;
   readonly branch: string | null;
@@ -132,6 +133,8 @@ interface WorktreeInspection {
   readonly trackedFileCount: number;
   /** Ignored paths other than reproducible dependency installs. */
   readonly ignoredFiles: ReadonlyArray<string>;
+  /** Git refuses an unforced removal while this holds. */
+  readonly hasSubmodules: boolean;
 }
 
 interface WorktreeUsage {
@@ -141,7 +144,7 @@ interface WorktreeUsage {
 }
 
 /** Parses `git status --porcelain=v2 --branch -z --ignored=matching`. */
-function parseWorktreeStatus(stdout: string): WorktreeInspection {
+function parseWorktreeStatus(stdout: string): Omit<WorktreeInspection, "hasSubmodules"> {
   let headSha: string | null = null;
   let branch: string | null = null;
   let upstream: string | null = null;
@@ -235,6 +238,7 @@ function removalBlockers(input: {
         ? inspection.trackedFileCount
         : inspection.changedFileCount;
     if (changedFiles > 0) blockers.add("dirty");
+    if (inspection.hasSubmodules) blockers.add("submodules");
     if (inspection.branch === null) {
       // No ref keeps a detached commit, so it must already be on the default
       // branch for either intent.
@@ -434,9 +438,49 @@ const make = Effect.gen(function* () {
   });
 
   /**
+   * Git's own reason to refuse an unforced `worktree remove`: this checkout's
+   * Git directory keeps submodule repositories, as `submodule update` and
+   * `deinit` leave them, or a submodule path at `commit` is checked out.
+   * Forcing it could delete their unpublished commits. A staged submodule
+   * change already shows as a changed file, so the commit's gitlinks suffice.
+   * null when the listing is incomplete.
+   */
+  const readHasSubmodules = Effect.fn("WorktreeService.readHasSubmodules")(function* (
+    worktreePath: string,
+    commit: string,
+  ) {
+    const modulesPath = yield* git.execute({
+      operation: "WorktreeService.readHasSubmodules.modules",
+      cwd: worktreePath,
+      args: ["rev-parse", "--git-path", "modules"],
+      timeoutMs: 15_000,
+    });
+    if (modulesPath.stdoutTruncated) return null;
+    if (yield* fs.exists(path.resolve(worktreePath, modulesPath.stdout.trim()))) return true;
+    // Directories only, which is far smaller than the index on large repositories.
+    const tree = yield* git.execute({
+      operation: "WorktreeService.readHasSubmodules.gitlinks",
+      cwd: worktreePath,
+      args: ["ls-tree", "-r", "-d", "-z", commit],
+      timeoutMs: 15_000,
+      maxOutputBytes: STATUS_MAX_OUTPUT_BYTES,
+    });
+    if (tree.stdoutTruncated) return null;
+    const gitlinks = tree.stdout
+      .split("\0")
+      .flatMap((entry) =>
+        entry.startsWith("160000 ") ? [entry.slice(entry.indexOf("\t") + 1)] : [],
+      );
+    const checkedOut = yield* Effect.findFirst(gitlinks, (gitlink) =>
+      fs.exists(path.join(worktreePath, gitlink, ".git")),
+    );
+    return Option.isSome(checkedOut);
+  });
+
+  /**
    * Branch, HEAD commit, upstream counters, changed files and ignored files
-   * from one `git status` call. null when the status cannot be read in full:
-   * a partial listing could hide a changed or ignored file.
+   * from one `git status` call, then its submodules. null when either cannot
+   * be read in full: a partial listing could hide a file or a submodule.
    */
   const inspect = Effect.fn("WorktreeService.inspect")(
     function* (worktreePath: string) {
@@ -456,7 +500,12 @@ const make = Effect.gen(function* () {
         timeoutMs: 15_000,
         maxOutputBytes: STATUS_MAX_OUTPUT_BYTES,
       });
-      return result.stdoutTruncated ? null : parseWorktreeStatus(result.stdout);
+      if (result.stdoutTruncated) return null;
+      const status = parseWorktreeStatus(result.stdout);
+      // Without a commit the status is already unavailable to every caller.
+      if (status.headSha === null) return { ...status, hasSubmodules: false };
+      const hasSubmodules = yield* readHasSubmodules(worktreePath, status.headSha);
+      return hasSubmodules === null ? null : { ...status, hasSubmodules };
     },
     Effect.catchCause((cause) =>
       Cause.hasInterruptsOnly(cause)
@@ -839,6 +888,7 @@ const make = Effect.gen(function* () {
       if (changedFiles > 0) {
         return skipped("dirty", `${changedFiles} ${changedFiles === 1 ? "file" : "files"}`);
       }
+      if (latest.hasSubmodules) return skipped("submodules");
       if (latest.ignoredFiles.length > 0 && !allowIgnoredFiles) {
         return skipped("ignored_files", latest.ignoredFiles[0]);
       }

@@ -201,6 +201,8 @@ function workBlockerLabel(worktree: WorktreeInfo, blocker: WorktreePruneBlocker)
       const label = againstUpstream ? "unpushed" : "unmerged";
       return count ? `${count} ${label}` : label === "unpushed" ? "Unpushed" : "Unmerged";
     }
+    case "submodules":
+      return "Submodules";
     case "status_unavailable":
       return "Status unknown";
     case "unrestorable_thread":
@@ -210,12 +212,17 @@ function workBlockerLabel(worktree: WorktreeInfo, blocker: WorktreePruneBlocker)
   }
 }
 
+// Git refuses this removal unless forced, which T3 Code never does for it.
+const SUBMODULES_MESSAGE =
+  "It has submodule repositories. Preserve their work and remove this checkout manually.";
+
 const BLOCKER_DETAIL: Record<WorktreePruneBlocker, string> = {
   running: "A turn is running or queued here.",
   session: "A provider session is using this checkout.",
   terminal: "A terminal is open here.",
   open_thread: "A linked thread is not settled or archived.",
   dirty: "It has uncommitted changes.",
+  submodules: SUBMODULES_MESSAGE,
   unpushed: "It has commits that are not pushed or merged.",
   unrestorable_thread: "A linked thread could not get this checkout back after removal.",
   status_unavailable: "Git status could not be read.",
@@ -294,6 +301,7 @@ const SKIP_MESSAGE: Record<WorktreePruneSkip["reason"], string> = {
   terminal: "A terminal is open in it.",
   open_thread: "A linked thread is still open.",
   dirty: "It has uncommitted changes.",
+  submodules: SUBMODULES_MESSAGE,
   unpushed: "It has commits that are not pushed or merged.",
   unrestorable_thread: "A linked thread could not get this checkout back.",
   status_unavailable: "Its Git status could not be read.",

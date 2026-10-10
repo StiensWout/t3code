@@ -61,6 +61,7 @@ const REMOVAL_SKIP_REASON: Record<WorktreePruneSkipReason, string> = {
   terminal: "open terminal",
   open_thread: "a linked thread is still open",
   dirty: "has uncommitted changes",
+  submodules: "has submodule repositories",
   unpushed: "has commits that are not pushed or merged",
   unrestorable_thread: "a linked thread could not get this checkout back",
   status_unavailable: "Git status could not be read",

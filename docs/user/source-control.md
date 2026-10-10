@@ -208,17 +208,20 @@ history. **Remove** is offered only when nothing would be lost:
 - **Open thread:** a linked thread is idle but not settled or archived.
 - **Changed, unpushed, or unmerged:** it has uncommitted files, or commits its upstream does not
   have. Without an upstream, and for a detached checkout, commits must be on the default branch.
+- **Submodules:** it has checked-out submodules or retained submodule repositories. Git refuses
+  unforced removal. Preserve their commits and local files before removing the checkout manually.
 - **Status unknown:** Git could not be read.
 - **Linked thread:** the thread records a different branch from the checkout and could not restore it.
 
-Ignored files such as `.env` or build output do not block removal, but they are deleted with the
-checkout. The row shows how many there are and the confirmation lists them. `node_modules` is not
-counted.
+Ignored files such as `.env` or build output are deleted with the checkout, so they need your
+confirmation in Settings. The row shows how many there are and the confirmation lists them.
+Deleting a thread does not ask about them and keeps a worktree that has them. `node_modules` is
+not counted.
 
 [Storage cleanup](./project-settings.md#storage-cleanup) removes worktrees automatically. It uses
 its own rules: it can remove a clean worktree whose thread is idle or whose branch has unpushed
 commits, because the branch is kept. The configured local-file policy decides whether ignored or untracked
-files keep a checkout. Tracked edits always keep it.
+files keep a checkout. Tracked edits and submodule repositories always keep it.
 
 When a thread needs a removed worktree again, T3 Code recreates it from the kept branch before the
 next turn and runs the project's setup script there. If that fails, for example because the branch

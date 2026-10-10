@@ -15,11 +15,15 @@ import {
   type Project,
   type WorktreeSubmodules,
 } from "@t3tools/contracts";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import * as ServerConfig from "../config.ts";
+import * as ProcessRunner from "../processRunner.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as TerminalManager from "../terminal/Manager.ts";
+import * as NodePtyAdapter from "../terminal/NodePtyAdapter.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 import * as WorktreeLifecycle from "./WorktreeLifecycle.ts";
 import * as WorktreeRevivalService from "./WorktreeRevivalService.ts";
@@ -724,48 +728,176 @@ it.effect("an older setup completion cannot clear a replacement checkout's pendi
   }).pipe(Effect.provide(Layer.mergeAll(serverConfigLiveLayer, NodeServices.layer, gitLayer))),
 );
 
-it.effect("keeps pending setup for each project sharing the canonical repository", () =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    const config = yield* ServerConfig.ServerConfig;
-    const repositoryRoot = yield* initializeRepository();
-    const aliasRoot = yield* fs.makeTempDirectoryScoped({ prefix: "t3-revival-alias-" });
-    const aliasPath = path.join(aliasRoot, "repository");
-    yield* fs.symlink(repositoryRoot, aliasPath);
-    const worktreePath = path.join(config.worktreesDir, "setup", "shared-projects");
-    const firstProject = makeProject(repositoryRoot);
-    const secondProject = { ...makeProject(aliasPath), id: ProjectId.make("second-project") };
-    const projects = [firstProject, secondProject];
-    const attempts: Array<string | undefined> = [];
-    const layer = makeRevivalLayer(
-      firstProject,
-      (input) =>
-        Effect.sync(() => {
-          attempts.push(input.projectId);
-          return startedSetup(
-            worktreePath,
-            false,
-            Effect.succeed({
-              exitCode: attempts.length === 2 ? 1 : 0,
-              durationMs: 1,
-            }),
-          );
-        }),
-      { config, projects },
-    );
-    const start = (projectId: ProjectId) =>
-      Effect.flatMap(WorktreeRevivalService.WorktreeRevivalService, (service) =>
-        service.reviveForThread({ threadId, projectId, worktreePath, branch: "feature/revival" }),
-      ).pipe(Effect.provide(Layer.fresh(layer)));
-    yield* start(firstProject.id);
-    const error = yield* start(secondProject.id).pipe(Effect.flip);
-    assert.deepInclude(error, { stage: "run_setup" });
-    yield* start(secondProject.id);
-    yield* start(firstProject.id);
-    yield* start(secondProject.id);
-    assert.deepEqual(attempts, [firstProject.id, secondProject.id, secondProject.id]);
-  }).pipe(Effect.provide(Layer.mergeAll(serverConfigLiveLayer, NodeServices.layer, gitLayer))),
+it.live.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+  "retries setup in the same shell until the checkout is replaced, then starts a fresh shell",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const config = yield* ServerConfig.ServerConfig;
+      const repositoryRoot = yield* initializeRepository();
+      const scratch = yield* fs.makeTempDirectoryScoped({ prefix: "t3-revival-shell-" });
+      const attemptsPath = path.join(scratch, "attempts");
+      const scriptPath = path.join(scratch, "setup.cjs");
+      yield* fs.writeFileString(
+        scriptPath,
+        [
+          'const fs = require("node:fs");',
+          "const cwd = process.cwd();",
+          `const attemptsPath = ${JSON.stringify(attemptsPath)};`,
+          "const attempts = fs.existsSync(attemptsPath) ? Number(fs.readFileSync(attemptsPath)) : 0;",
+          "fs.writeFileSync(attemptsPath, String(attempts + 1));",
+          "if (attempts < 2) process.exit(1);",
+          'fs.writeFileSync("ready", cwd);',
+        ].join("\n"),
+      );
+      const worktreePath = path.join(config.worktreesDir, "setup", "replacement-shell");
+      const project = {
+        ...makeProject(repositoryRoot),
+        scripts: [
+          {
+            id: "setup",
+            name: "Setup",
+            icon: "configure",
+            runOnWorktreeCreate: true,
+            async: false,
+            command: `'${process.execPath.replaceAll("'", "'\\''")}' '${scriptPath.replaceAll("'", "'\\''")}'`,
+          },
+        ],
+      } satisfies Project;
+      const nativePty = yield* NodePtyAdapter.make();
+      let spawns = 0;
+      const terminal = yield* TerminalManager.makeWithOptions({
+        logsDir: path.join(scratch, "logs"),
+        shellResolver: () => "/bin/bash",
+        env: { ...process.env, SHELL: "/bin/bash" },
+        ptyAdapter: {
+          spawn: (input) =>
+            nativePty.spawn({ ...input, args: ["--noprofile", "--norc"] }).pipe(
+              Effect.tap(() =>
+                Effect.sync(() => {
+                  spawns++;
+                }),
+              ),
+            ),
+        },
+      });
+      const runner = yield* ProjectSetupScriptRunner.make.pipe(
+        Effect.provideService(TerminalManager.TerminalManager, terminal),
+        Effect.provideService(HostProcess.Environment, { ...process.env, SHELL: "/bin/bash" }),
+        Effect.provide(
+          Layer.mergeAll(Layer.mock(ProjectService.ProjectService)({}), ServerSettings.layerTest()),
+        ),
+      );
+      yield* Effect.gen(function* () {
+        const revival = yield* WorktreeRevivalService.WorktreeRevivalService;
+        const input = { threadId, projectId, worktreePath, branch: "feature/revival" };
+        for (let attempt = 0; attempt < 2; attempt++) {
+          const error = yield* revival.reviveForThread(input).pipe(Effect.flip);
+          assert.equal(error.stage, "run_setup");
+          assert.equal(error.cause, "Setup script exited with 1.");
+        }
+        assert.equal(spawns, 1);
+        yield* fs.remove(worktreePath, { recursive: true });
+        const replacement = yield* revival.reviveForThread(input);
+        assert.deepEqual(replacement, { revived: true, generation: 2 });
+        assert.equal(spawns, 2);
+        assert.equal(
+          yield* fs.readFileString(path.join(worktreePath, "ready")),
+          yield* fs.realPath(worktreePath),
+        );
+        yield* revival.reviveForThread(input);
+        assert.equal(yield* fs.readFileString(attemptsPath), "3");
+      }).pipe(Effect.provide(makeRevivalLayer(project, runner.runForThread, { config })));
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          serverConfigLiveLayer,
+          NodeServices.layer,
+          gitLayer,
+          ProcessRunner.layer.pipe(Layer.provide(NodeServices.layer)),
+        ),
+      ),
+    ),
+);
+
+it.effect(
+  "keeps separate setup readiness for nested projects and aliases of the same Git repository",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const config = yield* ServerConfig.ServerConfig;
+      const repositoryRoot = yield* initializeRepository();
+      const nestedRoot = path.join(repositoryRoot, "subproject");
+      yield* fs.makeDirectory(nestedRoot);
+      const aliasRoot = yield* fs.makeTempDirectoryScoped({ prefix: "t3-revival-alias-" });
+      const aliasPath = path.join(aliasRoot, "repository");
+      yield* fs.symlink(repositoryRoot, aliasPath);
+      const worktreePath = path.join(config.worktreesDir, "setup", "shared-projects");
+      const firstProject = makeProject(repositoryRoot);
+      const secondProject = { ...makeProject(nestedRoot), id: ProjectId.make("second-project") };
+      const aliasProject = {
+        ...makeProject(path.join(aliasPath, "subproject")),
+        id: ProjectId.make("alias-project"),
+      };
+      const unrelatedProject = {
+        ...makeProject(yield* initializeRepository()),
+        id: ProjectId.make("unrelated-project"),
+      };
+      const nonGitRoot = yield* fs.makeTempDirectoryScoped({ prefix: "t3-revival-nongit-" });
+      const nonGitProject = { ...makeProject(nonGitRoot), id: ProjectId.make("nongit-project") };
+      const missingProject = {
+        ...makeProject(path.join(nonGitRoot, "missing")),
+        id: ProjectId.make("missing-project"),
+      };
+      const projects = [
+        firstProject,
+        secondProject,
+        aliasProject,
+        unrelatedProject,
+        nonGitProject,
+        missingProject,
+      ];
+      const attempts: Array<string | undefined> = [];
+      const layer = makeRevivalLayer(
+        firstProject,
+        (input) =>
+          Effect.sync(() => {
+            attempts.push(input.projectId);
+            return startedSetup(
+              worktreePath,
+              false,
+              Effect.succeed({
+                exitCode: attempts.length === 2 ? 1 : 0,
+                durationMs: 1,
+              }),
+            );
+          }),
+        { config, projects },
+      );
+      const start = (projectId: ProjectId) =>
+        Effect.flatMap(WorktreeRevivalService.WorktreeRevivalService, (service) =>
+          service.reviveForThread({ threadId, projectId, worktreePath, branch: "feature/revival" }),
+        ).pipe(Effect.provide(Layer.fresh(layer)));
+      yield* start(firstProject.id);
+      const error = yield* start(secondProject.id).pipe(Effect.flip);
+      assert.deepInclude(error, { stage: "run_setup" });
+      yield* start(secondProject.id);
+      yield* start(aliasProject.id);
+      yield* start(firstProject.id);
+      yield* start(secondProject.id);
+      yield* start(aliasProject.id);
+      yield* start(unrelatedProject.id);
+      yield* start(nonGitProject.id);
+      yield* start(missingProject.id);
+      assert.deepEqual(attempts, [
+        firstProject.id,
+        secondProject.id,
+        secondProject.id,
+        aliasProject.id,
+      ]);
+    }).pipe(Effect.provide(Layer.mergeAll(serverConfigLiveLayer, NodeServices.layer, gitLayer))),
 );
 
 it.effect("rejects a missing checkout that contains a configured managed root", () =>

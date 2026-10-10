@@ -215,10 +215,34 @@ const make = Effect.gen(function* () {
         branch: input.branch,
       });
     }
+    // Inventory groups projects by Git's common directory, including nested
+    // project roots and aliases. A non-Git or missing project has no shared
+    // checkout readiness and must not prevent another project's revival.
+    const repositoryKeys = yield* Effect.forEach(
+      projectRoots,
+      (workspaceRoot) =>
+        Effect.gen(function* () {
+          const result = yield* git.execute({
+            operation: "WorktreeRevivalService.repositoryKey",
+            cwd: workspaceRoot,
+            args: ["rev-parse", "--git-common-dir"],
+            env: { LC_ALL: "C" },
+            allowNonZeroExit: true,
+            timeoutMs: 15_000,
+          });
+          if (result.exitCode !== 0) return null;
+          const commonDir = result.stdout.trim();
+          return commonDir.length === 0
+            ? workspaceRoot
+            : yield* canonicalizePath(path.resolve(workspaceRoot, commonDir));
+        }).pipe(Effect.orElseSucceed(() => null)),
+      { concurrency: PROJECT_SCAN_CONCURRENCY },
+    );
+    const repositoryKey = repositoryKeys[projectRoots.indexOf(requestedWorkspaceRoot)] ?? null;
     return {
       workspaceRoot: requestedWorkspaceRoot,
       projectIds: projectSnapshot.projects
-        .filter((_, index) => projectRoots[index] === requestedWorkspaceRoot)
+        .filter((_, index) => repositoryKey !== null && repositoryKeys[index] === repositoryKey)
         .map((project) => project.id),
     };
   });
@@ -548,6 +572,9 @@ const make = Effect.gen(function* () {
         projectId: input.projectId,
         projectCwd: project.workspaceRoot,
         worktreePath,
+        // Retries reuse this checkout's shell. A replacement token starts a
+        // fresh shell even when the previous shell still holds the deleted cwd.
+        preferredTerminalId: `setup-revival-${token}`,
         project: {
           id: project.id,
           workspaceRoot: project.workspaceRoot,

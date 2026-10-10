@@ -298,6 +298,94 @@ it.effect("refuses the legacy forced removal of a worktree with changes", () => 
   }).pipe(Effect.provide(layer));
 });
 
+it.effect(
+  "keeps a checkout with initialized submodules, which Git only removes when forced",
+  () => {
+    const { state, layer } = makeHarness();
+    return Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const git = yield* GitVcsDriver.GitVcsDriver;
+      const worktrees = yield* WorktreeService.WorktreeService;
+      const run = (cwd: string, args: ReadonlyArray<string>) =>
+        git.execute({
+          operation: "WorktreeServiceTest.submodules",
+          cwd,
+          args: ["-c", "protocol.file.allow=always", "-c", "user.name=T3 Test", ...args],
+        });
+      const library = yield* initializeRepository();
+      const repositoryRoot = yield* initializeRepository();
+      state.projects = [makeProject(repositoryRoot)];
+      yield* run(repositoryRoot, ["submodule", "add", library, "lib"]);
+      yield* run(repositoryRoot, ["commit", "-m", "add submodule"]);
+      yield* run(repositoryRoot, ["update-ref", "refs/remotes/upstream/main", "refs/heads/main"]);
+      const headSha = (yield* git.resolveCommit({ cwd: repositoryRoot, revision: "HEAD" }))
+        .commitSha;
+
+      // Clean, but its submodule holds a commit no remote has.
+      const initialized = yield* addWorktree(repositoryRoot, "initialized");
+      yield* run(initialized, ["submodule", "update", "--init"]);
+      const submodule = path.join(initialized, "lib");
+      yield* run(submodule, ["checkout", "-b", "unpublished"]);
+      yield* run(submodule, [
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "--allow-empty",
+        "-m",
+        "x",
+      ]);
+      yield* run(submodule, ["checkout", "--detach", "HEAD~1"]);
+      // Checked out by hand, so this worktree's Git directory has no submodule repository.
+      const cloned = yield* addWorktree(repositoryRoot, "cloned");
+      yield* run(repositoryRoot, ["clone", library, path.join(cloned, "lib")]);
+      const uninitialized = yield* addWorktree(repositoryRoot, "uninitialized");
+      const late = yield* addWorktree(repositoryRoot, "late");
+
+      const listed = (yield* worktrees.listWorktrees({})).worktrees.find(
+        (worktree) => worktree.path === initialized,
+      );
+      assert.deepInclude(listed, {
+        dirty: false,
+        safeToPrune: false,
+        pruneBlockers: ["submodules"],
+      });
+      assert.equal(yield* removeManually(initialized), "submodules");
+      assert.equal(yield* removeManually(cloned), "submodules");
+      assert.deepEqual(
+        yield* worktrees.removeIfSafe({
+          path: initialized,
+          workspaceRoot: repositoryRoot,
+          intent: "policy",
+          expected: { branch: "feature/initialized", headSha },
+          recheck: Effect.succeed(true),
+        }),
+        { outcome: "skipped", reason: "submodules" },
+      );
+      assert.isTrue(yield* fs.exists(cloned));
+      yield* run(submodule, ["rev-parse", "--verify", "refs/heads/unpublished"]);
+      // Deinitializing keeps the repository and its unpublished branch in Git metadata.
+      yield* run(initialized, ["submodule", "deinit", "--force", "lib"]);
+      assert.isFalse(yield* fs.exists(path.join(submodule, ".git")));
+      assert.equal(yield* removeManually(initialized), "submodules");
+      // Initialized after the first inspection found none.
+      assert.deepEqual(
+        yield* worktrees.removeIfSafe({
+          path: late,
+          workspaceRoot: repositoryRoot,
+          intent: "policy",
+          expected: { branch: "feature/late", headSha },
+          recheck: run(late, ["submodule", "update", "--init"]).pipe(Effect.as(true), Effect.orDie),
+        }),
+        { outcome: "skipped", reason: "submodules" },
+      );
+      assert.isTrue(yield* fs.exists(path.join(late, "lib", ".git")));
+
+      assert.equal(yield* removeManually(uninitialized), "removed");
+    }).pipe(Effect.provide(layer));
+  },
+);
+
 it.effect("removes a detached checkout only once its commit is on the default branch", () => {
   const { state, layer } = makeHarness();
   return Effect.gen(function* () {

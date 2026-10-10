@@ -184,6 +184,13 @@ describe("worktree state label", () => {
     ).toBe("3 unmerged, Linked thread");
   });
 
+  it("warns about submodules Git will not remove without force", () => {
+    expect(worktreeStateLabel(blocked({ pruneBlockers: ["submodules"] }))).toMatchObject({
+      text: "Submodules",
+      tone: "warning",
+    });
+  });
+
   it("reports unreadable status", () => {
     expect(worktreeStateLabel(blocked({ pruneBlockers: ["status_unavailable"] }))).toMatchObject({
       text: "Status unknown",

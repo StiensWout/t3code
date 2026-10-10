@@ -28,7 +28,10 @@ export type WorktreeProjectRef = typeof WorktreeProjectRef.Type;
  * Reasons the inventory will not remove a managed worktree by hand. `running`,
  * `session`, `terminal` and `status_unavailable` also stop configured
  * Storage cleanup. Its local-file policy determines whether untracked and
- * ignored files keep a checkout; tracked edits always do. `open_thread`, a named branch's `unpushed` commits and
+ * ignored files keep a checkout; tracked edits always do. `submodules` stops
+ * both: Git refuses an unforced removal of a checkout with initialized
+ * submodules, and forcing it could lose their unpublished commits.
+ * `open_thread`, a named branch's `unpushed` commits and
  * `unrestorable_thread` only stop manual removal, since cleanup keeps the branch.
  * `unrestorable_thread` is a linked thread that revival could not bring back:
  * the checkout is detached, or the thread recorded a different branch or none.
@@ -39,6 +42,7 @@ export const WorktreePruneBlocker = Schema.Literals([
   "terminal",
   "open_thread",
   "dirty",
+  "submodules",
   "unpushed",
   "unrestorable_thread",
   "status_unavailable",
