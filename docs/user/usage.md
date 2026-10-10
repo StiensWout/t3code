@@ -31,10 +31,12 @@ you to allow access on the server Mac.
 Usage includes each configured account's history, including disabled accounts. Custom homes follow
 the account's home setting or its `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, or `GROK_HOME` environment
 variable. Pi reads `~/.pi/agent/sessions`, or the `sessions` directory under
-`PI_CODING_AGENT_DIR`. Pi includes recorded tool and summary costs; these appear under
-`Tools/summaries` when Pi does not record their model. Use absolute paths or `~/` paths in the
-account's environment settings; relative environment paths depend on each project's working directory
-and cannot be reliably discovered by Usage. Accounts sharing a history directory count once.
+`PI_CODING_AGENT_DIR`. Set `PI_CODING_AGENT_SESSION_DIR` to read a different session directory.
+To include sessions saved through `--session-dir` or Pi's `sessionDir` setting, set this environment
+variable to the same directory. Pi includes recorded tool and summary costs under `Tools/summaries`.
+Use absolute paths or `~/` paths in the account's environment settings; relative environment paths
+depend on each project's working directory and cannot be reliably discovered by Usage. Accounts
+sharing a history directory count once.
 
 When your app and server support different providers, usage totals may cover only the providers
 your app understands. Update the app to include newly supported providers.

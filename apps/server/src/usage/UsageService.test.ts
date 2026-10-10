@@ -331,7 +331,7 @@ describe("UsageService", () => {
                 kind: "cache_warm",
                 provider: "openai",
                 model: "actual-model",
-                usage,
+                usage: { ...usage, cost: { ...usage.cost, total: 0 } },
               },
             ]
               .map((line) => encodeUnknownJsonString(line))
@@ -361,7 +361,7 @@ describe("UsageService", () => {
           const pi = first.buckets.filter((bucket) => bucket.provider === "pi");
           assert.strictEqual(
             pi.reduce((total, bucket) => total + bucket.costUsd, 0),
-            7,
+            44,
           );
           assert.strictEqual(
             pi.reduce((total, bucket) => total + totalTokens(bucket.totals), 0),
@@ -382,6 +382,21 @@ describe("UsageService", () => {
             reasoningTokens: 2,
           });
           assert.strictEqual(assistant?.costSource, "providerReported");
+          assert.approximately(assistant?.categoryCostUsd?.input ?? NaN, 10 / 38, 1e-6);
+          assert.approximately(assistant?.categoryCostUsd?.cacheRead ?? NaN, 2 / 38, 1e-6);
+          assert.approximately(assistant?.categoryCostUsd?.cacheWrite ?? NaN, 6 / 38, 1e-6);
+          assert.approximately(assistant?.categoryCostUsd?.output ?? NaN, 20 / 38, 1e-6);
+          assert.strictEqual(assistant?.cacheSavingsUsd, 18);
+          const warm = pi.find((bucket) => bucket.model === "openai/actual-model");
+          assert.strictEqual(warm?.costSource, "modelPriced");
+          assert.strictEqual(warm?.costUsd, 38);
+          assert.deepStrictEqual(warm?.categoryCostUsd, {
+            input: 10,
+            cacheRead: 2,
+            cacheWrite: 6,
+            output: 20,
+          });
+          assert.strictEqual(warm?.cacheSavingsUsd, 18);
           assert.strictEqual(
             first.sources.filter((source) => source.fingerprint.provider === "pi").length,
             1,
@@ -403,7 +418,7 @@ describe("UsageService", () => {
             grown.buckets
               .filter((bucket) => bucket.provider === "pi")
               .reduce((total, bucket) => total + bucket.costUsd, 0),
-            8,
+            45,
           );
           yield* service.awaitPersisted;
           const restarted = yield* UsageService.make;
@@ -414,6 +429,14 @@ describe("UsageService", () => {
             layerService({
               prefix: "usage-pi-fork",
               home,
+              ratesDocument: {
+                "actual-model": {
+                  input_cost_per_token: 1,
+                  output_cost_per_token: 4,
+                  cache_read_input_token_cost: 0.1,
+                  cache_creation_input_token_cost: 2,
+                },
+              },
               settings: {
                 ...settings,
                 providerInstances: {
@@ -500,14 +523,16 @@ describe("UsageService", () => {
     }).pipe(Effect.scoped),
   );
 
-  it.live("discovers Pi history in its default home and a tilde agent directory", () =>
+  it.live("discovers Pi history in its default home and directory overrides", () =>
     Effect.gen(function* () {
       const { home, settings } = yield* setup;
-      for (const [agentDir, relativeDir] of [
-        [undefined, ".pi/agent"],
-        ["~/custom-pi", "custom-pi"],
+      for (const [agentDir, sessionDir, relativeDir] of [
+        [undefined, undefined, ".pi/agent/sessions"],
+        ["~/custom-pi", undefined, "custom-pi/sessions"],
+        ["~/ignored-pi", "~/custom-sessions", "custom-sessions"],
+        ["~/ignored-pi", NodePath.join(home, "absolute-sessions"), "absolute-sessions"],
       ] as const) {
-        const dir = NodePath.join(home, relativeDir, "sessions");
+        const dir = NodePath.join(home, relativeDir);
         yield* Effect.promise(async () => {
           await NodeFSP.mkdir(dir, { recursive: true });
           await NodeFSP.writeFile(
@@ -545,7 +570,10 @@ describe("UsageService", () => {
               prefix: "usage-pi-" + relativeDir.replaceAll("/", "-"),
               home,
               settings,
-              environment: { PI_CODING_AGENT_DIR: agentDir },
+              environment: {
+                PI_CODING_AGENT_DIR: agentDir,
+                PI_CODING_AGENT_SESSION_DIR: sessionDir,
+              },
             }),
           ),
           Effect.provideService(HostProcess.HomeDirectory, home),

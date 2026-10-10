@@ -65,10 +65,13 @@ function parseRecord(parsed: unknown, state: typeof PiScanState.Type): readonly 
   const usage = source.usage;
   // Pi's auxiliary tool and summary records carry no model attribution. Match
   // Pi's own breakdown rather than assigning them to the conversation model.
-  const model =
-    "provider" in source
-      ? `${source.provider}/${"responseModel" in source ? (source.responseModel ?? source.model) : source.model}`
-      : "Tools/summaries";
+  const rateModel =
+    "model" in source
+      ? "responseModel" in source
+        ? (source.responseModel ?? source.model)
+        : source.model
+      : undefined;
+  const model = "provider" in source ? `${source.provider}/${rateModel}` : "Tools/summaries";
   const outputTokens = tokenCount(usage.output);
   const totals = {
     // Pi's input/cache counters are already disjoint.
@@ -79,14 +82,17 @@ function parseRecord(parsed: unknown, state: typeof PiScanState.Type): readonly 
     reasoningTokens: Math.min(outputTokens, tokenCount(usage.reasoning)),
   };
   const cost = usage.cost?.total;
+  // Pi defaults omitted catalog rates to zero. Let shared pricing estimate
+  // API-equivalent cost when the transcript has no positive cost estimate.
   const reportedCostUsd =
-    typeof cost === "number" && Number.isFinite(cost) && cost >= 0 ? cost : null;
-  if (totalTokens(totals) === 0 && (reportedCostUsd === null || reportedCostUsd === 0)) return [];
+    typeof cost === "number" && Number.isFinite(cost) && cost > 0 ? cost : null;
+  if (totalTokens(totals) === 0 && reportedCostUsd === null) return [];
   return [
     {
       provider: "pi",
       timestampMs,
       model,
+      ...(rateModel === undefined ? {} : { rateModel }),
       sessionId: state.sessionId,
       totals,
       reportedCostUsd,
@@ -130,6 +136,8 @@ export const piUsageReader: ProviderUsageReader<PiSettings, Path.Path> = {
   directories: Effect.fn("piUsageReader.directories")(function* ({ environment }) {
     const path = yield* Path.Path;
     const home = yield* HostProcess.HomeDirectory;
+    const sessionDir = environment.PI_CODING_AGENT_SESSION_DIR?.trim();
+    if (sessionDir) return [{ dir: path.resolve(expandHomePath(sessionDir, home)) }];
     const agentDir = environment.PI_CODING_AGENT_DIR?.trim();
     return [
       {

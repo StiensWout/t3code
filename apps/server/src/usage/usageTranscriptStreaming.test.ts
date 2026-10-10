@@ -136,6 +136,7 @@ describe("large usage records", () => {
       {
         provider: "pi",
         model: "anthropic/actual",
+        rateModel: "actual",
         sessionId: "pi-session",
         timestampMs: Date.parse(timestamp),
         totals: {
