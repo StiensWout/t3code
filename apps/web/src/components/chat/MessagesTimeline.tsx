@@ -187,7 +187,7 @@ import {
 } from "./timelineScrollAnchoring";
 import { MessageCopyButton } from "./MessageCopyButton";
 import { PierreEntryIcon } from "./PierreEntryIcon";
-import { inferEntryKindFromPath } from "../../pierre-icons";
+import { WorkspaceEntryIcon, WorkspaceEntryTooltip } from "./WorkspaceEntryIcon";
 import { AssistantSelectionToolbar } from "./AssistantSelectionToolbar";
 import type { AssistantCitationSourceAnchor } from "~/lib/assistantTextSelection";
 import {
@@ -2744,7 +2744,7 @@ function AttemptFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "at
         icon={row.expanded ? ChevronDown : ChevronRight}
       />
       <span className="text-xs font-medium text-foreground/80">{row.label}</span>
-      <span className="text-2xs text-muted-foreground">Partial output retained</span>
+      <span className="text-2xs text-muted-foreground">Cut off by a steer</span>
     </button>
   );
 }
@@ -4264,16 +4264,23 @@ function UserMessageMentionChip(props: {
                 useRightPanelStore.getState().openFile(ctx.threadRef, props.record.path);
             }}
           >
-            <PierreEntryIcon
-              pathValue={props.record.path}
-              kind={inferEntryKindFromPath(props.record.path)}
+            <WorkspaceEntryIcon
+              path={props.record.path}
+              environmentId={ctx.activeThreadEnvironmentId}
+              cwd={ctx.workspaceRoot}
               theme={ctx.resolvedTheme}
             />
             <ContextChipLabel>{props.record.label}</ContextChipLabel>
           </ContextChip>
         }
       />
-      <TooltipPopup>{props.record.path}</TooltipPopup>
+      <TooltipPopup>
+        <WorkspaceEntryTooltip
+          path={props.record.path}
+          environmentId={ctx.activeThreadEnvironmentId}
+          cwd={ctx.workspaceRoot}
+        />
+      </TooltipPopup>
     </Tooltip>
   );
 }
