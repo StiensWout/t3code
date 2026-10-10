@@ -180,7 +180,7 @@ export function formatWorktreeAge(iso: string, nowMs: number): string {
   const days = Math.floor(hours / 24);
   if (days < 30) return `${days}d`;
   const months = Math.floor(days / 30);
-  return months < 12 ? `${months}mo` : `${Math.floor(days / 365)}y`;
+  return days < 365 ? `${months}mo` : `${Math.floor(days / 365)}y`;
 }
 
 const IN_USE_BLOCKERS: ReadonlySet<WorktreePruneBlocker> = new Set([
