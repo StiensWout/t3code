@@ -40,6 +40,11 @@ import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter"
 import { handoffBudget } from "@t3tools/provider-core/server/handoffBudget";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import {
+  MAX_TOOL_OUTPUT_IMAGES,
+  toolOutputImages,
+  compactDynamicToolOutput,
+} from "@t3tools/shared/toolOutput";
+import {
   makePiAdapterV2,
   PiAdapterV2Driver,
   PI_PROVIDER,
@@ -1848,6 +1853,152 @@ describe("PiAdapterV2", () => {
           kind: "integration",
         });
         assert.deepEqual(event.turnItem.input, { city: "Berlin" });
+      }
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect(
+    "keeps native and MCP images available to the shared asset reader with typed results",
+    () =>
+      Effect.gen(function* () {
+        const fake = yield* makeFakePi;
+        const { runtime, takeEvent } = yield* openRuntime(fake);
+        const providerThread = yield* runtime.ensureThread({
+          threadId: THREAD_ID,
+          modelSelection: modelSelection("default"),
+          runtimePolicy,
+        });
+        yield* startTurn(runtime, providerThread);
+        yield* fake.takeRequest("prompt");
+        yield* fake.emit({ type: "agent_start" });
+        const image = { type: "image", mimeType: "image/png", data: "AAAA" };
+        const content = [{ type: "text", text: "Screenshot captured" }, image];
+        const structured = { count: 2, ready: true, paths: ["one.png", "two.png"] };
+        const scriptResult = { content, structuredContent: { threadId: "child-thread" } };
+        const cases = [
+          { toolName: "read", result: { content }, expected: { content } },
+          {
+            toolName: "image_generate",
+            result: { content, structuredContent: structured },
+            expected: { content, structuredContent: structured },
+          },
+          {
+            toolName: "mcp__t3-code__preview_snapshot",
+            result: { content, structuredContent: scriptResult },
+            expected: {
+              content,
+              structuredContent: {
+                content: [content[0], { type: "image", mimeType: "image/png" }],
+                structuredContent: { threadId: "child-thread" },
+              },
+            },
+          },
+          {
+            toolName: "structured_tool",
+            result: { content: [], structuredContent: [false, 2, null, { ready: true }] },
+            expected: { content: [], structuredContent: [false, 2, null, { ready: true }] },
+          },
+        ];
+        for (const [index, test] of cases.entries()) {
+          for (const phase of ["update", "end"] as const) {
+            yield* fake.emit({
+              type: `tool_execution_${phase}`,
+              toolCallId: `image-${index}`,
+              toolName: test.toolName,
+              ...(phase === "end" ? { result: test.result } : { partialResult: test.result }),
+              isError: false,
+            });
+            const event = yield* takeEvent(
+              (event) =>
+                event.type === "turn_item.updated" && event.turnItem.type === "dynamic_tool",
+            );
+            if (event.type !== "turn_item.updated" || event.turnItem.type !== "dynamic_tool")
+              return yield* Effect.die("Expected an image tool item");
+            assert.equal(event.turnItem.status, phase === "end" ? "completed" : "running");
+            assert.deepEqual(event.turnItem.output, test.expected);
+            assert.deepEqual(
+              toolOutputImages(event.turnItem.output),
+              index === 3 ? [] : [{ mimeType: "image/png", data: "AAAA" }],
+            );
+            if (index === 2) {
+              assert.deepEqual(compactDynamicToolOutput(event.turnItem.output), {
+                threadId: "child-thread",
+              });
+              assert.equal(JSON.stringify(event.turnItem.output).split("AAAA").length - 1, 1);
+            }
+          }
+        }
+      }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("bounds tool images, text, and structured values without losing error status", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, providerThread);
+      yield* fake.takeRequest("prompt");
+      yield* fake.emit({ type: "agent_start" });
+      const image = { type: "image", mimeType: "image/png", data: "AAAA" };
+      const cases = [
+        {
+          content: [
+            { type: "text", text: "x".repeat(128 * 1024) },
+            ...Array.from({ length: 20 }, () => image),
+          ],
+          structuredContent: { oversized: "x".repeat(128 * 1024) },
+          isError: true,
+        },
+        {
+          content: [image],
+          structuredContent: Array.from({ length: 10_000 }, () => 1),
+          isError: true,
+        },
+        {
+          content: [image],
+          structuredContent: Array.from({ length: 40 }).reduce<unknown>(
+            (nested) => ({ nested }),
+            null,
+          ),
+          isError: true,
+        },
+        {
+          content: [image, ...Array.from({ length: 200 }, () => ({ type: "text", text: "extra" }))],
+          structuredContent: { oversized: "x".repeat(128 * 1024) },
+          isError: true,
+        },
+        {
+          content: [{ type: "text", text: "a" + "🙂".repeat(40_000) }, image],
+          structuredContent: { oversized: "x".repeat(128 * 1024) },
+          isError: true,
+        },
+      ];
+      for (const [index, result] of cases.entries()) {
+        yield* fake.emit({
+          type: "tool_execution_end",
+          toolCallId: `bounded-image-${index}`,
+          toolName: "image_generate",
+          result,
+          isError: true,
+        });
+        const event = yield* takeEvent(
+          (event) => event.type === "turn_item.updated" && event.turnItem.type === "dynamic_tool",
+        );
+        if (event.type !== "turn_item.updated" || event.turnItem.type !== "dynamic_tool")
+          return yield* Effect.die("Expected an image tool item");
+        assert.equal(event.turnItem.status, "failed");
+        assert.propertyVal(event.turnItem.output, "isError", true);
+        assert.propertyVal(event.turnItem.output, "structuredContentOmitted", true);
+        assert.notProperty(event.turnItem.output, "structuredContent");
+        assert.isBelow(Buffer.byteLength(JSON.stringify(event.turnItem.output), "utf8"), 68_000);
+        const images = toolOutputImages(event.turnItem.output);
+        assert.lengthOf(images, index === 0 ? MAX_TOOL_OUTPUT_IMAGES : 1);
+        assert.deepEqual(images[0], { mimeType: "image/png", data: "AAAA" });
+        assert.notInclude(JSON.stringify(event.turnItem.output), "�");
       }
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );

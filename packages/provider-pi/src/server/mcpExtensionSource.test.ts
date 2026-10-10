@@ -4,7 +4,7 @@ import * as NodePath from "node:path";
 import * as NodeOS from "node:os";
 import * as NodeModule from "node:module";
 import * as NodeVM from "node:vm";
-import { assert, describe, it } from "@effect/vitest";
+import { assert, describe, expect, it } from "@effect/vitest";
 
 import { PI_T3_MCP_EXTENSION_SOURCE } from "./mcpExtensionSource.ts";
 
@@ -51,6 +51,7 @@ interface RegisteredTool {
   readonly name: string;
   readonly description: string;
   readonly parameters: unknown;
+  readonly outputSchema?: unknown;
   readonly exposure?: string;
   readonly promptSnippet?: string;
   readonly promptGuidelines?: ReadonlyArray<string>;
@@ -59,7 +60,14 @@ interface RegisteredTool {
     args: Record<string, unknown>,
     signal?: AbortSignal,
   ) => Promise<{
-    readonly content: ReadonlyArray<{ readonly type: string; readonly text: string }>;
+    readonly content: ReadonlyArray<{
+      readonly type: string;
+      readonly text?: string;
+      readonly data?: string;
+      readonly mimeType?: string;
+    }>;
+    readonly structuredContent?: unknown;
+    readonly isError?: boolean;
   }>;
 }
 
@@ -71,6 +79,7 @@ type AgentStartHook = (
 async function loadMcpBridge(
   options: {
     readonly modern?: boolean;
+    readonly result?: unknown;
     readonly toolSearchAvailable?: boolean;
     readonly toolSearchDisabled?: boolean;
     readonly allowsTool?: (name: string) => boolean;
@@ -91,7 +100,11 @@ async function loadMcpBridge(
     { name: "delegate_task", description: "Delegate work to another agent." },
     { name: "task_status", description: "Check delegated work." },
     { name: "preview_snapshot", description: "Inspect the collaborative browser." },
-  ].map((tool) => ({ ...tool, inputSchema: { type: "object", properties: {} } }));
+  ].map((tool) => ({
+    ...tool,
+    inputSchema: { type: "object", properties: {} },
+    outputSchema: { type: "object", properties: { count: { type: "number" } } },
+  }));
   const source = NodeModule.stripTypeScriptTypes(
     PI_T3_MCP_EXTENSION_SOURCE.replace(/^import .*;$/gm, "").replace(
       "export default async function",
@@ -106,20 +119,25 @@ async function loadMcpBridge(
     Type: { Unsafe: (schema: unknown) => schema },
     fetch: async (
       url: string,
-      options: { body: string; headers: Record<string, string>; signal?: AbortSignal },
+      transport: { body: string; headers: Record<string, string>; signal?: AbortSignal },
     ) => {
+      transport.signal?.throwIfAborted();
       transports.push({
         url,
-        authorization: options.headers.authorization!,
-        signal: options.signal,
+        authorization: transport.headers.authorization!,
+        signal: transport.signal,
       });
-      const request = JSON.parse(options.body) as { id: number; method: string; params?: unknown };
+      const request = JSON.parse(transport.body) as {
+        id: number;
+        method: string;
+        params?: unknown;
+      };
       requests.push(request);
       const result =
         request.method === "tools/list"
           ? { tools: catalog }
           : request.method === "tools/call"
-            ? { content: [{ type: "text", text: "browser snapshot" }] }
+            ? (options.result ?? { content: [{ type: "text", text: "browser snapshot" }] })
             : {};
       return new Response(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }), {
         headers: { "content-type": "application/json" },
@@ -164,6 +182,67 @@ async function loadMcpBridge(
     },
   };
 }
+
+describe("Pi MCP tool results", () => {
+  it("returns mixed screenshot blocks and typed script output without repeating structured text", async () => {
+    const content = [
+      { type: "text", text: "Browser screenshot" },
+      { type: "image", data: "AAAA", mimeType: "image/png", _meta: { private: true } },
+      { type: "text", text: "Screenshot captured" },
+    ] as const;
+    const result = { content, structuredContent: { count: 2 }, _meta: { private: true } };
+    const bridge = await loadMcpBridge({ modern: true, result });
+    const tool = bridge.tools.find((tool) => tool.name === "mcp__t3-code__preview_snapshot")!;
+    const output = await tool.execute("snapshot", {});
+    assert.deepEqual(output.content, [
+      content[0],
+      { type: "image", data: "AAAA", mimeType: "image/png" },
+      content[2],
+    ]);
+    assert.deepEqual(output.structuredContent, { content, structuredContent: { count: 2 } });
+    assert.deepEqual(tool.outputSchema, {
+      type: "object",
+      properties: {
+        content: { type: "array", items: { type: "object" } },
+        structuredContent: { type: "object", properties: { count: { type: "number" } } },
+        isError: { type: "boolean" },
+      },
+      required: ["content"],
+    });
+  });
+
+  it.each([false, true])(
+    "preserves image-only results and error status, isError=%s",
+    async (isError) => {
+      const image = { type: "image", data: "AAAA", mimeType: "image/png" };
+      const result = { content: [image], isError };
+      const bridge = await loadMcpBridge({ result });
+      const output = await bridge.tools[0]!.execute("image", {});
+      assert.deepEqual(output.content[0], image);
+      assert.equal(output.content.length, isError ? 2 : 1);
+      if (isError) assert.include(output.content[1]?.text ?? "", "returned an error");
+      assert.equal(output.isError, isError ? true : undefined);
+      assert.deepEqual(output.structuredContent, result);
+    },
+  );
+
+  it("uses structured output as model text when content is empty", async () => {
+    const result = { content: [], structuredContent: { count: 2 } };
+    const bridge = await loadMcpBridge({ result });
+    const output = await bridge.tools[0]!.execute("structured", {});
+    assert.deepEqual(output.content, [{ type: "text", text: '{"count":2}' }]);
+    assert.deepEqual(output.structuredContent, result);
+  });
+
+  it("propagates cancellation without returning a successful result", async () => {
+    const bridge = await loadMcpBridge();
+    const controller = new AbortController();
+    controller.abort();
+    await expect(bridge.tools[0]!.execute("cancelled", {}, controller.signal)).rejects.toThrow(
+      "aborted",
+    );
+  });
+});
 
 describe("Pi MCP tool exposure", () => {
   it("keeps orchestration direct and optional bridge tools discoverable on modern Pi", async () => {
