@@ -30,13 +30,16 @@ import {
   WorktreeMutationError,
   WorktreePruneSkipReason,
 } from "@t3tools/contracts";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import * as ServerConfig from "../config.ts";
 import * as GitManager from "../git/GitManager.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
 import { resolveWorkspaceLeasePath, withWorkspaceLease } from "../workspace/workspaceLease.ts";
+import { isFilesystemRoot, managedWorktreesDirectories } from "../worktreesDirectory.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 import * as WorktreeLifecycle from "./WorktreeLifecycle.ts";
 import { storageCleanupActivityAt, worktreeThreadBusy } from "./worktreeThreadState.ts";
@@ -312,6 +315,7 @@ const make = Effect.gen(function* () {
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const terminals = yield* TerminalManager.TerminalManager;
   const lifecycle = yield* WorktreeLifecycle.WorktreeLifecycle;
+  const settings = yield* ServerSettings.ServerSettingsService;
 
   const liveTerminals = new Map<string, Map<string, TerminalSummary>>();
   const noteTerminal = (terminal: TerminalSummary) => {
@@ -344,7 +348,23 @@ const make = Effect.gen(function* () {
       Effect.provideService(FileSystem.FileSystem, fs),
       Effect.provideService(Path.Path, path),
     );
-  const managedWorktreesRoot = yield* canonicalizePath(config.worktreesDir);
+  const readManagedWorktreesRoots = Effect.fn("WorktreeService.readManagedWorktreesRoots")(
+    function* () {
+      const directories = yield* settings.getSettings.pipe(
+        Effect.orElseSucceed(() => ({ worktreesDirectory: "", previousWorktreesDirectories: [] })),
+      );
+      const roots = yield* Effect.forEach(
+        managedWorktreesDirectories(
+          directories,
+          config.worktreesDir,
+          path,
+          yield* HostProcess.HomeDirectory,
+        ),
+        canonicalizePath,
+      );
+      return [...new Set(roots.filter((root) => !isFilesystemRoot(root, path)))];
+    },
+  );
 
   const inside = (root: string, target: string) => {
     const relative = path.relative(root, target);
@@ -545,6 +565,7 @@ const make = Effect.gen(function* () {
     group: ProjectGroup,
     usageFor: (worktreePath: string) => WorktreeUsage,
     canonicalProjectRoots: ReadonlyArray<string>,
+    managedWorktreesRoots: ReadonlyArray<string>,
     now: number,
   ) {
     const primaryProject = group.projects[0];
@@ -555,7 +576,8 @@ const make = Effect.gen(function* () {
         // A registration whose directory is gone has nothing on disk to
         // manage. Revival prunes it before recreating the path.
         !entry.prunable &&
-        inside(managedWorktreesRoot, entry.path) &&
+        !managedWorktreesRoots.some((root) => atOrInside(entry.path, root)) &&
+        managedWorktreesRoots.some((root) => inside(root, entry.path)) &&
         !containsProjectRoot(entry.path, canonicalProjectRoots),
     );
     if (entries.length === 0) return [] as WorktreeInfo[];
@@ -633,6 +655,7 @@ const make = Effect.gen(function* () {
       Effect.mapError((cause) => inventoryError("load_threads", cause)),
     );
     const now = yield* Clock.currentTimeMillis;
+    const managedWorktreesRoots = yield* readManagedWorktreesRoots();
 
     const normalizedProjects = yield* Effect.forEach(
       projects,
@@ -699,7 +722,7 @@ const make = Effect.gen(function* () {
     const records = yield* Effect.forEach(
       [...groups.values()],
       (group) =>
-        listGroup(group, usageFor, canonicalProjectRoots, now).pipe(
+        listGroup(group, usageFor, canonicalProjectRoots, managedWorktreesRoots, now).pipe(
           Effect.mapError((cause) =>
             inventoryError("inspect_repository", cause, {
               workspaceRoot: group.canonicalWorkspaceRoot,
@@ -739,7 +762,12 @@ const make = Effect.gen(function* () {
     const allowIgnoredFiles =
       input.intent === "manual" ? input.allowIgnoredFiles === true : keepWhen !== "any-local-files";
     const workspaceRoot = yield* canonicalizePath(input.workspaceRoot);
-    if (!inside(managedWorktreesRoot, worktreePath) || !(yield* fs.exists(worktreePath))) {
+    const managedWorktreesRoots = yield* readManagedWorktreesRoots();
+    if (
+      managedWorktreesRoots.some((root) => atOrInside(worktreePath, root)) ||
+      !managedWorktreesRoots.some((root) => inside(root, worktreePath)) ||
+      !(yield* fs.exists(worktreePath))
+    ) {
       return skipped("protected_path");
     }
     const canonicalProjectRoots = yield* Effect.forEach(
@@ -779,9 +807,20 @@ const make = Effect.gen(function* () {
       usage,
       now: yield* Clock.currentTimeMillis,
     });
-    if (blocker !== undefined) return skipped(blocker);
+    if (blocker !== undefined) {
+      const count =
+        keepWhen === "tracked-changes"
+          ? inspection?.trackedFileCount
+          : inspection?.changedFileCount;
+      return skipped(
+        blocker,
+        blocker === "dirty" && count !== undefined
+          ? `${count} ${count === 1 ? "file" : "files"}`
+          : undefined,
+      );
+    }
     if ((inspection?.ignoredFiles.length ?? 0) > 0 && !allowIgnoredFiles) {
-      return skipped("ignored_files");
+      return skipped("ignored_files", inspection?.ignoredFiles[0]);
     }
     if (input.intent === "policy" && !(yield* input.recheck)) return skipped("policy_changed");
     // Every check above judged the first inspection, and the reads since then
@@ -795,12 +834,13 @@ const make = Effect.gen(function* () {
       if (latest.headSha !== inspection.headSha || latest.branch !== inspection.branch) {
         return skipped("changed");
       }
-      if (latest.changedFileCount > 0) return skipped("dirty");
-      if (
-        latest.ignoredFiles.length > 0 &&
-        !(input.intent === "manual" && input.allowIgnoredFiles === true)
-      ) {
-        return skipped("ignored_files");
+      const changedFiles =
+        keepWhen === "tracked-changes" ? latest.trackedFileCount : latest.changedFileCount;
+      if (changedFiles > 0) {
+        return skipped("dirty", `${changedFiles} ${changedFiles === 1 ? "file" : "files"}`);
+      }
+      if (latest.ignoredFiles.length > 0 && !allowIgnoredFiles) {
+        return skipped("ignored_files", latest.ignoredFiles[0]);
       }
     }
 

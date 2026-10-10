@@ -1,7 +1,4 @@
-import {
-  GitCommandError,
-  OrchestrationV2AppThreadJson,
-} from "@t3tools/contracts";
+import { GitCommandError, OrchestrationV2AppThreadJson } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import type {
@@ -387,7 +384,7 @@ const make = Effect.gen(function* () {
         });
         if (removal.outcome === "skipped") {
           const reason = sentence(
-            removal.detail === undefined
+            removal.detail === undefined || removal.detail === REMOVAL_SKIP_REASON[removal.reason]
               ? REMOVAL_SKIP_REASON[removal.reason]
               : `${REMOVAL_SKIP_REASON[removal.reason]} (${removal.detail})`,
           );

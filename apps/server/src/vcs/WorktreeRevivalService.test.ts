@@ -13,6 +13,7 @@ import { ProjectId, ThreadId, type Project } from "@t3tools/contracts";
 import * as ServerConfig from "../config.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 import * as WorktreeLifecycle from "./WorktreeLifecycle.ts";
 import * as WorktreeRevivalService from "./WorktreeRevivalService.ts";
@@ -104,6 +105,7 @@ const makeRevivalLayer = (
         NodeServices.layer,
         gitLayer,
         WorktreeLifecycle.layer,
+        ServerSettings.layerTest(),
         Layer.mock(ProjectService.ProjectService)({
           getById: (requestedProjectId) =>
             Effect.succeed(
@@ -288,6 +290,7 @@ it.effect("leaves a complete checkout when the turn start is cancelled during cr
         Layer.mergeAll(
           serverConfigLiveLayer,
           NodeServices.layer,
+          ServerSettings.layerTest(),
           Layer.succeed(GitVcsDriver.GitVcsDriver, {
             ...driver,
             createWorktree: (input, options) =>

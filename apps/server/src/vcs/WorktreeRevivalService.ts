@@ -14,11 +14,14 @@ import {
   type WorktreeMutationErrorStage,
   WorktreeMutationError,
 } from "@t3tools/contracts";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import * as ServerConfig from "../config.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import { resolveWorkspaceLeasePath, withWorkspaceLease } from "../workspace/workspaceLease.ts";
+import { isFilesystemRoot, managedWorktreesDirectories } from "../worktreesDirectory.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 import * as WorktreeLifecycle from "./WorktreeLifecycle.ts";
 
@@ -104,6 +107,7 @@ const make = Effect.gen(function* () {
   const lifecycle = yield* WorktreeLifecycle.WorktreeLifecycle;
   const projectsService = yield* ProjectService.ProjectService;
   const setupScripts = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
+  const settings = yield* ServerSettings.ServerSettingsService;
   const generationByWorktreePath = yield* Ref.make(new Map<string, number>());
   // Project setup for a recreated worktree: one run per project, worktree, and
   // generation, shared by every turn start that needs it.
@@ -141,7 +145,23 @@ const make = Effect.gen(function* () {
       Effect.provideService(FileSystem.FileSystem, fs),
       Effect.provideService(Path.Path, path),
     );
-  const managedWorktreesRoot = yield* canonicalizePath(config.worktreesDir);
+  const readManagedWorktreesRoots = Effect.fn("WorktreeRevivalService.readManagedWorktreesRoots")(
+    function* () {
+      const directories = yield* settings.getSettings.pipe(
+        Effect.orElseSucceed(() => ({ worktreesDirectory: "", previousWorktreesDirectories: [] })),
+      );
+      const roots = yield* Effect.forEach(
+        managedWorktreesDirectories(
+          directories,
+          config.worktreesDir,
+          path,
+          yield* HostProcess.HomeDirectory,
+        ),
+        canonicalizePath,
+      );
+      return [...new Set(roots.filter((root) => !isFilesystemRoot(root, path)))];
+    },
+  );
 
   const resolveManagedWorkspaceRoot = Effect.fn(
     "WorktreeRevivalService.resolveManagedWorkspaceRoot",
@@ -258,7 +278,11 @@ const make = Effect.gen(function* () {
         worktreePath,
       };
     }
-    if (!isPathInside(managedWorktreesRoot, worktreePath, path)) {
+    const managedWorktreesRoots = yield* readManagedWorktreesRoots();
+    if (
+      managedWorktreesRoots.includes(worktreePath) ||
+      !managedWorktreesRoots.some((root) => isPathInside(root, worktreePath, path))
+    ) {
       return yield* mutationError("outside_managed_root", undefined, {
         path: worktreePath,
         workspaceRoot,

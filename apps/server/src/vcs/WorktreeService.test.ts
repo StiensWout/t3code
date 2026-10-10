@@ -465,7 +465,7 @@ it.effect("keeps a checkout that gains an ignored file during the final checks",
       recheck: fs.writeFileString(secret, "TOKEN=1\n").pipe(Effect.as(true), Effect.orDie),
     });
 
-    assert.deepEqual(outcome, { outcome: "skipped", reason: "ignored_files" });
+    assert.deepEqual(outcome, { outcome: "skipped", reason: "ignored_files", detail: ".env" });
     assert.isTrue(yield* fs.exists(secret));
   }).pipe(Effect.provide(layer));
 });
@@ -612,7 +612,7 @@ it.effect("lists managed worktrees with what removal would delete or keep", () =
   }).pipe(Effect.provide(layer));
 });
 
-it.effect("applies each Storage cleanup local-file policy while preserving tracked edits", () => {
+it.effect("applies the cleanup policy to files written during its final checks", () => {
   const { state, layer } = makeHarness();
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -626,14 +626,15 @@ it.effect("applies each Storage cleanup local-file policy while preserving track
         const name = `${keepWhen}-${file.replaceAll(".", "-")}`;
         const worktreePath = yield* addWorktree(repositoryRoot, name);
         const { commitSha } = yield* git.resolveCommit({ cwd: worktreePath, revision: "HEAD" });
-        yield* fs.writeFileString(path.join(worktreePath, file), "local content\n");
         const result = yield* worktrees.removeIfSafe({
           intent: "policy",
           path: worktreePath,
           workspaceRoot: repositoryRoot,
           keepWhen,
           expected: { branch: `feature/${name}`, headSha: commitSha },
-          recheck: Effect.succeed(true),
+          recheck: fs
+            .writeFileString(path.join(worktreePath, file), "local content\n")
+            .pipe(Effect.as(true), Effect.orDie),
         });
         const shouldRemove =
           file !== "README.md" &&

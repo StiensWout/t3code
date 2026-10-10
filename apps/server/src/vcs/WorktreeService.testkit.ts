@@ -19,6 +19,7 @@ import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 import * as WorktreeLifecycle from "./WorktreeLifecycle.ts";
@@ -60,6 +61,7 @@ export const makeHarness = () => {
     serverConfigLayer,
     Sqlite.layerMemory,
     WorktreeLifecycle.layer,
+    ServerSettings.layerTest(),
     Layer.mock(GitManager.GitManager)({
       invalidateStatus: () => Effect.suspend(() => state.onRemoved),
     }),
@@ -167,13 +169,13 @@ export const initializeRepository = Effect.fn("WorktreeServiceTest.initializeRep
 export const addWorktree = Effect.fn("WorktreeServiceTest.addWorktree")(function* (
   repositoryRoot: string,
   name: string,
-  options: { readonly detached?: boolean } = {},
+  options: { readonly detached?: boolean; readonly root?: string } = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const config = yield* ServerConfig.ServerConfig;
   const git = yield* GitVcsDriver.GitVcsDriver;
-  const worktreePath = path.join(yield* fs.realPath(config.worktreesDir), name);
+  const worktreePath = path.join(yield* fs.realPath(options.root ?? config.worktreesDir), name);
   yield* git.execute({
     operation: "WorktreeServiceTest.addWorktree",
     cwd: repositoryRoot,
