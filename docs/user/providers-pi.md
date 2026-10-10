@@ -19,7 +19,8 @@ parts of the process lifecycle.
 ## What Carries Over
 
 T3 Code discovers the models reported by Pi and exposes their supported thinking levels. The
-thinking picker marks Pi's current configured level as the default without overriding it. Threads
+thinking picker marks the discovered active model's configured level as its default without
+overriding it. Other models keep their Pi defaults when no level is selected. Threads
 use Pi's native session files for resume, rollback, and forks within the same Pi instance. Forks
 preserve the native conversation through the selected turn in the destination workspace.
 Switching providers uses portable conversation context. Extension
