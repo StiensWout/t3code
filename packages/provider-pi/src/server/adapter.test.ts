@@ -3044,11 +3044,12 @@ describe("PiAdapterV2", () => {
       assert.equal(steerResult._tag, "Failure");
       if (steerResult._tag === "Failure") {
         assert.equal(steerResult.failure._tag, "ProviderAdapterSteerRunError");
-        if (
-          steerResult.failure._tag === "ProviderAdapterSteerRunError" &&
-          isProviderAdapterProtocolError(steerResult.failure.cause)
-        ) {
-          assert.equal(steerResult.failure.cause.detail, rejection);
+        if (steerResult.failure._tag === "ProviderAdapterSteerRunError") {
+          const cause = steerResult.failure.cause;
+          assert.isTrue(isProviderAdapterProtocolError(cause));
+          if (isProviderAdapterProtocolError(cause)) {
+            assert.equal(cause.detail, rejection);
+          }
         }
       }
       yield* fake.emit({
