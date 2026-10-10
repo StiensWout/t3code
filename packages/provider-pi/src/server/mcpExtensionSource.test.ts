@@ -74,12 +74,14 @@ async function loadMcpBridge(
     readonly toolSearchAvailable?: boolean;
     readonly toolSearchDisabled?: boolean;
     readonly allowsTool?: (name: string) => boolean;
+    readonly runtimeMode?: string;
   } = {},
 ) {
   const handlers = new Map<string, AgentStartHook>();
   const tools: RegisteredTool[] = [];
   const requests: Array<{ readonly method: string; readonly params?: unknown }> = [];
   let activeTools = ["read"];
+  let bridgeSourcePath = "/fixture/pi-t3-extension.ts";
   const transports: Array<{
     readonly url: string;
     readonly authorization: string;
@@ -87,9 +89,17 @@ async function loadMcpBridge(
   }> = [];
   const servers: Array<{ readonly name: string; readonly config: Record<string, unknown> }> = [];
   const catalog = [
-    { name: "orchestrator_capabilities", description: "Discover available providers and models." },
+    {
+      name: "orchestrator_capabilities",
+      description: "Discover available providers and models.",
+      annotations: { readOnlyHint: true },
+    },
     { name: "delegate_task", description: "Delegate work to another agent." },
-    { name: "task_status", description: "Check delegated work." },
+    {
+      name: "task_status",
+      description: "Check delegated work.",
+      annotations: { readOnlyHint: false },
+    },
     { name: "preview_snapshot", description: "Inspect the collaborative browser." },
   ].map((tool) => ({ ...tool, inputSchema: { type: "object", properties: {} } }));
   const source = NodeModule.stripTypeScriptTypes(
@@ -100,9 +110,15 @@ async function loadMcpBridge(
   );
   await NodeVM.runInNewContext(`${source}\nt3McpExtension(pi)`, {
     process: {
-      env: { T3_MCP_URL: "http://fixture.invalid/mcp", T3_MCP_BEARER_TOKEN: "fixture-token" },
+      env: {
+        T3_MCP_URL: "http://fixture.invalid/mcp",
+        T3_MCP_BEARER_TOKEN: "fixture-token",
+        T3_PI_MCP_EXTENSION_PATH: "/fixture/pi-t3-extension.ts",
+        T3_PI_RUNTIME_MODE: options.runtimeMode,
+      },
     },
     AbortSignal,
+    NodePath,
     Type: { Unsafe: (schema: unknown) => schema },
     fetch: async (
       url: string,
@@ -137,12 +153,14 @@ async function loadMcpBridge(
       setActiveTools: (names: string[]) => {
         activeTools = names.filter((name) => options.allowsTool?.(name) ?? true);
       },
-      getAllTools: () =>
-        options.toolSearchAvailable &&
+      getAllTools: () => [
+        ...tools.map((tool) => ({ name: tool.name, sourceInfo: { path: bridgeSourcePath } })),
+        ...(options.toolSearchAvailable &&
         !options.toolSearchDisabled &&
         (options.allowsTool?.("tool_search") ?? true)
           ? [{ name: "tool_search", sourceInfo: { path: "builtin:tool-search" } }]
-          : [],
+          : []),
+      ],
       ...(options.modern
         ? {
             registerMcpServer: (name: string, config: Record<string, unknown>) =>
@@ -155,6 +173,9 @@ async function loadMcpBridge(
   return {
     handlers,
     tools,
+    setBridgeSourcePath: (path: string) => {
+      bridgeSourcePath = path;
+    },
     requests,
     servers,
     transports,
@@ -301,6 +322,52 @@ describe("Pi MCP tool exposure", () => {
 });
 
 describe("Pi tool discovery permissions", () => {
+  it.each(["approval-required", "auto-accept-edits", "auto"])(
+    "allows annotated T3 reads in %s while gating mutations and replacements",
+    async (runtimeMode) => {
+      const bridge = await loadMcpBridge({ modern: true, runtimeMode });
+      const hook = bridge.handlers.get("tool_call") as unknown as (
+        event: { toolName: string; input: unknown },
+        ctx: { ui: { confirm: (title: string) => Promise<boolean> } },
+      ) => Promise<{ block: true; reason: string } | undefined>;
+      const confirmations: string[] = [];
+      const ctx = {
+        ui: {
+          confirm: async (title: string) => {
+            confirmations.push(title);
+            return false;
+          },
+        },
+      };
+      for (const prefix of ["mcp__t3-code__", "mcp__t3_code__"]) {
+        assert.isUndefined(
+          await hook({ toolName: prefix + "orchestrator_capabilities", input: {} }, ctx),
+        );
+        assert.equal(
+          (await hook({ toolName: prefix + "delegate_task", input: {} }, ctx))?.block,
+          true,
+        );
+        // task_status acknowledges result delivery, and is intentionally not read-only.
+        assert.equal(
+          (await hook({ toolName: prefix + "task_status", input: {} }, ctx))?.block,
+          true,
+        );
+      }
+      assert.equal(confirmations.length, 4);
+      bridge.setBridgeSourcePath("/user/extensions/replacement.ts");
+      assert.equal(
+        (await hook({ toolName: "mcp__t3-code__orchestrator_capabilities", input: {} }, ctx))
+          ?.block,
+        true,
+      );
+      assert.equal(
+        (await hook({ toolName: "mcp__other__orchestrator_capabilities", input: {} }, ctx))?.block,
+        true,
+      );
+      assert.equal(confirmations.length, 6);
+    },
+  );
+
   it("allows discovery without confirmation and still gates the discovered tool", async () => {
     type ToolCallHook = (
       event: { toolName: string; input: unknown },
