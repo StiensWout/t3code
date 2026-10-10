@@ -2583,6 +2583,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               if (wake !== null) {
                 for (const event of wake.events) {
                   if (!continuation && event["type"] === "agent_settled") {
+                    activeTurn.nativeAborted = event["aborted"] === true;
                     activeTurn.settleWhenIdle = true;
                     continue;
                   }
