@@ -7,7 +7,6 @@ import type {
   VcsInitInput,
   VcsListRemotesResult,
   VcsListWorkspaceFilesResult,
-  VcsWorkspace,
   ReviewDiffPreviewInput,
   ReviewDiffPreviewResult,
   VcsRepositoryIdentity,
@@ -80,7 +79,6 @@ export class VcsDriver extends Context.Service<
     readonly listWorkspaceFiles: (
       cwd: string,
     ) => Effect.Effect<VcsListWorkspaceFilesResult, VcsError>;
-    readonly listWorkspaces: (cwd: string) => Effect.Effect<ReadonlyArray<VcsWorkspace>, VcsError>;
     readonly listRemotes: (cwd: string) => Effect.Effect<VcsListRemotesResult, VcsError>;
     readonly filterIgnoredPaths: (
       cwd: string,

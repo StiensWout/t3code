@@ -199,6 +199,8 @@ connected machine, grouped by project. Each row shows its branch, a linked threa
 used, and either **Remove** or what keeps it. The mobile app has the same list under
 **Settings → Source control**.
 
+The list includes the current worktree directory and directories you previously configured.
+
 Removing a worktree deletes its checkout and keeps its branch, its commits, and T3 checkpoint
 history. **Remove** is offered only when nothing would be lost:
 
@@ -207,6 +209,7 @@ history. **Remove** is offered only when nothing would be lost:
 - **Changed, unpushed, or unmerged:** it has uncommitted files, or commits its upstream does not
   have. Without an upstream, and for a detached checkout, commits must be on the default branch.
 - **Status unknown:** Git could not be read.
+- **Linked thread:** the thread records a different branch from the checkout and could not restore it.
 
 Ignored files such as `.env` or build output do not block removal, but they are deleted with the
 checkout. The row shows how many there are and the confirmation lists them. `node_modules` is not
@@ -221,6 +224,8 @@ When a thread needs a removed worktree again, T3 Code recreates it from the kept
 next turn and runs the project's setup script there. If that fails, for example because the branch
 was deleted or a required setup script exits with an error, the turn stops and says why. Send the
 message again to retry.
+
+If a missing checkout is outside those managed directories, restore it manually before retrying.
 
 ## Troubleshooting
 

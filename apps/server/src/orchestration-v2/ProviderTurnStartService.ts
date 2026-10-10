@@ -529,11 +529,7 @@ export const layer: Layer.Layer<
         const reboundThread = yield* projectionStore
           .getThreadShell(projection.thread.id)
           .pipe(Effect.orElseSucceed(() => null));
-        if (
-          reboundThread !== null &&
-          (reboundThread.worktreePath !== worktreePath ||
-            reboundThread.branch !== projection.thread.branch)
-        ) {
+        if (reboundThread !== null && reboundThread.worktreePath !== worktreePath) {
           yield* settleRunBeforeStart({
             signal: "worktree-rebound",
             status: "failed",

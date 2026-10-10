@@ -8,7 +8,13 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
-import { ProjectId, ThreadId, type Project } from "@t3tools/contracts";
+import {
+  GitCommandError,
+  ProjectId,
+  ThreadId,
+  type Project,
+  type WorktreeSubmodules,
+} from "@t3tools/contracts";
 
 import * as ServerConfig from "../config.ts";
 import * as ProjectService from "../project/ProjectService.ts";
@@ -97,22 +103,36 @@ const initializeRepository = Effect.fn("WorktreeRevivalServiceTest.initializeRep
 const makeRevivalLayer = (
   project: Project,
   runForThread: ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"]["runForThread"],
+  options: {
+    readonly config?: ServerConfig.ServerConfig["Service"];
+    readonly projects?: readonly Project[];
+    readonly settings?: Parameters<typeof ServerSettings.layerTest>[0];
+    readonly git?: GitVcsDriver.GitVcsDriver["Service"];
+  } = {},
 ) =>
   WorktreeRevivalService.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
-        serverConfigLiveLayer,
+        options.config === undefined
+          ? serverConfigLiveLayer
+          : Layer.succeed(ServerConfig.ServerConfig, options.config),
         NodeServices.layer,
-        gitLayer,
+        options.git === undefined
+          ? gitLayer
+          : Layer.succeed(GitVcsDriver.GitVcsDriver, options.git),
         WorktreeLifecycle.layer,
-        ServerSettings.layerTest(),
+        ServerSettings.layerTest(options.settings),
         Layer.mock(ProjectService.ProjectService)({
           getById: (requestedProjectId) =>
             Effect.succeed(
-              requestedProjectId === project.id ? Option.some(project) : Option.none(),
+              Option.fromNullishOr(
+                (options.projects ?? [project]).find(
+                  (project) => project.id === requestedProjectId,
+                ),
+              ),
             ),
           snapshot: Effect.succeed({
-            projects: [project],
+            projects: options.projects ?? [project],
             updatedAt: "2026-01-01T00:00:00.000Z",
           }),
         }),
@@ -155,7 +175,7 @@ it.effect(
       );
 
       assert.equal(error._tag, "WorktreeMutationError");
-      assert.match(error.message, /outside the managed worktrees directory/);
+      assert.deepInclude(error, { stage: "outside_managed_root" });
       assert.isFalse(yield* fs.exists(escapedPath));
     }).pipe(Effect.provide(Layer.mergeAll(serverConfigLiveLayer, NodeServices.layer, gitLayer))),
 );
@@ -285,10 +305,16 @@ it.effect("leaves a complete checkout when the turn start is cancelled during cr
     const project = makeProject(repositoryRoot);
     const createEntered = yield* Deferred.make<void>();
     const releaseCreate = yield* Deferred.make<void>();
+    let setupAttempts = 0;
+    const runSetup = () =>
+      Effect.sync(() => {
+        setupAttempts++;
+        return { status: "no-script" as const };
+      });
     const layer = WorktreeRevivalService.layer.pipe(
       Layer.provide(
         Layer.mergeAll(
-          serverConfigLiveLayer,
+          Layer.succeed(ServerConfig.ServerConfig, config),
           NodeServices.layer,
           ServerSettings.layerTest(),
           Layer.succeed(GitVcsDriver.GitVcsDriver, {
@@ -306,7 +332,9 @@ it.effect("leaves a complete checkout when the turn start is cancelled during cr
               updatedAt: "2026-01-01T00:00:00.000Z",
             }),
           }),
-          Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({}),
+          Layer.succeed(ProjectSetupScriptRunner.ProjectSetupScriptRunner, {
+            runForThread: runSetup,
+          }),
         ),
       ),
     );
@@ -325,6 +353,15 @@ it.effect("leaves a complete checkout when the turn start is cancelled during cr
       assert.isTrue(yield* fs.exists(path.join(worktreePath, "README.md")));
       assert.equal(yield* lifecycle.revision, 1);
     }).pipe(Effect.provide(layer.pipe(Layer.provideMerge(WorktreeLifecycle.layer))));
+    assert.equal(setupAttempts, 0);
+    yield* Effect.flatMap(WorktreeRevivalService.WorktreeRevivalService, (service) =>
+      service.reviveForThread({ threadId, projectId, worktreePath, branch: "feature/revival" }),
+    ).pipe(Effect.provide(makeRevivalLayer(project, runSetup, { config })));
+    assert.equal(
+      setupAttempts,
+      1,
+      "creation cancellation must retain pending setup across restart",
+    );
   }).pipe(Effect.provide(Layer.mergeAll(serverConfigLiveLayer, NodeServices.layer, gitLayer))),
 );
 
@@ -489,5 +526,370 @@ it.effect("does not wait for a setup script that lets the agent start alongside 
     }).pipe(Effect.provide(layer));
 
     assert.deepEqual(result, { revived: true, generation: 1 });
+  }).pipe(Effect.provide(Layer.mergeAll(serverConfigLiveLayer, NodeServices.layer, gitLayer))),
+);
+
+it.effect("retries required setup after restart and remembers success on the next restart", () =>
+  Effect.gen(function* () {
+    const path = yield* Path.Path;
+    const config = yield* ServerConfig.ServerConfig;
+    const repositoryRoot = yield* initializeRepository();
+    const worktreePath = path.join(config.worktreesDir, "setup", "restart");
+    let attempts = 0;
+    const layer = makeRevivalLayer(
+      makeProject(repositoryRoot),
+      () =>
+        Effect.sync(() =>
+          startedSetup(
+            worktreePath,
+            false,
+            Effect.succeed({
+              exitCode: ++attempts === 1 ? 1 : 0,
+              durationMs: 1,
+            }),
+          ),
+        ),
+      { config },
+    );
+    const start = Effect.flatMap(WorktreeRevivalService.WorktreeRevivalService, (service) =>
+      service.reviveForThread({ threadId, projectId, worktreePath, branch: "feature/revival" }),
+    );
+    const error = yield* start.pipe(Effect.flip, Effect.provide(layer));
+    assert.equal(error.stage, "run_setup");
+    const retry = yield* start.pipe(Effect.provide(Layer.fresh(layer)));
+    assert.deepEqual(retry, { revived: false, generation: 0 });
+    assert.equal(attempts, 2);
+    yield* start.pipe(Effect.provide(Layer.fresh(layer)));
+    assert.equal(attempts, 2, "successful setup must survive another restart");
+  }).pipe(Effect.provide(Layer.mergeAll(serverConfigLiveLayer, NodeServices.layer, gitLayer))),
+);
+
+it.effect("remembers async setup startup across restart without waiting for completion", () =>
+  Effect.gen(function* () {
+    const path = yield* Path.Path;
+    const config = yield* ServerConfig.ServerConfig;
+    const repositoryRoot = yield* initializeRepository();
+    const worktreePath = path.join(config.worktreesDir, "setup", "async-restart");
+    let attempts = 0;
+    const layer = makeRevivalLayer(
+      makeProject(repositoryRoot),
+      () =>
+        Effect.sync(() => {
+          attempts++;
+          return startedSetup(worktreePath, true, Effect.never);
+        }),
+      { config },
+    );
+    const start = Effect.flatMap(WorktreeRevivalService.WorktreeRevivalService, (service) =>
+      service.reviveForThread({ threadId, projectId, worktreePath, branch: "feature/revival" }),
+    );
+    yield* start.pipe(Effect.provide(layer));
+    yield* start.pipe(Effect.provide(Layer.fresh(layer)));
+    assert.equal(attempts, 1);
+  }).pipe(Effect.provide(Layer.mergeAll(serverConfigLiveLayer, NodeServices.layer, gitLayer))),
+);
+
+it.effect("retains setup readiness after Git creates a checkout and then fails", () =>
+  Effect.gen(function* () {
+    const path = yield* Path.Path;
+    const config = yield* ServerConfig.ServerConfig;
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    const repositoryRoot = yield* initializeRepository();
+    const worktreePath = path.join(config.worktreesDir, "setup", "create-failure");
+    let attempts = 0;
+    const runSetup = () =>
+      Effect.sync(() => {
+        attempts++;
+        return { status: "no-script" as const };
+      });
+    const project = makeProject(repositoryRoot);
+    const start = Effect.flatMap(WorktreeRevivalService.WorktreeRevivalService, (service) =>
+      service.reviveForThread({ threadId, projectId, worktreePath, branch: "feature/revival" }),
+    );
+    const failureLayer = makeRevivalLayer(project, runSetup, {
+      config,
+      git: {
+        ...driver,
+        createWorktree: (input, options) =>
+          driver.createWorktree(input, options).pipe(
+            Effect.andThen(
+              Effect.fail(
+                new GitCommandError({
+                  operation: "createWorktree",
+                  command: "git",
+                  cwd: repositoryRoot,
+                  detail: "simulated creation failure",
+                  cause: "failure after checkout creation",
+                }),
+              ),
+            ),
+          ),
+      },
+    });
+    const error = yield* start.pipe(Effect.flip, Effect.provide(failureLayer));
+    assert.equal(error.stage, "create_worktree");
+    assert.equal(attempts, 0);
+    yield* start.pipe(Effect.provide(makeRevivalLayer(project, runSetup, { config })));
+    assert.equal(attempts, 1);
+  }).pipe(Effect.provide(Layer.mergeAll(serverConfigLiveLayer, NodeServices.layer, gitLayer))),
+);
+
+it.effect("does not retry async setup after its later non-zero exit", () =>
+  Effect.gen(function* () {
+    const path = yield* Path.Path;
+    const config = yield* ServerConfig.ServerConfig;
+    const repositoryRoot = yield* initializeRepository();
+    const worktreePath = path.join(config.worktreesDir, "setup", "async-failure");
+    const finished = yield* Deferred.make<ProjectSetupScriptRunner.ProjectSetupScriptCompletion>();
+    const observed = yield* Deferred.make<void>();
+    let attempts = 0;
+    const layer = makeRevivalLayer(
+      makeProject(repositoryRoot),
+      () =>
+        Effect.sync(() => {
+          attempts++;
+          return startedSetup(
+            worktreePath,
+            true,
+            Deferred.await(finished).pipe(Effect.tap(() => Deferred.succeed(observed, undefined))),
+          );
+        }),
+      { config },
+    );
+    const start = Effect.flatMap(WorktreeRevivalService.WorktreeRevivalService, (service) =>
+      service.reviveForThread({ threadId, projectId, worktreePath, branch: "feature/revival" }),
+    );
+    yield* Effect.gen(function* () {
+      yield* start;
+      yield* Deferred.succeed(finished, { exitCode: 1, durationMs: 1 });
+      yield* Deferred.await(observed);
+      yield* start;
+      assert.equal(attempts, 1);
+    }).pipe(Effect.provide(layer));
+    yield* start.pipe(Effect.provide(Layer.fresh(layer)));
+    assert.equal(attempts, 1);
+  }).pipe(Effect.provide(Layer.mergeAll(serverConfigLiveLayer, NodeServices.layer, gitLayer))),
+);
+
+it.effect("an older setup completion cannot clear a replacement checkout's pending setup", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const config = yield* ServerConfig.ServerConfig;
+    const repositoryRoot = yield* initializeRepository();
+    const worktreePath = path.join(config.worktreesDir, "setup", "replacement");
+    const firstStarted = yield* Deferred.make<void>();
+    const secondStarted = yield* Deferred.make<void>();
+    const firstFinished =
+      yield* Deferred.make<ProjectSetupScriptRunner.ProjectSetupScriptCompletion>();
+    let attempts = 0;
+    const layer = makeRevivalLayer(
+      makeProject(repositoryRoot),
+      () =>
+        Effect.suspend(() => {
+          attempts++;
+          if (attempts === 1)
+            return Deferred.succeed(firstStarted, undefined).pipe(
+              Effect.as(startedSetup(worktreePath, false, Deferred.await(firstFinished))),
+            );
+          if (attempts === 2)
+            return Deferred.succeed(secondStarted, undefined).pipe(
+              Effect.as(startedSetup(worktreePath, false, Effect.never)),
+            );
+          return Effect.succeed(
+            startedSetup(worktreePath, false, Effect.succeed({ exitCode: 0, durationMs: 1 })),
+          );
+        }),
+      { config },
+    );
+    const input = { threadId, projectId, worktreePath, branch: "feature/revival" };
+    yield* Effect.gen(function* () {
+      const service = yield* WorktreeRevivalService.WorktreeRevivalService;
+      const first = yield* service.reviveForThread(input).pipe(Effect.forkChild);
+      yield* Deferred.await(firstStarted);
+      yield* fs.remove(worktreePath, { recursive: true });
+      const second = yield* service.reviveForThread(input).pipe(Effect.forkChild);
+      yield* Deferred.await(secondStarted);
+      yield* Deferred.succeed(firstFinished, { exitCode: 0, durationMs: 1 });
+      const stale = yield* Fiber.join(first).pipe(Effect.flip);
+      assert.equal(stale.stage, "run_setup");
+      assert.equal(stale.cause, "Worktree readiness changed while setup was running.");
+      yield* Fiber.interrupt(second);
+    }).pipe(Effect.provide(layer));
+    const retry = yield* Effect.flatMap(WorktreeRevivalService.WorktreeRevivalService, (service) =>
+      service.reviveForThread(input),
+    ).pipe(Effect.provide(Layer.fresh(layer)));
+    assert.deepEqual(retry, { revived: false, generation: 0 });
+    assert.equal(attempts, 3);
+  }).pipe(Effect.provide(Layer.mergeAll(serverConfigLiveLayer, NodeServices.layer, gitLayer))),
+);
+
+it.effect("keeps pending setup for each project sharing the canonical repository", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const config = yield* ServerConfig.ServerConfig;
+    const repositoryRoot = yield* initializeRepository();
+    const aliasRoot = yield* fs.makeTempDirectoryScoped({ prefix: "t3-revival-alias-" });
+    const aliasPath = path.join(aliasRoot, "repository");
+    yield* fs.symlink(repositoryRoot, aliasPath);
+    const worktreePath = path.join(config.worktreesDir, "setup", "shared-projects");
+    const firstProject = makeProject(repositoryRoot);
+    const secondProject = { ...makeProject(aliasPath), id: ProjectId.make("second-project") };
+    const projects = [firstProject, secondProject];
+    const attempts: Array<string | undefined> = [];
+    const layer = makeRevivalLayer(
+      firstProject,
+      (input) =>
+        Effect.sync(() => {
+          attempts.push(input.projectId);
+          return startedSetup(
+            worktreePath,
+            false,
+            Effect.succeed({
+              exitCode: attempts.length === 2 ? 1 : 0,
+              durationMs: 1,
+            }),
+          );
+        }),
+      { config, projects },
+    );
+    const start = (projectId: ProjectId) =>
+      Effect.flatMap(WorktreeRevivalService.WorktreeRevivalService, (service) =>
+        service.reviveForThread({ threadId, projectId, worktreePath, branch: "feature/revival" }),
+      ).pipe(Effect.provide(Layer.fresh(layer)));
+    yield* start(firstProject.id);
+    const error = yield* start(secondProject.id).pipe(Effect.flip);
+    assert.deepInclude(error, { stage: "run_setup" });
+    yield* start(secondProject.id);
+    yield* start(firstProject.id);
+    yield* start(secondProject.id);
+    assert.deepEqual(attempts, [firstProject.id, secondProject.id, secondProject.id]);
+  }).pipe(Effect.provide(Layer.mergeAll(serverConfigLiveLayer, NodeServices.layer, gitLayer))),
+);
+
+it.effect("rejects a missing checkout that contains a configured managed root", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const config = yield* ServerConfig.ServerConfig;
+    const repositoryRoot = yield* initializeRepository();
+    const worktreePath = path.join(config.worktreesDir, "ancestor");
+    const error = yield* Effect.flatMap(WorktreeRevivalService.WorktreeRevivalService, (service) =>
+      service.reviveForThread({ threadId, projectId, worktreePath, branch: "feature/revival" }),
+    ).pipe(
+      Effect.flip,
+      Effect.provide(
+        makeRevivalLayer(
+          makeProject(repositoryRoot),
+          () => Effect.succeed({ status: "no-script" }),
+          {
+            config,
+            settings: { worktreesDirectory: path.join(worktreePath, "managed-root") },
+          },
+        ),
+      ),
+    );
+    assert.equal(error.stage, "outside_managed_root");
+    assert.isFalse(yield* fs.exists(worktreePath));
+  }).pipe(Effect.provide(Layer.mergeAll(serverConfigLiveLayer, NodeServices.layer, gitLayer))),
+);
+
+it.effect("resolves environment and project submodule settings before the checkout's t3.json", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const config = yield* ServerConfig.ServerConfig;
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    const previousAllowedProtocol = process.env.GIT_ALLOW_PROTOCOL;
+    process.env.GIT_ALLOW_PROTOCOL = "file";
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        if (previousAllowedProtocol === undefined) delete process.env.GIT_ALLOW_PROTOCOL;
+        else process.env.GIT_ALLOW_PROTOCOL = previousAllowedProtocol;
+      }),
+    );
+    const nested = yield* initializeRepository();
+    const inner = yield* initializeRepository();
+    const repositoryRoot = yield* initializeRepository();
+    const git = (cwd: string, args: readonly string[]) =>
+      driver.execute({
+        operation: "WorktreeRevivalServiceTest.submodules",
+        cwd,
+        args,
+      });
+    yield* git(inner, ["submodule", "add", nested, "nested"]);
+    yield* git(inner, ["commit", "-am", "add nested submodule"]);
+    yield* git(repositoryRoot, ["submodule", "add", inner, "inner"]);
+    yield* git(repositoryRoot, ["commit", "-am", "add inner submodule"]);
+    const cases: readonly {
+      name: string;
+      file: WorktreeSubmodules | undefined;
+      environment: WorktreeSubmodules | null;
+      project?: WorktreeSubmodules;
+      populated: boolean;
+    }[] = [
+      { name: "environment-none", file: "recursive", environment: "none", populated: false },
+      { name: "environment-recursive", file: "none", environment: "recursive", populated: true },
+      {
+        name: "project-none",
+        file: "recursive",
+        environment: "recursive",
+        project: "none",
+        populated: false,
+      },
+      {
+        name: "project-recursive",
+        file: "none",
+        environment: "none",
+        project: "recursive",
+        populated: true,
+      },
+      { name: "file-none", file: "none", environment: null, populated: false },
+      { name: "default-recursive", file: undefined, environment: null, populated: true },
+    ];
+    for (const testCase of cases) {
+      yield* fs.writeFileString(
+        path.join(repositoryRoot, "t3.json"),
+        JSON.stringify(testCase.file === undefined ? {} : { worktreeSubmodules: testCase.file }),
+      );
+      yield* git(repositoryRoot, ["add", "t3.json"]);
+      yield* git(repositoryRoot, ["commit", "--allow-empty", "-m", testCase.name]);
+      const branch = `feature/${testCase.name}`;
+      yield* git(repositoryRoot, ["branch", branch]);
+      const worktreePath = path.join(config.worktreesDir, testCase.name);
+      yield* Effect.flatMap(WorktreeRevivalService.WorktreeRevivalService, (service) =>
+        service.reviveForThread({ threadId, projectId, worktreePath, branch }),
+      ).pipe(
+        Effect.provide(
+          makeRevivalLayer(
+            makeProject(repositoryRoot),
+            () => Effect.succeed({ status: "no-script" }),
+            {
+              config,
+              settings: {
+                worktreeSubmodules: testCase.environment,
+                projectSettingsOverrides:
+                  testCase.project === undefined
+                    ? {}
+                    : {
+                        [projectId]: { worktreeSubmodules: testCase.project },
+                      },
+              },
+            },
+          ),
+        ),
+      );
+      assert.equal(
+        yield* fs.exists(path.join(worktreePath, "inner", "README.md")),
+        testCase.populated,
+        testCase.name,
+      );
+      assert.equal(
+        yield* fs.exists(path.join(worktreePath, "inner", "nested", "README.md")),
+        testCase.populated,
+        testCase.name,
+      );
+    }
   }).pipe(Effect.provide(Layer.mergeAll(serverConfigLiveLayer, NodeServices.layer, gitLayer))),
 );

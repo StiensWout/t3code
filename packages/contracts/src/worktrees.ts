@@ -31,7 +31,7 @@ export type WorktreeProjectRef = typeof WorktreeProjectRef.Type;
  * ignored files keep a checkout; tracked edits always do. `open_thread`, a named branch's `unpushed` commits and
  * `unrestorable_thread` only stop manual removal, since cleanup keeps the branch.
  * `unrestorable_thread` is a linked thread that revival could not bring back:
- * the checkout is detached, or the thread recorded no branch.
+ * the checkout is detached, or the thread recorded a different branch or none.
  */
 export const WorktreePruneBlocker = Schema.Literals([
   "running",
@@ -241,7 +241,7 @@ export class WorktreeMutationError extends Schema.TaggedError<WorktreeMutationEr
       case "missing_branch":
         return `Cannot recreate the worktree: branch '${this.branch ?? "unknown"}' no longer exists.`;
       case "outside_managed_root":
-        return `Cannot revive a worktree outside the managed worktrees directory: '${this.path ?? "unknown"}'.`;
+        return `Cannot revive a worktree outside the managed worktrees directories: '${this.path ?? "unknown"}'. Restore that checkout manually before sending another message.`;
       case "registered_different_ref":
         return `Cannot revive '${this.path ?? "unknown"}': Git already registers that path for a different ref.`;
       case "branch_in_use":

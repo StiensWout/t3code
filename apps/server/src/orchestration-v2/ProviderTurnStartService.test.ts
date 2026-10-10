@@ -918,6 +918,7 @@ function makeWorktreeTurnStartFixture(input: {
   let runStatus: OrchestrationV2Run["status"] = "starting";
   let generation = 0;
   let boundWorktreePath = projection.thread.worktreePath;
+  let boundBranch = projection.thread.branch;
   const currentProjection = (): OrchestrationV2ThreadProjection => ({
     ...projection,
     runs: projection.runs.map((candidate) =>
@@ -1002,6 +1003,7 @@ function makeWorktreeTurnStartFixture(input: {
                 ({
                   ...projection.thread,
                   worktreePath: boundWorktreePath,
+                  branch: boundBranch,
                 }) as unknown as OrchestrationV2ThreadShell,
             ),
         }),
@@ -1039,6 +1041,9 @@ function makeWorktreeTurnStartFixture(input: {
     /** Moves the thread to another checkout, as a metadata update would. */
     rebindWorktree: (worktreePath: string) => {
       boundWorktreePath = worktreePath;
+    },
+    renameBranch: (branch: string) => {
+      boundBranch = branch;
     },
   };
 }
@@ -1136,6 +1141,25 @@ effectIt.effect("does not open a provider session for a run superseded during re
     expect(fixture.order).toEqual(["revive"]);
     expect(fixture.close).not.toHaveBeenCalled();
     expect(fixture.open).not.toHaveBeenCalled();
+  }),
+);
+
+effectIt.effect("starts the turn when its branch is renamed during revival", () =>
+  Effect.gen(function* () {
+    const revivalStarted = yield* Deferred.make<void>();
+    const releaseRevival = yield* Deferred.make<void>();
+    const fixture = makeWorktreeTurnStartFixture({
+      revival: "unchanged",
+      revivalGate: Deferred.succeed(revivalStarted, undefined).pipe(
+        Effect.andThen(Deferred.await(releaseRevival)),
+      ),
+    });
+    const start = yield* fixture.start.pipe(Effect.provide(fixture.layer), Effect.forkChild);
+    yield* Deferred.await(revivalStarted);
+    fixture.renameBranch("feature/descriptive-name");
+    yield* Deferred.succeed(releaseRevival, undefined);
+    yield* Fiber.join(start);
+    expect(fixture.startRootRun).toHaveBeenCalledOnce();
   }),
 );
 

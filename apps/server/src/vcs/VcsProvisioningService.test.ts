@@ -41,7 +41,6 @@ function makeDriver(calls: string[]): VcsDriver.VcsDriver["Service"] {
           expiresAt: Option.none(),
         },
       }),
-    listWorkspaces: () => Effect.succeed([]),
     listRemotes: () =>
       Effect.succeed({
         remotes: [],

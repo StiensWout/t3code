@@ -37,7 +37,7 @@ const linkedThread = (
     id: ThreadId.make(`thread-${worktreePath}`),
     projectId,
     worktreePath,
-    branch: "feature/linked",
+    branch: `feature/${worktreePath.split(/[\\/]/).at(-1)}`,
     ...overrides,
   });
 
@@ -186,6 +186,24 @@ it.effect("finishes a removal whose request is cancelled while Git is deleting",
 
     assert.isFalse(yield* fs.exists(worktreePath));
     assert.equal(yield* lifecycle.revision, 1);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("keeps a checkout when its linked thread records a different branch", () => {
+  const { state, layer } = makeHarness();
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const repositoryRoot = yield* initializeRepository();
+    state.projects = [makeProject(repositoryRoot)];
+    const worktreePath = yield* addWorktree(repositoryRoot, "switched");
+    state.threads = [linkedThread(worktreePath, { branch: "main", settledOverride: "settled" })];
+    const worktrees = yield* WorktreeService.WorktreeService;
+    const [listed] = (yield* worktrees.listWorktrees({})).worktrees;
+    assert.deepInclude(listed, { safeToPrune: false, pruneBlockers: ["unrestorable_thread"] });
+    assert.equal(yield* removeManually(worktreePath), "unrestorable_thread");
+    assert.isTrue(yield* fs.exists(worktreePath));
+    state.threads = [linkedThread(worktreePath, { settledOverride: "settled" })];
+    assert.equal(yield* removeManually(worktreePath), "removed");
   }).pipe(Effect.provide(layer));
 });
 

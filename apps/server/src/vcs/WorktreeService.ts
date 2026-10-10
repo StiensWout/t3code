@@ -19,7 +19,6 @@ import {
   type VcsPruneWorktreesInput,
   type VcsPruneWorktreesResult,
   type VcsRemoveWorktreeInput,
-  type VcsWorkspace,
   type WorktreeInfo,
   type WorktreeKeepWhen,
   type WorktreeInventoryErrorStage,
@@ -40,6 +39,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
 import { resolveWorkspaceLeasePath, withWorkspaceLease } from "../workspace/workspaceLease.ts";
 import { isFilesystemRoot, managedWorktreesDirectories } from "../worktreesDirectory.ts";
+import type { GitWorktree } from "./GitWorktree.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 import * as WorktreeLifecycle from "./WorktreeLifecycle.ts";
 import { storageCleanupActivityAt, worktreeThreadBusy } from "./worktreeThreadState.ts";
@@ -253,11 +253,11 @@ function removalBlockers(input: {
     }
   }
   // Revival recreates a checkout from the branch its thread recorded. A thread
-  // without one, or any thread on a detached checkout, would be left with a
-  // path nothing can restore.
+  // without the checkout's current branch would be restored to a different
+  // workspace or left with a path nothing can restore.
   if (
     manual &&
-    usage.threads.some((thread) => thread.branch === null || inspection?.branch === null)
+    usage.threads.some((thread) => thread.branch === null || thread.branch !== inspection?.branch)
   ) {
     blockers.add("unrestorable_thread");
   }
@@ -544,7 +544,7 @@ const make = Effect.gen(function* () {
         Effect.flatMap((entries) =>
           Effect.forEach(entries, (entry) =>
             canonicalizePath(entry.path).pipe(
-              Effect.map((canonicalPath): VcsWorkspace => ({ ...entry, path: canonicalPath })),
+              Effect.map((canonicalPath): GitWorktree => ({ ...entry, path: canonicalPath })),
             ),
           ),
         ),
@@ -855,7 +855,7 @@ const make = Effect.gen(function* () {
           operation: "WorktreeService.cleanUntracked",
           cwd: worktreePath,
           args: ["clean", "-ffdx"],
-          timeoutMs: 30_000,
+          timeoutMs: 300_000,
         });
       }
       yield* git.removeWorktree({ cwd: workspaceRoot, path: worktreePath, force: false });

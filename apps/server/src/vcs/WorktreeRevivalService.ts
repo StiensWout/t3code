@@ -1,7 +1,9 @@
 import * as Context from "effect/Context";
+import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Hex from "effect/encoding/Hex";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -15,6 +17,8 @@ import {
   WorktreeMutationError,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
+import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 
 import * as ServerConfig from "../config.ts";
 import * as ProjectService from "../project/ProjectService.ts";
@@ -76,6 +80,7 @@ export interface WorktreeRevivalForThreadInput {
 }
 
 interface WorktreeRevivalInput {
+  readonly projectId: ProjectId;
   readonly workspaceRoot: string;
   readonly worktreePath: string;
   readonly branch: string;
@@ -103,6 +108,7 @@ const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  const crypto = yield* Crypto.Crypto;
   const git = yield* GitVcsDriver.GitVcsDriver;
   const lifecycle = yield* WorktreeLifecycle.WorktreeLifecycle;
   const projectsService = yield* ProjectService.ProjectService;
@@ -115,7 +121,7 @@ const make = Effect.gen(function* () {
     new Map<
       string,
       {
-        readonly generation: number;
+        readonly token: string;
         readonly outcome: Deferred.Deferred<void, WorktreeMutationError>;
       }
     >(),
@@ -124,6 +130,29 @@ const make = Effect.gen(function* () {
   const serviceScope = yield* Effect.scope;
 
   const setupKey = (projectId: ProjectId, worktreePath: string) => `${projectId}\0${worktreePath}`;
+  const pendingSetupPath = (projectId: ProjectId, worktreePath: string) =>
+    crypto.digest("SHA-256", new TextEncoder().encode(setupKey(projectId, worktreePath))).pipe(
+      Effect.map((digest) =>
+        path.join(config.stateDir, "worktree-revival-setup", Hex.encode(digest)),
+      ),
+      Effect.mapError((cause) =>
+        mutationError("run_setup", cause, { projectId, path: worktreePath }),
+      ),
+    );
+  const readPendingSetup = (projectId: ProjectId, worktreePath: string) =>
+    pendingSetupPath(projectId, worktreePath).pipe(
+      Effect.flatMap((markerPath) =>
+        fs.readFileString(markerPath).pipe(
+          Effect.catchIf(
+            (cause) => cause.reason._tag === "NotFound",
+            () => Effect.void,
+          ),
+          Effect.mapError((cause) =>
+            mutationError("run_setup", cause, { projectId, path: worktreePath }),
+          ),
+        ),
+      ),
+    );
   const currentGeneration = (worktreePath: string) =>
     Ref.get(generationByWorktreePath).pipe(
       Effect.map((generations) => generations.get(worktreePath) ?? 0),
@@ -186,7 +215,12 @@ const make = Effect.gen(function* () {
         branch: input.branch,
       });
     }
-    return requestedWorkspaceRoot;
+    return {
+      workspaceRoot: requestedWorkspaceRoot,
+      projectIds: projectSnapshot.projects
+        .filter((_, index) => projectRoots[index] === requestedWorkspaceRoot)
+        .map((project) => project.id),
+    };
   });
 
   const listCanonicalWorkspaces = Effect.fn("WorktreeRevivalService.listCanonicalWorkspaces")(
@@ -256,7 +290,7 @@ const make = Effect.gen(function* () {
   const reviveWorktreeUnlocked = Effect.fn("WorktreeRevivalService.reviveWorktree")(function* (
     input: WorktreeRevivalInput,
   ) {
-    const workspaceRoot = yield* resolveManagedWorkspaceRoot(input);
+    const { workspaceRoot, projectIds } = yield* resolveManagedWorkspaceRoot(input);
     const worktreePath = yield* canonicalizePath(input.worktreePath);
     const exists = yield* fs.exists(worktreePath).pipe(
       Effect.mapError((cause) =>
@@ -280,7 +314,9 @@ const make = Effect.gen(function* () {
     }
     const managedWorktreesRoots = yield* readManagedWorktreesRoots();
     if (
-      managedWorktreesRoots.includes(worktreePath) ||
+      managedWorktreesRoots.some(
+        (root) => root === worktreePath || isPathInside(worktreePath, root, path),
+      ) ||
       !managedWorktreesRoots.some((root) => isPathInside(root, worktreePath, path))
     ) {
       return yield* mutationError("outside_managed_root", undefined, {
@@ -376,22 +412,57 @@ const make = Effect.gen(function* () {
     }
 
     yield* validateBranchExists(workspaceRoot, input.branch);
+    const submodules = yield* settings.getSettings.pipe(
+      Effect.map(
+        (settings) => resolveProjectSettings(settings, input.projectId).settings.worktreeSubmodules,
+      ),
+      Effect.orElseSucceed(() => null),
+    );
     // A cancelled turn start must not stop `git worktree add` halfway: the
     // next turn would take the partial directory for a healthy checkout.
-    const generation = yield* git
-      .createWorktree({ cwd: workspaceRoot, refName: input.branch, path: worktreePath })
-      .pipe(
+    const generation = yield* Effect.gen(function* () {
+      // Persist readiness before Git can leave a checkout behind. Each project
+      // sharing this repository owns its setup; success for one cannot clear
+      // another's pending work. Tokens distinguish recreations across restarts.
+      const token = yield* crypto.randomUUIDv4.pipe(
         Effect.mapError((cause) =>
-          mutationError("create_worktree", cause, {
-            path: worktreePath,
-            workspaceRoot,
-            branch: input.branch,
-          }),
+          mutationError("run_setup", cause, { projectId: input.projectId, path: worktreePath }),
         ),
-        Effect.andThen(advanceGeneration(worktreePath)),
-        Effect.tap(() => lifecycle.markInventoryChanged),
-        Effect.uninterruptible,
       );
+      yield* Effect.forEach(new Set([...projectIds, input.projectId]), (projectId) =>
+        Effect.gen(function* () {
+          const filePath = yield* pendingSetupPath(projectId, worktreePath);
+          yield* writeFileStringAtomically({
+            filePath,
+            contents: token,
+          }).pipe(
+            Effect.provideService(FileSystem.FileSystem, fs),
+            Effect.provideService(Path.Path, path),
+            Effect.mapError((cause) =>
+              mutationError("run_setup", cause, { projectId, path: worktreePath }),
+            ),
+          );
+        }),
+      );
+      return yield* git
+        .createWorktree(
+          { cwd: workspaceRoot, refName: input.branch, path: worktreePath },
+          { submodules },
+        )
+        .pipe(
+          Effect.mapError((cause) =>
+            mutationError("create_worktree", cause, {
+              path: worktreePath,
+              workspaceRoot,
+              branch: input.branch,
+            }),
+          ),
+        );
+    }).pipe(
+      Effect.andThen(advanceGeneration(worktreePath)),
+      Effect.tap(() => lifecycle.markInventoryChanged),
+      Effect.uninterruptible,
+    );
 
     const finalExists = yield* fs.exists(worktreePath).pipe(
       Effect.mapError((cause) =>
@@ -449,6 +520,7 @@ const make = Effect.gen(function* () {
   const runSetup = Effect.fn("WorktreeRevivalService.runSetup")(function* (
     input: WorktreeRevivalForThreadInput,
     worktreePath: string,
+    token: string,
     outcome: Deferred.Deferred<void, WorktreeMutationError>,
   ) {
     const project = yield* loadProject(input);
@@ -458,6 +530,18 @@ const make = Effect.gen(function* () {
         workspaceRoot: project.workspaceRoot,
         branch: input.branch,
       });
+    const permitStartup = withWorkspaceLease(
+      worktreePath,
+      Effect.gen(function* () {
+        if ((yield* readPendingSetup(input.projectId, worktreePath)) !== token) {
+          return yield* setupFailed("Worktree readiness changed while setup was running.");
+        }
+        yield* fs
+          .remove(yield* pendingSetupPath(input.projectId, worktreePath))
+          .pipe(Effect.mapError(setupFailed));
+        yield* Deferred.succeed(outcome, undefined);
+      }),
+    ).pipe(Effect.uninterruptible);
     const setup = yield* setupScripts
       .runForThread({
         threadId: input.threadId,
@@ -473,8 +557,11 @@ const make = Effect.gen(function* () {
         observeCompletion: {},
       })
       .pipe(Effect.mapError(setupFailed));
-    if (setup.status !== "started" || setup.completion === undefined) return;
-    if (setup.async) yield* Deferred.succeed(outcome, undefined);
+    if (setup.status !== "started" || setup.completion === undefined) {
+      yield* permitStartup;
+      return;
+    }
+    if (setup.async) yield* permitStartup;
     // Awaiting completion also releases the script's terminal subscription.
     const completion = yield* setup.completion;
     if (!setup.async && completion.exitCode !== 0) {
@@ -482,6 +569,7 @@ const make = Effect.gen(function* () {
         `Setup script exited with ${completion.exitCode ?? "no exit code"}.`,
       );
     }
+    if (!setup.async) yield* permitStartup;
   });
 
   /**
@@ -494,24 +582,39 @@ const make = Effect.gen(function* () {
   const ensureSetup = Effect.fn("WorktreeRevivalService.ensureSetup")(function* (
     input: WorktreeRevivalForThreadInput,
     worktreePath: string,
-    generation: number,
+    token: string,
   ) {
     const key = setupKey(input.projectId, worktreePath);
     const fresh = yield* Deferred.make<void, WorktreeMutationError>();
     // Registering the run and forking it cannot be split by an interrupt: a
     // registered outcome nobody completes would hold every later turn. The
-    // run itself stays interruptible so closing the service stops it.
-    const outcome = yield* Effect.uninterruptible(
+    // lease also prevents a delayed caller for an older token from replacing
+    // the current run. The script stays interruptible and runs outside it.
+    const outcome = yield* withWorkspaceLease(
+      worktreePath,
       Effect.gen(function* () {
+        const pending = yield* readPendingSetup(input.projectId, worktreePath);
+        if (pending !== token) {
+          const current = (yield* Ref.get(setupRuns)).get(key);
+          if (pending === undefined && current?.token === token) return current.outcome;
+          return yield* mutationError(
+            "run_setup",
+            "Worktree readiness changed before setup started.",
+            {
+              projectId: input.projectId,
+              path: worktreePath,
+            },
+          );
+        }
         const registered = yield* Ref.modify(setupRuns, (runs) => {
           const current = runs.get(key);
-          if (current !== undefined && current.generation === generation) {
+          if (current !== undefined && current.token === token) {
             return [current.outcome, runs] as const;
           }
-          return [fresh, new Map(runs).set(key, { generation, outcome: fresh })] as const;
+          return [fresh, new Map(runs).set(key, { token, outcome: fresh })] as const;
         });
         if (registered === fresh) {
-          yield* Effect.interruptible(runSetup(input, worktreePath, fresh)).pipe(
+          yield* Effect.interruptible(runSetup(input, worktreePath, token, fresh)).pipe(
             Effect.onExit((exit) =>
               Effect.gen(function* () {
                 if (Exit.isFailure(exit)) {
@@ -530,7 +633,7 @@ const make = Effect.gen(function* () {
         }
         return registered;
       }),
-    );
+    ).pipe(Effect.uninterruptible);
     yield* Deferred.await(outcome);
   });
 
@@ -549,21 +652,24 @@ const make = Effect.gen(function* () {
     const revival = yield* withWorkspaceLease(
       worktreePath,
       Effect.gen(function* () {
-        if (yield* fs.exists(worktreePath).pipe(Effect.orElseSucceed(() => false))) {
-          return { revived: false, generation: yield* currentGeneration(worktreePath) };
-        }
-        const project = yield* loadProject(input);
-        return yield* reviveWorktreeUnlocked({
-          workspaceRoot: project.workspaceRoot,
-          worktreePath,
-          branch: input.branch,
+        const revival = yield* Effect.gen(function* () {
+          if (yield* fs.exists(worktreePath).pipe(Effect.orElseSucceed(() => false))) {
+            return { revived: false, generation: yield* currentGeneration(worktreePath) };
+          }
+          const project = yield* loadProject(input);
+          return yield* reviveWorktreeUnlocked({
+            projectId: input.projectId,
+            workspaceRoot: project.workspaceRoot,
+            worktreePath,
+            branch: input.branch,
+          });
         });
+        return { ...revival, setupToken: yield* readPendingSetup(input.projectId, worktreePath) };
       }),
     );
-    // Generation 0 means this server never recreated the worktree, so its
-    // setup belonged to the thread launch that created it.
-    if (revival.generation > 0) {
-      yield* ensureSetup(input, worktreePath, revival.generation);
+    // Existing directories without a revival marker retain their launch setup.
+    if (revival.setupToken !== undefined) {
+      yield* ensureSetup(input, worktreePath, revival.setupToken);
     }
     return { revived: revival.revived, generation: revival.generation };
   });

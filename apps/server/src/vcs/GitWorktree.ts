@@ -1,12 +1,18 @@
-import type { VcsWorkspace } from "@t3tools/contracts";
+/** A checkout registered in local Git metadata. */
+export interface GitWorktree {
+  readonly path: string;
+  readonly refName: string | null;
+  readonly headCommit: string | null;
+  readonly prunable: boolean;
+}
 
 /**
  * Parse `git worktree list --porcelain -z`. Fields are NUL-terminated and
  * records end with an extra NUL, so paths may contain newlines. `-z` needs
  * Git 2.36, which listRefs already requires.
  */
-export function parseGitWorktreeListPorcelain(stdout: string): VcsWorkspace[] {
-  const entries: VcsWorkspace[] = [];
+export function parseGitWorktreeListPorcelain(stdout: string): GitWorktree[] {
+  const entries: GitWorktree[] = [];
   let currentPath: string | null = null;
   let currentRefName: string | null = null;
   let currentHeadCommit: string | null = null;
