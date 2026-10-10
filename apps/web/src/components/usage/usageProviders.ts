@@ -43,7 +43,7 @@ export const PROVIDER_PRESENTATION = {
   },
   pi: {
     label: "Pi",
-    color: "var(--contrast-foreground)",
+    color: "#4d9f8a",
     driverKind: ProviderDriverKind.make("pi"),
   },
 } satisfies Record<UsageProviderKind, UsageProviderPresentation>;
