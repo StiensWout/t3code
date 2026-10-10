@@ -146,6 +146,7 @@ function mcpOutputSchema(tool: McpTool) {
       content: { type: "array", items: { type: "object" } },
       ...(tool.outputSchema === undefined ? {} : { structuredContent: tool.outputSchema }),
       isError: { type: "boolean" },
+      _meta: { type: "object" },
     },
     required: ["content"],
   });

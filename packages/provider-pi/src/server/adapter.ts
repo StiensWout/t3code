@@ -26,11 +26,6 @@
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { AgentScope } from "@t3tools/shared/AgentScope";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
-import {
-  MAX_TOOL_OUTPUT_IMAGES,
-  MAX_TOOL_OUTPUT_IMAGE_BASE64_LENGTH,
-  readToolOutputImage,
-} from "@t3tools/shared/toolOutput";
 import * as Predicate from "effect/Predicate";
 import {
   defaultInstanceIdForDriver,
@@ -253,110 +248,80 @@ function contentText(content: unknown): string {
     .join("");
 }
 
-const MAX_TOOL_OUTPUT_BYTES = 64 * 1024;
-const MAX_TOOL_CONTENT_BLOCKS = 128;
+const MAX_STRUCTURED_TOOL_OUTPUT_BYTES = 64 * 1024;
 
-/** Keep structured values typed, but omit oversized values and duplicate image bytes. */
-function boundedStructuredToolValue(value: unknown) {
-  let bytes = MAX_TOOL_OUTPUT_BYTES;
+/** Preserve complete structured JSON only when its size and traversal remain bounded. */
+function isBoundedStructuredToolValue(value: unknown): boolean {
+  let bytes = MAX_STRUCTURED_TOOL_OUTPUT_BYTES;
   let nodes = 4_096;
-  let exceeded = false;
-  const visit = (entry: unknown, depth: number): unknown => {
-    if (depth > 32 || --nodes < 0) {
-      exceeded = true;
-      return undefined;
-    }
-    const image = readToolOutputImage(entry);
-    if (image !== null) entry = { type: "image", mimeType: image.mimeType };
+  const visit = (entry: unknown, depth: number): boolean => {
+    if (depth > 32 || --nodes < 0 || bytes < 0) return false;
     if (Array.isArray(entry)) {
       bytes -= 2 + entry.length;
-      const items: unknown[] = [];
-      for (const item of entry) {
-        items.push(visit(item, depth + 1));
-        if (exceeded || bytes < 0) break;
-      }
-      return items;
+      return entry.every((item) => visit(item, depth + 1));
     }
     if (Predicate.isObject(entry)) {
       bytes -= 2;
-      const entries: Array<[string, unknown]> = [];
       for (const key in entry) {
         if (!Object.hasOwn(entry, key)) continue;
-        if (key.length > bytes) {
-          exceeded = true;
-          break;
-        }
+        if (key.length > bytes) return false;
         bytes -= Buffer.byteLength(JSON.stringify(key), "utf8") + 2;
-        entries.push([key, visit(entry[key], depth + 1)]);
-        if (exceeded || bytes < 0) break;
+        if (!visit(entry[key], depth + 1)) return false;
       }
-      return Object.fromEntries(entries);
+      return bytes >= 0;
     }
-    if (typeof entry === "string" && entry.length > bytes) {
-      exceeded = true;
-      return undefined;
-    }
+    if (typeof entry === "string" && entry.length > bytes) return false;
     bytes -= Buffer.byteLength(JSON.stringify(entry) ?? "null", "utf8");
-    return entry;
+    return bytes >= 0;
   };
-  const output = visit(value, 0);
-  return exceeded || bytes < 0
-    ? { structuredContentOmitted: true as const }
-    : { structuredContent: output };
+  return visit(value, 0);
 }
 
-/** Image bytes stay in asset-serving content blocks, never in structured mirrors. */
-function piToolOutput(result: unknown): unknown {
+/** Keep model content and distinct typed values; server ingestion owns image byte policy. */
+function piToolOutput(result: unknown, toolName: string): unknown {
   const rawContent = recordField(result, "content");
-  const rawBlocks = Array.isArray(rawContent)
+  const content = Array.isArray(rawContent)
     ? rawContent
     : typeof rawContent === "string"
       ? [{ type: "text", text: rawContent }]
       : [];
-  const content: Array<
-    { type: "text"; text: string } | { type: "image"; mimeType: string; data?: string }
-  > = [];
-  let bytes = MAX_TOOL_OUTPUT_BYTES;
-  let images = 0;
-  let truncated = rawBlocks.length > MAX_TOOL_CONTENT_BLOCKS;
-  for (const block of rawBlocks.slice(0, MAX_TOOL_CONTENT_BLOCKS)) {
-    const image = readToolOutputImage(block);
-    if (image !== null) {
-      if (++images > MAX_TOOL_OUTPUT_IMAGES) {
-        truncated = true;
-        continue;
-      }
-      const data = image.data;
-      if (data !== undefined && data.length > MAX_TOOL_OUTPUT_IMAGE_BASE64_LENGTH) {
-        content.push({ type: "image", mimeType: image.mimeType });
-        truncated = true;
-      } else {
-        content.push({ type: "image", ...image });
-      }
-    } else if (recordField(block, "type") === "text") {
-      const rawText = recordString(block, "text") ?? "";
-      const remaining = Math.max(0, bytes);
-      const buffer = Buffer.from(rawText.slice(0, remaining), "utf8");
-      let end = Math.min(buffer.byteLength, remaining);
-      // Avoid splitting a UTF-8 character at the byte limit.
-      while (end < buffer.byteLength && end > 0 && (buffer[end]! & 0xc0) === 0x80) end--;
-      const bounded = buffer.subarray(0, end).toString("utf8");
-      truncated ||= rawText.length > remaining || buffer.byteLength > remaining;
-      bytes -= end;
-      if (bounded.length > 0) content.push({ type: "text", text: bounded });
-    }
+  let structured = recordField(result, "structuredContent");
+  // Pi MCP tools return the full CallToolResult to scripts. The model content
+  // is already captured, so store only its distinct structured payload.
+  const details = recordField(result, "details");
+  const isMcpResult =
+    toolName.startsWith("mcp__") &&
+    recordString(details, "server") !== undefined &&
+    recordString(details, "tool") !== undefined &&
+    Array.isArray(recordField(structured, "content"));
+  if (isMcpResult) {
+    structured = recordField(structured, "structuredContent");
   }
-  const structured = recordField(result, "structuredContent");
-  // Keep the familiar string shape for ordinary text-only tools.
-  if (images === 0 && structured === undefined && !truncated) {
-    const text = content.map((block) => (block.type === "text" ? block.text : "")).join("");
+  if (typeof structured === "string" && structured === contentText(content)) {
+    structured = undefined;
+  }
+  if (structured !== undefined && !isBoundedStructuredToolValue(structured)) {
+    return {
+      content: [
+        ...content,
+        {
+          type: "text",
+          text: "Structured output omitted because it exceeds the stored result limit.",
+        },
+      ],
+    };
+  }
+  if (
+    !isMcpResult &&
+    structured === undefined &&
+    content.every((block) => recordField(block, "type") === "text")
+  ) {
+    const text = contentText(content);
     return text.length > 0 ? text : undefined;
   }
   return {
     content,
-    ...(structured === undefined ? {} : boundedStructuredToolValue(structured)),
-    ...(recordField(result, "isError") === true ? { isError: true } : {}),
-    ...(truncated ? { outputTruncated: true } : {}),
+    ...(structured === undefined ? {} : { structuredContent: structured }),
   };
 }
 
@@ -1096,10 +1061,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         const completed = phase === "end";
         const isError = event["isError"] === true;
         const resultRecord = completed ? event["result"] : event["partialResult"];
-        const outputText =
-          toolName === "bash" || toolName === "edit" || toolName === "write"
-            ? contentText(recordField(resultRecord, "content"))
-            : "";
+        const outputText = contentText(recordField(resultRecord, "content"));
         // A Stop aborts in-flight tools, and pi reports those as error ends.
         // Present them as interrupted (matching the run) rather than failed.
         const status = completed
@@ -1163,7 +1125,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             return;
           }
         }
-        const output = piToolOutput(resultRecord);
+        const output = piToolOutput(resultRecord, toolName);
         yield* emit({
           type: "turn_item.updated",
           driver: PI_PROVIDER,
