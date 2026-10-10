@@ -1873,12 +1873,21 @@ describe("PiAdapterV2", () => {
         yield* startTurn(runtime, providerThread);
         yield* fake.takeRequest("prompt");
         yield* fake.emit({ type: "agent_start" });
-        const image = { type: "image", mimeType: "image/png", data: "AAAA" };
-        const content = [{ type: "text", text: "Screenshot captured" }, image];
+        const image = {
+          type: "image",
+          mimeType: "image/png",
+          data: Buffer.alloc(64 * 1024, 0x61).toString("base64"),
+        };
+        const note = "Read image file [image/png]";
+        const content = [{ type: "text", text: note }, image];
         const structured = { count: 2, ready: true, paths: ["one.png", "two.png"] };
         const scriptResult = { content, structuredContent: { threadId: "child-thread" } };
         const cases = [
-          { toolName: "read", result: { content }, expected: { content } },
+          {
+            toolName: "read",
+            result: { content, structuredContent: { ...image, note } },
+            expected: { content },
+          },
           {
             toolName: "image_generate",
             result: { content, structuredContent: structured },
@@ -1946,15 +1955,16 @@ describe("PiAdapterV2", () => {
             assert.deepEqual(
               toolOutputImages(event.turnItem.output),
               test.expected.content.some((block) => block.type === "image")
-                ? [{ mimeType: "image/png", data: "AAAA" }]
+                ? [{ mimeType: "image/png", data: image.data }]
                 : [],
             );
+            if (index === 0) assert.equal(turnItemOutputText(event.turnItem), note);
             if (index === 5) assert.equal(turnItemOutputText(event.turnItem), "first\nsecond");
             if (index === 2) {
               assert.deepEqual(compactDynamicToolOutput(event.turnItem.output), {
                 threadId: "child-thread",
               });
-              assert.equal(JSON.stringify(event.turnItem.output).split("AAAA").length - 1, 1);
+              assert.equal(JSON.stringify(event.turnItem.output).split(image.data).length - 1, 1);
             }
           }
         }
@@ -2033,6 +2043,29 @@ describe("PiAdapterV2", () => {
           structuredContent: { path: "read.ts", ready: true },
         });
         assert.equal(turnItemOutputText(event.turnItem), text);
+        const note = "Read image file [image/png]";
+        const image = { type: "image", data: "AAAA", mimeType: "image/png" };
+        const imageContent = [{ type: "text", text: note }, image];
+        // An extension can attach distinct typed metadata to a read result.
+        for (const structuredContent of [
+          { ...image, note, width: 1200 },
+          { ...image, note: "A distinct note" },
+          { ...image, note, data: "AQID" },
+        ]) {
+          yield* fake.emit({
+            type: "tool_execution_end",
+            toolCallId: "distinct-image-metadata",
+            toolName: "read",
+            result: { content: imageContent, structuredContent },
+          });
+          const event = yield* takeEvent(
+            (event) => event.type === "turn_item.updated" && event.turnItem.type === "dynamic_tool",
+          );
+          if (event.type !== "turn_item.updated" || event.turnItem.type !== "dynamic_tool")
+            return yield* Effect.die("Expected a read image tool item");
+          assert.deepEqual(event.turnItem.output, { content: imageContent, structuredContent });
+          assert.equal(turnItemOutputText(event.turnItem), note);
+        }
       }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 

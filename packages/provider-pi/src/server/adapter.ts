@@ -26,6 +26,7 @@
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { AgentScope } from "@t3tools/shared/AgentScope";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
+import { readToolOutputImage } from "@t3tools/shared/toolOutput";
 import * as Predicate from "effect/Predicate";
 import {
   defaultInstanceIdForDriver,
@@ -299,6 +300,27 @@ function piToolOutput(result: unknown, toolName: string): unknown {
   }
   if (typeof structured === "string" && structured === contentText(content)) {
     structured = undefined;
+  }
+  // Native read repeats its image and first text note as structured output.
+  // Drop only that exact mirror; an extension's extra metadata stays distinct.
+  if (toolName === "read" && Predicate.isObject(structured)) {
+    const image = readToolOutputImage(structured);
+    const note =
+      recordString(
+        content.find((block) => recordField(block, "type") === "text"),
+        "text",
+      ) ?? "";
+    if (
+      image !== null &&
+      Object.keys(structured).every((key) => ["type", "data", "mimeType", "note"].includes(key)) &&
+      recordString(structured, "note") === note &&
+      content.some((block) => {
+        const match = readToolOutputImage(block);
+        return match !== null && match.mimeType === image.mimeType && match.data === image.data;
+      })
+    ) {
+      structured = undefined;
+    }
   }
   if (structured !== undefined && !isBoundedStructuredToolValue(structured)) {
     return {
