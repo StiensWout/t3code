@@ -594,7 +594,7 @@ it.effect("remembers async setup startup across restart without waiting for comp
   }).pipe(Effect.provide(Layer.mergeAll(serverConfigLiveLayer, NodeServices.layer, gitLayer))),
 );
 
-it.effect("retains setup readiness after Git creates a checkout and then fails", () =>
+it.effect("invalidates a failed creation and retains setup readiness for its checkout", () =>
   Effect.gen(function* () {
     const path = yield* Path.Path;
     const config = yield* ServerConfig.ServerConfig;
@@ -631,11 +631,19 @@ it.effect("retains setup readiness after Git creates a checkout and then fails",
           ),
       },
     });
-    const error = yield* start.pipe(Effect.flip, Effect.provide(failureLayer));
-    assert.equal(error.stage, "create_worktree");
-    assert.equal(attempts, 0);
+    yield* Effect.gen(function* () {
+      const lifecycle = yield* WorktreeLifecycle.WorktreeLifecycle;
+      const revisionBefore = yield* lifecycle.revision;
+      const error = yield* start.pipe(Effect.flip);
+      assert.equal(error.stage, "create_worktree");
+      assert.equal(attempts, 0);
+      assert.isAbove(yield* lifecycle.revision, revisionBefore);
+      const retry = yield* start;
+      assert.deepEqual(retry, { revived: false, generation: 1 });
+      assert.equal(attempts, 1);
+    }).pipe(Effect.provide(failureLayer.pipe(Layer.provideMerge(WorktreeLifecycle.layer))));
     yield* start.pipe(Effect.provide(makeRevivalLayer(project, runSetup, { config })));
-    assert.equal(attempts, 1);
+    assert.equal(attempts, 1, "successful setup must survive a restart");
   }).pipe(Effect.provide(Layer.mergeAll(serverConfigLiveLayer, NodeServices.layer, gitLayer))),
 );
 

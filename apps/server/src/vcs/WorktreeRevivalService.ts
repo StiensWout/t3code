@@ -93,9 +93,9 @@ export class WorktreeRevivalService extends Context.Service<
   {
     /**
      * Makes sure a thread's worktree exists before its turn starts, and that
-     * project setup has let the agent in. `generation` counts how often this
-     * server recreated the path, so a caller can tell its provider process
-     * still holds a directory that was replaced.
+     * project setup has let the agent in. `generation` advances when recreation
+     * may have replaced the directory, even if Git then fails, so a caller can
+     * restart a provider process that still holds the old directory.
      */
     readonly reviveForThread: (
       input: WorktreeRevivalForThreadInput,
@@ -485,8 +485,10 @@ const make = Effect.gen(function* () {
           ),
         );
     }).pipe(
-      Effect.andThen(advanceGeneration(worktreePath)),
-      Effect.tap(() => lifecycle.markInventoryChanged),
+      Effect.ensuring(
+        advanceGeneration(worktreePath).pipe(Effect.andThen(lifecycle.markInventoryChanged)),
+      ),
+      Effect.andThen(currentGeneration(worktreePath)),
       Effect.uninterruptible,
     );
 
