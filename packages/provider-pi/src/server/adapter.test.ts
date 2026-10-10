@@ -2415,6 +2415,51 @@ describe("PiAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
+  it.effect("keeps native Stop abort available for a legacy slash prompt that starts a turn", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, providerThread, "default", [], "/skill:review the diff");
+      const prompt = yield* fake.takeRequest("prompt");
+      assert.isTrue(typeof prompt["id"] === "string");
+      if (typeof prompt["id"] !== "string") return;
+
+      // Older Pi acknowledges slash commands before the agent starts and has
+      // no disposition field to distinguish a handled command from a skill.
+      fake.deferNextState();
+      yield* fake.emit({
+        type: "response",
+        id: prompt["id"],
+        command: "prompt",
+        success: true,
+      });
+      yield* fake.takeRequest("get_state");
+      yield* fake.emit({ type: "agent_start" });
+      const running = yield* takeEvent(
+        (event) =>
+          event.type === "provider_turn.updated" && event.providerTurn.status === "running",
+      );
+      if (running.type !== "provider_turn.updated") return;
+      yield* fake.resolveDeferredState({
+        isStreaming: true,
+        isCompacting: false,
+        pendingMessageCount: 0,
+      });
+
+      yield* runtime.interruptTurn({
+        providerThread,
+        providerTurnId: running.providerTurn.id,
+        requestRuntimeRestart: true,
+      });
+      assert.isTrue(fake.allRequests().some((request) => request["type"] === "abort"));
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
   it.effect("keeps a handled prompt alive when Pi starts work before its idle probe returns", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakePi;

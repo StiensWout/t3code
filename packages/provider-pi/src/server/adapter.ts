@@ -2040,8 +2040,15 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                   disposition === undefined &&
                   responseTurn.promptMayBeCommandOnly &&
                   (!responseTurn.sawAgentActivity || responseTurn.adoptedWake);
-                if (disposition === "handled" || legacyCommandHandled)
+                if (disposition === "handled") {
                   responseTurn.settleWhenIdle = true;
+                } else if (legacyCommandHandled) {
+                  // A legacy ack cannot distinguish an extension command
+                  // from a slash prompt that will start a normal agent turn.
+                  // Probe for command-only completion without changing Stop's
+                  // native abort behavior if agent_start arrives first.
+                  yield* scheduleSettleProbe(responseTurn);
+                }
               }
               if (
                 responseTurn !== null &&
