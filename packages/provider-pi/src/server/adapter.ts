@@ -2810,7 +2810,16 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               // Pi's generic abort does not cancel manual compaction. Terminate
               // so Stop covers user /compact as well as detached recovery compact.
               stopRequested = true;
-              if (interruptInput.requestRuntimeRestart === true && !turn.settleWhenIdle) {
+              const compactionInFlight =
+                turn.activeCompaction !== null || turn.manualCompactInFlight;
+              if (
+                (interruptInput.requestRuntimeRestart === true && !turn.settleWhenIdle) ||
+                (turn.settleWhenIdle && !compactionInFlight)
+              ) {
+                // A handled acknowledgement is a settlement hint, not proof
+                // that an extension or adopted wake left no native work.
+                // Try Pi's graceful abort before teardown when that intent
+                // forces it, unless compaction is the reason for termination.
                 yield* request({ type: "abort" }, 2_000).pipe(Effect.ignore);
               }
               // Terminating fails every later request, so read the stopped

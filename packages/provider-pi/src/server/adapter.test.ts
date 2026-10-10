@@ -2415,7 +2415,146 @@ describe("PiAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
-  it.effect("keeps native Stop abort available for a legacy slash prompt that starts a turn", () =>
+  it.effect.each([
+    {
+      label: "a legacy slash prompt",
+      text: "/skill:review the diff",
+      disposition: undefined,
+      requestRuntimeRestart: true,
+    },
+    {
+      label: "a handled slash command",
+      text: "/ask what is 2+2",
+      disposition: "handled",
+      requestRuntimeRestart: true,
+    },
+    {
+      label: "a handled input prompt",
+      text: "summarize the repo",
+      disposition: "handled",
+      requestRuntimeRestart: true,
+    },
+    {
+      label: "a handled prompt during generic interruption",
+      text: "summarize the repo",
+      disposition: "handled",
+      requestRuntimeRestart: false,
+    },
+  ] as const)(
+    "tries Pi's native abort before teardown for $label (runtime restart=$requestRuntimeRestart)",
+    ({ text, disposition, requestRuntimeRestart, label }) =>
+      Effect.gen(function* () {
+        const fake = yield* makeFakePi;
+        const { runtime, takeEvent } = yield* openRuntime(fake);
+        const providerThread = yield* runtime.ensureThread({
+          threadId: THREAD_ID,
+          modelSelection: modelSelection("default"),
+          runtimePolicy,
+        });
+        yield* startTurn(runtime, providerThread, "default", [], text);
+        const prompt = yield* fake.takeRequest("prompt");
+        assert.isTrue(typeof prompt["id"] === "string");
+        if (typeof prompt["id"] !== "string") return;
+
+        // A legacy reply has no disposition; newer Pi reports handled before
+        // an extension-started run necessarily emits agent_start.
+        fake.deferNextState();
+        yield* fake.emit({
+          type: "response",
+          id: prompt["id"],
+          command: "prompt",
+          success: true,
+          ...(disposition === undefined ? {} : { data: { disposition } }),
+        });
+        yield* fake.takeRequest("get_state");
+        yield* fake.emit({ type: "agent_start" });
+        const running = yield* takeEvent(
+          (event) =>
+            event.type === "provider_turn.updated" && event.providerTurn.status === "running",
+        );
+        if (running.type !== "provider_turn.updated") return;
+        const barrierId = `stop-probe-${label}`;
+        yield* fake.emit({
+          type: "extension_ui_request",
+          id: barrierId,
+          method: "notify",
+          message: barrierId,
+        });
+        yield* takeEvent(
+          (event) =>
+            event.type === "turn_item.updated" &&
+            event.turnItem.type === "dynamic_tool" &&
+            event.turnItem.toolName === "notify" &&
+            JSON.stringify(event.turnItem).includes(barrierId),
+        );
+        yield* fake.resolveDeferredState({
+          isStreaming: true,
+          isCompacting: false,
+          pendingMessageCount: 0,
+        });
+
+        yield* runtime.interruptTurn({
+          providerThread,
+          providerTurnId: running.providerTurn.id,
+          requestRuntimeRestart,
+        });
+        assert.isTrue(
+          fake.allRequests().some((request) => request["type"] === "abort"),
+          label,
+        );
+      }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("tries native abort for a handled prompt joined to a running native wake", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const offers =
+        yield* Queue.unbounded<ProviderContinuationRequests.ProviderContinuationRequest>();
+      const { runtime, takeEvent } = yield* openRuntime(
+        fake,
+        "default",
+        THREAD_ID,
+        SESSION_ID,
+        undefined,
+        { offer: (request) => Queue.offer(offers, request).pipe(Effect.asVoid) },
+      );
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* fake.takeRequest("get_state");
+      yield* fake.emit({ type: "agent_start" });
+      yield* Queue.take(offers);
+      yield* startTurn(runtime, providerThread, "default", [], "also check the tests");
+      const running = yield* takeEvent(
+        (event) =>
+          event.type === "provider_turn.updated" && event.providerTurn.status === "running",
+      );
+      if (running.type !== "provider_turn.updated") return;
+      const prompt = yield* fake.takeRequest("prompt");
+      assert.isTrue(typeof prompt["id"] === "string");
+      if (typeof prompt["id"] !== "string") return;
+
+      fake.deferNextState();
+      yield* fake.emit({
+        type: "response",
+        id: prompt["id"],
+        command: "prompt",
+        success: true,
+        data: { disposition: "handled" },
+      });
+      yield* fake.takeRequest("get_state");
+      yield* runtime.interruptTurn({
+        providerThread,
+        providerTurnId: running.providerTurn.id,
+        requestRuntimeRestart: true,
+      });
+      assert.isTrue(fake.allRequests().some((request) => request["type"] === "abort"));
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("settles a handled prompt when a handled steer invalidates its idle probe", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakePi;
       const { runtime, takeEvent } = yield* openRuntime(fake);
@@ -2424,39 +2563,59 @@ describe("PiAdapterV2", () => {
         modelSelection: modelSelection("default"),
         runtimePolicy,
       });
-      yield* startTurn(runtime, providerThread, "default", [], "/skill:review the diff");
+      yield* startTurn(runtime, providerThread, "default", [], "ping");
+      const running = yield* takeEvent(
+        (event) =>
+          event.type === "provider_turn.updated" && event.providerTurn.status === "running",
+      );
+      if (running.type !== "provider_turn.updated") return;
       const prompt = yield* fake.takeRequest("prompt");
       assert.isTrue(typeof prompt["id"] === "string");
       if (typeof prompt["id"] !== "string") return;
 
-      // Older Pi acknowledges slash commands before the agent starts and has
-      // no disposition field to distinguish a handled command from a skill.
       fake.deferNextState();
       yield* fake.emit({
         type: "response",
         id: prompt["id"],
         command: "prompt",
         success: true,
+        data: { disposition: "handled" },
       });
       yield* fake.takeRequest("get_state");
-      yield* fake.emit({ type: "agent_start" });
-      const running = yield* takeEvent(
-        (event) =>
-          event.type === "provider_turn.updated" && event.providerTurn.status === "running",
-      );
-      if (running.type !== "provider_turn.updated") return;
+      const steering = yield* runtime
+        .steerTurn({
+          threadId: THREAD_ID,
+          runId: RunId.make("run:thread-pi-test:1"),
+          providerThread,
+          providerTurnId: running.providerTurn.id,
+          message: {
+            messageId: "message:thread-pi-test:handled-steer-probe" as never,
+            text: "pong",
+            attachments: [],
+            createdBy: "user",
+            creationSource: "web",
+          },
+        })
+        .pipe(Effect.result, Effect.forkScoped);
+      const steerPrompt = yield* fake.takeRequest("prompt");
+      assert.isTrue(typeof steerPrompt["id"] === "string");
+      if (typeof steerPrompt["id"] !== "string") return;
+
       yield* fake.resolveDeferredState({
-        isStreaming: true,
+        isStreaming: false,
         isCompacting: false,
         pendingMessageCount: 0,
       });
-
-      yield* runtime.interruptTurn({
-        providerThread,
-        providerTurnId: running.providerTurn.id,
-        requestRuntimeRestart: true,
+      yield* fake.emit({
+        type: "response",
+        id: steerPrompt["id"],
+        command: "prompt",
+        success: true,
+        data: { disposition: "handled" },
       });
-      assert.isTrue(fake.allRequests().some((request) => request["type"] === "abort"));
+      assert.equal((yield* Fiber.join(steering))._tag, "Success");
+      const terminal = yield* takeEvent((event) => event.type === "turn.terminal");
+      assert.isTrue(terminal.type === "turn.terminal" && terminal.status === "completed");
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
