@@ -128,7 +128,7 @@ export async function loadMcpBridge(
       });
     },
     pi: {
-      // Pi runs every handler registered for an event, in registration order.
+      // Runs every handler for an event in registration order; only the last result is kept.
       on: (name: string, handler: AgentStartHook) => {
         const previous = handlers.get(name);
         handlers.set(
