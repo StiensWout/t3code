@@ -1,5 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off
-import * as NodeCrypto from "node:crypto";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 
 import {
   ChatAttachmentId,
@@ -10,6 +9,8 @@ import {
 } from "@t3tools/contracts";
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import * as Context from "effect/Context";
+import * as Crypto from "effect/Crypto";
+import * as Hex from "effect/encoding/Hex";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -39,6 +40,7 @@ export const layer = (
   Layer.effectContext(
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
+      const crypto = yield* Crypto.Crypto;
       const path = yield* Path.Path;
       const baseDir = yield* fileSystem
         .makeTempDirectoryScoped({ prefix: "t3-provider-host-" })
@@ -76,10 +78,13 @@ export const layer = (
           ) {
             return null;
           }
-          const digest = NodeCrypto.createHash("sha256")
-            .update(`${input.threadId}:${input.messageId}:${input.index}:`)
-            .update(input.bytes)
-            .digest("hex");
+          const prefix = new TextEncoder().encode(
+            `${input.threadId}:${input.messageId}:${input.index}:`,
+          );
+          const bytes = new Uint8Array(prefix.byteLength + input.bytes.byteLength);
+          bytes.set(prefix);
+          bytes.set(input.bytes, prefix.byteLength);
+          const digest = Hex.encode(yield* crypto.digest("SHA-256", bytes));
           const attachment = {
             type: "image" as const,
             id: ChatAttachmentId.make(`${input.threadId}-${digest.slice(0, 32)}`),
@@ -108,4 +113,4 @@ export const layer = (
         }),
       );
     }),
-  );
+  ).pipe(Layer.provide(NodeCrypto.layer));
