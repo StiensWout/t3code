@@ -53,7 +53,8 @@ the work log. Pi terminal decoration such as titles, status lines, and widgets d
 Code equivalent.
 
 For multi-step work, Pi can keep a task list in the work log through T3 Code's own todo tool, like
-other providers' task lists. Lists that Pi extensions draw as terminal widgets do not appear.
+other providers' task lists. To turn it off, add `--exclude-tools t3_update_todos` to Pi's launch
+arguments. Lists that Pi extensions draw as terminal widgets do not appear.
 
 ## Permission Modes
 

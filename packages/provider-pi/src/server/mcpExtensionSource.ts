@@ -408,7 +408,8 @@ export default async function t3McpExtension(pi: ExtensionAPI) {
   });
 
   // Pi restores a session's recorded tool loadout, in which a terminal Pi run without this
-  // extension removed the todo tool. Reactivate it; --tools exclusions never register it.
+  // extension removed the todo tool. Reactivate it, as in a fresh session; --tools allowlists
+  // and --exclude-tools still keep it off.
   const activateTodoTool = () => {
     if (typeof pi.getActiveTools !== "function" || !ownsTool(TODO_TOOL)) return;
     const active = pi.getActiveTools();
