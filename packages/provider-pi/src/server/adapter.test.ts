@@ -1561,6 +1561,133 @@ describe("PiAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
+  it.effect("shows startup warnings and current extension status in the next turn", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const warning = {
+        type: "extension_ui_request",
+        method: "notify",
+        message: "MCP server github failed to connect",
+        notifyType: "warning",
+      };
+      yield* fake.emit({ ...warning, id: "warn-1" });
+      yield* fake.emit({ ...warning, id: "warn-2" });
+      yield* fake.emit({
+        type: "extension_ui_request",
+        id: "info",
+        method: "notify",
+        message: "Loaded 3 skills",
+      });
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      const ui = (method: string, fields: Record<string, unknown>) =>
+        fake.emit({ type: "extension_ui_request", id: `ui-${method}`, method, ...fields });
+      yield* ui("setStatus", { statusKey: "plan", statusText: "\u001b[33mplanning\u001b[0m" });
+      yield* ui("setStatus", { statusKey: "gone", statusText: "temporary" });
+      yield* ui("setStatus", { statusKey: "gone" });
+      yield* ui("setWidget", {
+        widgetKey: "todo",
+        widgetLines: ["\u001b[1mTodo\u001b[0m", "1. Read"],
+      });
+      const turnNotices = Effect.fnUntraced(function* (
+        runOrdinal: number,
+        during: Effect.Effect<void> = Effect.void,
+      ) {
+        yield* startTurn(runtime, providerThread, "default", [], "Hello pi", undefined, runOrdinal);
+        yield* fake.takeRequest("prompt");
+        yield* during;
+        yield* fake.emit({ type: "response", command: "prompt", success: true });
+        yield* fake.emit({ type: "agent_start" });
+        yield* fake.emit({ type: "agent_settled" });
+        const notices = new Map<string, string>();
+        while (true) {
+          const event = yield* takeEvent(
+            (event) =>
+              event.type === "turn.terminal" ||
+              (event.type === "turn_item.updated" && event.turnItem.type === "system_notice"),
+          );
+          if (event.type === "turn.terminal") return Array.from(notices.values()).sort();
+          if (event.type === "turn_item.updated" && event.turnItem.type === "system_notice") {
+            notices.set(event.turnItem.id, event.turnItem.message);
+          }
+        }
+      });
+
+      assert.deepStrictEqual(
+        yield* turnNotices(1, ui("setStatus", { statusKey: "plan", statusText: "executing" })),
+        ["MCP server github failed to connect", "Todo\n1. Read", "plan: executing"],
+      );
+
+      yield* ui("setStatus", { statusKey: "plan", statusText: "done" });
+      yield* ui("setWidget", { widgetKey: "todo" });
+      assert.deepStrictEqual(yield* turnNotices(2), ["plan: done"]);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("keeps idle extension warnings with the thread that was loaded", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* fake.emit({
+        type: "extension_ui_request",
+        id: "warn",
+        method: "notify",
+        message: "Previous thread warning",
+        notifyType: "error",
+      });
+      yield* fake.emit({
+        type: "extension_ui_request",
+        id: "status",
+        method: "setStatus",
+        statusKey: "mcp",
+        statusText: "2 servers",
+      });
+      // A dialog round trip proves the warning was handled while the first thread was loaded.
+      yield* fake.emit({ type: "extension_ui_request", id: "sync", method: "confirm", title: "?" });
+      const pending = yield* takeEvent((event) => event.type === "runtime_request.updated");
+      if (pending.type !== "runtime_request.updated") return;
+      yield* runtime.respondToRuntimeRequest({
+        requestId: pending.runtimeRequest.id,
+        decision: "accept",
+      });
+      yield* fake.takeRequest("extension_ui_response");
+
+      const otherThreadId = ThreadId.make("thread-pi-test-other");
+      const otherThread = yield* runtime.ensureThread({
+        threadId: otherThreadId,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, otherThread, "default", [], "Hello", undefined, 1, otherThreadId);
+      yield* fake.takeRequest("prompt");
+      yield* fake.emit({ type: "response", command: "prompt", success: true });
+      yield* fake.emit({ type: "agent_start" });
+      yield* fake.emit({ type: "agent_settled" });
+      const messages: Array<string> = [];
+      while (true) {
+        const event = yield* takeEvent(
+          (event) =>
+            event.type === "turn.terminal" ||
+            (event.type === "turn_item.updated" && event.turnItem.type === "system_notice"),
+        );
+        if (event.type === "turn.terminal") break;
+        if (event.type === "turn_item.updated" && event.turnItem.type === "system_notice") {
+          messages.push(event.turnItem.message);
+        }
+      }
+      assert.deepStrictEqual(messages, ["mcp: 2 servers"]);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
   it.effect("injects the T3 MCP extension and bearer when a session exists", () =>
     Effect.gen(function* () {
       yield* (yield* McpProviderSessions.McpProviderSessions).set({
