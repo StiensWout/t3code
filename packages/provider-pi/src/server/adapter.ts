@@ -1354,28 +1354,21 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           const key = recordString(event, method === "setStatus" ? "statusKey" : "widgetKey");
           if (key === undefined) return;
           const displayKey = `${method}:${key}`;
-          const status = piDisplayText(recordString(event, "statusText") ?? "").replace(
-            /\s+/g,
-            " ",
-          );
-          const lines = recordField(event, "widgetLines");
           // Pi clears a key by omitting its statusText or widgetLines.
-          const text =
-            method === "setStatus"
-              ? status.length === 0
-                ? ""
-                : `${key}: ${status}`
-              : piDisplayText(
-                  Array.isArray(lines)
-                    ? lines.filter((line) => typeof line === "string").join("\n")
-                    : "",
-                );
-          if (text.length === 0) {
-            extensionDisplays.delete(displayKey);
-            return;
+          let text: string;
+          if (method === "setStatus") {
+            const status = piDisplayText(recordString(event, "statusText") ?? "");
+            text = status.length === 0 ? "" : `${key}: ${status.replace(/\s+/g, " ")}`;
+          } else {
+            const lines = recordField(event, "widgetLines");
+            const strings = Array.isArray(lines)
+              ? lines.filter((line) => typeof line === "string")
+              : [];
+            text = piDisplayText(strings.join("\n"));
           }
           if (extensionDisplays.get(displayKey)?.text === text) return;
           extensionDisplays.delete(displayKey);
+          if (text.length === 0) return;
           extensionDisplays.set(displayKey, { text, shownTo: null });
           if (extensionDisplays.size > MAX_EXTENSION_DISPLAYS) {
             extensionDisplays.delete(extensionDisplays.keys().next().value!);

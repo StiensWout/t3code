@@ -533,6 +533,31 @@ const startTurn = Effect.fnUntraced(function* (
   });
 });
 
+// Settles a started Pi turn and returns the latest text of each system notice it showed, sorted.
+const settleTurnNotices = Effect.fnUntraced(function* (
+  fake: FakePi,
+  takeEvent: Effect.Success<ReturnType<typeof openRuntime>>["takeEvent"],
+  beforeResponse: Effect.Effect<void> = Effect.void,
+) {
+  yield* fake.takeRequest("prompt");
+  yield* beforeResponse;
+  yield* fake.emit({ type: "response", command: "prompt", success: true });
+  yield* fake.emit({ type: "agent_start" });
+  yield* fake.emit({ type: "agent_settled" });
+  const notices = new Map<string, string>();
+  while (true) {
+    const event = yield* takeEvent(
+      (event) =>
+        event.type === "turn.terminal" ||
+        (event.type === "turn_item.updated" && event.turnItem.type === "system_notice"),
+    );
+    if (event.type === "turn.terminal") return Array.from(notices.values()).sort();
+    if (event.type === "turn_item.updated" && event.turnItem.type === "system_notice") {
+      notices.set(event.turnItem.id, event.turnItem.message);
+    }
+  }
+});
+
 describe("PiAdapterV2", () => {
   it.effect("keeps native image bytes and the saved path in the prompt", () =>
     Effect.gen(function* () {
@@ -1593,29 +1618,10 @@ describe("PiAdapterV2", () => {
         widgetKey: "todo",
         widgetLines: ["\u001b[1mTodo\u001b[0m", "1. Read"],
       });
-      const turnNotices = Effect.fnUntraced(function* (
-        runOrdinal: number,
-        during: Effect.Effect<void> = Effect.void,
-      ) {
-        yield* startTurn(runtime, providerThread, "default", [], "Hello pi", undefined, runOrdinal);
-        yield* fake.takeRequest("prompt");
-        yield* during;
-        yield* fake.emit({ type: "response", command: "prompt", success: true });
-        yield* fake.emit({ type: "agent_start" });
-        yield* fake.emit({ type: "agent_settled" });
-        const notices = new Map<string, string>();
-        while (true) {
-          const event = yield* takeEvent(
-            (event) =>
-              event.type === "turn.terminal" ||
-              (event.type === "turn_item.updated" && event.turnItem.type === "system_notice"),
-          );
-          if (event.type === "turn.terminal") return Array.from(notices.values()).sort();
-          if (event.type === "turn_item.updated" && event.turnItem.type === "system_notice") {
-            notices.set(event.turnItem.id, event.turnItem.message);
-          }
-        }
-      });
+      const turnNotices = (runOrdinal: number, beforeResponse?: Effect.Effect<void>) =>
+        startTurn(runtime, providerThread, "default", [], "Hello pi", undefined, runOrdinal).pipe(
+          Effect.andThen(settleTurnNotices(fake, takeEvent, beforeResponse)),
+        );
 
       assert.deepStrictEqual(
         yield* turnNotices(1, ui("setStatus", { statusKey: "plan", statusText: "executing" })),
@@ -1668,23 +1674,7 @@ describe("PiAdapterV2", () => {
         runtimePolicy,
       });
       yield* startTurn(runtime, otherThread, "default", [], "Hello", undefined, 1, otherThreadId);
-      yield* fake.takeRequest("prompt");
-      yield* fake.emit({ type: "response", command: "prompt", success: true });
-      yield* fake.emit({ type: "agent_start" });
-      yield* fake.emit({ type: "agent_settled" });
-      const messages: Array<string> = [];
-      while (true) {
-        const event = yield* takeEvent(
-          (event) =>
-            event.type === "turn.terminal" ||
-            (event.type === "turn_item.updated" && event.turnItem.type === "system_notice"),
-        );
-        if (event.type === "turn.terminal") break;
-        if (event.type === "turn_item.updated" && event.turnItem.type === "system_notice") {
-          messages.push(event.turnItem.message);
-        }
-      }
-      assert.deepStrictEqual(messages, ["mcp: 2 servers"]);
+      assert.deepStrictEqual(yield* settleTurnNotices(fake, takeEvent), ["mcp: 2 servers"]);
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
