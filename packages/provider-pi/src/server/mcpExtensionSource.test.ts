@@ -6,7 +6,7 @@ import * as NodeModule from "node:module";
 import * as NodeVM from "node:vm";
 import { assert, describe, it } from "@effect/vitest";
 
-import { PI_T3_MCP_EXTENSION_SOURCE } from "./mcpExtensionSource.ts";
+import { PI_T3_MCP_EXTENSION_SOURCE, PI_T3_TODO_TOOL } from "./mcpExtensionSource.ts";
 import { loadMcpBridge } from "./mcpBridge.testkit.ts";
 
 type RequestHook = (
@@ -41,9 +41,11 @@ async function loadHooks(
     NodeFSP,
     NodePath,
     stripFrontmatter: (content: string) => content,
+    Type: { Unsafe: (schema: unknown) => schema },
     pi: {
       on: (name: string, handler: unknown) => handlers.set(name, handler),
       getCommands: () => commands,
+      registerTool: () => undefined,
     },
   });
   return handlers;
@@ -293,6 +295,52 @@ describe("Pi MCP tool schemas", () => {
   });
 });
 
+describe("Pi T3 todo tool", () => {
+  it("returns the full typed list without MCP credentials", async () => {
+    const bridge = await loadMcpBridge({ withoutMcp: true });
+    assert.equal(bridge.tools.length, 0);
+    const tool = bridge.registeredTool(PI_T3_TODO_TOOL);
+    assert.isDefined(tool);
+    const result = await tool!.execute("todos-1", {
+      explanation: " Fixing the parser first ",
+      todos: [
+        { id: " parse ", text: " Fix the parser ", status: "completed" },
+        { id: "tests", text: "Run the tests", status: "in_progress" },
+        { id: "docs", text: "Update docs", status: "pending" },
+      ],
+    });
+    assert.deepEqual(result.details, {
+      explanation: "Fixing the parser first",
+      steps: [
+        { id: "parse", text: "Fix the parser", status: "completed" },
+        { id: "tests", text: "Run the tests", status: "running" },
+        { id: "docs", text: "Update docs", status: "pending" },
+      ],
+    });
+    assert.include(result.content[0]?.text ?? "", "1/3");
+  });
+
+  it.each([
+    {
+      name: "duplicate ids",
+      todos: [
+        { id: "a", text: "One", status: "pending" },
+        { id: "a", text: "Two", status: "pending" },
+      ],
+    },
+    { name: "blank text", todos: [{ id: "a", text: " ", status: "pending" }] },
+    { name: "unknown status", todos: [{ id: "a", text: "One", status: "done" }] },
+  ])("rejects $name so the model can resend the list", async ({ todos }) => {
+    const bridge = await loadMcpBridge({ withoutMcp: true });
+    const tool = bridge.registeredTool(PI_T3_TODO_TOOL)!;
+    let rejected = false;
+    await tool.execute("todos-bad", { todos }).catch(() => {
+      rejected = true;
+    });
+    assert.isTrue(rejected);
+  });
+});
+
 describe("Pi tool discovery permissions", () => {
   it.each(["approval-required", "auto-accept-edits", "auto"])(
     "allows annotated T3 reads in %s while gating mutations and replacements",
@@ -324,8 +372,10 @@ describe("Pi tool discovery permissions", () => {
           true,
         );
       }
+      assert.isUndefined(await hook({ toolName: PI_T3_TODO_TOOL, input: {} }, ctx));
       assert.equal(confirmations.length, 4);
       bridge.setBridgeSourcePath("/user/extensions/replacement.ts");
+      assert.equal((await hook({ toolName: PI_T3_TODO_TOOL, input: {} }, ctx))?.block, true);
       assert.equal(
         (await hook({ toolName: "mcp__t3-code__orchestrator_capabilities", input: {} }, ctx))
           ?.block,
@@ -335,7 +385,7 @@ describe("Pi tool discovery permissions", () => {
         (await hook({ toolName: "mcp__other__orchestrator_capabilities", input: {} }, ctx))?.block,
         true,
       );
-      assert.equal(confirmations.length, 6);
+      assert.equal(confirmations.length, 7);
     },
   );
 
@@ -363,10 +413,12 @@ describe("Pi tool discovery permissions", () => {
     );
     await NodeVM.runInNewContext(`${source}\nt3McpExtension(pi)`, {
       process: { env: { T3_PI_RUNTIME_MODE: "approval-required" } },
+      Type: { Unsafe: (schema: unknown) => schema },
       pi: {
         on: (name: string, handler: ToolCallHook) => {
           if (name === "tool_call") toolCall = handler;
         },
+        registerTool: () => undefined,
         getAllTools: () => [{ name: "tool_search", sourceInfo: { path: searchPath } }],
       },
     });
@@ -408,7 +460,11 @@ async function loadRequestHook(): Promise<RequestHook> {
   );
   await NodeVM.runInNewContext(`${source}\nt3McpExtension(pi)`, {
     process: { env: {} },
-    pi: { on: (name: string, handler: RequestHook) => handlers.set(name, handler) },
+    Type: { Unsafe: (schema: unknown) => schema },
+    pi: {
+      on: (name: string, handler: RequestHook) => handlers.set(name, handler),
+      registerTool: () => undefined,
+    },
   });
   const hook = handlers.get("before_provider_request");
   assert.isDefined(hook);
