@@ -128,7 +128,16 @@ export async function loadMcpBridge(
       });
     },
     pi: {
-      on: (name: string, handler: AgentStartHook) => handlers.set(name, handler),
+      // Pi runs every handler registered for an event, in registration order.
+      on: (name: string, handler: AgentStartHook) => {
+        const previous = handlers.get(name);
+        handlers.set(
+          name,
+          previous === undefined
+            ? handler
+            : async (event, ctx) => (await previous(event, ctx), handler(event, ctx)),
+        );
+      },
       registerTool: (tool: RegisteredTool) => {
         if (options.allowsTool && !options.allowsTool(tool.name)) return;
         const index = registered.findIndex((current) => current.name === tool.name);

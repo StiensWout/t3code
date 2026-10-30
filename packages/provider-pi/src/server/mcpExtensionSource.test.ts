@@ -176,7 +176,7 @@ describe("Pi MCP tool exposure", () => {
     assert.include(prompt?.systemPrompt ?? "", "orchestrator_capabilities");
     assert.equal(bridge.servers.length, 0);
     assert.equal(bridge.tools.length, 8);
-    assert.deepEqual(bridge.getActiveTools(), ["read", "tool_search"]);
+    assert.deepEqual(bridge.getActiveTools(), ["read", PI_T3_TODO_TOOL, "tool_search"]);
     assert.deepEqual(
       bridge.tools
         .filter((tool) => tool.exposure !== "hidden")
@@ -219,6 +219,7 @@ describe("Pi MCP tool exposure", () => {
     assert.deepEqual(bridge.getActiveTools(), [
       "read",
       "mcp__t3-code__task_status",
+      PI_T3_TODO_TOOL,
       "tool_search",
       "mcp__t3-code__orchestrator_capabilities",
       "mcp__t3-code__preview_snapshot",
@@ -316,6 +317,21 @@ describe("Pi T3 todo tool", () => {
     });
   });
 
+  it("reactivates itself when a session restores a loadout without it", async () => {
+    const bridge = await loadMcpBridge({ withoutMcp: true });
+    const ctx = { ui: { notify: () => undefined } };
+    bridge.restoreActiveTools(["read"]);
+    await bridge.handlers.get("session_start")!({ systemPrompt: "" }, ctx);
+    assert.deepEqual(bridge.getActiveTools(), ["read", PI_T3_TODO_TOOL]);
+    bridge.restoreActiveTools(["read"]);
+    await bridge.handlers.get("session_tree")!({ systemPrompt: "" }, ctx);
+    assert.deepEqual(bridge.getActiveTools(), ["read", PI_T3_TODO_TOOL]);
+    bridge.setBridgeSourcePath("/user/extensions/replacement.ts");
+    bridge.restoreActiveTools(["read"]);
+    await bridge.handlers.get("session_tree")!({ systemPrompt: "" }, ctx);
+    assert.deepEqual(bridge.getActiveTools(), ["read"]);
+  });
+
   it.each([
     {
       name: "duplicate ids",
@@ -324,8 +340,13 @@ describe("Pi T3 todo tool", () => {
         { id: "a", text: "Two", status: "pending" },
       ],
     },
+    { name: "an empty list", todos: [] },
     { name: "blank text", todos: [{ id: "a", text: " ", status: "pending" }] },
     { name: "unknown status", todos: [{ id: "a", text: "One", status: "done" }] },
+    {
+      name: "an inherited property as status",
+      todos: [{ id: "a", text: "One", status: "constructor" }],
+    },
   ])("rejects $name so the model can resend the list", async ({ todos }) => {
     const bridge = await loadMcpBridge({ withoutMcp: true });
     const rejected = await bridge

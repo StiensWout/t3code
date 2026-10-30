@@ -2540,7 +2540,11 @@ describe("PiAdapterV2", () => {
         type: "tool_execution_end",
         toolCallId: "todos-bad",
         toolName: tool.name,
-        result: { content: [{ type: "text", text: 'Todo id "a" is used more than once.' }] },
+        // A tool_result hook can mark a call failed and keep its details.
+        result: {
+          content: [{ type: "text", text: "Blocked by a policy hook." }],
+          details: { steps: [{ id: "a", text: "One", status: "pending" }] },
+        },
         isError: true,
       });
       const failed = yield* takeEvent((event) => event.type === "turn_item.updated");

@@ -30,7 +30,7 @@ const PROTOCOL = "2025-06-18";
 const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
 const FILE_CHANGE_TOOLS = new Set(${JSON.stringify(PI_FILE_CHANGE_TOOLS)});
 const TODO_TOOL = ${JSON.stringify(PI_T3_TODO_TOOL)};
-const TODO_STATUSES = { pending: "pending", in_progress: "running", completed: "completed" } as const;
+const TODO_STATUSES = new Map([["pending", "pending"], ["in_progress", "running"], ["completed", "completed"]] as const);
 
 type RuntimeMode = "approval-required" | "auto-accept-edits" | "auto" | "full-access";
 
@@ -375,7 +375,7 @@ export default async function t3McpExtension(pi: ExtensionAPI) {
             properties: {
               id: { type: "string", description: 'Short id, unchanged across updates, for example "tests".' },
               text: { type: "string", description: "What this item does." },
-              status: { type: "string", enum: Object.keys(TODO_STATUSES) },
+              status: { type: "string", enum: [...TODO_STATUSES.keys()] },
             },
             required: ["id", "text", "status"],
           },
@@ -386,12 +386,12 @@ export default async function t3McpExtension(pi: ExtensionAPI) {
     }),
     async execute(_toolCallId, params) {
       const input = params as { todos?: unknown; explanation?: unknown };
-      if (!Array.isArray(input.todos)) throw new Error("todos must be an array.");
+      if (!Array.isArray(input.todos) || input.todos.length === 0) throw new Error("todos must list at least one item.");
       const ids = new Set<string>();
       const steps = input.todos.map((todo: { id?: unknown; text?: unknown; status?: unknown }) => {
         const id = typeof todo?.id === "string" ? todo.id.trim() : "";
         const text = typeof todo?.text === "string" ? todo.text.trim() : "";
-        const status = TODO_STATUSES[todo?.status as keyof typeof TODO_STATUSES];
+        const status = TODO_STATUSES.get(todo?.status as never);
         if (id.length === 0 || text.length === 0) throw new Error("Every todo needs a non-empty id and text.");
         if (ids.has(id)) throw new Error(\`Todo id "\${id}" is used more than once.\`);
         if (status === undefined) throw new Error("status must be pending, in_progress or completed.");
@@ -406,6 +406,16 @@ export default async function t3McpExtension(pi: ExtensionAPI) {
       };
     },
   });
+
+  // Pi restores a session's recorded tool loadout, in which a terminal Pi run without this
+  // extension removed the todo tool. Reactivate it; --tools exclusions never register it.
+  const activateTodoTool = () => {
+    if (typeof pi.getActiveTools !== "function" || !ownsTool(TODO_TOOL)) return;
+    const active = pi.getActiveTools();
+    if (!active.includes(TODO_TOOL)) pi.setActiveTools([...active, TODO_TOOL]);
+  };
+  pi.on("session_start", activateTodoTool);
+  pi.on("session_tree", activateTodoTool);
 
   const endpoint = env(URL_ENV);
   const token = env(TOKEN_ENV);
