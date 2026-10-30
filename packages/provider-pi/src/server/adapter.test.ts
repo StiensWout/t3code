@@ -1651,6 +1651,54 @@ describe("PiAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
+  it.effect("shows extension status again after a rollback replaces Pi's session", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      const status = fake.emit({
+        type: "extension_ui_request",
+        id: "status",
+        method: "setStatus",
+        statusKey: "mode",
+        statusText: "plan",
+      });
+      yield* status;
+      yield* startTurn(runtime, providerThread);
+      assert.deepStrictEqual(yield* settleTurnNotices(fake, takeEvent), ["mode: plan"]);
+
+      const snapshot = yield* runtime.rollbackThread({
+        providerThread,
+        target: {
+          type: "thread_start",
+          checkpointId: CheckpointId.make("checkpoint-start"),
+          appRunOrdinal: 0,
+        },
+        providerThreadTurns: [
+          {
+            id: ProviderTurnId.make("turn-1"),
+            providerThreadId: providerThread.id,
+            nodeId: NodeId.make("node-1"),
+            runAttemptId: null,
+            nativeTurnRef: { driver: PI_PROVIDER, nativeId: "u1", strength: "strong" },
+            ordinal: 1,
+            status: "completed",
+            startedAt: null,
+            completedAt: null,
+          },
+        ],
+      });
+      // The forked session's extensions set their status again, which this branch has not shown.
+      yield* status;
+      yield* startTurn(runtime, snapshot.providerThread, "default", [], "Again", undefined, 2);
+      assert.deepStrictEqual(yield* settleTurnNotices(fake, takeEvent), ["mode: plan"]);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
   it.effect("keeps idle extension output with the thread that was loaded", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakePi;

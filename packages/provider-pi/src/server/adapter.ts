@@ -1560,11 +1560,13 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         const state = threadState;
         const turn = state?.activeTurn ?? null;
         if (turn === null) {
+          const bounded = (field: string, maxChars: number) =>
+            piDisplayText(recordString(event, field) ?? "").slice(0, maxChars) || undefined;
           holdExtensionEvent({
             type: "extension_error",
-            extensionPath: recordString(event, "extensionPath"),
-            event: recordString(event, "event"),
-            error: recordString(event, "error")?.slice(0, 2_000),
+            extensionPath: bounded("extensionPath", 500),
+            event: bounded("event", 100),
+            error: bounded("error", 2_000),
           });
           return;
         }
@@ -2334,7 +2336,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           lastNativeThreadId = resumeId ?? lastNativeThreadId;
           // Failed lifecycle operations can still change native sessions; invalidate bindings and defaults.
           threadState = null;
-          // Pi resets extension status and widgets before swapping sessions; session_start sets them again.
+          // Pi's TUI resets extension UI on session swaps and RPC sends no clears, so reset the mirror.
           extensionDisplays.clear();
           appliedModel = null;
           appliedThinking = null;
@@ -3046,6 +3048,8 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               ),
               (barrier) =>
                 Effect.gen(function* () {
+                  // Forking replaces Pi's session, so extension UI resets as on a switch.
+                  extensionDisplays.clear();
                   const forkData = yield* lifecycleRequest({ type: "fork", entryId: forkEntryId });
                   if (recordField(forkData, "cancelled") === true)
                     return yield* protocolError("A Pi extension cancelled the session fork");
