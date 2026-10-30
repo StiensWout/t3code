@@ -3468,6 +3468,8 @@ describe("PiAdapterV2", () => {
 
   it.effect("reads a thread snapshot from pi's active branch", () =>
     Effect.gen(function* () {
+      const host = yield* ProviderHost.ProviderHost;
+      const fileSystem = yield* FileSystem.FileSystem;
       const fake = yield* makeFakePi;
       const { runtime } = yield* openRuntime(fake);
       const providerThread = yield* runtime.ensureThread({
@@ -3475,7 +3477,7 @@ describe("PiAdapterV2", () => {
         modelSelection: modelSelection("default"),
         runtimePolicy,
       });
-      fake.queueMessages({
+      const activeBranch = {
         messages: [
           {
             role: "user",
@@ -3487,15 +3489,65 @@ describe("PiAdapterV2", () => {
             content: [{ type: "text", text: "hello back" }],
             timestamp: 1700000001000,
           },
-          { role: "toolResult", content: [] },
+          { role: "toolResult", content: [{ type: "image", data: "BAUG", mimeType: "image/png" }] },
+          {
+            role: "user",
+            content: [{ type: "image", data: "AQID", mimeType: "image/png" }],
+            timestamp: 1700000002000,
+          },
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "and this" },
+              { type: "image", data: "BwgJ", mimeType: "image/jpeg" },
+            ],
+            timestamp: 1700000003000,
+          },
         ],
-      });
+      };
+      fake.queueMessages(activeBranch);
       const snapshot = yield* runtime.readThreadSnapshot({ providerThread });
-      assert.equal(snapshot.messages.length, 2);
-      assert.equal(snapshot.messages[0]!.role, "user");
-      assert.equal(snapshot.messages[0]!.text, "hello pi");
-      assert.equal(snapshot.messages[1]!.role, "assistant");
-      assert.equal(snapshot.messages[1]!.text, "hello back");
+      assert.deepEqual(
+        snapshot.messages.map(({ role, text, attachments, createdAt }) => ({
+          role,
+          text,
+          images: attachments.map(({ type, mimeType, sizeBytes }) => ({
+            type,
+            mimeType,
+            sizeBytes,
+          })),
+          createdAt: DateTime.toEpochMillis(createdAt),
+        })),
+        [
+          { role: "user", text: "hello pi", images: [], createdAt: 1700000000000 },
+          { role: "assistant", text: "hello back", images: [], createdAt: 1700000001000 },
+          {
+            role: "user",
+            text: "",
+            images: [{ type: "image", mimeType: "image/png", sizeBytes: 3 }],
+            createdAt: 1700000002000,
+          },
+          {
+            role: "user",
+            text: "and this",
+            images: [{ type: "image", mimeType: "image/jpeg", sizeBytes: 3 }],
+            createdAt: 1700000003000,
+          },
+        ],
+      );
+      const stored = yield* Effect.forEach(snapshot.messages.slice(2), (message) =>
+        fileSystem.readFile(host.resolveAttachmentPath(message.attachments[0]!)!),
+      );
+      assert.deepEqual(
+        stored.map((bytes) => Array.from(bytes)),
+        [
+          [1, 2, 3],
+          [7, 8, 9],
+        ],
+      );
+      fake.queueMessages(activeBranch);
+      const reread = yield* runtime.readThreadSnapshot({ providerThread });
+      assert.deepEqual(reread.messages, snapshot.messages);
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 

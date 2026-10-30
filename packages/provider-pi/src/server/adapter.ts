@@ -2818,29 +2818,48 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             const messagesData = yield* request({ type: "get_messages" });
             const activeMessages = recordField(messagesData, "messages");
             const threadId = state.providerThread.appThreadId ?? input.threadId;
-            const messages = (Array.isArray(activeMessages) ? activeMessages : []).flatMap(
-              (message, index) => {
+            const messages = yield* Effect.forEach(
+              Array.isArray(activeMessages) ? activeMessages : [],
+              Effect.fnUntraced(function* (message, index) {
                 const role = recordString(message, "role");
                 if (role !== "user" && role !== "assistant") return [];
-                const text = contentText(recordField(message, "content"));
-                if (text.length === 0) return [];
-                const timestamp = recordNumber(message, "timestamp");
+                const content = recordField(message, "content");
+                const text = contentText(content);
+                const id = idAllocator.derive.messageFromProviderItem({
+                  driver: PI_PROVIDER,
+                  nativeItemId: `${wantedNativeId}:snapshot-message:${index}`,
+                });
+                // Pi only accepts images on user messages.
+                const images = role === "user" && Array.isArray(content) ? content : [];
+                const attachments = yield* Effect.forEach(images, (block, imageIndex) => {
+                  const data = recordString(block, "data");
+                  const mimeType = recordString(block, "mimeType");
+                  if (recordField(block, "type") !== "image" || !data || !mimeType)
+                    return Effect.succeed([]);
+                  return host
+                    .persistImageAttachment({
+                      threadId,
+                      messageId: id,
+                      index: imageIndex,
+                      mimeType,
+                      bytes: Buffer.from(data, "base64"),
+                    })
+                    .pipe(Effect.map((attachment) => (attachment === null ? [] : [attachment])));
+                }).pipe(Effect.map((attachments) => attachments.flat()));
+                if (text.length === 0 && attachments.length === 0) return [];
                 const at = Option.getOrElse(
-                  DateTime.make(timestamp ?? Number.NaN),
+                  DateTime.make(recordNumber(message, "timestamp") ?? Number.NaN),
                   () => state.providerThread.createdAt,
                 );
                 return [
                   {
-                    id: idAllocator.derive.messageFromProviderItem({
-                      driver: PI_PROVIDER,
-                      nativeItemId: `${wantedNativeId}:snapshot-message:${index}`,
-                    }),
+                    id,
                     threadId,
                     runId: null,
                     nodeId: null,
                     role: role as "user" | "assistant",
                     text,
-                    attachments: [],
+                    attachments,
                     streaming: false,
                     createdBy: role === "user" ? ("user" as const) : ("agent" as const),
                     creationSource: "provider" as const,
@@ -2848,8 +2867,8 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                     updatedAt: at,
                   },
                 ];
-              },
-            );
+              }),
+            ).pipe(Effect.map((messages) => messages.flat()));
             return {
               providerThread: state.providerThread,
               providerTurns: [],

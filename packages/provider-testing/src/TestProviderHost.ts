@@ -1,4 +1,7 @@
-import { DEFAULT_SERVER_SETTINGS, type ServerSettings } from "@t3tools/contracts";
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeCrypto from "node:crypto";
+
+import { ChatAttachmentId, DEFAULT_SERVER_SETTINGS, type ServerSettings } from "@t3tools/contracts";
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -60,6 +63,22 @@ export const layer = (
           return Effect.succeed(options.runBackgroundWork ?? true);
         }),
         resolveAttachmentPath: (attachment) => path.join(attachmentsDir, attachment.id),
+        persistImageAttachment: Effect.fn("ProviderHost.persistImageAttachment")(function* (input) {
+          if (!input.mimeType.startsWith("image/")) return null;
+          const digest = NodeCrypto.createHash("sha256")
+            .update(`${input.threadId}:${input.messageId}:${input.index}:`)
+            .update(input.bytes)
+            .digest("hex");
+          const attachment = {
+            type: "image" as const,
+            id: ChatAttachmentId.make(`${input.threadId}-${digest.slice(0, 32)}`),
+            name: `image-${input.index + 1}`,
+            mimeType: input.mimeType,
+            sizeBytes: input.bytes.byteLength,
+          };
+          yield* fileSystem.writeFile(path.join(attachmentsDir, attachment.id), input.bytes);
+          return attachment;
+        }),
         credentials: Effect.fn("ProviderHost.credentials")(function (namespace, bindingId) {
           return Effect.sync(() => {
             const key = `${namespace}:${bindingId}`;
