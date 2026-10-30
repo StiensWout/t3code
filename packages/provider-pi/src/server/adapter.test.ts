@@ -1624,31 +1624,28 @@ describe("PiAdapterV2", () => {
         );
 
       assert.deepStrictEqual(
-        yield* turnNotices(1, ui("setStatus", { statusKey: "plan", statusText: "executing" })),
-        ["MCP server github failed to connect", "Todo\n1. Read", "plan: executing"],
+        yield* turnNotices(
+          1,
+          ui("setStatus", { statusKey: "plan", statusText: "executing" }).pipe(
+            Effect.andThen(ui("setWidget", { widgetKey: "todo" })),
+          ),
+        ),
+        ["MCP server github failed to connect", "plan: executing", "todo cleared"],
       );
 
       yield* ui("setStatus", { statusKey: "plan", statusText: "done" });
-      yield* ui("setWidget", { widgetKey: "todo" });
       assert.deepStrictEqual(yield* turnNotices(2), ["plan: done"]);
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
-  it.effect("keeps idle extension warnings with the thread that was loaded", () =>
+  it.effect("keeps idle extension output with the thread that was loaded", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakePi;
       const { runtime, takeEvent } = yield* openRuntime(fake);
-      yield* runtime.ensureThread({
+      const providerThread = yield* runtime.ensureThread({
         threadId: THREAD_ID,
         modelSelection: modelSelection("default"),
         runtimePolicy,
-      });
-      yield* fake.emit({
-        type: "extension_ui_request",
-        id: "warn",
-        method: "notify",
-        message: "Previous thread warning",
-        notifyType: "error",
       });
       yield* fake.emit({
         type: "extension_ui_request",
@@ -1657,6 +1654,18 @@ describe("PiAdapterV2", () => {
         statusKey: "mcp",
         statusText: "2 servers",
       });
+      yield* startTurn(runtime, providerThread);
+      assert.deepStrictEqual(yield* settleTurnNotices(fake, takeEvent), ["mcp: 2 servers"]);
+
+      // Session switches rerun session_start, so each thread can receive the same warning.
+      const warning = {
+        type: "extension_ui_request",
+        id: "warn",
+        method: "notify",
+        message: "Extension warning",
+        notifyType: "error",
+      };
+      yield* fake.emit(warning);
       // A dialog round trip proves the warning was handled while the first thread was loaded.
       yield* fake.emit({ type: "extension_ui_request", id: "sync", method: "confirm", title: "?" });
       const pending = yield* takeEvent((event) => event.type === "runtime_request.updated");
@@ -1673,8 +1682,16 @@ describe("PiAdapterV2", () => {
         modelSelection: modelSelection("default"),
         runtimePolicy,
       });
+      yield* fake.emit(warning);
       yield* startTurn(runtime, otherThread, "default", [], "Hello", undefined, 1, otherThreadId);
-      assert.deepStrictEqual(yield* settleTurnNotices(fake, takeEvent), ["mcp: 2 servers"]);
+      assert.deepStrictEqual(yield* settleTurnNotices(fake, takeEvent), [
+        "Extension warning",
+        "mcp: 2 servers",
+      ]);
+
+      const resumed = yield* runtime.resumeThread({ providerThread });
+      yield* startTurn(runtime, resumed, "default", [], "Hello again", undefined, 2);
+      assert.deepStrictEqual(yield* settleTurnNotices(fake, takeEvent), ["Extension warning"]);
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
