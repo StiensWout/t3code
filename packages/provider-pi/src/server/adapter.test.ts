@@ -544,16 +544,16 @@ const settleTurnNotices = Effect.fnUntraced(function* (
   yield* fake.emit({ type: "response", command: "prompt", success: true });
   yield* fake.emit({ type: "agent_start" });
   yield* fake.emit({ type: "agent_settled" });
-  const notices = new Map<string, string>();
+  const notices: Array<string> = [];
   while (true) {
     const event = yield* takeEvent(
       (event) =>
         event.type === "turn.terminal" ||
         (event.type === "turn_item.updated" && event.turnItem.type === "system_notice"),
     );
-    if (event.type === "turn.terminal") return Array.from(notices.values()).sort();
+    if (event.type === "turn.terminal") return notices;
     if (event.type === "turn_item.updated" && event.turnItem.type === "system_notice") {
-      notices.set(event.turnItem.id, event.turnItem.message);
+      notices.push(event.turnItem.message);
     }
   }
 });
@@ -1627,15 +1627,27 @@ describe("PiAdapterV2", () => {
       assert.deepStrictEqual(
         yield* turnNotices(
           1,
-          ui("setStatus", { statusKey: "plan", statusText: "executing" }).pipe(
+          ui("setStatus", { statusKey: "plan", statusText: "reading" }).pipe(
+            Effect.andThen(ui("setStatus", { statusKey: "plan", statusText: "executing" })),
             Effect.andThen(ui("setWidget", { widgetKey: "todo" })),
           ),
         ),
-        ["MCP server github failed to connect", "mode: plan", "plan: executing", "todo cleared"],
+        // In-turn changes coalesce into one update per row.
+        [
+          "MCP server github failed to connect",
+          "mode: plan",
+          "plan: planning",
+          "Todo\n1. Read",
+          "plan: executing",
+          "todo cleared",
+        ],
       );
 
       yield* ui("setStatus", { statusKey: "plan", statusText: "done" });
       assert.deepStrictEqual(yield* turnNotices(2), ["plan: done"]);
+
+      yield* ui("setStatus", { statusKey: "plan" });
+      assert.deepStrictEqual(yield* turnNotices(3), ["plan cleared"]);
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 

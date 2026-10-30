@@ -89,6 +89,8 @@ const SETTLE_PROBE_RETRY_DELAY = Duration.millis(100);
 const MAX_HELD_EXTENSION_EVENTS = 20;
 const MAX_EXTENSION_DISPLAYS = 20;
 const MAX_EXTENSION_DISPLAY_CHARS = 4_000;
+// Extension status can tick per token; coalesce in-turn rows so each change is not a persisted event.
+const EXTENSION_DISPLAY_FLUSH_DELAY = Duration.millis(500);
 
 const PiProviderCapabilitiesV2 = {
   runtimePolicy: { enforcement: "client-boundary" },
@@ -573,7 +575,11 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         readonly event: PiRpcRecord;
       }> = [];
       // Pi cannot be queried for extension status or widgets, so mirror the latest text per key.
-      const extensionDisplays = new Map<string, { readonly text: string; shown: boolean }>();
+      const extensionDisplays = new Map<
+        string,
+        { readonly text: string; readonly cleared: boolean; shown: boolean }
+      >();
+      let extensionDisplayFlushScheduled = false;
       // Session switches emit session_start output before the switched-to thread state exists.
       let loadingAppThreadId: AppThreadId = null;
       let lastKnownLeaf: string | null = null;
@@ -1325,6 +1331,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         for (const [displayKey, display] of extensionDisplays) {
           if (display.shown) continue;
           display.shown = true;
+          if (display.cleared) extensionDisplays.delete(displayKey);
           yield* emitSystemNotice(turn, `${displayKey}:${turn.providerTurn.id}`, display.text);
         }
       });
@@ -1391,23 +1398,24 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           const previous = extensionDisplays.get(displayKey);
           if ((previous?.text ?? "") === text) return;
           extensionDisplays.delete(displayKey);
-          const turn = threadState?.activeTurn ?? null;
-          if (text.length === 0) {
-            // Rows update in place, so a thread that saw the text must see it go away.
-            if (turn !== null && previous?.shown === true) {
-              yield* emitSystemNotice(
-                turn,
-                `${displayKey}:${turn.providerTurn.id}`,
-                `${key} cleared`,
-              );
-            }
-            return;
+          // Rows update in place, so a thread that saw the text must see it go away.
+          if (text.length > 0 || previous?.shown === true) {
+            extensionDisplays.set(displayKey, {
+              text: text.length > 0 ? text : `${key} cleared`,
+              cleared: text.length === 0,
+              shown: false,
+            });
           }
-          extensionDisplays.set(displayKey, { text, shown: false });
           if (extensionDisplays.size > MAX_EXTENSION_DISPLAYS) {
             extensionDisplays.delete(extensionDisplays.keys().next().value!);
           }
-          if (turn !== null) yield* showExtensionDisplays(turn);
+          if (threadState?.activeTurn != null && !extensionDisplayFlushScheduled) {
+            extensionDisplayFlushScheduled = true;
+            yield* Queue.offer(connection.events, { type: "t3.show_extension_displays" }).pipe(
+              Effect.delay(EXTENSION_DISPLAY_FLUSH_DELAY),
+              Effect.forkIn(scope),
+            );
+          }
           return;
         }
         if (
@@ -1644,6 +1652,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         const interrupted = turn.interrupted || turn.nativeAborted;
         const completedAt = yield* DateTime.now;
         yield* completeOpenStreamItems(turn);
+        yield* showExtensionDisplays(turn);
         if (turn.activeCompaction !== null) {
           const status = interrupted ? "cancelled" : turn.failure === null ? "completed" : "failed";
           yield* emitCompaction(turn, turn.activeCompaction, status);
@@ -2171,6 +2180,11 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                 if (state !== null) yield* finalizeTurn(state);
               }
             }
+            return;
+          }
+          case "t3.show_extension_displays": {
+            extensionDisplayFlushScheduled = false;
+            if (turn !== null) yield* showExtensionDisplays(turn);
             return;
           }
           case "t3.ui_request_expired": {
