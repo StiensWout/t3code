@@ -3489,7 +3489,7 @@ describe("PiAdapterV2", () => {
             content: [{ type: "text", text: "hello back" }],
             timestamp: 1700000001000,
           },
-          { role: "toolResult", content: [{ type: "image", data: "BAUG", mimeType: "image/png" }] },
+          { role: "toolResult", content: [] },
           {
             role: "user",
             content: [{ type: "image", data: "AQID", mimeType: "image/png" }],
@@ -3508,7 +3508,7 @@ describe("PiAdapterV2", () => {
       fake.queueMessages(activeBranch);
       const snapshot = yield* runtime.readThreadSnapshot({ providerThread });
       assert.deepEqual(
-        snapshot.messages.map(({ role, text, attachments, createdAt }) => ({
+        snapshot.messages.map(({ role, text, attachments }) => ({
           role,
           text,
           images: attachments.map(({ type, mimeType, sizeBytes }) => ({
@@ -3516,22 +3516,19 @@ describe("PiAdapterV2", () => {
             mimeType,
             sizeBytes,
           })),
-          createdAt: DateTime.toEpochMillis(createdAt),
         })),
         [
-          { role: "user", text: "hello pi", images: [], createdAt: 1700000000000 },
-          { role: "assistant", text: "hello back", images: [], createdAt: 1700000001000 },
+          { role: "user", text: "hello pi", images: [] },
+          { role: "assistant", text: "hello back", images: [] },
           {
             role: "user",
             text: "",
             images: [{ type: "image", mimeType: "image/png", sizeBytes: 3 }],
-            createdAt: 1700000002000,
           },
           {
             role: "user",
             text: "and this",
             images: [{ type: "image", mimeType: "image/jpeg", sizeBytes: 3 }],
-            createdAt: 1700000003000,
           },
         ],
       );

@@ -1,10 +1,11 @@
-import { ChatAttachmentId, PROVIDER_SEND_TURN_MAX_IMAGE_BYTES } from "@t3tools/contracts";
+import { ChatImageAttachment } from "@t3tools/contracts";
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import { ProviderCredentialError } from "@t3tools/provider-core/server/errors";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 
 import {
   chatAttachmentStableKey,
@@ -18,6 +19,8 @@ import { inferImageExtension } from "../imageMime.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as DocumentText from "./DocumentText.ts";
 import * as ProviderCredentialStore from "./ProviderCredentialStore.ts";
+
+const isChatImageAttachment = Schema.is(ChatImageAttachment);
 
 export const layer = Layer.effect(
   ProviderHost.ProviderHost,
@@ -46,25 +49,18 @@ export const layer = Layer.effect(
       resolveAttachmentPath: (attachment) =>
         resolveAttachmentPath({ attachmentsDir: config.attachmentsDir, attachment }),
       persistImageAttachment: Effect.fn("ProviderHost.persistImageAttachment")(function* (input) {
-        if (
-          !/^image\//i.test(input.mimeType) ||
-          input.mimeType.length > 100 ||
-          input.bytes.byteLength > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES
-        ) {
-          return null;
-        }
         const id = createDeterministicAttachmentId(
           input.threadId,
           chatAttachmentStableKey(input.messageId, input.index, input.bytes),
         );
-        if (id === null) return null;
         const attachment = {
           type: "image" as const,
-          id: ChatAttachmentId.make(id),
+          id,
           name: `image-${input.index + 1}${inferImageExtension({ mimeType: input.mimeType })}`,
           mimeType: input.mimeType,
           sizeBytes: input.bytes.byteLength,
         };
+        if (!isChatImageAttachment(attachment)) return null;
         const path = resolveAttachmentPath({ attachmentsDir: config.attachmentsDir, attachment });
         if (path === null) return null;
         // The id hashes the bytes, so an existing file already holds them.

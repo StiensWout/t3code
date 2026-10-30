@@ -2830,22 +2830,24 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                   nativeItemId: `${wantedNativeId}:snapshot-message:${index}`,
                 });
                 // Pi only accepts images on user messages.
-                const images = role === "user" && Array.isArray(content) ? content : [];
-                const attachments = yield* Effect.forEach(images, (block, imageIndex) => {
-                  const data = recordString(block, "data");
-                  const mimeType = recordString(block, "mimeType");
-                  if (recordField(block, "type") !== "image" || !data || !mimeType)
-                    return Effect.succeed([]);
-                  return host
-                    .persistImageAttachment({
-                      threadId,
-                      messageId: id,
-                      index: imageIndex,
-                      mimeType,
-                      bytes: Buffer.from(data, "base64"),
-                    })
-                    .pipe(Effect.map((attachment) => (attachment === null ? [] : [attachment])));
-                }).pipe(Effect.map((attachments) => attachments.flat()));
+                const images = (role === "user" && Array.isArray(content) ? content : []).flatMap(
+                  (block) => {
+                    const data = recordString(block, "data");
+                    const mimeType = recordString(block, "mimeType");
+                    return recordField(block, "type") === "image" && data && mimeType
+                      ? [{ data, mimeType }]
+                      : [];
+                  },
+                );
+                const attachments = (yield* Effect.forEach(images, ({ data, mimeType }, index) =>
+                  host.persistImageAttachment({
+                    threadId,
+                    messageId: id,
+                    index,
+                    mimeType,
+                    bytes: Buffer.from(data, "base64"),
+                  }),
+                )).filter((attachment) => attachment !== null);
                 if (text.length === 0 && attachments.length === 0) return [];
                 const at = Option.getOrElse(
                   DateTime.make(recordNumber(message, "timestamp") ?? Number.NaN),
