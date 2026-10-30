@@ -577,7 +577,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
       // Pi cannot be queried for extension status or widgets, so mirror the latest text per key.
       const extensionDisplays = new Map<
         string,
-        { readonly text: string; readonly cleared: boolean; shown: boolean }
+        { readonly text: string; readonly cleared: boolean; readonly seen: boolean; shown: boolean }
       >();
       let extensionDisplayFlushScheduled = false;
       // Session switches emit session_start output before the switched-to thread state exists.
@@ -1398,11 +1398,13 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           const previous = extensionDisplays.get(displayKey);
           if ((previous?.text ?? "") === text) return;
           extensionDisplays.delete(displayKey);
-          // Rows update in place, so a thread that saw the text must see it go away.
-          if (text.length > 0 || previous?.shown === true) {
+          // Rows update in place, so a thread that saw earlier text must see it go away.
+          const seen = previous !== undefined && (previous.shown || previous.seen);
+          if (text.length > 0 || seen) {
             extensionDisplays.set(displayKey, {
               text: text.length > 0 ? text : `${key} cleared`,
               cleared: text.length === 0,
+              seen,
               shown: false,
             });
           }

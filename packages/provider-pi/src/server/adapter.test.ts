@@ -1646,6 +1646,7 @@ describe("PiAdapterV2", () => {
       yield* ui("setStatus", { statusKey: "plan", statusText: "done" });
       assert.deepStrictEqual(yield* turnNotices(2), ["plan: done"]);
 
+      yield* ui("setStatus", { statusKey: "plan", statusText: "verifying" });
       yield* ui("setStatus", { statusKey: "plan" });
       assert.deepStrictEqual(yield* turnNotices(3), ["plan cleared"]);
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
