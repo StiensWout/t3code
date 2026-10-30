@@ -27,6 +27,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as PlatformError from "effect/PlatformError";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
@@ -3499,6 +3500,7 @@ describe("PiAdapterV2", () => {
             role: "user",
             content: [
               { type: "text", text: "and this" },
+              { type: "image", data: "!!!!", mimeType: "image/png" },
               { type: "image", data: "BwgJ", mimeType: "image/jpeg" },
             ],
             timestamp: 1700000003000,
@@ -3508,9 +3510,10 @@ describe("PiAdapterV2", () => {
       fake.queueMessages(activeBranch);
       const snapshot = yield* runtime.readThreadSnapshot({ providerThread });
       assert.deepEqual(
-        snapshot.messages.map(({ role, text, attachments }) => ({
+        snapshot.messages.map(({ role, text, attachments, createdAt }) => ({
           role,
           text,
+          createdAt: DateTime.toEpochMillis(createdAt),
           images: attachments.map(({ type, mimeType, sizeBytes }) => ({
             type,
             mimeType,
@@ -3518,16 +3521,18 @@ describe("PiAdapterV2", () => {
           })),
         })),
         [
-          { role: "user", text: "hello pi", images: [] },
-          { role: "assistant", text: "hello back", images: [] },
+          { role: "user", text: "hello pi", createdAt: 1700000000000, images: [] },
+          { role: "assistant", text: "hello back", createdAt: 1700000001000, images: [] },
           {
             role: "user",
             text: "",
+            createdAt: 1700000002000,
             images: [{ type: "image", mimeType: "image/png", sizeBytes: 3 }],
           },
           {
             role: "user",
             text: "and this",
+            createdAt: 1700000003000,
             images: [{ type: "image", mimeType: "image/jpeg", sizeBytes: 3 }],
           },
         ],
@@ -3545,6 +3550,48 @@ describe("PiAdapterV2", () => {
       fake.queueMessages(activeBranch);
       const reread = yield* runtime.readThreadSnapshot({ providerThread });
       assert.deepEqual(reread.messages, snapshot.messages);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("keeps a snapshot's text when its images cannot be stored", () =>
+    Effect.gen(function* () {
+      const host = yield* ProviderHost.ProviderHost;
+      const fake = yield* makeFakePi;
+      const { runtime } = yield* openRuntime(fake).pipe(
+        Effect.provideService(ProviderHost.ProviderHost, {
+          ...host,
+          persistImageAttachment: () =>
+            Effect.fail(
+              PlatformError.systemError({
+                _tag: "PermissionDenied",
+                module: "FileSystem",
+                method: "writeFile",
+              }),
+            ),
+        }),
+      );
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      fake.queueMessages({
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "see image" },
+              { type: "image", data: "AQID", mimeType: "image/png" },
+            ],
+            timestamp: 1700000000000,
+          },
+        ],
+      });
+      const snapshot = yield* runtime.readThreadSnapshot({ providerThread });
+      assert.deepEqual(
+        snapshot.messages.map(({ text, attachments }) => ({ text, attachments })),
+        [{ text: "see image", attachments: [] }],
+      );
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 

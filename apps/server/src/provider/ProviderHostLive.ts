@@ -1,4 +1,4 @@
-import { ChatImageAttachment } from "@t3tools/contracts";
+import { ChatImageAttachment, isProviderSendTurnSupportedImageMimeType } from "@t3tools/contracts";
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import { ProviderCredentialError } from "@t3tools/provider-core/server/errors";
 import * as Crypto from "effect/Crypto";
@@ -60,11 +60,22 @@ export const layer = Layer.effect(
           mimeType: input.mimeType,
           sizeBytes: input.bytes.byteLength,
         };
-        if (!isChatImageAttachment(attachment)) return null;
+        if (
+          !isChatImageAttachment(attachment) ||
+          !isProviderSendTurnSupportedImageMimeType(attachment.mimeType)
+        ) {
+          return null;
+        }
         const path = resolveAttachmentPath({ attachmentsDir: config.attachmentsDir, attachment });
         if (path === null) return null;
-        // The id hashes the bytes, so an existing file already holds them.
-        if (!(yield* fileSystem.exists(path))) yield* fileSystem.writeFile(path, input.bytes);
+        // The id hashes the bytes and files only appear by rename, so an existing file is complete.
+        if (yield* fileSystem.exists(path)) return attachment;
+        // The stale-upload sweep removes a .part left by a crash.
+        const partPath = `${path}.${yield* crypto.randomUUIDv4().pipe(Effect.orDie)}.part`;
+        yield* fileSystem.writeFile(partPath, input.bytes).pipe(
+          Effect.andThen(fileSystem.rename(partPath, path)),
+          Effect.onError(() => fileSystem.remove(partPath, { force: true }).pipe(Effect.ignore)),
+        );
         return attachment;
       }),
       // DocumentText owns the path-resolution span.

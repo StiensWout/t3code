@@ -29,9 +29,11 @@ import * as Deferred from "effect/Deferred";
 import * as Option from "effect/Option";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Base64 from "effect/encoding/Base64";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
@@ -2834,19 +2836,32 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                   (block) => {
                     const data = recordString(block, "data");
                     const mimeType = recordString(block, "mimeType");
-                    return recordField(block, "type") === "image" && data && mimeType
-                      ? [{ data, mimeType }]
+                    if (recordField(block, "type") !== "image" || !data || !mimeType) return [];
+                    const bytes = Base64.decode(data);
+                    return Result.isSuccess(bytes) && bytes.success.byteLength > 0
+                      ? [{ bytes: bytes.success, mimeType }]
                       : [];
                   },
                 );
-                const attachments = (yield* Effect.forEach(images, ({ data, mimeType }, index) =>
-                  host.persistImageAttachment({
-                    threadId,
-                    messageId: id,
-                    index,
-                    mimeType,
-                    bytes: Buffer.from(data, "base64"),
-                  }),
+                const attachments = (yield* Effect.forEach(
+                  images,
+                  ({ bytes, mimeType }, imageIndex) =>
+                    host
+                      .persistImageAttachment({
+                        threadId,
+                        messageId: id,
+                        index: imageIndex,
+                        mimeType,
+                        bytes,
+                      })
+                      .pipe(
+                        // One unwritable image must not cost the rest of the history.
+                        Effect.catch((cause) =>
+                          Effect.logWarning("Pi snapshot image could not be stored", {
+                            cause,
+                          }).pipe(Effect.as(null)),
+                        ),
+                      ),
                 )).filter((attachment) => attachment !== null);
                 if (text.length === 0 && attachments.length === 0) return [];
                 const at = Option.getOrElse(

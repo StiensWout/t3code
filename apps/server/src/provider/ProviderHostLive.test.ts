@@ -49,7 +49,7 @@ it.layer(layerTest)("ProviderHostLive", (it) => {
         attachmentId: first!.id,
       });
       assert.deepEqual(Array.from(yield* fileSystem.readFile(path!)), [1, 2, 3]);
-      assert.isNull(yield* host.persistImageAttachment({ ...image, mimeType: "text/plain" }));
+      assert.isNull(yield* host.persistImageAttachment({ ...image, mimeType: "image/svg+xml" }));
     }),
   );
 });

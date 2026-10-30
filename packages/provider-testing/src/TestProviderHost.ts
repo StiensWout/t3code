@@ -1,7 +1,13 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeCrypto from "node:crypto";
 
-import { ChatAttachmentId, DEFAULT_SERVER_SETTINGS, type ServerSettings } from "@t3tools/contracts";
+import {
+  ChatAttachmentId,
+  DEFAULT_SERVER_SETTINGS,
+  isProviderSendTurnSupportedImageMimeType,
+  PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
+  type ServerSettings,
+} from "@t3tools/contracts";
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -64,7 +70,12 @@ export const layer = (
         }),
         resolveAttachmentPath: (attachment) => path.join(attachmentsDir, attachment.id),
         persistImageAttachment: Effect.fn("ProviderHost.persistImageAttachment")(function* (input) {
-          if (!input.mimeType.startsWith("image/")) return null;
+          if (
+            !isProviderSendTurnSupportedImageMimeType(input.mimeType) ||
+            input.bytes.byteLength > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES
+          ) {
+            return null;
+          }
           const digest = NodeCrypto.createHash("sha256")
             .update(`${input.threadId}:${input.messageId}:${input.index}:`)
             .update(input.bytes)

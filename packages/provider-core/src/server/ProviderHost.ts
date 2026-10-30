@@ -52,7 +52,7 @@ export class ProviderHost extends Context.Service<
     readonly resolveAttachmentPath: (attachment: ChatAttachment) => string | null;
     /**
      * Stores provider-held image bytes as a thread attachment. The same thread, message, index
-     * and bytes always yield the same attachment. Null when the bytes are not a storable image.
+     * and bytes always yield the same attachment. Null for a type T3 cannot send or over 10 MiB.
      */
     readonly persistImageAttachment: (input: {
       readonly threadId: ThreadId;
