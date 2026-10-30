@@ -1604,6 +1604,27 @@ describe("PiAdapterV2", () => {
         method: "notify",
         message: "Loaded 3 skills",
       });
+      yield* fake.emit({
+        type: "extension_ui_request",
+        id: "startup-sync",
+        method: "confirm",
+        title: "?",
+      });
+      const pending = yield* takeEvent((event) => event.type === "runtime_request.updated");
+      if (pending.type !== "runtime_request.updated") return;
+      yield* runtime.respondToRuntimeRequest({
+        requestId: pending.runtimeRequest.id,
+        decision: "accept",
+      });
+      yield* fake.takeRequest("extension_ui_response");
+      const otherThreadId = ThreadId.make("thread-pi-startup-other");
+      const otherThread = yield* runtime.ensureThread({
+        threadId: otherThreadId,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, otherThread, "default", [], "Hello", undefined, 1, otherThreadId);
+      assert.deepStrictEqual(yield* settleTurnNotices(fake, takeEvent), []);
       const providerThread = yield* runtime.ensureThread({
         threadId: THREAD_ID,
         modelSelection: modelSelection("default"),

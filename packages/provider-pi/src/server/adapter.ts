@@ -581,7 +581,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
       >();
       let extensionDisplayFlushScheduled = false;
       // Session switches emit session_start output before the switched-to thread state exists.
-      let loadingAppThreadId: AppThreadId = null;
+      let loadingAppThreadId: AppThreadId = input.threadId;
       let lastKnownLeaf: string | null = null;
       // Failed get_entries leaves an untrustworthy turn boundary; re-sync the cursor on next capture.
       let leafCursorStale = false;
