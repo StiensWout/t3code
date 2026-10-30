@@ -1022,16 +1022,15 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         const outputText = contentText(recordField(resultRecord, "content"));
         if (toolName === PI_T3_TODO_TOOL) {
           // The list appears once the call succeeds; a failed call stays a visible tool row.
-          const todoList =
-            completed && !isError
-              ? decodePiTodoList(recordField(resultRecord, "details"))
-              : Option.none();
-          if (Option.isSome(todoList)) {
-            return yield* emitTodoList(turn, toolCallId, todoList.value, startedAt, emittedAt);
-          }
           if (!completed) {
             itemOrdinal(turn, toolCallId);
             return;
+          }
+          const todoList = isError
+            ? Option.none()
+            : decodePiTodoList(recordField(resultRecord, "details"));
+          if (Option.isSome(todoList)) {
+            return yield* emitTodoList(turn, toolCallId, todoList.value, startedAt, emittedAt);
           }
         }
         const status = completed
@@ -1122,18 +1121,12 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         startedAt: DateTime.Utc,
         completedAt: DateTime.Utc,
       ) {
-        const planId =
-          turn.todoPlanId ??
-          (yield* idAllocator.allocate.plan({
-            threadId: turn.turnInput.threadId,
-            runId: turn.turnInput.runId,
-            driver: PI_PROVIDER,
-          }));
-        turn.todoPlanId = planId;
+        const planId = (turn.todoPlanId ??= yield* idAllocator.allocate.plan({
+          threadId: turn.turnInput.threadId,
+          runId: turn.turnInput.runId,
+          driver: PI_PROVIDER,
+        }));
         const base = baseItemFields(turn, toolCallId, startedAt, completedAt);
-        const steps = todoList.steps;
-        const explanation =
-          todoList.explanation === undefined ? {} : { explanation: todoList.explanation };
         yield* emitItemNode(turn, toolCallId, "todo_list", "completed", startedAt, completedAt);
         yield* emit({
           type: "plan.updated",
@@ -1144,9 +1137,10 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             runId: turn.turnInput.runId,
             nodeId: base.nodeId,
             kind: "todo_list",
-            status: steps.every((step) => step.status === "completed") ? "completed" : "active",
-            steps,
-            ...explanation,
+            status: todoList.steps.every((step) => step.status === "completed")
+              ? "completed"
+              : "active",
+            ...todoList,
           },
         });
         yield* emit({
@@ -1159,8 +1153,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             completedAt,
             type: "todo_list",
             planId,
-            steps,
-            ...explanation,
+            ...todoList,
           },
         });
       });
