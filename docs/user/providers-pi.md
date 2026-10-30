@@ -52,9 +52,9 @@ Blocking `select`, `confirm`, `input`, and `editor` dialogs work in T3 Code. Not
 the work log. Pi terminal decoration such as titles, status lines, and widgets does not have a T3
 Code equivalent.
 
-For multi-step work, Pi can keep a task list in the work log through T3 Code's own todo tool, like
-other providers' task lists. To turn it off, add `--exclude-tools t3_update_todos` to Pi's launch
-arguments. Lists that Pi extensions draw as terminal widgets do not appear.
+For multi-step work, Pi can keep a task list in the web and desktop work log through T3 Code's own
+todo tool, like other providers' task lists. To turn it off, add `--exclude-tools t3_update_todos`
+to Pi's launch arguments. Lists that Pi extensions draw as terminal widgets do not appear.
 
 ## Permission Modes
 
