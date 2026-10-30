@@ -1617,7 +1617,10 @@ describe("PiAdapterV2", () => {
       yield* ui("setStatus", { statusKey: "gone" });
       yield* ui("setWidget", {
         widgetKey: "todo",
-        widgetLines: ["\u001b[1mTodo\u001b[0m", "1. Read"],
+        widgetLines: [
+          "\u001b[1mTodo\u001b[0m\u001bPdiscard\u001b\\\u001bXdiscard\u0007",
+          "1. Read\u001b^discard\u001b\\\u001b_discard",
+        ],
       });
       const turnNotices = (runOrdinal: number, beforeResponse?: Effect.Effect<void>) =>
         startTurn(runtime, providerThread, "default", [], "Hello pi", undefined, runOrdinal).pipe(

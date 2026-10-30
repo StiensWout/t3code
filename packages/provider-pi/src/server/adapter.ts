@@ -213,7 +213,7 @@ function contentText(content: unknown): string {
 function piDisplayText(text: string): string {
   return text
     .replace(
-      /\u001b\[[0-?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?|\u001b[@-_]/g,
+      /\u001b\[[0-?]*[ -/]*[@-~]|\u001b[\]PX^_][\s\S]*?(?:\u0007|\u001b\\|$)|\u001b[@-_]/g,
       "",
     )
     .replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, "")
