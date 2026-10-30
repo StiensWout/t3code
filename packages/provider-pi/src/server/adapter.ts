@@ -573,10 +573,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         readonly event: PiRpcRecord;
       }> = [];
       // Pi cannot be queried for extension status or widgets, so mirror the latest text per key.
-      const extensionDisplays = new Map<
-        string,
-        { readonly text: string; readonly shownTo: Set<AppThreadId> }
-      >();
+      const extensionDisplays = new Map<string, { readonly text: string; shown: boolean }>();
       // Session switches emit session_start output before the switched-to thread state exists.
       let loadingAppThreadId: AppThreadId = null;
       let lastKnownLeaf: string | null = null;
@@ -1273,7 +1270,10 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         message: string,
       ) {
         const emittedAt = yield* DateTime.now;
-        yield* emitItemNode(turn, nativeItemId, "system", "completed", emittedAt, emittedAt);
+        // Status rows update in place; their node never changes after the first update.
+        if (!turn.itemOrdinals.has(nativeItemId)) {
+          yield* emitItemNode(turn, nativeItemId, "system", "completed", emittedAt, emittedAt);
+        }
         yield* emit({
           type: "turn_item.updated",
           driver: PI_PROVIDER,
@@ -1320,12 +1320,11 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         );
       });
 
-      // One item per key and turn, updated in place; a thread sees unchanged text only once.
+      // One item per key and turn, updated in place; unchanged text is shown only once.
       const showExtensionDisplays = Effect.fnUntraced(function* (turn: ActivePiTurn) {
-        const threadId = turn.turnInput.threadId;
         for (const [displayKey, display] of extensionDisplays) {
-          if (display.shownTo.has(threadId)) continue;
-          display.shownTo.add(threadId);
+          if (display.shown) continue;
+          display.shown = true;
           yield* emitSystemNotice(turn, `${displayKey}:${turn.providerTurn.id}`, display.text);
         }
       });
@@ -1395,7 +1394,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           const turn = threadState?.activeTurn ?? null;
           if (text.length === 0) {
             // Rows update in place, so a thread that saw the text must see it go away.
-            if (turn !== null && previous?.shownTo.has(turn.turnInput.threadId) === true) {
+            if (turn !== null && previous?.shown === true) {
               yield* emitSystemNotice(
                 turn,
                 `${displayKey}:${turn.providerTurn.id}`,
@@ -1404,7 +1403,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             }
             return;
           }
-          extensionDisplays.set(displayKey, { text, shownTo: new Set() });
+          extensionDisplays.set(displayKey, { text, shown: false });
           if (extensionDisplays.size > MAX_EXTENSION_DISPLAYS) {
             extensionDisplays.delete(extensionDisplays.keys().next().value!);
           }
@@ -2321,6 +2320,8 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           lastNativeThreadId = resumeId ?? lastNativeThreadId;
           // Failed lifecycle operations can still change native sessions; invalidate bindings and defaults.
           threadState = null;
+          // Pi resets extension status and widgets before swapping sessions; session_start sets them again.
+          extensionDisplays.clear();
           appliedModel = null;
           appliedThinking = null;
           appliedSessionName = null;

@@ -1611,6 +1611,7 @@ describe("PiAdapterV2", () => {
       });
       const ui = (method: string, fields: Record<string, unknown>) =>
         fake.emit({ type: "extension_ui_request", id: `ui-${method}`, method, ...fields });
+      yield* ui("setStatus", { statusKey: "mode", statusText: "plan" });
       yield* ui("setStatus", { statusKey: "plan", statusText: "\u001b[33mplanning\u001b[0m" });
       yield* ui("setStatus", { statusKey: "gone", statusText: "temporary" });
       yield* ui("setStatus", { statusKey: "gone" });
@@ -1630,7 +1631,7 @@ describe("PiAdapterV2", () => {
             Effect.andThen(ui("setWidget", { widgetKey: "todo" })),
           ),
         ),
-        ["MCP server github failed to connect", "plan: executing", "todo cleared"],
+        ["MCP server github failed to connect", "mode: plan", "plan: executing", "todo cleared"],
       );
 
       yield* ui("setStatus", { statusKey: "plan", statusText: "done" });
@@ -1666,7 +1667,14 @@ describe("PiAdapterV2", () => {
         notifyType: "error",
       };
       yield* fake.emit(warning);
-      // A dialog round trip proves the warning was handled while the first thread was loaded.
+      yield* fake.emit({
+        type: "extension_ui_request",
+        id: "status-2",
+        method: "setStatus",
+        statusKey: "mcp",
+        statusText: "3 servers",
+      });
+      // A dialog round trip proves both were handled while the first thread was loaded.
       yield* fake.emit({ type: "extension_ui_request", id: "sync", method: "confirm", title: "?" });
       const pending = yield* takeEvent((event) => event.type === "runtime_request.updated");
       if (pending.type !== "runtime_request.updated") return;
@@ -1684,10 +1692,8 @@ describe("PiAdapterV2", () => {
       });
       yield* fake.emit(warning);
       yield* startTurn(runtime, otherThread, "default", [], "Hello", undefined, 1, otherThreadId);
-      assert.deepStrictEqual(yield* settleTurnNotices(fake, takeEvent), [
-        "Extension warning",
-        "mcp: 2 servers",
-      ]);
+      // Pi resets extension status when it swaps sessions, so the first thread's status stays behind.
+      assert.deepStrictEqual(yield* settleTurnNotices(fake, takeEvent), ["Extension warning"]);
 
       const resumed = yield* runtime.resumeThread({ providerThread });
       yield* startTurn(runtime, resumed, "default", [], "Hello again", undefined, 2);
