@@ -1762,8 +1762,17 @@ describe("PiAdapterV2", () => {
       const snapshot = yield* rollback();
       // The forked session's extensions set their status again, which this branch has not shown.
       yield* status;
+      yield* fake.emit({
+        type: "extension_ui_request",
+        method: "setWidget",
+        widgetKey: "pending",
+        widgetLines: ["Pending widget"],
+      });
       yield* startTurn(runtime, snapshot.providerThread, "default", [], "Again", undefined, 3);
-      assert.deepStrictEqual(yield* settleTurnNotices(fake, takeEvent), ["mode: plan"]);
+      assert.deepStrictEqual(yield* settleTurnNotices(fake, takeEvent), [
+        "mode: plan",
+        "Pending widget",
+      ]);
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
