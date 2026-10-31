@@ -7,6 +7,7 @@ import {
   ProviderDriverKind,
   type ChatAttachment,
   type ModelSelection,
+  PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   type OrchestrationV2ExecutionNode,
   type OrchestrationV2ProviderCapabilities,
   type OrchestrationV2ProviderFailure,
@@ -2836,7 +2837,13 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                   (block) => {
                     const data = recordString(block, "data");
                     const mimeType = recordString(block, "mimeType");
-                    if (recordField(block, "type") !== "image" || !data || !mimeType) return [];
+                    if (
+                      recordField(block, "type") !== "image" ||
+                      !data ||
+                      !mimeType ||
+                      data.length > Math.ceil(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / 3) * 4
+                    )
+                      return [];
                     const bytes = Base64.decode(data);
                     return Result.isSuccess(bytes) && bytes.success.byteLength > 0
                       ? [{ bytes: bytes.success, mimeType }]
@@ -2858,7 +2865,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                         // One unwritable image must not cost the rest of the history.
                         Effect.catch((cause) =>
                           Effect.logWarning("Pi snapshot image could not be stored", {
-                            cause,
+                            reason: cause.reason._tag,
                           }).pipe(Effect.as(null)),
                         ),
                       ),
