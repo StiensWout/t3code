@@ -36,6 +36,7 @@ type AgentStartHook = (
   },
   ctx: {
     model?: { api: string };
+    isProjectTrusted: () => boolean;
     ui: { notify: (message: string, severity: string) => void };
   },
 ) => Promise<{ systemPrompt: string } | undefined>;

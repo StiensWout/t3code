@@ -74,7 +74,10 @@ describe("Pi orchestration prompt section", () => {
     const bridge = await loadMcpBridge();
     const hook = bridge.handlers.get("before_agent_start")!;
     for (const event of events) {
-      const result = await hook(event, { ui: { notify: assert.fail } });
+      const result = await hook(event, {
+        isProjectTrusted: () => true,
+        ui: { notify: assert.fail },
+      });
       assert.isDefined(result);
       assert.isTrue(result!.systemPrompt.startsWith(`${event.systemPrompt}\n\n`));
       assert.include(result!.systemPrompt, "orchestrator_capabilities");
@@ -164,6 +167,7 @@ describe("Pi MCP tool results", () => {
 describe("Pi MCP tool exposure", () => {
   const discoveryContext = {
     model: { api: "anthropic-messages" },
+    isProjectTrusted: () => true,
     ui: { notify: () => undefined },
   };
 
@@ -212,7 +216,11 @@ describe("Pi MCP tool exposure", () => {
     });
     const event = { systemPrompt: "" };
     await bridge.handlers.get("session_start")!(event, discoveryContext);
-    const gatewayContext = { model: { api: "openai-completions" }, ui: { notify: assert.fail } };
+    const gatewayContext = {
+      model: { api: "openai-completions" },
+      isProjectTrusted: () => true,
+      ui: { notify: assert.fail },
+    };
     await bridge.handlers.get("model_select")!(event, gatewayContext);
     bridge.restoreActiveTools(["read", "mcp__t3-code__task_status"]);
     await bridge.handlers.get("session_tree")!(event, gatewayContext);
@@ -319,7 +327,7 @@ describe("Pi T3 todo tool", () => {
 
   it("reactivates itself when a session restores a loadout without it", async () => {
     const bridge = await loadMcpBridge({ withoutMcp: true });
-    const ctx = { ui: { notify: () => undefined } };
+    const ctx = { isProjectTrusted: () => true, ui: { notify: () => undefined } };
     bridge.restoreActiveTools(["read"]);
     await bridge.handlers.get("session_start")!({ systemPrompt: "" }, ctx);
     assert.deepEqual(bridge.getActiveTools(), ["read", PI_T3_TODO_TOOL]);
