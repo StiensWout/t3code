@@ -167,6 +167,7 @@ interface FakePi {
   readonly deferNextModelSelection: () => void;
   readonly queueModels: (models: ReadonlyArray<unknown>) => void;
   readonly vetoNextNewSession: () => void;
+  readonly vetoNextFork: () => void;
   readonly allRequests: () => ReadonlyArray<PiRpcRecord>;
   readonly queueStats: (data: unknown) => void;
   /** Pi before 0.84.4 answers clear_queue as an unknown command. */
@@ -209,6 +210,7 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
   let failState = false;
   let vetoSwitch = false;
   let vetoNewSession = false;
+  let vetoFork = false;
   let deferredLifecycle: string | undefined;
   let sessionFile = FAKE_SESSION_FILE;
   let sessionGeneration = 0;
@@ -278,8 +280,11 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
         return { ...base, data: messagesQueue.shift() ?? { messages: [] } };
       case "get_session_stats":
         return { ...base, data: statsQueue.shift() ?? {} };
-      case "fork":
-        return { ...base, data: { text: "Hello pi", cancelled: false } };
+      case "fork": {
+        const cancelled = vetoFork;
+        vetoFork = false;
+        return { ...base, data: { text: "Hello pi", cancelled } };
+      }
       case "clear_queue":
         return clearQueue === "unknown_command"
           ? { ...base, success: false, error: "Unknown command: clear_queue" }
@@ -387,6 +392,9 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
     },
     vetoNextNewSession: () => {
       vetoNewSession = true;
+    },
+    vetoNextFork: () => {
+      vetoFork = true;
     },
     allRequests: () => allRequests,
     vetoNextSwitch: () => {
@@ -1676,7 +1684,7 @@ describe("PiAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
-  it.effect("shows extension status again after a rollback replaces Pi's session", () =>
+  it.effect("keeps extension output on a cancelled rollback and resets it after a fork", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakePi;
       const { runtime, takeEvent } = yield* openRuntime(fake);
@@ -1696,30 +1704,65 @@ describe("PiAdapterV2", () => {
       yield* startTurn(runtime, providerThread);
       assert.deepStrictEqual(yield* settleTurnNotices(fake, takeEvent), ["mode: plan"]);
 
-      const snapshot = yield* runtime.rollbackThread({
-        providerThread,
-        target: {
-          type: "thread_start",
-          checkpointId: CheckpointId.make("checkpoint-start"),
-          appRunOrdinal: 0,
-        },
-        providerThreadTurns: [
-          {
-            id: ProviderTurnId.make("turn-1"),
-            providerThreadId: providerThread.id,
-            nodeId: NodeId.make("node-1"),
-            runAttemptId: null,
-            nativeTurnRef: { driver: PI_PROVIDER, nativeId: "u1", strength: "strong" },
-            ordinal: 1,
-            status: "completed",
-            startedAt: null,
-            completedAt: null,
+      const rollback = () =>
+        runtime.rollbackThread({
+          providerThread,
+          target: {
+            type: "thread_start",
+            checkpointId: CheckpointId.make("checkpoint-start"),
+            appRunOrdinal: 0,
           },
-        ],
+          providerThreadTurns: [
+            {
+              id: ProviderTurnId.make("turn-1"),
+              providerThreadId: providerThread.id,
+              nodeId: NodeId.make("node-1"),
+              runAttemptId: null,
+              nativeTurnRef: { driver: PI_PROVIDER, nativeId: "u1", strength: "strong" },
+              ordinal: 1,
+              status: "completed",
+              startedAt: null,
+              completedAt: null,
+            },
+          ],
+        });
+      yield* fake.emit({
+        type: "extension_ui_request",
+        method: "setStatus",
+        statusKey: "mode",
       });
+      yield* fake.emit({
+        type: "extension_ui_request",
+        method: "setWidget",
+        widgetKey: "pending",
+        widgetLines: ["Pending widget"],
+      });
+      // A dialog round trip proves the idle clear and widget reached the mirror before the fork.
+      yield* fake.emit({
+        type: "extension_ui_request",
+        id: "fork-sync",
+        method: "confirm",
+        title: "?",
+      });
+      const pending = yield* takeEvent((event) => event.type === "runtime_request.updated");
+      if (pending.type !== "runtime_request.updated") return;
+      yield* runtime.respondToRuntimeRequest({
+        requestId: pending.runtimeRequest.id,
+        decision: "accept",
+      });
+      yield* fake.takeRequest("extension_ui_response");
+      fake.vetoNextFork();
+      assert.isTrue(Exit.isFailure(yield* rollback().pipe(Effect.exit)));
+      yield* startTurn(runtime, providerThread, "default", [], "After veto", undefined, 2);
+      assert.deepStrictEqual(yield* settleTurnNotices(fake, takeEvent), [
+        "mode cleared",
+        "Pending widget",
+      ]);
+
+      const snapshot = yield* rollback();
       // The forked session's extensions set their status again, which this branch has not shown.
       yield* status;
-      yield* startTurn(runtime, snapshot.providerThread, "default", [], "Again", undefined, 2);
+      yield* startTurn(runtime, snapshot.providerThread, "default", [], "Again", undefined, 3);
       assert.deepStrictEqual(yield* settleTurnNotices(fake, takeEvent), ["mode: plan"]);
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );

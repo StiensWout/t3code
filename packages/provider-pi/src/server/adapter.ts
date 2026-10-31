@@ -3051,10 +3051,16 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               (barrier) =>
                 Effect.gen(function* () {
                   // Forking replaces Pi's session, so extension UI resets as on a switch.
+                  const previousDisplays = new Map(extensionDisplays);
                   extensionDisplays.clear();
                   const forkData = yield* lifecycleRequest({ type: "fork", entryId: forkEntryId });
-                  if (recordField(forkData, "cancelled") === true)
+                  if (recordField(forkData, "cancelled") === true) {
+                    extensionDisplays.clear();
+                    for (const [key, display] of previousDisplays) {
+                      extensionDisplays.set(key, display);
+                    }
                     return yield* protocolError("A Pi extension cancelled the session fork");
+                  }
                   const forkState = yield* request({ type: "get_state" }).pipe(
                     Effect.onError(() =>
                       Effect.sync(() => {
