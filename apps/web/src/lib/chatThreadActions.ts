@@ -5,7 +5,12 @@ import type {
   ProjectId,
   ScopedProjectRef,
 } from "@t3tools/contracts";
-import type { DraftThreadEnvMode } from "../composerDraftStore";
+import type { ComposerThreadDraftState, DraftThreadEnvMode } from "../composerDraftStore";
+
+type ComposerModelSelectionState = Pick<
+  ComposerThreadDraftState,
+  "activeProvider" | "modelSelectionByProvider" | "modelSelectionExplicit"
+>;
 
 interface ThreadContextLike {
   environmentId: EnvironmentId;
@@ -21,7 +26,6 @@ interface NewThreadHandler {
       envMode?: DraftThreadEnvMode;
       startFromOrigin?: boolean;
     },
-    // The opened draft's identity, which most callers have no use for.
   ): Promise<unknown>;
 }
 
@@ -51,6 +55,18 @@ export function resolveNewThreadModelSelectionOverride(input: {
   );
 }
 
+export function hasExplicitComposerModelSelection(
+  draft: ComposerModelSelectionState | null | undefined,
+): boolean {
+  const activeProvider = draft?.activeProvider;
+  return (
+    draft?.modelSelectionExplicit === true &&
+    activeProvider !== null &&
+    activeProvider !== undefined &&
+    draft.modelSelectionByProvider[activeProvider] !== undefined
+  );
+}
+
 export function resolveThreadActionProjectRef(
   context: ChatThreadActionContext,
 ): ScopedProjectRef | null {
@@ -66,12 +82,6 @@ export function resolveThreadActionProjectRef(
   return context.defaultProjectRef;
 }
 
-// New threads inherit only the *project* from the current context. Branch,
-// worktree, and env mode always come from the user's configured defaults —
-// carrying them over from the viewed thread meant "new thread" silently
-// reused checkouts and branches. Explicit affordances (branch toolbar's
-// "new thread in this worktree") pass those options to handleNewThread
-// directly instead.
 export async function startNewThreadFromContext(
   context: ChatThreadActionContext,
 ): Promise<boolean> {

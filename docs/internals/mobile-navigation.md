@@ -1,31 +1,92 @@
-# Mobile navigation headers
+# Mobile navigation
 
-The iOS Home and thread routes share the root native stack in
-[`Stack.tsx`](../../apps/mobile/src/Stack.tsx). Keeping them in one navigation
-controller lets UIKit animate the header between routes. The iPad sidebar owns
-a separate, single-screen stack; Android uses its own in-flow headers.
+Home and thread routes share the [root native stack](../../apps/mobile/src/Stack.tsx)
+so UIKit can animate the header within one navigation controller. The iPad sidebar
+has its own stack. Splitting Home and threads between controllers loses that
+continuous transition. How the stack becomes columns, sheets and panes is in
+[Mobile layout](./mobile-layout.md).
 
-On Liquid Glass iOS, Home keeps a transparent native title and renders its brand
-as a custom leading item. A custom `headerTitle` previously shortened the scroll
-fade and removed the blur behind the logo. Preserve the native title when
-changing the brand or its connection-status replacement.
+## Selecting versus drilling in
 
-Both brand states use `BRAND_HEADER_ITEM_IDENTIFIER` from
-[`CompactBrandTitle.tsx`](../../apps/mobile/src/components/CompactBrandTitle.tsx).
-The native-stack and react-native-screens patches forward custom item identifiers
-to `UIBarButtonItem.identifier`, just as they do for native buttons and menus.
-UIKit otherwise matches transition items using their position and content, so
-the brand needs an explicit identity separate from navigation controls. Connection
-status changes retain that identity. See [Apple's identifier documentation](https://developer.apple.com/documentation/uikit/uibarbuttonitem/identifier).
+Opening a page has two intents, and each has one action:
 
-The react-native-screens patch caches leading, trailing, and center item groups
-independently. A button can belong to only one group: constructing another group
-with the same button removes it from the previous one. Unrelated menu updates
-must therefore preserve the other groups while UIKit may be animating them.
-Each cache includes the owning header config, its item values, and custom native
-item identities, so changed content or remounted event emitters still rebuild.
+- **Select** shows a thread or pull request as the workspace's only page, the
+  way a list row does. Everything that selects (rows, the command palette,
+  compose, notifications, deep links) uses
+  [`selectWorkspaceDetail`](../../apps/mobile/src/features/layout/workspace/workspace-detail-selection.ts),
+  which the root stack's router handles. The resulting stack is the same on
+  phones, collapsed splits, and expanded splits. Only route keys differ: the
+  page already showing keeps its key, so the detail column updates in place
+  instead of pushing.
+- **Drill in** opens a page over the current one so Back returns, with
+  `StackActions.push`.
 
-Custom header identifiers require native code generation and a new mobile build;
-an over-the-air JavaScript update alone is insufficient. The Android view manager
-implements the generated identifier setter as a no-op because this behavior is
-specific to iOS 26 and later.
+`navigate` to `Thread` or `PullRequest` is rejected by lint, because it pushes
+or updates in place depending on what happens to be on top. Never infer the
+choice from transition events: UIKit reports the sidebar column appearing in
+split views too. The one native signal the router uses is the card native Back
+is popping. The workspace navigator reports it, and a selection never reuses
+that card.
+
+Beside the list, Settings pages share one native screen whose content swaps,
+like the system Settings app. A route per page would pop and push the column,
+and would unmount its header configuration, which hides the navigation bar.
+
+## UIKit constraints
+
+The [react-native-screens fork](../operations/mobile-screens-fork.md)
+preserves behavior that is easy to break when changing native headers:
+
+- The brand belongs in `headerTitle`. On iOS 26.5, UIKit morphs a background-free
+  leading toolbar item's rectangle into the next screen's glass back button,
+  even when the items have different identifiers.
+- UIKit's scroll-edge fade does not recognize Fabric text views. An empty native
+  label supplies the custom title's geometry. Removing that apparently unused
+  view changes the fade.
+- Leading, trailing, and center item groups need independent caches. A button can
+  belong to only one group; rebuilding an unchanged group can pull its buttons
+  out of a group UIKit is still animating. Cache ownership also includes the
+  header config, whose event emitter changes on remount.
+- A horizontal ScrollView at its leading edge must yield to the full-screen back
+  gesture. Upstream gives every horizontal ScrollView priority, so swiping back
+  on a code block or table can only bounce its content.
+- UIKit draws the header's scroll-edge blur inside the scroll view, and workspace
+  columns pad their content away from the iPhone Duo's vertical bar. Register a
+  header scroll view only through
+  [`NativeScrollViewMarker`](../../apps/mobile/src/native/NativeScrollViewMarker.tsx)
+  or `NativeScrollView`: their native wrapper widens the scroll view under that
+  bar, so the blur reaches it while the content stays in the safe area. On the
+  left it shifts React Native's content view back through its bounds origin,
+  never with a content offset: React Native rewrites offsets on its own layout
+  passes, which left threads shifted under the bar. Lint rejects
+  `ScrollViewMarker` imported anywhere else.
+
+The fork adds native header props that require code generation and a new binary.
+See the [fork build instructions](../operations/mobile-screens-fork.md).
+
+## Native media presentations
+
+iOS delegates full-screen video to [AVKit](../../apps/mobile/modules/t3-native-controls/ios/T3NativeVideoPresentation.swift)
+and images and documents to [Quick Look](../../apps/mobile/modules/t3-native-controls/ios/T3NativeFilePresentation.swift).
+Each framework owns its controls and transition. A separate UIKit zoom transition
+prevents AVKit's native Close action from exiting full screen and interferes with
+Quick Look's interactive return to its thumbnail. The AVKit entry selector is
+guarded, with standard modal presentation as the fallback.
+
+[Thumbnail registration](../../apps/mobile/modules/t3-native-controls/ios/T3NativePresentation.swift)
+holds weak view references for transition and share-sheet anchors. It does not own
+the preview; a source row can disappear while a native presentation is open.
+Identifiers must distinguish attachments that are visible at the same time.
+Native promises complete after dismissal so callers keep local file leases until
+the preview or share flow has finished.
+
+Treat a dismissal request as pending until UIKit finishes its current transition.
+Starting another dismissal while presentation or an interactive dismissal is
+settling can strand the controller. Video cleanup restores the previous audio
+configuration only if it still matches the preview's configuration. It must not
+deactivate the shared audio session, which may belong to another player or recorder.
+
+Video playback holds the first signed asset URL for the lifetime of the preview.
+Following credential refreshes reactively would restart playback. Quick Look copies
+original bytes into its own temporary directory so preview and sharing cannot
+mutate a draft or workspace file.

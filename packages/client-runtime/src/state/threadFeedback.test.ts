@@ -1,37 +1,13 @@
 import { describe, expect, it } from "vite-plus/test";
 import { MessageId } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
-import { AsyncResult } from "effect/unstable/reactivity";
+import { AsyncResult } from "effect/reactivity";
 
 import {
-  codexFeedbackMessage,
-  parseCodexFeedbackCommand,
+  codexFeedbackNotice,
   submitCodexFeedback,
   type CodexFeedbackSubmission,
 } from "./threadFeedback.ts";
-
-describe("parseCodexFeedbackCommand", () => {
-  it("accepts feedback without a reason", () => {
-    expect(parseCodexFeedbackCommand(" /feedback ")).toEqual({});
-  });
-
-  it("preserves a feedback description", () => {
-    expect(parseCodexFeedbackCommand("/feedback The agent stopped early.")).toEqual({
-      reason: "The agent stopped early.",
-    });
-  });
-
-  it("accepts mixed-case feedback commands", () => {
-    expect(parseCodexFeedbackCommand("/Feedback Retry failed.")).toEqual({
-      reason: "Retry failed.",
-    });
-  });
-
-  it("ignores other slash commands and ordinary messages", () => {
-    expect(parseCodexFeedbackCommand("/feedback-status")).toBeNull();
-    expect(parseCodexFeedbackCommand("Please send /feedback")).toBeNull();
-  });
-});
 
 describe("submitCodexFeedback", () => {
   const submission = {
@@ -40,7 +16,7 @@ describe("submitCodexFeedback", () => {
     createdAt: "2026-08-23T00:00:00.000Z",
   } as const;
 
-  it("shows the command and clears the draft before the upload finishes", async () => {
+  it("reports upload progress and clears the draft before the upload finishes", async () => {
     let draft: string = submission.command;
     let finishUpload:
       | ((result: ReturnType<typeof AsyncResult.success<{ feedbackId: string }>>) => void)
@@ -66,14 +42,10 @@ describe("submitCodexFeedback", () => {
 
     expect(draft).toBe("");
     expect(states).toEqual([{ ...submission, status: "uploading" }]);
-    expect(codexFeedbackMessage(states[0]!)).toMatchObject({
-      id: submission.id,
-      role: "user",
-      text: submission.command,
+    expect(codexFeedbackNotice(states[0]!)).toEqual({
+      title: "Sending feedback to OpenAI...",
+      description: undefined,
     });
-    expect(codexFeedbackMessage(states[0]!, "assistant").text).toBe(
-      "Sending feedback to OpenAI...",
-    );
 
     draft = "Keep this newer message.";
     finishUpload?.(AsyncResult.success({ feedbackId: "codex-thread-1" }));
@@ -85,7 +57,7 @@ describe("submitCodexFeedback", () => {
       status: "sent",
       feedbackId: "codex-thread-1",
     });
-    expect(codexFeedbackMessage(states.at(-1)!, "assistant").text).toContain("codex-thread-1");
+    expect(codexFeedbackNotice(states.at(-1)!)?.description).toContain("codex-thread-1");
   });
 
   it("records a failed upload without losing its user-facing error", async () => {
@@ -105,6 +77,7 @@ describe("submitCodexFeedback", () => {
       status: "failed",
       errorMessage: "Upload rejected.",
     });
+    expect(codexFeedbackNotice(states.at(-1)!)?.description).toBe("Upload rejected.");
   });
 
   it("marks interruptions without reporting them as upload failures", async () => {
@@ -119,6 +92,7 @@ describe("submitCodexFeedback", () => {
     });
 
     expect(states.at(-1)).toEqual({ ...submission, status: "interrupted" });
+    expect(codexFeedbackNotice(states.at(-1)!)).toBeNull();
   });
 
   it("lets another feedback submission finish while the first remains in flight", async () => {

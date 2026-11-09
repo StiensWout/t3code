@@ -1,112 +1,154 @@
 # Product analytics
 
-T3 Code sends anonymous product events from the server to PostHog. The server
-uses the first available hashed Codex account ID, hashed Claude user ID, or
-installation-scoped anonymous ID as the distinct ID. It also keeps the
-telemetry opt-out, event buffer, and batch delivery. Clients do not load the
-PostHog browser SDK.
+The server owns analytics delivery, opt-out, and identity for every connected client.
+Clients do not load the PostHog browser SDK. Client-use events require an
+authenticated connection, so visiting the hosted app without connecting does not
+count as product use.
 
-## Client events
+## Installs and owners
 
-These events use the metadata from the WebSocket connection that caused them.
-The metadata is not a person property or server-global current-client value.
-Two clients connected to one server can report different values at the same
-time.
+`distinct_id` keeps the rule every build has used: the hashed Codex workspace,
+else the Claude machine id, else the install's anonymous id. It can change when
+someone logs in, and a Codex Team shares one, but keeping it means PostHog charts
+and history never break. Do not change it; add a field instead.
 
-| Event                   | Description                                                                                                                                          |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `client.connected`      | The server accepted an authenticated WebSocket connection. Reconnects count again. Use this event for connection diagnostics, not active-use counts. |
-| `client.thread.started` | The server accepted a command that created a thread.                                                                                                 |
-| `client.turn.requested` | The server accepted a turn request. This is the standard active-use event.                                                                           |
+Every event also carries `installId` when the server can save its state: the hash
+of a random id in the state directory, which never changes for the install. If
+that file cannot be written, events still go out under `distinct_id`, as before. Count installs
+with it. Who an install belongs to is a separate fact, sent as
+`install.owner_observed`. Owners are resolved at query time in our own store, so
+a rule can change and apply to all history.
 
-`provider.turn.sent` stays a provider execution event. It does not receive
-client metadata because a provider turn can continue after the requesting
-client disconnects.
+[Owner sources](../../apps/server/src/telemetry/Identify.ts), strongest first:
+T3 Connect, then the OpenAI and Claude person ids, then the client device. The
+server reports what it can read itself: the linked Connect account and provider
+logins. A connecting client reports its signed-in Connect account and its device,
+which links every environment opened from one phone, browser, or desktop. Use the
+OpenAI `user_id` claim, not the Codex `account_id` (the ChatGPT workspace, which a
+whole Team shares) or the token `sub` (one per login method). Two Connect accounts are never the same person, whatever
+weaker ids they share.
 
-## Recommended properties
+Every id is SHA-256 hashed with [one helper](../../packages/shared/src/telemetryId.ts)
+on both sides, so a Connect account hashes the same on the client and the server.
+The server accepts only hashes from clients.
 
-Client properties appear on the three client events when the connected client
-reports them. Older clients can omit every client property.
+## Attribution boundaries
 
-| Property               | Values and meaning                                                                                                                                                                              |
-| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `surface`              | Product client: `web`, `desktop`, or `mobile`.                                                                                                                                                  |
-| `webDeployment`        | Web delivery: `hosted` for the hosted app or `server` for web files served by a T3 server. Web only. This does not describe connection distance.                                                |
-| `clientOs`             | `macOS`, `Windows`, `Linux`, `iOS`, `Android`, `ChromeOS`, `other`, or `unknown`.                                                                                                               |
-| `clientDeviceType`     | `desktop`, `phone`, `tablet`, or `unknown`. This is separate from `surface`.                                                                                                                    |
-| `clientBrowser`        | Normalized browser family. Web only. Browser detection is best effort.                                                                                                                          |
-| `clientAppVersion`     | Version of the connected client.                                                                                                                                                                |
-| `clientOsMajorVersion` | Client OS major version when the native client reports it. Initially mobile only.                                                                                                               |
-| `clientDeviceModel`    | Hardware model when the native client reports it. Initially mobile only. This is not a user-assigned device name.                                                                               |
-| `connectionMethod`     | `direct`, `ssh`, `relay`, or `unknown`. `direct` means that the client connected to the server endpoint without an SSH or relay connection. It does not mean both processes run on one machine. |
+Client dimensions belong to the event's WebSocket connection. A server-global
+"current client" would misattribute simultaneous web, desktop, and mobile use.
+Provider execution has its own events because a turn can outlive the requesting
+connection.
 
-Server properties appear on all events, including server boot and background
-events.
+Keep client and server dimensions separate. A desktop host can serve a phone or a
+remote browser, and a direct connection can cross a network. Older clients omit
+metadata. Missing client values must stay unknown rather than being backfilled
+from server properties. The legacy `clientType` property describes how the server
+runs; use `surface` for the connected client.
 
-| Property           | Values and meaning                                             |
-| ------------------ | -------------------------------------------------------------- |
-| `serverOs`         | Server process OS, normalized to the same names as `clientOs`. |
-| `serverArch`       | Server process architecture.                                   |
-| `serverWslDistro`  | WSL distribution from `WSL_DISTRO_NAME`, when present.         |
-| `serverAppVersion` | T3 server version.                                             |
-| `serverMode`       | Server runtime mode: `desktop` or `web`.                       |
+## Interpreting events
 
-## Legacy properties
+Use `client.turn.requested` for active-use reports. There is no connection event,
+because T3 Connect sessions expire hourly and each reconnect would count again.
+A command whose id was already accepted is a retry, so it records nothing again.
+One identity can appear in several client groups during a period; adding those
+groups double-counts users.
 
-Existing property meanings do not change:
+Provider send and completion counts need not match. `provider.turn.completed`
+is one provider turn, and `segment` says what started it: the run's first
+attempt (`initial`), a `steering_restart`, a provider `continuation` such as a
+Codex goal turn, or a `native_child` subagent. `createdBy`, `creationSource`,
+`scheduled`, and `subagent` describe the run's starting message, and `childKind`
+separates native subagents from T3-managed child threads. Use this event for
+per-turn measurements, not for counting requests.
 
-- `clientType` describes how the server runs. It is `desktop-app` for a desktop
-  server and `cli-web-client` for a CLI web server. It does not describe the
-  connected client. Use `surface` and `webDeployment` for new reports.
-- `platform`, `arch`, `wsl`, and `t3CodeVersion` describe the server. Use the
-  new `server*` names for new reports.
-- `appVersion` describes the connected client. Use `clientAppVersion` for new
-  reports.
-- Mobile connection events keep `os`, `osMajorVersion`, and `deviceModel`.
-  Use the new `client*` names for new reports.
+`provider.request.completed` is one run, recorded when the run settles in the
+server process that ran it. It adds each root turn once, so continuations,
+steering, and replayed provider events do not add rows. `requestKind: "user"`
+counts what people asked for. Native subagent turns are summed apart from the
+root (`childUsageStatus`, `childInputTokens`); T3-managed child threads report
+their own requests as `t3_child`. A child still running at settlement is never
+added later, and the summary sets `childrenRunning`. A server restart loses the
+summary of a run in progress. A run that continues after a restart reports its
+own usage with `restartContinuation` and `lifecycleObserved: false`; it cannot
+recover the original request's count or kind. A run whose provider session never
+opens has no summary, and a start the provider rejects reports
+`providerTurns: 0`. A Stop that lands while a steering restart is starting ends
+the run without a summary. Collection is best effort, with no scan or backfill of
+provider history.
 
-## PostHog dashboard
+Counts cover the main agent. `otherInputTokens` and `otherOutputTokens` are what
+a provider's own ledger recorded beyond it during the turn: Claude's per-process
+`modelUsage` growth, which covers native subagents, compaction, and helper
+calls. They need a baseline from the same process, so they stay absent when it
+is unknown or the ledger goes backwards, and background work that ends between
+turns lands in the next one. Claude subagents have no turns of their own, so
+this never overlaps child turns.
 
-Create one saved dashboard named `Client and platform usage`. Set
-`client.turn.requested` as the event for active-use reports. A user can appear
-in several client groups during one period, so do not add breakdown values to
-calculate a total.
+`model`, `effort`, and `serviceTier` are what the run selected. `serviceTier`
+is `standard`, `flex`, `fast`, or `ultrafast`, from Codex's tier option or
+Claude's fast mode, and is absent when the selection does not set one. `observedModel` and
+`mixedModels` appear only when the provider reported the models for the counted
+work (Codex thread settings and reroutes, Claude root messages, OpenCode steps).
+`mixedModels: false` without `reportVersion` was never checked. Model labels
+come from the bundled model manifest and the Cursor and Grok catalogs, also for
+routed ids such as `anthropic/claude-opus-5-5`, and efforts come from a closed
+list, so user-configured names stay out.
 
-Save these insights:
+Status and counters answer different questions. `usageReported: false` means
+the adapter attached no usage; a harness where every row says so is unsupported,
+not idle. `partial` keeps valid counts that cannot establish a whole-turn total,
+such as an OpenCode step that ended without a report, an OpenCode stream
+reconnect, or an interrupted segment.
+Explicit zeros are sent and unknown counts stay absent. `localCommand` marks a
+provider-local command such as Claude's `/compact`, whose result counters are not
+model work. Reasoning tokens are a subset of output.
 
-| Insight                         | Configuration                                                                                                                                                                                                                                                                           |
-| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Active users, daily             | Trends, `client.turn.requested`, unique users, daily interval.                                                                                                                                                                                                                          |
-| Active users, weekly            | Trends, `client.turn.requested`, unique users, weekly interval.                                                                                                                                                                                                                         |
-| Active users, monthly           | Trends, `client.turn.requested`, unique users, monthly interval.                                                                                                                                                                                                                        |
-| Client usage                    | Trends, `client.turn.requested`, unique users. Save four filtered series: `surface = desktop`, `surface = mobile`, `surface = web` and `webDeployment = hosted`, and `surface = web` and `webDeployment = server`. Name them Desktop, Native mobile, Hosted web, and Server-served web. |
-| Client OS, active users         | Trends, `client.turn.requested`, unique users, breakdown by `clientOs`.                                                                                                                                                                                                                 |
-| Client OS, turns                | Trends, `client.turn.requested`, total events, breakdown by `clientOs`.                                                                                                                                                                                                                 |
-| Client versus server OS         | Table, `client.turn.requested`, breakdown by `clientOs` and `serverOs`.                                                                                                                                                                                                                 |
-| Connection method, active users | Trends, `client.turn.requested`, unique users, breakdown by `connectionMethod`.                                                                                                                                                                                                         |
-| Connection method, turns        | Trends, `client.turn.requested`, total events, breakdown by `connectionMethod`.                                                                                                                                                                                                         |
-| Mobile devices                  | Table, `client.turn.requested`, filter `surface = mobile`, breakdown by `clientOs`, `clientOsMajorVersion`, and `clientDeviceType`.                                                                                                                                                     |
-| Client version adoption         | Trends, `client.turn.requested`, unique users, breakdown by `clientAppVersion`.                                                                                                                                                                                                         |
-| Server version adoption         | Trends, `client.turn.requested`, unique users, breakdown by `serverAppVersion`.                                                                                                                                                                                                         |
-| Missing metadata                | Table or SQL insight that shows the percentage of `client.turn.requested` events where each of `surface`, `clientOs`, `clientDeviceType`, `clientAppVersion`, and `connectionMethod` is absent. Track `webDeployment` and `clientBrowser` only within `surface = web`.                  |
+Charts built on these events should say "output tokens per measured provider
+completion", compare matching provider, observed model, effort, interaction mode,
+and terminal status, and show eligible and measured counts by harness, origin,
+and status so unknown models and unsupported adapters stay in the denominator.
+Divide summed totals for output/input ratios; averaging per-turn ratios lets
+small-input turns dominate. Rows without `reportVersion` keep their missing
+fields unknown; a missing origin is never a person.
 
-In PostHog Data management, use the event and property descriptions from this
-document. Mark the recommended properties as verified. Keep `clientType`
-visible with its legacy description so old reports remain understandable.
+`feature.used` counts WebSocket requests that start a feature. RPCs are observed in
+the RPC authorization middleware after the request succeeds; dispatched commands
+are recorded by the dispatch handler, which can tell a retry apart.
+[Feature mapping](../../apps/server/src/telemetry/FeatureUsage.ts) allowlists
+the methods and commands, and takes variants only from closed contract enums,
+so paths, ids, and text never reach analytics. Guests of a shared thread have no
+WebSocket connection, so the guest share service records their joins and messages
+itself, with no `surface`.
 
-## Collection and release boundary
+Agent tool events report driver kinds, never instance ids: users name
+instances, so an instance id can identify an account or employer.
+[Provider dimensions](../../apps/server/src/telemetry/ProviderDimensions.ts)
+report a model only when it is a non-custom entry in a vendor catalog. OpenCode,
+Pi, and ACP agents list models from user configuration, such as local Ollama
+tags, so their models stay out. Handoff settings come from closed enums and
+booleans in tool arguments; prompts, titles, and ids are never read. Thread ids
+are used only to look up the threads on each side and never leave the server,
+which is also why tool events carry no per-thread sequence. A handoff to several
+threads, such as `create_threads`, records one `mcp.tool.invoked` per target, each
+repeating the call's outcome and duration, so event counts are not call counts.
 
-Client values are best effort. Invalid values are ignored and never reject a
-connection. Browser clients use user-agent data for broad OS, browser, phone,
-and tablet groups. They do not infer CPU architecture or an exact OS version
-from `navigator.platform`.
+## Delivery
 
-This change does not collect URLs, tokens, prompts, IP addresses, or
-user-assigned device names. It measures authenticated product use. It does not
-measure a person who visits the hosted app without connecting to a server.
+The server sends batches to the ingest endpoint at `ingest.t3.codes`, which archives
+every event and forwards some of them to PostHog. A send can fail after the endpoint
+has stored the batch, so every retry is a copy.
+[Delivery](../../apps/server/src/telemetry/AnalyticsService.ts) gives each event a
+uuid when it is recorded (the endpoint rejects events without one), backs off after
+a failed send, and drops a batch after a few tries. Without these limits, one stuck
+batch was sent every second for days.
 
-The new fields start with the first client and server release that contains
-this metadata path. Historical events cannot reliably identify the client OS,
-hosted web use, device type, or connection method when the old client did not
-send those fields. Reports must treat missing values as pre-release or older
-client data instead of backfilling them from server fields.
+## Collection boundary
+
+Keep analytics payloads to product metadata and normalized measurements. Do not
+send prompts, authentication material, raw provider payloads, user-assigned device
+names, or conversation identifiers. Client metadata is best effort; invalid values
+must not reject a connection. PostHog person profiles remain disabled.
+
+Dev-runner servers and the CI archive smoke test turn telemetry off, which also
+stops relay tracing, because each would count as a new install. Set
+`T3CODE_TELEMETRY_ENABLED=true` to test analytics or relay tracing from a dev server.

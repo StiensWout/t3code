@@ -1,73 +1,108 @@
+import { Button } from "../../components/ui/Button";
 import type {
-  ApprovalRequestId,
   ProviderApprovalDecision,
   ProviderApprovalOption,
+  RuntimeRequestId,
 } from "@t3tools/contracts";
+import {
+  FULL_ACCESS_OVERRIDE_QUESTION,
+  fullAccessOverrideExplanation,
+} from "@t3tools/client-runtime/state/thread-requests";
+import { useState } from "react";
 import { Pressable, View } from "react-native";
 
-import { AppText as Text } from "../../components/AppText";
+import { AppText as Text } from "../../components/ui/AppText";
 import type { PendingApproval } from "../../lib/threadActivity";
 
 export interface PendingApprovalCardProps {
+  readonly canOperateThread: boolean;
   readonly approval: PendingApproval;
-  readonly respondingApprovalId: ApprovalRequestId | null;
+  readonly respondingApprovalId: RuntimeRequestId | null;
   readonly onRespond: (
-    requestId: ApprovalRequestId,
+    requestId: RuntimeRequestId,
     decision: ProviderApprovalDecision,
   ) => Promise<unknown>;
 }
 
-const DEFAULT_APPROVAL_OPTIONS = [
+const DEFAULT_APPROVAL_OPTIONS: ReadonlyArray<ProviderApprovalOption> = [
   { decision: "accept", label: "Allow once" },
   { decision: "acceptForSession", label: "Allow session" },
   { decision: "decline", label: "Decline" },
-] satisfies ReadonlyArray<ProviderApprovalOption>;
+];
 
 export function PendingApprovalCard(props: PendingApprovalCardProps) {
-  const options = props.approval.options ?? DEFAULT_APPROVAL_OPTIONS;
-  // Opaque for the same reason as PendingUserInputCard: nothing blurs the feed
-  // behind this card, so a translucent surface bleeds messages through it.
+  const options: ReadonlyArray<ProviderApprovalOption> =
+    props.approval.options ?? DEFAULT_APPROVAL_OPTIONS;
+  const warning = options.find((option) => option.warning)?.warning;
+  const canRespond = props.approval.responseCapability === "live";
+  const disabled = !canRespond || props.respondingApprovalId === props.approval.requestId;
+  const [explanationOpen, setExplanationOpen] = useState(false);
   return (
-    <View className="gap-2.5 rounded-[20px] border border-adaptive-neutral-200-white-a6 bg-adaptive-neutral-100-900 p-4">
-      <Text className="font-t3-bold text-2xs uppercase tracking-[1.1px] text-adaptive-sky-700-300">
+    <View className="gap-2.5 rounded-[20px] border border-border bg-card-alt p-4">
+      <Text className="font-t3-bold text-2xs uppercase tracking-[1.1px] text-foreground-secondary">
         Approval needed
       </Text>
-      <Text className="font-t3-bold text-lg text-adaptive-neutral-950-50">
+      <Text className="font-t3-bold text-lg text-foreground">
         {props.approval.appName ?? props.approval.requestKind}
       </Text>
       {props.approval.detail ? (
-        <Text className="font-sans text-sm leading-normal text-adaptive-neutral-600-400">
+        <Text className="font-sans text-sm leading-normal text-foreground-secondary">
           {props.approval.detail}
         </Text>
       ) : null}
-      <View className="flex-row flex-wrap gap-2.5">
-        {options.map((option) => (
-          <Pressable
-            key={option.decision}
-            className={`items-center justify-center rounded-[14px] px-3.5 py-3 ${
-              option.decision === "accept"
-                ? "bg-blue-500"
-                : option.decision === "decline"
-                  ? "bg-adaptive-rose-100-500-a18"
-                  : "bg-adaptive-neutral-200-800"
-            }`}
-            disabled={props.respondingApprovalId === props.approval.requestId}
-            onPress={() => void props.onRespond(props.approval.requestId, option.decision)}
-          >
-            <Text
-              className={`text-sm ${
-                option.decision === "accept"
-                  ? "font-t3-extrabold text-white"
-                  : option.decision === "decline"
-                    ? "font-t3-bold text-adaptive-rose-700-300"
-                    : "font-t3-bold text-adaptive-neutral-950-50"
-              }`}
-            >
-              {option.label}
+      {props.approval.reason ? (
+        <Text className="font-sans text-xs leading-normal text-warning-foreground">
+          {props.approval.reason}
+        </Text>
+      ) : null}
+      {props.approval.fullAccessOverride ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ expanded: explanationOpen }}
+          onPress={() => setExplanationOpen((open) => !open)}
+        >
+          <Text className="font-t3-bold text-xs text-foreground-secondary underline">
+            {FULL_ACCESS_OVERRIDE_QUESTION}
+          </Text>
+          {explanationOpen ? (
+            <Text className="mt-1 font-sans text-xs leading-normal text-foreground-muted">
+              {fullAccessOverrideExplanation(props.approval.fullAccessOverride)}
             </Text>
-          </Pressable>
+          ) : null}
+        </Pressable>
+      ) : null}
+      {!canRespond ? (
+        <Text className="font-sans text-sm leading-5 text-foreground-muted">
+          The provider process for this request is no longer available. Interrupt or restart the run
+          to continue.
+        </Text>
+      ) : null}
+      {warning ? (
+        <Text className="font-sans text-xs leading-normal text-warning-foreground">{warning}</Text>
+      ) : null}
+      <View className="gap-2">
+        {options.map((option) => (
+          <Button
+            key={option.decision}
+            label={option.label}
+            tone={
+              option.decision === "accept"
+                ? "primary"
+                : option.decision === "decline"
+                  ? "danger"
+                  : "secondary"
+            }
+            disabled={disabled || !props.canOperateThread}
+            onPress={() => void props.onRespond(props.approval.requestId, option.decision)}
+            fullWidth
+          />
         ))}
       </View>
+      {!props.canOperateThread ? (
+        <Text className="font-sans text-xs text-foreground-muted">
+          This connection cannot respond to approvals.
+        </Text>
+      ) : null}
     </View>
   );
 }
