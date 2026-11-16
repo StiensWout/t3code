@@ -24,7 +24,7 @@ function sameMarks(left: readonly RichTextMark[], right: readonly RichTextMark[]
 }
 
 // Brackets, quotes, commas, and Markdown delimiters end a URL or path token; a lone `~` does not.
-const PATH_TOKEN = /(?:[\p{L}\p{N}_/.:@%+=&?#-]|(?<!~)~(?!~))+/gu;
+const PATH_TOKEN = /(?:[\p{L}\p{M}\p{N}_/.:@%+=&?#-]|(?<!~)~(?!~))+/gu;
 const FILE_EXTENSION = /^\.[a-z][a-z0-9]*(?::\d+){0,2}$/i;
 // `_yes_/_no_`: each side of a slash is its own emphasis span, so the word is not a path.
 const EMPHASIS_ALTERNATIVES = /^_[^/]+_(?:\/_[^/]+_)+$/;
