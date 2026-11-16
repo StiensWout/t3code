@@ -398,6 +398,11 @@ export default defineConfig({
         },
       },
       {
+        // Standalone node:test repro, kept exactly as the bug report wrote it.
+        files: ["apps/web/src/composer-rich-text.unicode-filenames.test.mts"],
+        rules: { "t3code/namespace-node-imports": "off" },
+      },
+      {
         files: ["apps/server/src/mcp/McpHttpServer.ts"],
         rules: { "t3code/no-raw-mcp-registration": "off" },
       },
