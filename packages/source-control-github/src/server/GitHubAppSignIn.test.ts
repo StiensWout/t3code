@@ -254,6 +254,40 @@ describe("GitHubAppSignIn", () => {
     }).pipe(Effect.provide(layer));
   });
 
+  it.effect("keeps the newer sign-in when an older device-code request finishes late", () => {
+    const requested = Deferred.makeUnsafe<void>();
+    const released = Deferred.makeUnsafe<void>();
+    let starts = 0;
+    let responses = 0;
+    const { layer } = harness({
+      gate: (sent) => {
+        if (sent.path !== "/login/device/code" || ++starts !== 1) return Effect.void;
+        return Deferred.succeed(requested, undefined).pipe(
+          Effect.andThen(Deferred.await(released)),
+        );
+      },
+      handle: (sent) =>
+        sent.path === "/login/device/code"
+          ? { body: { ...deviceCode, device_code: ++responses === 1 ? "device-2" : "device-1" } }
+          : {
+              body:
+                sent.form.get("device_code") === "device-2"
+                  ? { access_token: "ghu_newer" }
+                  : { error: "authorization_pending" },
+            },
+    });
+    return Effect.gen(function* () {
+      const signIn = yield* GitHubAppSignIn.GitHubAppSignIn;
+      const first = yield* Effect.forkChild(Effect.exit(signIn.start("github.com")));
+      yield* Deferred.await(requested);
+      yield* signIn.start("github.com");
+      yield* Deferred.succeed(released, undefined);
+      yield* Fiber.join(first);
+      yield* TestClock.adjust("5 seconds");
+      expect(JSON.parse((yield* savedSignIns)["github.com"] ?? "{}").accessToken).toBe("ghu_newer");
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect("refuses hosts the app is not registered on", () => {
     const { layer, requests } = harness({ handle: () => ({ body: {} }) });
     return Effect.gen(function* () {
