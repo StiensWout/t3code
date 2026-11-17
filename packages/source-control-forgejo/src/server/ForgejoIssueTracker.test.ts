@@ -281,7 +281,7 @@ describe("ForgejoIssueTracker", () => {
               if (route === "repos/acme/web/labels") return output(encode(ISSUE.labels));
               if (route === "orgs/acme/labels") return output(encode([organizationLabel]));
               if (route === "repos/acme/web/issues/42/labels") {
-                expect(input.stdin).toBe(encode({ labels: [3, 9] }));
+                expect(input.stdin).toBe(encode({ labels: [9, 3] }));
                 savedIssue = { ...savedIssue, labels: [organizationLabel, ...ISSUE.labels] };
                 return output(encode(savedIssue.labels));
               }
@@ -386,6 +386,8 @@ describe("ForgejoIssueTracker", () => {
         calls.push([input.method ?? "GET", input.path, input.body]);
         const [route] = input.path.split("?");
         if (route === "user") return { stdout: encode({ login: "julius" }) };
+        if (route === "repos/acme/web/issues/42")
+          return { stdout: encode({ ...ISSUE, labels: [] }) };
         if (route === "repos/acme/web/issues/42/comments") {
           return {
             stdout: encode(
@@ -426,6 +428,7 @@ describe("ForgejoIssueTracker", () => {
       );
       expect(error.reason).toBe("failed");
       expect(calls.map(([method, path]) => `${method} ${path.split("?")[0]}`)).toEqual([
+        "GET repos/acme/web/issues/42",
         "GET repos/acme/web/labels",
         "GET repos/acme/web/labels",
         "GET orgs/acme/labels",

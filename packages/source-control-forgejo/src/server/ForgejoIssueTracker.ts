@@ -258,59 +258,65 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
     });
 
     /**
-     * Labels are written by id, so names are resolved against the repository's own and then its
-     * organization's, page by page until each is found. A name neither has refuses the write
-     * rather than dropping it.
+     * Labels are written by id, so names are resolved against the labels the issue already carries,
+     * then the repository's own and then its organization's, page by page until each is found. A
+     * name none has refuses the write rather than dropping it.
      */
     const labelIds = Effect.fn("ForgejoIssueTracker.labelIds")(function* (
       target: Target,
       operation: string,
       names: ReadonlyArray<string>,
+      carried: ReadonlyArray<typeof ForgejoLabel.Type> = [],
     ) {
       const ids = new Map<string, number>();
+      for (const label of carried) {
+        if (names.includes(label.name)) ids.set(label.name, label.id);
+      }
       const wanted = new Set(names).size;
-      const repository = yield* cli
-        .resolveRepository({
-          cwd: target.cwd,
-          host: target.host,
-          repository: target.scope,
-        })
-        .pipe(
-          Effect.mapError(
-            (error) =>
-              new IssueTrackerError({
-                tracker: KIND,
-                operation,
-                reason: reasonFor(error),
-                detail: error.detail,
-                cause: error,
-              }),
-          ),
-        );
-      const owner = repository.repository.split("/")[0] ?? "";
-      const listings = [
-        `${repoPath(target.scope)}/labels`,
-        `orgs/${encodeURIComponent(owner)}/labels`,
-      ];
-      for (const path of listings) {
-        for (let page = 1; ids.size < wanted && page <= MAX_PAGES; page++) {
-          const next = yield* readPage(target, operation, path, page, ForgejoLabel).pipe(
-            // A repository owned by a user has no organization labels to look in.
-            Effect.catchIf(
-              (error) => path !== listings[0] && error.reason === "not-found",
-              () => Effect.succeed({ rows: [], nextCursor: null }),
+      if (ids.size < wanted) {
+        const repository = yield* cli
+          .resolveRepository({
+            cwd: target.cwd,
+            host: target.host,
+            repository: target.scope,
+          })
+          .pipe(
+            Effect.mapError(
+              (error) =>
+                new IssueTrackerError({
+                  tracker: KIND,
+                  operation,
+                  reason: reasonFor(error),
+                  detail: error.detail,
+                  cause: error,
+                }),
             ),
           );
-          for (const label of next.rows) {
-            if (names.includes(label.name) && !ids.has(label.name)) ids.set(label.name, label.id);
+        const owner = repository.repository.split("/")[0] ?? "";
+        const listings = [
+          `${repoPath(target.scope)}/labels`,
+          `orgs/${encodeURIComponent(owner)}/labels`,
+        ];
+        for (const path of listings) {
+          for (let page = 1; ids.size < wanted && page <= MAX_PAGES; page++) {
+            const next = yield* readPage(target, operation, path, page, ForgejoLabel).pipe(
+              // A repository owned by a user has no organization labels to look in.
+              Effect.catchIf(
+                (error) => path !== listings[0] && error.reason === "not-found",
+                () => Effect.succeed({ rows: [], nextCursor: null }),
+              ),
+            );
+            for (const label of next.rows) {
+              if (names.includes(label.name) && !ids.has(label.name)) ids.set(label.name, label.id);
+            }
+            if (next.nextCursor === null) break;
           }
-          if (next.nextCursor === null) break;
         }
       }
       if (names.some((name) => !ids.has(name))) {
         return yield* refused(operation, "Forgejo found no label by one of the names given.");
       }
-      return [...ids.values()];
+      return [...new Set(names)].flatMap((name) => ids.get(name) ?? []);
     });
 
     /** `/comments` takes no page and answers with every comment, so the pages are cut here. */
@@ -546,36 +552,39 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
           ),
         ),
 
-      update: (input) =>
-        Effect.all([
-          issueTarget("update", input),
-          // Resolved before anything is written, so an unknown label changes nothing.
-          input.labels === undefined ? Effect.void : labelIds(input, "update", input.labels),
-        ]).pipe(
-          Effect.flatMap(([{ path }, labels]) =>
-            Effect.all([
-              input.title === undefined && input.body === undefined && input.assignees === undefined
-                ? Effect.void
-                : write(input, "update", {
-                    path,
-                    method: "PATCH",
-                    body: {
-                      ...(input.title === undefined ? {} : { title: input.title }),
-                      ...(input.body === undefined ? {} : { body: input.body }),
-                      ...(input.assignees === undefined ? {} : { assignees: input.assignees }),
-                    },
-                  }),
-              labels === undefined
-                ? Effect.void
-                : write(input, "update", {
-                    path: `${path}/labels`,
-                    method: "PUT",
-                    body: { labels },
-                  }),
-            ]),
-          ),
-          Effect.asVoid,
-        ),
+      update: Effect.fn("ForgejoIssueTracker.update")(function* (input) {
+        const { path } = yield* issueTarget("update", input);
+        // Resolved before anything is written, so an unknown label changes nothing.
+        const labels =
+          input.labels === undefined
+            ? undefined
+            : yield* labelIds(
+                input,
+                "update",
+                input.labels,
+                (yield* getIssue(input, "update", path)).labels ?? [],
+              );
+        yield* Effect.all([
+          input.title === undefined && input.body === undefined && input.assignees === undefined
+            ? Effect.void
+            : write(input, "update", {
+                path,
+                method: "PATCH",
+                body: {
+                  ...(input.title === undefined ? {} : { title: input.title }),
+                  ...(input.body === undefined ? {} : { body: input.body }),
+                  ...(input.assignees === undefined ? {} : { assignees: input.assignees }),
+                },
+              }),
+          labels === undefined
+            ? Effect.void
+            : write(input, "update", {
+                path: `${path}/labels`,
+                method: "PUT",
+                body: { labels },
+              }),
+        ]);
+      }),
 
       setState: (input) => {
         const wanted = ISSUE_STATES.find((state) => state.name === input.state);
