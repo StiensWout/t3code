@@ -210,6 +210,29 @@ describe("ForgejoIssueTracker", () => {
     }),
   );
 
+  it.effect("keeps a label the issue carries when its organization's labels cannot be listed", () =>
+    Effect.gen(function* () {
+      const organizationLabel = { id: 9, name: "security", color: "ff0000" };
+      const puts: unknown[] = [];
+      const api = yield* tracker((input) => {
+        const [route] = input.path.split("?");
+        if (route?.startsWith("orgs/")) throw new Error("organization labels are not listable");
+        if (route === "repos/acme/web/labels") return { stdout: encode(ISSUE.labels) };
+        if (route === "repos/acme/web/issues/42") {
+          return { stdout: encode({ ...ISSUE, labels: [organizationLabel] }) };
+        }
+        if (route === "repos/acme/web/issues/42/labels" && input.method === "PUT") {
+          puts.push(input.body);
+          return { stdout: encode([organizationLabel, ...ISSUE.labels]) };
+        }
+        return answer(input.path);
+      });
+      const target = { cwd: "/w", host: "forgejo.test:3000", scope: "acme/web", key: "42" };
+      yield* api.update!({ ...target, labels: ["security", "bug"] });
+      expect(puts).toEqual([{ labels: [9, 3] }]);
+    }),
+  );
+
   it.effect("retains organization labels when the server is mounted under a path", () => {
     const organizationLabel = { id: 9, name: "security", color: "ff0000" };
     let savedIssue = { ...ISSUE, labels: [organizationLabel] };
