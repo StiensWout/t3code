@@ -2,6 +2,7 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -285,6 +286,11 @@ describe("GitHubAppSignIn", () => {
       yield* Fiber.join(first);
       yield* TestClock.adjust("5 seconds");
       expect(JSON.parse((yield* savedSignIns)["github.com"] ?? "{}").accessToken).toBe("ghu_newer");
+      const olderStartError = Exit.findErrorOption(yield* Fiber.join(first));
+      expect(Option.getOrUndefined(olderStartError)).toMatchObject({
+        reason: "failed",
+        detail: "A newer sign-in replaced this one.",
+      });
     }).pipe(Effect.provide(layer));
   });
 
