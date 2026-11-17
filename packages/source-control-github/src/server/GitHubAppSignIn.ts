@@ -96,6 +96,7 @@ export class GitHubAppSignIn extends Context.Service<
 >()("@t3tools/source-control-github/server/GitHubAppSignIn") {}
 
 interface PendingSignIn {
+  readonly attempt: number;
   readonly deferred: Deferred.Deferred<void, SourceControlSignInError>;
   readonly fiber: Fiber.Fiber<boolean>;
 }
@@ -387,7 +388,7 @@ export const make = Effect.gen(function* () {
           `${GitHubClient.APP_SIGN_IN.appName} only signs in to ${GitHubClient.APP_SIGN_IN.hosts.join(", ")}. Use a token or the GitHub CLI for ${host}.`,
         );
       }
-      // Claimed before the request so a slower, older request cannot replace this sign-in.
+      // Number requests before sending them so response order cannot reverse sign-in order.
       const attempt = yield* Ref.modify(pending, (current) => {
         const next = (current.get(host)?.attempt ?? 0) + 1;
         return [
@@ -434,10 +435,12 @@ export const make = Effect.gen(function* () {
       );
       const registered = yield* Ref.modify(pending, (current) => {
         const entry = current.get(host);
-        if (entry?.attempt !== attempt) return [Option.none(), current] as const;
+        if (entry === undefined || (entry.signIn?.attempt ?? 0) > attempt) {
+          return [Option.none(), current] as const;
+        }
         return [
           Option.some(entry.signIn),
-          new Map(current).set(host, { attempt, signIn: { deferred, fiber } }),
+          new Map(current).set(host, { ...entry, signIn: { attempt, deferred, fiber } }),
         ] as const;
       });
       if (Option.isNone(registered)) {

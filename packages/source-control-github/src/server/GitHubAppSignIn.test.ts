@@ -288,6 +288,58 @@ describe("GitHubAppSignIn", () => {
     }).pipe(Effect.provide(layer));
   });
 
+  it.effect.each(["http", "error-body", "interrupted"] as const)(
+    "keeps the older sign-in when a newer device-code request fails (%s)",
+    (failure) => {
+      const requested = Deferred.makeUnsafe<void>();
+      const released = Deferred.makeUnsafe<void>();
+      const newerRequested = Deferred.makeUnsafe<void>();
+      let starts = 0;
+      let responses = 0;
+      const { layer } = harness({
+        gate: (sent) => {
+          if (sent.path !== "/login/device/code") return Effect.void;
+          if (++starts === 1) {
+            return Deferred.succeed(requested, undefined).pipe(
+              Effect.andThen(Deferred.await(released)),
+            );
+          }
+          return Deferred.succeed(newerRequested, undefined).pipe(
+            Effect.andThen(failure === "interrupted" ? Effect.never : Effect.void),
+          );
+        },
+        handle: (sent) => {
+          if (sent.path !== "/login/device/code") {
+            return { body: { access_token: "ghu_older" } };
+          }
+          if (++responses === 1 && failure !== "interrupted") {
+            return failure === "http"
+              ? { status: 502, body: {} }
+              : { body: { error: "unauthorized_client" } };
+          }
+          return { body: deviceCode };
+        },
+      });
+      return Effect.gen(function* () {
+        const signIn = yield* GitHubAppSignIn.GitHubAppSignIn;
+        const first = yield* Effect.forkChild(signIn.start("github.com"));
+        yield* Deferred.await(requested);
+        if (failure === "interrupted") {
+          const newer = yield* Effect.forkChild(signIn.start("github.com"));
+          yield* Deferred.await(newerRequested);
+          yield* Fiber.interrupt(newer);
+        } else {
+          expect((yield* Effect.flip(signIn.start("github.com"))).reason).toBe("failed");
+        }
+        yield* Deferred.succeed(released, undefined);
+        expect((yield* Fiber.join(first)).userCode).toBe(deviceCode.user_code);
+        yield* TestClock.adjust("5 seconds");
+        yield* signIn.wait("github.com");
+        expect(yield* signIn.token("github.com")).toEqual(Option.some("ghu_older"));
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
   it.effect("refuses hosts the app is not registered on", () => {
     const { layer, requests } = harness({ handle: () => ({ body: {} }) });
     return Effect.gen(function* () {
