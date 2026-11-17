@@ -159,7 +159,11 @@ export function groupIssues(
   );
 }
 
-/** The scopes whose labels and people a list filter offers, each reached through one project. */
+/**
+ * The scopes whose labels and people a list filter offers, each reached through one project.
+ * Scopes are per environment: each reads with its own credentials, so two environments' Linear
+ * teams keyed ENG can be different workspaces.
+ */
 export function issueFilterScopes(
   held: ReadonlyMap<EnvironmentId, HeldIssuePage>,
   projects: ReadonlyArray<EnvironmentProject>,
@@ -180,7 +184,10 @@ export function issueFilterScopes(
       if (!tracker?.configured || tracker.capabilities === null) continue;
       if (
         scopes.some(
-          (s) => s.input.scope.toLowerCase() === scope.toLowerCase() && s.input.host === host,
+          (s) =>
+            s.environmentId === environmentId &&
+            s.input.scope.toLowerCase() === scope.toLowerCase() &&
+            s.input.host === host,
         )
       )
         continue;
@@ -209,6 +216,7 @@ export function issueFilterScopes(
       if (
         scopes.some(
           (s) =>
+            s.environmentId === environmentId &&
             s.input.scope.toLowerCase() === input.scope.toLowerCase() &&
             s.input.host?.toLowerCase() === host,
         )
