@@ -47,7 +47,7 @@ function answer(overrides: Partial<IssueListResult>): IssueListResult {
 }
 
 function hold(first: IssueListResult) {
-  return holdIssuePages([[environmentId, first]], new Map()).get(environmentId)!;
+  return holdIssuePages([[environmentId, first]], new Map(), { state: "open" }).get(environmentId)!;
 }
 
 describe("continueIssuePage", () => {
@@ -220,6 +220,7 @@ describe("groupIssues", () => {
         ],
       ],
       new Map(),
+      { state: "open" },
     );
     const [group] = groupIssues(held, "", []);
     expect(group!.rows.map((row) => row.displayKey)).toEqual(["#1", "#2"]);
@@ -253,6 +254,7 @@ describe("groupIssues", () => {
         ["env-2" as EnvironmentId, inWorkspace("globex")],
       ],
       new Map(),
+      { state: "open" },
     );
     const [group] = groupIssues(held, "", []);
     expect(group!.rows.map((row) => row.url)).toEqual([

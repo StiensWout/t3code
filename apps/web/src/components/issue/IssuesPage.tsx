@@ -219,7 +219,7 @@ export function IssuesPage() {
   useLiveRefresh(list.refresh, { key: JSON.stringify(targets) });
 
   const [pages, setPages] = useState<ReadonlyMap<EnvironmentId, HeldIssuePage>>(new Map());
-  const held = holdIssuePages(list.answers, pages);
+  const held = holdIssuePages(list.answers, pages, listInput);
   const loadPage = useAtomCommand(issueEnvironment.listPage, { reportFailure: false });
   const [loadingMore, setLoadingMore] = useState<string | null>(null);
   // One tracker group's button carries on that tracker's scopes only.

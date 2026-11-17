@@ -2,6 +2,7 @@ import type {
   EnvironmentId,
   IssueListCursors,
   IssueListEntry,
+  IssueListInput,
   IssueListProjectError,
   IssueListResult,
   IssueListSort,
@@ -10,7 +11,7 @@ import type {
   SourceControlProviderKind,
 } from "@t3tools/contracts";
 
-import { mergeIssueListPage } from "./state/issues.ts";
+import { issueEntryKey, mergeIssueListPage } from "./state/issues.ts";
 import { sourceControlClients } from "./sourceControlClients.ts";
 import type { EnvironmentProject } from "./state/shell.ts";
 
@@ -20,6 +21,8 @@ export interface EnvironmentIssueEntry extends IssueListEntry {
 
 /** Rows from every environment that answered, with any continuation pages laid over them. */
 export interface HeldIssuePage {
+  /** The listing's input as a key, so a refresh of it is told apart from a new listing. */
+  readonly listing: string;
   readonly answer: IssueListResult;
   readonly entries: ReadonlyArray<IssueListEntry>;
   readonly errors: ReadonlyArray<IssueListProjectError>;
@@ -37,29 +40,62 @@ export function issueTrackerKey(tracker: Pick<IssueTrackerSummary, "tracker" | "
   return `${tracker.tracker} ${tracker.host.toLowerCase()}`;
 }
 
-/** Continuations are laid over the first page they continue; a new first page forgets them. */
+/**
+ * Continuations are laid over the first page they continue. A refresh of the same listing
+ * replaces only the first page: the rows and cursors continuations brought stay, so "Load more"
+ * carries on where it was. A different listing forgets them.
+ */
 export function holdIssuePages(
   answers: ReadonlyArray<readonly [EnvironmentId, IssueListResult]>,
   pages: ReadonlyMap<EnvironmentId, HeldIssuePage>,
+  input: IssueListInput,
 ): ReadonlyMap<EnvironmentId, HeldIssuePage> {
+  const listing = JSON.stringify(input);
   const next = new Map<EnvironmentId, HeldIssuePage>();
   for (const [environmentId, answer] of answers) {
     const previous = pages.get(environmentId);
+    if (previous?.answer === answer && previous.listing === listing) {
+      next.set(environmentId, previous);
+      continue;
+    }
+    const fresh: HeldIssuePage = {
+      listing,
+      answer,
+      entries: answer.entries,
+      errors: answer.errors,
+      moreErrors: [],
+      nextCursors: answer.nextCursors,
+      moreFailure: null,
+    };
     next.set(
       environmentId,
-      previous?.answer === answer
-        ? previous
-        : {
-            answer,
-            entries: answer.entries,
-            errors: answer.errors,
-            moreErrors: [],
-            nextCursors: answer.nextCursors,
-            moreFailure: null,
-          },
+      previous?.listing === listing ? refreshIssuePage(previous, fresh) : fresh,
     );
   }
   return next;
+}
+
+/** A new first page under the rows and cursors that continuations of the old one brought. */
+function refreshIssuePage(previous: HeldIssuePage, fresh: HeldIssuePage): HeldIssuePage {
+  const firstPage = new Set(previous.answer.entries.map(issueEntryKey));
+  const continued = previous.entries.filter((entry) => !firstPage.has(issueEntryKey(entry)));
+  // A scope whose cursor moved off the first page's was continued; it keeps where it got to.
+  const old = previous.answer.nextCursors;
+  const held = previous.nextCursors;
+  const nextCursors: Record<string, string> = { ...fresh.nextCursors };
+  for (const key of new Set([...Object.keys(old), ...Object.keys(held)])) {
+    const cursor = held[key];
+    if (cursor === old[key]) continue;
+    if (cursor === undefined) delete nextCursors[key];
+    else nextCursors[key] = cursor;
+  }
+  return {
+    ...fresh,
+    entries: mergeIssueListPage(continued, fresh.answer.entries),
+    errors: [...fresh.answer.errors, ...previous.moreErrors.flatMap((more) => more.errors)],
+    moreErrors: previous.moreErrors,
+    nextCursors,
+  };
 }
 
 /** The cursors of one tracker host, so its "Load more" leaves the other trackers where they are. */
@@ -81,6 +117,7 @@ export function continueIssuePage(
   const moreErrors = page.moreErrors.filter((more) => !more.asked.some((key) => key in asked));
   if (next.errors.length > 0) moreErrors.push({ asked: Object.keys(asked), errors: next.errors });
   return {
+    listing: page.listing,
     answer: page.answer,
     entries: mergeIssueListPage(page.entries, next.entries),
     errors: [...page.answer.errors, ...moreErrors.flatMap((more) => more.errors)],
