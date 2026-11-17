@@ -11,6 +11,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   continueIssuePage,
+  finishIssuePage,
   groupIssues,
   holdIssuePages,
   issueCursorsForHost,
@@ -83,6 +84,75 @@ describe("holdIssuePages", () => {
 
     const kept = holdIssuePages([[environmentId, refreshed]], loaded, listing).get(environmentId)!;
     expect(kept.entries.map((row) => row.title)).toEqual(["Renamed", "Issue 3"]);
+  });
+
+  it.each(["moved", "closed"] as const)(
+    "restarts only the affected repository when a continuation issue is %s",
+    (change) => {
+      const secondRepo = (key: string) =>
+        entry({
+          key,
+          scope: "acme/web",
+          projectId: "web" as ProjectId,
+          url: `https://github.com/acme/web/issues/${key}`,
+        });
+      const firstCursors = { "github.com acme/api": "a2", "github.com acme/web": "w2" };
+      const first = answer({
+        entries: [entry({ key: "1" }), entry({ key: "2" }), secondRepo("5")],
+        nextCursors: firstCursors,
+      });
+      const moved = entry({ key: "4", updatedAt: "2026-10-02T00:00:00.000Z" });
+      const pages = new Map([
+        [
+          environmentId,
+          continueIssuePage(
+            hold(first),
+            answer({
+              entries: [entry({ key: "3" }), entry({ key: "4" }), secondRepo("6")],
+              nextCursors: { "github.com acme/api": "a3", "github.com acme/web": "w3" },
+            }),
+          ),
+        ],
+      ]);
+      const refreshed = answer({
+        ...first,
+        entries: change === "moved" ? [moved, entry({ key: "1" }), secondRepo("5")] : first.entries,
+      });
+      const revisions = new Map(
+        change === "closed" ? [[environmentId, new Map([["github.com acme/api", 1]])]] : [],
+      );
+      const held = holdIssuePages([[environmentId, refreshed]], pages, listing, revisions).get(
+        environmentId,
+      )!;
+      expect(held.entries.map((row) => row.key).sort()).toEqual(
+        change === "moved" ? ["1", "4", "5", "6"] : ["1", "2", "5", "6"],
+      );
+      expect(held.nextCursors).toEqual({
+        "github.com acme/api": "a2",
+        "github.com acme/web": "w3",
+      });
+    },
+  );
+
+  it("forgets loaded rows and rejects a late continuation when switching away and back", () => {
+    const first = answer({
+      entries: [entry({ key: "1" })],
+      nextCursors: { "github.com acme/api": "a2" },
+    });
+    const loaded = continueIssuePage(
+      hold(first),
+      answer({ entries: [entry({ key: "2" })], nextCursors: { "github.com acme/api": "a3" } }),
+    );
+    const switched = holdIssuePages([], new Map([[environmentId, loaded]]), {
+      ...listing,
+      state: "closed",
+    });
+    const returned = holdIssuePages([[environmentId, first]], switched, listing);
+    const late = finishIssuePage(returned, environmentId, loaded, { failure: "rate limited" });
+
+    expect(late.get(environmentId)?.entries.map((row) => row.key)).toEqual(["1"]);
+    expect(late.get(environmentId)?.nextCursors).toEqual({ "github.com acme/api": "a2" });
+    expect(late.get(environmentId)?.moreFailure).toBeNull();
   });
 });
 

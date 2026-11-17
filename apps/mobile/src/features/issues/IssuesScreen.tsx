@@ -1,7 +1,7 @@
 import { useAtom, useAtomValue } from "@effect/atom-react";
 import { LegendList, type LegendListRef } from "@legendapp/list/react-native";
 import {
-  continueIssuePage,
+  finishIssuePage,
   groupIssues,
   holdIssuePages,
   issueFilterScopes,
@@ -158,14 +158,19 @@ export function IssuesScreen(
   const list = useIssueList(targets);
 
   const [pages, setPages] = useState<ReadonlyMap<EnvironmentId, HeldIssuePage>>(new Map());
-  const held = holdIssuePages(list.answers, pages, listInput);
+  const held = holdIssuePages(list.answers, pages, listInput, list.scopeRevisions);
+  if (held !== pages) setPages(held);
+  const refresh = () => {
+    setPages(new Map());
+    list.refresh();
+  };
   const loadPage = useAtomCommand(issueEnvironment.listPage, { reportFailure: false });
   const [loadingMore, setLoadingMore] = useState(false);
   const loading = useRef(false);
   const continuable = [...held].filter(([, page]) => Object.keys(page.nextCursors).length > 0);
   const moreFailure = [...held.values()].find((page) => page.moreFailure)?.moreFailure ?? null;
   const loadMore = async (retry = false) => {
-    if (loading.current || (moreFailure !== null && !retry)) return;
+    if (loading.current || list.isPending || (moreFailure !== null && !retry)) return;
     loading.current = true;
     setLoadingMore(true);
     const loaded = await Promise.all(
@@ -177,21 +182,24 @@ export function IssuesScreen(
         const failure = AsyncResult.isFailure(result) ? squashAtomCommandFailure(result) : null;
         return [
           environmentId,
-          continueIssuePage(
-            page,
-            AsyncResult.isFailure(result)
-              ? {
-                  failure:
-                    failure instanceof Error ? failure.message : m(msg("The next page failed.")),
-                }
-              : result.value,
-          ),
+          page,
+          AsyncResult.isFailure(result)
+            ? {
+                failure:
+                  failure instanceof Error ? failure.message : m(msg("The next page failed.")),
+              }
+            : result.value,
         ] as const;
       }),
     );
     loading.current = false;
     setLoadingMore(false);
-    setPages(new Map([...held, ...loaded]));
+    setPages((current) =>
+      loaded.reduce(
+        (pages, [environmentId, page, next]) => finishIssuePage(pages, environmentId, page, next),
+        current,
+      ),
+    );
   };
 
   const groups = groupIssues(held, query, projects, sort);
@@ -310,7 +318,7 @@ export function IssuesScreen(
         refreshControl={
           <RefreshControl
             refreshing={list.isPending && list.answers.length > 0}
-            onRefresh={list.refresh}
+            onRefresh={refresh}
             // The list already accounts for the navigation header in its content inset.
             progressViewOffset={Platform.OS === "ios" ? 60 : undefined}
           />

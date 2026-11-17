@@ -1,6 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
-  continueIssuePage,
+  finishIssuePage,
   groupIssues,
   holdIssuePages,
   issueCursorsForHost,
@@ -219,35 +219,38 @@ export function IssuesPage() {
   useLiveRefresh(list.refresh, { key: JSON.stringify(targets) });
 
   const [pages, setPages] = useState<ReadonlyMap<EnvironmentId, HeldIssuePage>>(new Map());
-  const held = holdIssuePages(list.answers, pages, listInput);
+  const held = holdIssuePages(list.answers, pages, listInput, list.scopeRevisions);
+  if (held !== pages) setPages(held);
+  const refresh = () => {
+    setPages(new Map());
+    list.refresh();
+  };
   const loadPage = useAtomCommand(issueEnvironment.listPage, { reportFailure: false });
   const [loadingMore, setLoadingMore] = useState<string | null>(null);
   // One tracker group's button carries on that tracker's scopes only.
   const loadMore = async (environmentId: EnvironmentId, host: string) => {
     const page = held.get(environmentId);
     const cursors = page ? issueCursorsForHost(page.nextCursors, host) : {};
-    if (!page || Object.keys(cursors).length === 0 || loadingMore !== null) return;
+    if (!page || Object.keys(cursors).length === 0 || loadingMore !== null || list.isPending)
+      return;
     setLoadingMore(`${environmentId} ${host}`);
     const result = await loadPage({ environmentId, input: { ...listInput, cursors } });
     setLoadingMore(null);
     const failure = result._tag === "Failure" ? squashAtomCommandFailure(result) : null;
-    setPages((current) => {
-      const next = new Map(current);
-      next.set(
+    setPages((current) =>
+      finishIssuePage(
+        current,
         environmentId,
-        continueIssuePage(
-          page,
-          result._tag === "Failure"
-            ? {
-                failure:
-                  failure instanceof Error ? failure.message : m(msg("The next page failed.")),
-              }
-            : result.value,
-          cursors,
-        ),
-      );
-      return next;
-    });
+        page,
+        result._tag === "Failure"
+          ? {
+              failure:
+                failure instanceof Error ? failure.message : m(msg("The next page failed.")),
+            }
+          : result.value,
+        cursors,
+      ),
+    );
   };
 
   // Rows grouped per tracker account, so a tracker that cannot be read says so where its rows
@@ -462,7 +465,7 @@ export function IssuesPage() {
   ) : noneAnswered && list.error ? (
     <PullRequestsUnavailableState
       error={list.error}
-      onRetry={list.refresh}
+      onRetry={refresh}
       refreshing={list.isPending}
     />
   ) : groups.length === 0 ? (
@@ -488,7 +491,7 @@ export function IssuesPage() {
               <Var>{list.error}</Var> Showing the issues that loaded.
             </T>
           </span>
-          <Button size="xs" variant="outline" onClick={list.refresh}>
+          <Button size="xs" variant="outline" onClick={refresh}>
             <T>Retry</T>
           </Button>
         </div>
@@ -570,7 +573,7 @@ export function IssuesPage() {
                     size="sm"
                     variant="ghost-muted"
                     className="self-start"
-                    disabled={loadingMore !== null}
+                    disabled={loadingMore !== null || list.isPending}
                     onClick={() => void loadMore(environmentId, group.tracker.host)}
                   >
                     {loadingMore === `${environmentId} ${group.tracker.host}` ? (
@@ -699,7 +702,7 @@ export function IssuesPage() {
                   size="icon"
                   variant="outline"
                   aria-label={gt("Refresh issues")}
-                  onClick={list.refresh}
+                  onClick={refresh}
                   disabled={list.isPending}
                 >
                   <RefreshIcon size="md" refreshing={list.isPending} />

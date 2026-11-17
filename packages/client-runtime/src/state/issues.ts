@@ -33,6 +33,14 @@ export function issueEntryKey(
   return `${entry.projectId}\u0000${entry.host.toLowerCase()}\u0000${entry.scope.toLowerCase()}\u0000${entry.key}`;
 }
 
+export function issueListScopeKey(host: string, scope: string): string {
+  return `${host.toLowerCase()} ${scope.toLowerCase()}`;
+}
+
+const listScopeRevisions = Atom.family((_environmentId: EnvironmentId) =>
+  Atom.make<ReadonlyMap<string, number>>(new Map()),
+);
+
 /**
  * Lay a continuation page over the rows already held. A page only covers the scopes it was asked
  * to continue, so rows from other scopes stay; a row the page repeats replaces the held one, so a
@@ -174,6 +182,17 @@ export function createIssueEnvironmentAtoms<R, E>(
     { environmentId, input }: { readonly environmentId: EnvironmentId; readonly input: IssueRef },
     registry: AtomRegistry.AtomRegistry,
   ) => Effect.sync(() => registry.refresh(detail({ environmentId, input: detailRef(input) })));
+  const refreshAfterEdit = (
+    target: { readonly environmentId: EnvironmentId; readonly input: IssueRef },
+    registry: AtomRegistry.AtomRegistry,
+  ) =>
+    Effect.sync(() => {
+      // Without a host, invalidate any matching scope in the environment.
+      const key = issueListScopeKey(target.input.host ?? "", target.input.scope);
+      registry.update(listScopeRevisions(target.environmentId), (current) =>
+        new Map(current).set(key, (current.get(key) ?? 0) + 1),
+      );
+    }).pipe(Effect.andThen(refreshDetail(target, registry)));
   return {
     list: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:issues:list",
@@ -182,7 +201,7 @@ export function createIssueEnvironmentAtoms<R, E>(
     }),
     /**
      * A continuation of the listing, run as a command rather than read as a query: a page is
-     * asked for once and laid over the rows held, and a refresh of the first page forgets it.
+     * asked for once and laid over the rows held until that scope needs to start over.
      */
     listPage: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:issues:list-page",
@@ -235,14 +254,14 @@ export function createIssueEnvironmentAtoms<R, E>(
       tag: WS_METHODS.issuesUpdate,
       scheduler: commandScheduler,
       concurrency: serialPerEnvironment,
-      onSuccess: refreshDetail,
+      onSuccess: refreshAfterEdit,
     }),
     setState: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:issues:set-state",
       tag: WS_METHODS.issuesSetState,
       scheduler: commandScheduler,
       concurrency: serialPerEnvironment,
-      onSuccess: refreshDetail,
+      onSuccess: refreshAfterEdit,
     }),
     react: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:issues:react",
@@ -262,12 +281,18 @@ export interface IssueListTarget {
 export interface MergedIssueList {
   /** One answer per environment that has one, in target order. */
   readonly answers: ReadonlyArray<readonly [EnvironmentId, IssueListResult]>;
+  readonly scopeRevisions: ReadonlyMap<EnvironmentId, ReadonlyMap<string, number>>;
   /** The first environment that failed outright; the others may still have answered. */
   readonly error: string | null;
   readonly isPending: boolean;
 }
 
-const NO_ISSUE_LISTS: MergedIssueList = { answers: [], error: null, isPending: false };
+const NO_ISSUE_LISTS: MergedIssueList = {
+  answers: [],
+  scopeRevisions: new Map(),
+  error: null,
+  isPending: false,
+};
 
 /**
  * One listing read across every environment at once: React cannot subscribe to a list of atoms
@@ -282,16 +307,18 @@ export function createMergedIssueListAtoms<E>(
   const family = Atom.family((key: string) =>
     Atom.make((get): MergedIssueList => {
       const answers: Array<readonly [EnvironmentId, IssueListResult]> = [];
+      const scopeRevisions = new Map<EnvironmentId, ReadonlyMap<string, number>>();
       let error: string | null = null;
       let isPending = false;
       for (const target of JSON.parse(key) as ReadonlyArray<IssueListTarget>) {
+        scopeRevisions.set(target.environmentId, get(listScopeRevisions(target.environmentId)));
         const result = get(list(target));
         isPending ||= result.waiting;
         if (result._tag === "Failure" && error === null) error = formatError(result.cause);
         const value = Option.getOrNull(AsyncResult.value(result));
         if (value !== null) answers.push([target.environmentId, value]);
       }
-      return { answers, error, isPending };
+      return { answers, scopeRevisions, error, isPending };
     }).pipe(Atom.withLabel(`issues:merged-list:${key}`)),
   );
   const refresh = (
