@@ -56,7 +56,14 @@ describe("holdIssuePages", () => {
     const cursors = { "github.com acme/web": "w2" };
     const first = answer({ entries: [entry({ key: "1" })], nextCursors: cursors });
     const loaded = new Map([
-      [environmentId, continueIssuePage(hold(first), answer({ entries: [entry({ key: "3" })] }))],
+      [
+        environmentId,
+        // An older read of #1 came along with the continuation.
+        continueIssuePage(
+          hold(first),
+          answer({ entries: [entry({ key: "1" }), entry({ key: "3" })] }),
+        ),
+      ],
     ]);
     const refreshed = answer({
       entries: [entry({ key: "1", title: "Renamed" })],

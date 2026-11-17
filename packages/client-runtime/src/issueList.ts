@@ -2,6 +2,7 @@ import type {
   EnvironmentId,
   IssueListCursors,
   IssueListEntry,
+  IssueListInput,
   IssueListProjectError,
   IssueListResult,
   IssueListSort,
@@ -29,34 +30,61 @@ export interface HeldIssuePage {
     readonly errors: ReadonlyArray<IssueListProjectError>;
   }>;
   readonly nextCursors: IssueListCursors;
-  /** Why the last "Load more" failed, until a retry succeeds or a new first page arrives. */
+  /** Why the last "Load more" failed, until a retry succeeds or another listing is asked. */
   readonly moreFailure: string | null;
+  /** The listing these pages answer, as `JSON.stringify` of its input. */
+  readonly listing: string;
+  /** Every continuation laid over `answer`, so a refreshed first page gets them again. */
+  readonly continuations: ReadonlyArray<IssueContinuation>;
+}
+
+interface IssueContinuation {
+  readonly next: IssueListResult | { readonly failure: string };
+  readonly asked: IssueListCursors;
 }
 
 export function issueTrackerKey(tracker: Pick<IssueTrackerSummary, "tracker" | "host">): string {
   return `${tracker.tracker} ${tracker.host.toLowerCase()}`;
 }
 
-/** Continuations are laid over the first page they continue; a new first page forgets them. */
+/**
+ * Continuations are laid over the first page they continue. A refresh of the same listing lays
+ * them over the new first page, so rows loaded further down stay; another listing forgets them.
+ */
 export function holdIssuePages(
   answers: ReadonlyArray<readonly [EnvironmentId, IssueListResult]>,
   pages: ReadonlyMap<EnvironmentId, HeldIssuePage>,
+  input: IssueListInput,
 ): ReadonlyMap<EnvironmentId, HeldIssuePage> {
+  const listing = JSON.stringify(input);
   const next = new Map<EnvironmentId, HeldIssuePage>();
   for (const [environmentId, answer] of answers) {
     const previous = pages.get(environmentId);
+    if (previous?.answer === answer && previous.listing === listing) {
+      next.set(environmentId, previous);
+      continue;
+    }
+    const first: HeldIssuePage = {
+      answer,
+      entries: answer.entries,
+      errors: answer.errors,
+      moreErrors: [],
+      nextCursors: answer.nextCursors,
+      moreFailure: null,
+      listing,
+      continuations: [],
+    };
+    const continuations = previous?.listing === listing ? previous.continuations : [];
+    const held = continuations.reduce(
+      (page, more) => continueIssuePage(page, more.next, more.asked),
+      first,
+    );
+    // The first page is the newest read, so its rows win over older continuation copies.
     next.set(
       environmentId,
-      previous?.answer === answer
-        ? previous
-        : {
-            answer,
-            entries: answer.entries,
-            errors: answer.errors,
-            moreErrors: [],
-            nextCursors: answer.nextCursors,
-            moreFailure: null,
-          },
+      held === first
+        ? first
+        : { ...held, entries: mergeIssueListPage(held.entries, answer.entries) },
     );
   }
   return next;
@@ -77,7 +105,8 @@ export function continueIssuePage(
   next: IssueListResult | { readonly failure: string },
   asked: IssueListCursors = page.nextCursors,
 ): HeldIssuePage {
-  if ("failure" in next) return { ...page, moreFailure: next.failure };
+  const continuations = [...page.continuations, { next, asked }];
+  if ("failure" in next) return { ...page, moreFailure: next.failure, continuations };
   const moreErrors = page.moreErrors.filter((more) => !more.asked.some((key) => key in asked));
   if (next.errors.length > 0) moreErrors.push({ asked: Object.keys(asked), errors: next.errors });
   return {
@@ -90,6 +119,8 @@ export function continueIssuePage(
       ...next.nextCursors,
     },
     moreFailure: null,
+    listing: page.listing,
+    continuations,
   };
 }
 
