@@ -100,7 +100,7 @@ describe("video thumbnails", () => {
     expect(first.release).toHaveBeenCalledTimes(1);
   });
 
-  it("finishes a started extraction after its reader leaves so a re-signed URL reuses it", async () => {
+  it("finishes a started extraction after its reader leaves so the next reader of its URL reuses it", async () => {
     const started = Promise.withResolvers<void>();
     const replaced = Promise.withResolvers<void>();
     const first = player();
@@ -114,7 +114,7 @@ describe("video thumbnails", () => {
     const request = thumbnails.loadVideoThumbnail("video", async () => file, controller.signal);
     await started.promise;
     controller.abort();
-    const resigned = thumbnails.loadVideoThumbnail(
+    const reread = thumbnails.loadVideoThumbnail(
       "video",
       async () => source(),
       new AbortController().signal,
@@ -122,7 +122,7 @@ describe("video thumbnails", () => {
     replaced.resolve();
     first.attach();
     expect(await request).toBe(frame);
-    expect(await resigned).toBe(frame);
+    expect(await reread).toBe(frame);
     expect(mocks.createPlayer).toHaveBeenCalledTimes(1);
     expect(first.release).toHaveBeenCalledTimes(1);
     expect(file.dispose).toHaveBeenCalledTimes(1);

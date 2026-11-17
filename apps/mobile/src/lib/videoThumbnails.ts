@@ -2,12 +2,14 @@ import type { VideoThumbnail } from "expo-video";
 
 import type { AttachmentPreviewFile } from "./attachmentDownload";
 
-const thumbnails = new Map<string, VideoThumbnail>();
+// A frame is reused only for the URL it was decoded from: a file regenerated at the same path
+// keeps its key but is reauthorized to a new URL. Renewal re-signs it too, at most every 30 min.
+const thumbnails = new Map<string, { readonly uri: string; readonly thumbnail: VideoThumbnail }>();
 const MAX_CACHED_THUMBNAILS = 32;
 let pending: Promise<unknown> = Promise.resolve();
 
 export function cachedVideoThumbnail(key: string): VideoThumbnail | null {
-  return thumbnails.get(key) ?? null;
+  return thumbnails.get(key)?.thumbnail ?? null;
 }
 
 async function extractFrame(uri: string) {
@@ -56,23 +58,20 @@ export function loadVideoThumbnail(
   signal: AbortSignal,
 ): Promise<VideoThumbnail | null> {
   if (signal.aborted) return Promise.resolve(null);
-  const cached = cachedVideoThumbnail(key);
-  if (cached) return Promise.resolve(cached);
   const load = pending
     .then(async () => {
       if (signal.aborted) return null;
-      const cached = cachedVideoThumbnail(key);
-      if (cached) return cached;
-
       const source = await resolveSource(signal);
       if (!source) return null;
       try {
+        const cached = thumbnails.get(key);
+        if (cached?.uri === source.uri) return cached.thumbnail;
         if (signal.aborted) return null;
         // A started extraction finishes even if its reader leaves: its requests are already in
-        // flight, and a re-signed URL for the same video replaces the reader, not the frame.
+        // flight, and a later reader of the same URL reuses the frame.
         const thumbnail = await extractFrame(source.uri);
         if (!thumbnail) return null;
-        thumbnails.set(key, thumbnail);
+        thumbnails.set(key, { uri: source.uri, thumbnail });
         if (thumbnails.size > MAX_CACHED_THUMBNAILS) {
           thumbnails.delete(thumbnails.keys().next().value!);
         }
