@@ -56,14 +56,7 @@ describe("holdIssuePages", () => {
     const cursors = { "github.com acme/web": "w2" };
     const first = answer({ entries: [entry({ key: "1" })], nextCursors: cursors });
     const loaded = new Map([
-      [
-        environmentId,
-        // An older read of #1 came along with the continuation.
-        continueIssuePage(
-          hold(first),
-          answer({ entries: [entry({ key: "1" }), entry({ key: "3" })] }),
-        ),
-      ],
+      [environmentId, continueIssuePage(hold(first), answer({ entries: [entry({ key: "3" })] }))],
     ]);
     const refreshed = answer({
       entries: [entry({ key: "1", title: "Renamed" })],
@@ -80,6 +73,16 @@ describe("holdIssuePages", () => {
     }).get(environmentId)!;
     expect(closed.entries.map((row) => row.title)).toEqual(["Renamed"]);
     expect(closed.nextCursors).toEqual(cursors);
+  });
+
+  it("prefers a refreshed first page's row over an older copy in a continuation", () => {
+    const first = answer({ entries: [entry({ key: "1" })], nextCursors: { "github.com x": "c" } });
+    const older = answer({ entries: [entry({ key: "1" }), entry({ key: "3" })] });
+    const loaded = new Map([[environmentId, continueIssuePage(hold(first), older)]]);
+    const refreshed = answer({ entries: [entry({ key: "1", title: "Renamed" })] });
+
+    const kept = holdIssuePages([[environmentId, refreshed]], loaded, listing).get(environmentId)!;
+    expect(kept.entries.map((row) => row.title)).toEqual(["Renamed", "Issue 3"]);
   });
 });
 
