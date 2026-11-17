@@ -156,6 +156,52 @@ function tracker(
 }
 
 describe("ForgejoIssueTracker", () => {
+  it.effect("retains an organization label when updating an issue's title and labels", () =>
+    Effect.gen(function* () {
+      const organizationLabel = { id: 9, name: "security", color: "ff0000" };
+      let savedIssue = { ...ISSUE, labels: [organizationLabel] };
+      const api = yield* tracker((input) => {
+        const [route] = input.path.split("?");
+        if (route === "repos/acme/web") {
+          return {
+            stdout: encode({
+              full_name: "acme/web",
+              owner: { login: "acme", type: "organization" },
+              permissions: { push: true, admin: true },
+            }),
+          };
+        }
+        if (route === "repos/acme/web/labels") return { stdout: encode(ISSUE.labels) };
+        if (route === "orgs/acme/labels") return { stdout: encode([organizationLabel]) };
+        if (route === "repos/acme/web/issues/42") {
+          if (input.method === "PATCH") {
+            const body = input.body as { readonly title?: string };
+            savedIssue = { ...savedIssue, title: body.title ?? savedIssue.title };
+          }
+          return { stdout: encode(savedIssue) };
+        }
+        if (route === "repos/acme/web/issues/42/labels" && input.method === "PUT") {
+          const body = input.body as { readonly labels: ReadonlyArray<number> };
+          savedIssue = {
+            ...savedIssue,
+            labels: [organizationLabel, ...ISSUE.labels].filter((label) =>
+              body.labels.includes(label.id),
+            ),
+          };
+          return { stdout: encode(savedIssue.labels) };
+        }
+        return answer(input.path);
+      });
+      const target = { cwd: "/w", host: "forgejo.test:3000", scope: "acme/web", key: "42" };
+      const before = yield* api.getIssue(target);
+      expect(before.labels.map((label) => label.name)).toEqual(["security"]);
+      yield* api.update!({ ...target, title: "Updated title", labels: ["security", "bug"] });
+      const after = yield* api.getIssue(target);
+      expect(after.title).toBe("Updated title");
+      expect(after.labels.map((label) => label.name)).toEqual(["security", "bug"]);
+    }),
+  );
+
   it.effect("joins the issue, timeline and conversation into the neutral issue shape", () =>
     Effect.gen(function* () {
       const hosts = new Set<string | undefined>();
