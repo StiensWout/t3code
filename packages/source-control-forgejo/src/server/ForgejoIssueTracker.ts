@@ -269,7 +269,25 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
     ) {
       const ids = new Map<string, number>();
       const wanted = new Set(names).size;
-      const owner = target.scope.split("/")[0] ?? "";
+      const repository = yield* cli
+        .resolveRepository({
+          cwd: target.cwd,
+          host: target.host,
+          repository: target.scope,
+        })
+        .pipe(
+          Effect.mapError(
+            (error) =>
+              new IssueTrackerError({
+                tracker: KIND,
+                operation,
+                reason: reasonFor(error),
+                detail: error.detail,
+                cause: error,
+              }),
+          ),
+        );
+      const owner = repository.repository.split("/")[0] ?? "";
       const listings = [
         `${repoPath(target.scope)}/labels`,
         `orgs/${encodeURIComponent(owner)}/labels`,

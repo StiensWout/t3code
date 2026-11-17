@@ -1,6 +1,8 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as FileSystem from "effect/FileSystem";
+import * as HttpClient from "effect/http/HttpClient";
 import * as TestSourceControlHost from "@t3tools/source-control-testing/TestSourceControlHost";
 
 import * as ForgejoCli from "./ForgejoCli.ts";
@@ -144,6 +146,12 @@ function tracker(
   return ForgejoIssueTracker.make.pipe(
     Effect.provide(
       Layer.mock(ForgejoCli.ForgejoCli)({
+        resolveRepository: (input) =>
+          Effect.succeed({
+            login: "test",
+            baseUrl: "https://forgejo.test:3000",
+            repository: input.repository ?? "acme/web",
+          }),
         api: (input) => {
           const { stdout, stderr } = onApi(input);
           return Effect.succeed(
@@ -201,6 +209,73 @@ describe("ForgejoIssueTracker", () => {
       expect(after.labels.map((label) => label.name)).toEqual(["security", "bug"]);
     }),
   );
+
+  it.effect("retains organization labels when the server is mounted under a path", () => {
+    const organizationLabel = { id: 9, name: "security", color: "ff0000" };
+    let savedIssue = { ...ISSUE, labels: [organizationLabel] };
+    return Effect.gen(function* () {
+      const cli = yield* ForgejoCli.make;
+      const api = yield* ForgejoIssueTracker.make.pipe(
+        Effect.provideService(ForgejoCli.ForgejoCli, cli),
+      );
+      const target = { cwd: "/w", host: "forgejo.test:3000", scope: "forgejo/acme/web", key: "42" };
+      yield* api.update!({ ...target, title: "Updated title", labels: ["security", "bug"] });
+      const after = yield* api.getIssue(target);
+      expect(after.title).toBe("Updated title");
+      expect(after.labels.map((label) => label.name)).toEqual(["security", "bug"]);
+    }).pipe(
+      Effect.provideService(
+        FileSystem.FileSystem,
+        FileSystem.makeNoop({ exists: () => Effect.succeed(false) }),
+      ),
+      Effect.provideService(
+        HttpClient.HttpClient,
+        HttpClient.make(() => Effect.die("tea handles HTTP requests")),
+      ),
+      Effect.provide(
+        TestSourceControlHost.layer({
+          process: {
+            run: (input) => {
+              const output = (stdout: string) =>
+                Effect.succeed(
+                  TestSourceControlHost.processOutput(stdout, { stderr: "HTTP/1.1 200 OK\n" }),
+                );
+              if (input.command === "git")
+                return output("origin\thttps://forgejo.test:3000/forgejo/acme/web.git (fetch)");
+              if (input.args[0] === "login")
+                return output(
+                  encode([
+                    {
+                      name: "mounted",
+                      url: "https://forgejo.test:3000/forgejo",
+                      user: "octocat",
+                      default: "true",
+                    },
+                  ]),
+                );
+              const path = input.args.at(-1)?.split("/api/v1/")[1] ?? "";
+              const [route] = path.split("?");
+              if (route === "repos/acme/web/labels") return output(encode(ISSUE.labels));
+              if (route === "orgs/acme/labels") return output(encode([organizationLabel]));
+              if (route === "repos/acme/web/issues/42/labels") {
+                expect(input.stdin).toBe(encode({ labels: [3, 9] }));
+                savedIssue = { ...savedIssue, labels: [organizationLabel, ...ISSUE.labels] };
+                return output(encode(savedIssue.labels));
+              }
+              if (route === "repos/acme/web/issues/42") {
+                if (input.args.includes("PATCH")) {
+                  expect(input.stdin).toBe(encode({ title: "Updated title" }));
+                  savedIssue = { ...savedIssue, title: "Updated title" };
+                }
+                return output(encode(savedIssue));
+              }
+              return output(answer(path).stdout);
+            },
+          },
+        }),
+      ),
+    );
+  });
 
   it.effect("joins the issue, timeline and conversation into the neutral issue shape", () =>
     Effect.gen(function* () {
