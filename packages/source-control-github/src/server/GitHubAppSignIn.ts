@@ -100,6 +100,12 @@ interface PendingSignIn {
   readonly fiber: Fiber.Fiber<boolean>;
 }
 
+/** The newest `start` for a host, and the sign-in it last registered. */
+interface HostSignIn {
+  readonly attempt: number;
+  readonly signIn: PendingSignIn | undefined;
+}
+
 const signInError = (host: string, reason: SourceControlSignInFailure, detail: string) =>
   new SourceControlSignInError({ provider: KIND, host, reason, detail });
 
@@ -112,7 +118,7 @@ export const make = Effect.gen(function* () {
   const scope = yield* Effect.scope;
   const refreshLock = yield* Semaphore.make(1);
   const refused = yield* Ref.make<ReadonlySet<string>>(new Set());
-  const pending = yield* Ref.make<ReadonlyMap<string, PendingSignIn>>(new Map());
+  const pending = yield* Ref.make<ReadonlyMap<string, HostSignIn>>(new Map());
 
   const isAppHost = (host: string) =>
     enabled && GitHubClient.APP_SIGN_IN.hosts.includes(host.trim().toLowerCase());
@@ -381,6 +387,14 @@ export const make = Effect.gen(function* () {
           `${GitHubClient.APP_SIGN_IN.appName} only signs in to ${GitHubClient.APP_SIGN_IN.hosts.join(", ")}. Use a token or the GitHub CLI for ${host}.`,
         );
       }
+      // Claimed before the request so a slower, older request cannot replace this sign-in.
+      const attempt = yield* Ref.modify(pending, (current) => {
+        const next = (current.get(host)?.attempt ?? 0) + 1;
+        return [
+          next,
+          new Map(current).set(host, { attempt: next, signIn: current.get(host)?.signIn }),
+        ];
+      });
       const code = yield* postForm(
         host,
         "/login/device/code",
@@ -418,10 +432,19 @@ export const make = Effect.gen(function* () {
         Deferred.into(deferred),
         Effect.forkIn(scope),
       );
-      const previous = yield* Ref.modify(pending, (current) => [
-        current.get(host),
-        new Map(current).set(host, { deferred, fiber }),
-      ]);
+      const registered = yield* Ref.modify(pending, (current) => {
+        const entry = current.get(host);
+        if (entry?.attempt !== attempt) return [Option.none(), current] as const;
+        return [
+          Option.some(entry.signIn),
+          new Map(current).set(host, { attempt, signIn: { deferred, fiber } }),
+        ] as const;
+      });
+      if (Option.isNone(registered)) {
+        yield* Fiber.interrupt(fiber);
+        return yield* signInError(host, "failed", "A newer sign-in replaced this one.");
+      }
+      const previous = registered.value;
       if (previous !== undefined) {
         yield* Deferred.fail(
           previous.deferred,
@@ -440,7 +463,7 @@ export const make = Effect.gen(function* () {
   const wait: GitHubAppSignIn["Service"]["wait"] = Effect.fn("GitHubAppSignIn.wait")(
     function* (rawHost) {
       const host = rawHost.trim().toLowerCase();
-      const current = (yield* Ref.get(pending)).get(host);
+      const current = (yield* Ref.get(pending)).get(host)?.signIn;
       if (current === undefined) {
         return yield* signInError(host, "not-started", "No sign-in is in progress. Start again.");
       }
@@ -451,7 +474,7 @@ export const make = Effect.gen(function* () {
   const cancel: GitHubAppSignIn["Service"]["cancel"] = Effect.fn("GitHubAppSignIn.cancel")(
     function* (rawHost) {
       const host = rawHost.trim().toLowerCase();
-      const current = (yield* Ref.get(pending)).get(host);
+      const current = (yield* Ref.get(pending)).get(host)?.signIn;
       if (current === undefined) return;
       yield* Deferred.fail(
         current.deferred,
