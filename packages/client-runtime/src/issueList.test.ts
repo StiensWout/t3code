@@ -7,6 +7,9 @@ import type {
   ProjectId,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
+import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
+
+import { createMergedIssueCandidatesAtoms } from "./state/issues.ts";
 
 import {
   continueIssuePage,
@@ -151,5 +154,56 @@ describe("issueFilterScopes", () => {
       ],
     ]);
     expect(issueFilterScopes(held, [])).toEqual([]);
+  });
+
+  it("keeps filter labels from separate environments with identically named Linear teams", () => {
+    const secondEnvironmentId = "env-2" as EnvironmentId;
+    const scope = {
+      projectId: api,
+      tracker: "linear" as IssueTrackerKind,
+      host: "linear.app",
+      scope: "ENG",
+    };
+    const held = holdIssuePages(
+      [
+        [environmentId, answer({ trackers: [tracker({})], scopes: [scope] })],
+        [
+          secondEnvironmentId,
+          answer({
+            trackers: [tracker({})],
+            scopes: [{ ...scope, projectId: "second-project" as ProjectId }],
+          }),
+        ],
+      ],
+      new Map(),
+    );
+    const firstCandidates = Atom.make(
+      AsyncResult.success({
+        labels: [{ name: "customer", color: null, description: null }],
+        assignees: [],
+        truncated: false,
+      }),
+    );
+    const secondCandidates = Atom.make(
+      AsyncResult.success({
+        labels: [{ name: "internal", color: null, description: null }],
+        assignees: [],
+        truncated: false,
+      }),
+    );
+    const candidates = createMergedIssueCandidatesAtoms(
+      (target) => (target.environmentId === environmentId ? firstCandidates : secondCandidates),
+      () => "Could not read candidates",
+    );
+    const registry = AtomRegistry.make();
+    try {
+      const filters = registry.get(candidates(issueFilterScopes(held, [])));
+      expect(
+        filters.labels.map((label) => label.name),
+        "labels from both Linear workspaces",
+      ).toEqual(["customer", "internal"]);
+    } finally {
+      registry.dispose();
+    }
   });
 });
