@@ -235,6 +235,7 @@ describe("ForgejoIssueTracker", () => {
 
   it.effect("retains organization labels when the server is mounted under a path", () => {
     const organizationLabel = { id: 9, name: "security", color: "ff0000" };
+    const addedOrganizationLabel = { id: 12, name: "compliance", color: "00ff00" };
     let savedIssue = { ...ISSUE, labels: [organizationLabel] };
     return Effect.gen(function* () {
       const cli = yield* ForgejoCli.make;
@@ -242,10 +243,14 @@ describe("ForgejoIssueTracker", () => {
         Effect.provideService(ForgejoCli.ForgejoCli, cli),
       );
       const target = { cwd: "/w", host: "forgejo.test:3000", scope: "forgejo/acme/web", key: "42" };
-      yield* api.update!({ ...target, title: "Updated title", labels: ["security", "bug"] });
+      yield* api.update!({
+        ...target,
+        title: "Updated title",
+        labels: ["security", "bug", "compliance"],
+      });
       const after = yield* api.getIssue(target);
       expect(after.title).toBe("Updated title");
-      expect(after.labels.map((label) => label.name)).toEqual(["security", "bug"]);
+      expect(after.labels.map((label) => label.name)).toEqual(["security", "bug", "compliance"]);
     }).pipe(
       Effect.provideService(
         FileSystem.FileSystem,
@@ -279,10 +284,14 @@ describe("ForgejoIssueTracker", () => {
               const path = input.args.at(-1)?.split("/api/v1/")[1] ?? "";
               const [route] = path.split("?");
               if (route === "repos/acme/web/labels") return output(encode(ISSUE.labels));
-              if (route === "orgs/acme/labels") return output(encode([organizationLabel]));
+              if (route === "orgs/acme/labels")
+                return output(encode([organizationLabel, addedOrganizationLabel]));
               if (route === "repos/acme/web/issues/42/labels") {
-                expect(input.stdin).toBe(encode({ labels: [9, 3] }));
-                savedIssue = { ...savedIssue, labels: [organizationLabel, ...ISSUE.labels] };
+                expect(input.stdin).toBe(encode({ labels: [9, 3, 12] }));
+                savedIssue = {
+                  ...savedIssue,
+                  labels: [organizationLabel, ...ISSUE.labels, addedOrganizationLabel],
+                };
                 return output(encode(savedIssue.labels));
               }
               if (route === "repos/acme/web/issues/42") {
