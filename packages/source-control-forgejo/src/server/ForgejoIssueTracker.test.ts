@@ -320,13 +320,18 @@ describe("ForgejoIssueTracker", () => {
       calls.length = 0;
       yield* api.update!({ ...target, labels: ["bug", "urgent"] });
       expect(calls.at(-1)).toEqual(["PUT", "repos/acme/web/issues/42/labels", { labels: [3, 9] }]);
-      // A name the repository lacks refuses the save before anything is written.
+      // A name neither the repository nor its organization has refuses the save before anything
+      // is written.
       calls.length = 0;
       const error = yield* Effect.flip(
         api.update!({ ...target, title: "Renamed", labels: ["bug", "missing"] }),
       );
       expect(error.reason).toBe("failed");
-      expect(calls.map(([method]) => method)).toEqual(["GET", "GET"]);
+      expect(calls.map(([method, path]) => `${method} ${path.split("?")[0]}`)).toEqual([
+        "GET repos/acme/web/labels",
+        "GET repos/acme/web/labels",
+        "GET orgs/acme/labels",
+      ]);
     }),
   );
 

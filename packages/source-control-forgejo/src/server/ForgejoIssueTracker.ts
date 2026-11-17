@@ -258,8 +258,9 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
     });
 
     /**
-     * Labels are written by id, so names are resolved against the repository's own, page by page
-     * until each is found. A name the repository lacks refuses the write rather than dropping it.
+     * Labels are written by id, so names are resolved against the repository's own and then its
+     * organization's, page by page until each is found. A name neither has refuses the write
+     * rather than dropping it.
      */
     const labelIds = Effect.fn("ForgejoIssueTracker.labelIds")(function* (
       target: Target,
@@ -267,18 +268,26 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
       names: ReadonlyArray<string>,
     ) {
       const ids = new Map<string, number>();
-      for (let page = 1; ids.size < new Set(names).size && page <= MAX_PAGES; page++) {
-        const next = yield* readPage(
-          target,
-          operation,
-          `${repoPath(target.scope)}/labels`,
-          page,
-          ForgejoLabel,
-        );
-        for (const label of next.rows) {
-          if (names.includes(label.name)) ids.set(label.name, label.id);
+      const wanted = new Set(names).size;
+      const owner = target.scope.split("/")[0] ?? "";
+      const listings = [
+        `${repoPath(target.scope)}/labels`,
+        `orgs/${encodeURIComponent(owner)}/labels`,
+      ];
+      for (const path of listings) {
+        for (let page = 1; ids.size < wanted && page <= MAX_PAGES; page++) {
+          const next = yield* readPage(target, operation, path, page, ForgejoLabel).pipe(
+            // A repository owned by a user has no organization labels to look in.
+            Effect.catchIf(
+              (error) => path !== listings[0] && error.reason === "not-found",
+              () => Effect.succeed({ rows: [], nextCursor: null }),
+            ),
+          );
+          for (const label of next.rows) {
+            if (names.includes(label.name) && !ids.has(label.name)) ids.set(label.name, label.id);
+          }
+          if (next.nextCursor === null) break;
         }
-        if (next.nextCursor === null) break;
       }
       if (names.some((name) => !ids.has(name))) {
         return yield* refused(operation, "Forgejo found no label by one of the names given.");
