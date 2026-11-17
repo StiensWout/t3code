@@ -1,6 +1,7 @@
 import type {
   EnvironmentId,
   IssueListEntry,
+  IssueListInput,
   IssueListResult,
   IssueTrackerKind,
   IssueTrackerSummary,
@@ -90,6 +91,44 @@ describe("continueIssuePage", () => {
       issueCursorsForHost(next.nextCursors, "github.com"),
     );
     expect(done.nextCursors).toEqual({ "linear.app ENG": "l1" });
+  });
+});
+
+describe("holdIssuePages", () => {
+  const input: IssueListInput = { state: "open", limit: 50 };
+  const cursors = { "github.com acme/api": "c1", "linear.app ENG": "l1" };
+
+  it("keeps continued rows and cursors through a refresh of the same listing", () => {
+    const three = entry({ key: "3", updatedAt: "2026-10-03T00:00:00.000Z" });
+    const four = entry({ key: "4", updatedAt: "2026-10-02T00:00:00.000Z" });
+    const first = answer({ entries: [three, four], nextCursors: cursors });
+    const held = holdIssuePages([[environmentId, first]], new Map(), input).get(environmentId)!;
+    const github = issueCursorsForHost(cursors, "github.com");
+    const continued = continueIssuePage(
+      held,
+      answer({ entries: [entry({ key: "1" })], nextCursors: { "github.com acme/api": "c2" } }),
+      github,
+    );
+    const refreshed = answer({
+      entries: [{ ...three, title: "Renamed" }],
+      nextCursors: { "github.com acme/api": "c1b", "linear.app ENG": "l1b" },
+    });
+    const pages = new Map([[environmentId, continued]]);
+
+    const kept = holdIssuePages([[environmentId, refreshed]], pages, input).get(environmentId)!;
+    // Issue 4 left the first page, so it goes; issue 1 came from the continuation, so it stays.
+    expect(kept.entries.map((row) => [row.key, row.title])).toEqual([
+      ["3", "Renamed"],
+      ["1", "Issue 1"],
+    ]);
+    expect(kept.nextCursors).toEqual({ "github.com acme/api": "c2", "linear.app ENG": "l1b" });
+
+    const other = holdIssuePages([[environmentId, refreshed]], pages, {
+      ...input,
+      state: "closed",
+    });
+    expect(other.get(environmentId)!.entries.map((row) => row.key)).toEqual(["3"]);
+    expect(other.get(environmentId)!.nextCursors).toEqual(refreshed.nextCursors);
   });
 });
 
