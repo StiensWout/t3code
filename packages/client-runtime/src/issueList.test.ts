@@ -1,6 +1,7 @@
 import type {
   EnvironmentId,
   IssueListEntry,
+  IssueListInput,
   IssueListResult,
   IssueTrackerKind,
   IssueTrackerSummary,
@@ -18,6 +19,7 @@ import {
 
 const environmentId = "env-1" as EnvironmentId;
 const api = "api" as ProjectId;
+const listing: IssueListInput = { state: "open", involvement: "all", limit: 50 };
 
 function entry(overrides: Partial<IssueListEntry> & { key: string }): IssueListEntry {
   return {
@@ -46,8 +48,33 @@ function answer(overrides: Partial<IssueListResult>): IssueListResult {
 }
 
 function hold(first: IssueListResult) {
-  return holdIssuePages([[environmentId, first]], new Map()).get(environmentId)!;
+  return holdIssuePages([[environmentId, first]], new Map(), listing).get(environmentId)!;
 }
+
+describe("holdIssuePages", () => {
+  it("keeps loaded pages over a refreshed first page and forgets them for another listing", () => {
+    const cursors = { "github.com acme/web": "w2" };
+    const first = answer({ entries: [entry({ key: "1" })], nextCursors: cursors });
+    const loaded = new Map([
+      [environmentId, continueIssuePage(hold(first), answer({ entries: [entry({ key: "3" })] }))],
+    ]);
+    const refreshed = answer({
+      entries: [entry({ key: "1", title: "Renamed" })],
+      nextCursors: cursors,
+    });
+
+    const kept = holdIssuePages([[environmentId, refreshed]], loaded, listing).get(environmentId)!;
+    expect(kept.entries.map((row) => row.title)).toEqual(["Renamed", "Issue 3"]);
+    expect(kept.nextCursors).toEqual({});
+
+    const closed = holdIssuePages([[environmentId, refreshed]], loaded, {
+      ...listing,
+      state: "closed",
+    }).get(environmentId)!;
+    expect(closed.entries.map((row) => row.title)).toEqual(["Renamed"]);
+    expect(closed.nextCursors).toEqual(cursors);
+  });
+});
 
 describe("continueIssuePage", () => {
   const failure = { projectId: api, projectTitle: "api", message: "rate limited" };
@@ -181,6 +208,7 @@ describe("groupIssues", () => {
         ],
       ],
       new Map(),
+      listing,
     );
     const [group] = groupIssues(held, "", []);
     expect(group!.rows.map((row) => row.displayKey)).toEqual(["#1", "#2"]);
@@ -214,6 +242,7 @@ describe("groupIssues", () => {
         ["env-2" as EnvironmentId, inWorkspace("globex")],
       ],
       new Map(),
+      listing,
     );
     const [group] = groupIssues(held, "", []);
     expect(group!.rows.map((row) => row.url)).toEqual([
