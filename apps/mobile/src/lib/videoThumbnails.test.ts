@@ -1,4 +1,7 @@
+import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+
+import { mediaVideoThumbnailKey } from "./videoPreviewSource";
 
 const mocks = vi.hoisted(() => ({ createPlayer: vi.fn() }));
 vi.mock("expo-video", () => ({ createVideoPlayer: mocks.createPlayer }));
@@ -30,6 +33,43 @@ beforeEach(async () => {
 afterEach(() => vi.useRealTimers());
 
 describe("video thumbnails", () => {
+  it("shows the replacement frame when a workspace video is regenerated at the same path", async () => {
+    const video = {
+      type: "media" as const,
+      name: "demo.mp4",
+      mimeType: "video/mp4",
+      environmentId: EnvironmentId.make("environment"),
+      resource: {
+        _tag: "media-file" as const,
+        threadId: ThreadId.make("thread"),
+        path: "demo.mp4",
+      },
+    };
+    const original = player();
+    const replacement = player();
+    const replacementFrame = { width: 270, height: 480 };
+    replacement.generateThumbnailsAsync.mockResolvedValue([replacementFrame]);
+    mocks.createPlayer.mockReturnValueOnce(original).mockReturnValueOnce(replacement);
+
+    expect(
+      await thumbnails.loadVideoThumbnail(
+        mediaVideoThumbnailKey(video),
+        async () => ({ uri: "https://host/assets/original/demo.mp4", dispose: () => {} }),
+        new AbortController().signal,
+      ),
+    ).toEqual(frame);
+
+    // Reopening the thread reauthorizes the same path after the agent replaced its bytes.
+    expect(
+      await thumbnails.loadVideoThumbnail(
+        mediaVideoThumbnailKey(video),
+        async () => ({ uri: "https://host/assets/replacement/demo.mp4", dispose: () => {} }),
+        new AbortController().signal,
+      ),
+      "expect the regenerated workspace video's frame",
+    ).toEqual(replacementFrame);
+  });
+
   it("serializes decoding and skips queued requests that scroll out of view", async () => {
     const started = Promise.withResolvers<void>();
     const generated = Promise.withResolvers<(typeof frame)[]>();
