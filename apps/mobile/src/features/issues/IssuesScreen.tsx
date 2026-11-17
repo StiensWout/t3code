@@ -158,17 +158,15 @@ export function IssuesScreen(
   const list = useIssueList(targets);
 
   const [pages, setPages] = useState<ReadonlyMap<EnvironmentId, HeldIssuePage>>(new Map());
-  const held = holdIssuePages(list.answers, pages, listInput, list.scopeRevisions);
+  const held = holdIssuePages(list.answers, pages, listInput, list.revisions);
   if (held !== pages) setPages(held);
-  const refresh = () => {
-    setPages(new Map());
-    list.refresh();
-  };
+  const refresh = list.refresh;
   const loadPage = useAtomCommand(issueEnvironment.listPage, { reportFailure: false });
   const [loadingMore, setLoadingMore] = useState(false);
   const loading = useRef(false);
   const continuable = [...held].filter(([, page]) => Object.keys(page.nextCursors).length > 0);
-  const moreFailure = [...held.values()].find((page) => page.moreFailure)?.moreFailure ?? null;
+  const moreFailure =
+    [...held.values()].find((page) => page.moreFailure)?.moreFailure?.error ?? null;
   const loadMore = async (retry = false) => {
     if (loading.current || list.isPending || (moreFailure !== null && !retry)) return;
     loading.current = true;

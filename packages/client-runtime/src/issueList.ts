@@ -1,18 +1,25 @@
-import type {
-  EnvironmentId,
-  IssueListCursors,
-  IssueListEntry,
-  IssueListInput,
-  IssueListProjectError,
-  IssueListResult,
-  IssueListSort,
-  IssueScopeRef,
-  IssueTrackerSummary,
-  SourceControlProviderKind,
+import {
+  issueListCursorKey,
+  parseIssueListCursorKey,
+  type EnvironmentId,
+  type IssueListCursors,
+  type IssueListEntry,
+  type IssueListInput,
+  type IssueListProjectError,
+  type IssueListResult,
+  type IssueListSort,
+  type IssueScopeRef,
+  type IssueTrackerSummary,
+  type SourceControlProviderKind,
 } from "@t3tools/contracts";
 import * as Equal from "effect/Equal";
 
-import { issueEntryKey, issueListScopeKey, mergeIssueListPage } from "./state/issues.ts";
+import {
+  INITIAL_ISSUE_LIST_REVISION,
+  issueEntryKey,
+  mergeIssueListPage,
+  type IssueListRevision,
+} from "./state/issues.ts";
 import { sourceControlClients } from "./sourceControlClients.ts";
 import type { EnvironmentProject } from "./state/shell.ts";
 
@@ -20,25 +27,39 @@ export interface EnvironmentIssueEntry extends IssueListEntry {
   readonly environmentId: EnvironmentId;
 }
 
+interface IssuePageError<T> {
+  readonly keys: ReadonlyArray<string>;
+  readonly error: T;
+}
+
 /** Rows from every environment that answered, with any continuation pages laid over them. */
 export interface HeldIssuePage {
   readonly answer: IssueListResult;
   readonly entries: ReadonlyArray<IssueListEntry>;
   readonly errors: ReadonlyArray<IssueListProjectError>;
-  /** What continuations reported, each beside the cursors it was asked to carry on. */
-  readonly moreErrors: ReadonlyArray<{
-    readonly asked: ReadonlyArray<string>;
-    readonly errors: ReadonlyArray<IssueListProjectError>;
-  }>;
+  readonly moreErrors: ReadonlyArray<IssuePageError<IssueListProjectError>>;
   readonly nextCursors: IssueListCursors;
   /** Why the last "Load more" failed, until a retry succeeds or another listing is asked. */
-  readonly moreFailure: string | null;
+  readonly moreFailure: IssuePageError<string> | null;
   /** The listing these pages answer, as `JSON.stringify` of its input. */
   readonly listing: string;
-  readonly scopeRevisions: ReadonlyMap<string, number>;
+  readonly revision: IssueListRevision;
 }
 
-const NO_SCOPE_REVISIONS: ReadonlyMap<string, number> = new Map();
+function keepPageError<T>(failure: IssuePageError<T>, keepKey: (key: string) => boolean) {
+  const keys = failure.keys.filter(keepKey);
+  return keys.length === 0 ? [] : [{ ...failure, keys }];
+}
+
+function scopeWasEdited(key: string, before: IssueListRevision, after: IssueListRevision) {
+  const target = parseIssueListCursorKey(key);
+  if (target === undefined) return false;
+  const normalized = issueListCursorKey(target.host.toLowerCase(), target.scope);
+  return (
+    before.byCursor.get(normalized) !== after.byCursor.get(normalized) ||
+    before.anyHost.get(target.scope.toLowerCase()) !== after.anyHost.get(target.scope.toLowerCase())
+  );
+}
 
 export function issueTrackerKey(tracker: Pick<IssueTrackerSummary, "tracker" | "host">): string {
   return `${tracker.tracker} ${tracker.host.toLowerCase()}`;
@@ -47,7 +68,7 @@ export function issueTrackerKey(tracker: Pick<IssueTrackerSummary, "tracker" | "
 function firstPageBoundaries(answer: IssueListResult, sort: IssueListSort) {
   const boundaries = new Map<string, Array<readonly [string, string]>>();
   for (const row of answer.entries) {
-    const key = issueListScopeKey(row.host, row.scope);
+    const key = issueListCursorKey(row.host, row.scope);
     const item = [issueEntryKey(row), sort === "created" ? row.createdAt : row.updatedAt] as const;
     const rows = boundaries.get(key);
     if (rows) rows.push(item);
@@ -61,7 +82,7 @@ export function holdIssuePages(
   answers: ReadonlyArray<readonly [EnvironmentId, IssueListResult]>,
   pages: ReadonlyMap<EnvironmentId, HeldIssuePage>,
   input: IssueListInput,
-  revisions?: ReadonlyMap<EnvironmentId, ReadonlyMap<string, number>>,
+  revisions?: ReadonlyMap<EnvironmentId, IssueListRevision>,
 ): ReadonlyMap<EnvironmentId, HeldIssuePage> {
   const listing = JSON.stringify(input);
   const oldKeys = pages.keys();
@@ -69,12 +90,12 @@ export function holdIssuePages(
   const next = new Map<EnvironmentId, HeldIssuePage>();
   for (const [environmentId, answer] of answers) {
     const previous = pages.get(environmentId);
-    const scopeRevisions = revisions?.get(environmentId) ?? NO_SCOPE_REVISIONS;
+    const revision = revisions?.get(environmentId) ?? INITIAL_ISSUE_LIST_REVISION;
     if (oldKeys.next().value !== environmentId) changed = true;
     if (
       previous?.answer === answer &&
       previous.listing === listing &&
-      previous.scopeRevisions === scopeRevisions
+      previous.revision === revision
     ) {
       next.set(environmentId, previous);
       continue;
@@ -88,9 +109,12 @@ export function holdIssuePages(
       nextCursors: answer.nextCursors,
       moreFailure: null,
       listing,
-      scopeRevisions,
+      revision,
     };
-    if (previous?.listing !== listing) {
+    if (
+      previous?.listing !== listing ||
+      previous.revision.unscopedRefresh !== revision.unscopedRefresh
+    ) {
       next.set(environmentId, first);
       continue;
     }
@@ -103,10 +127,8 @@ export function holdIssuePages(
       ...Object.keys(previous.answer.nextCursors),
       ...Object.keys(answer.nextCursors),
     ])) {
-      const anyHost = key.slice(key.indexOf(" "));
       if (
-        scopeRevisions.get(key) !== previous.scopeRevisions.get(key) ||
-        scopeRevisions.get(anyHost) !== previous.scopeRevisions.get(anyHost) ||
+        scopeWasEdited(key, previous.revision, revision) ||
         previous.answer.nextCursors[key] !== answer.nextCursors[key] ||
         !Equal.equals(before.get(key), after.get(key))
       ) {
@@ -120,12 +142,18 @@ export function holdIssuePages(
       if (cursor === undefined) delete nextCursors[key];
       else nextCursors[key] = cursor;
     }
+    const keepKey = (key: string) => !reset.has(key);
+    const moreErrors = previous.moreErrors.flatMap((failure) => keepPageError(failure, keepKey));
     next.set(environmentId, {
       ...first,
       entries: mergeIssueListPage(
-        previous.entries.filter((row) => !reset.has(issueListScopeKey(row.host, row.scope))),
+        previous.entries.filter((row) => keepKey(issueListCursorKey(row.host, row.scope))),
         answer.entries,
       ),
+      errors: [...answer.errors, ...moreErrors.map((failure) => failure.error)],
+      moreErrors,
+      moreFailure:
+        previous.moreFailure && (keepPageError(previous.moreFailure, keepKey)[0] ?? null),
       nextCursors,
     });
   }
@@ -134,7 +162,11 @@ export function holdIssuePages(
 
 /** The cursors of one tracker host, so its "Load more" leaves the other trackers where they are. */
 export function issueCursorsForHost(cursors: IssueListCursors, host: string): IssueListCursors {
-  return Object.fromEntries(Object.entries(cursors).filter(([key]) => key.startsWith(`${host} `)));
+  return Object.fromEntries(Object.entries(cursors).filter(([key]) => cursorIsOnHost(key, host)));
+}
+
+function cursorIsOnHost(key: string, host: string): boolean {
+  return parseIssueListCursorKey(key)?.host.toLowerCase() === host.toLowerCase();
 }
 
 /**
@@ -147,19 +179,36 @@ export function continueIssuePage(
   next: IssueListResult | { readonly failure: string },
   asked: IssueListCursors = page.nextCursors,
 ): HeldIssuePage {
-  if ("failure" in next) return { ...page, moreFailure: next.failure };
-  const moreErrors = page.moreErrors.filter((more) => !more.asked.some((key) => key in asked));
-  if (next.errors.length > 0) moreErrors.push({ asked: Object.keys(asked), errors: next.errors });
+  const keys = Object.keys(asked);
+  if ("failure" in next) return { ...page, moreFailure: { keys, error: next.failure } };
+  const notAsked = (key: string) => !(key in asked);
+  const moreErrors = page.moreErrors.flatMap((failure) => keepPageError(failure, notAsked));
+  if (next.errors.length > 0) {
+    // The server returns the requested cursor unchanged when that scope fails.
+    const failed = keys.filter((key) => asked[key] === next.nextCursors[key]);
+    const scopes = next.scopes ?? page.answer.scopes ?? page.entries;
+    for (const error of next.errors) {
+      const matching = new Set(
+        scopes.flatMap((scope) =>
+          scope.projectId === error.projectId && scope.host !== undefined
+            ? [issueListCursorKey(scope.host, scope.scope)]
+            : [],
+        ),
+      );
+      const failedKeys = failed.filter((key) => matching.has(key));
+      moreErrors.push({ error, keys: failedKeys.length > 0 ? failedKeys : failed });
+    }
+  }
   return {
     ...page,
     entries: mergeIssueListPage(page.entries, next.entries),
-    errors: [...page.answer.errors, ...moreErrors.flatMap((more) => more.errors)],
+    errors: [...page.answer.errors, ...moreErrors.map((failure) => failure.error)],
     moreErrors,
     nextCursors: {
       ...Object.fromEntries(Object.entries(page.nextCursors).filter(([key]) => !(key in asked))),
       ...next.nextCursors,
     },
-    moreFailure: null,
+    moreFailure: page.moreFailure && (keepPageError(page.moreFailure, notAsked)[0] ?? null),
   };
 }
 
@@ -205,7 +254,7 @@ export function groupIssues(
       if (!byTracker.has(key)) byTracker.set(key, { tracker, rows: [], errors: [], more: [] });
       const group = byTracker.get(key)!;
       if (!group.tracker.configured && tracker.configured) group.tracker = tracker;
-      if (Object.keys(page.nextCursors).some((c) => c.startsWith(`${tracker.host} `)))
+      if (Object.keys(page.nextCursors).some((key) => cursorIsOnHost(key, tracker.host)))
         group.more.push(environmentId);
     }
     for (const entry of page.entries) {

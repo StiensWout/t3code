@@ -219,12 +219,9 @@ export function IssuesPage() {
   useLiveRefresh(list.refresh, { key: JSON.stringify(targets) });
 
   const [pages, setPages] = useState<ReadonlyMap<EnvironmentId, HeldIssuePage>>(new Map());
-  const held = holdIssuePages(list.answers, pages, listInput, list.scopeRevisions);
+  const held = holdIssuePages(list.answers, pages, listInput, list.revisions);
   if (held !== pages) setPages(held);
-  const refresh = () => {
-    setPages(new Map());
-    list.refresh();
-  };
+  const refresh = list.refresh;
   const loadPage = useAtomCommand(issueEnvironment.listPage, { reportFailure: false });
   const [loadingMore, setLoadingMore] = useState<string | null>(null);
   // One tracker group's button carries on that tracker's scopes only.
@@ -563,7 +560,7 @@ export function IssuesPage() {
               );
             })}
             {group.more.map((environmentId) => {
-              const moreFailure = held.get(environmentId)?.moreFailure ?? null;
+              const moreFailure = held.get(environmentId)?.moreFailure?.error ?? null;
               return (
                 <Fragment key={environmentId}>
                   {moreFailure === null ? null : (

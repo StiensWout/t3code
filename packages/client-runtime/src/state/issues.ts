@@ -1,4 +1,5 @@
 import {
+  issueListCursorKey,
   WS_METHODS,
   type EnvironmentId,
   type IssueAssigneeCandidate,
@@ -33,12 +34,20 @@ export function issueEntryKey(
   return `${entry.projectId}\u0000${entry.host.toLowerCase()}\u0000${entry.scope.toLowerCase()}\u0000${entry.key}`;
 }
 
-export function issueListScopeKey(host: string, scope: string): string {
-  return `${host.toLowerCase()} ${scope.toLowerCase()}`;
+export interface IssueListRevision {
+  readonly byCursor: ReadonlyMap<string, number>;
+  readonly anyHost: ReadonlyMap<string, number>;
+  readonly unscopedRefresh: number;
 }
 
-const listScopeRevisions = Atom.family((_environmentId: EnvironmentId) =>
-  Atom.make<ReadonlyMap<string, number>>(new Map()),
+export const INITIAL_ISSUE_LIST_REVISION: IssueListRevision = {
+  byCursor: new Map(),
+  anyHost: new Map(),
+  unscopedRefresh: 0,
+};
+
+const listRevision = Atom.family((_environmentId: EnvironmentId) =>
+  Atom.make(INITIAL_ISSUE_LIST_REVISION),
 );
 
 /**
@@ -188,10 +197,14 @@ export function createIssueEnvironmentAtoms<R, E>(
   ) =>
     Effect.sync(() => {
       // Without a host, invalidate any matching scope in the environment.
-      const key = issueListScopeKey(target.input.host ?? "", target.input.scope);
-      registry.update(listScopeRevisions(target.environmentId), (current) =>
-        new Map(current).set(key, (current.get(key) ?? 0) + 1),
-      );
+      const host = target.input.host?.toLowerCase();
+      const scope = target.input.scope.toLowerCase();
+      const field = host === undefined ? "anyHost" : "byCursor";
+      const key = host === undefined ? scope : issueListCursorKey(host, scope);
+      registry.update(listRevision(target.environmentId), (current) => ({
+        ...current,
+        [field]: new Map(current[field]).set(key, (current[field].get(key) ?? 0) + 1),
+      }));
     }).pipe(Effect.andThen(refreshDetail(target, registry)));
   return {
     list: createEnvironmentRpcQueryAtomFamily(runtime, {
@@ -281,7 +294,7 @@ export interface IssueListTarget {
 export interface MergedIssueList {
   /** One answer per environment that has one, in target order. */
   readonly answers: ReadonlyArray<readonly [EnvironmentId, IssueListResult]>;
-  readonly scopeRevisions: ReadonlyMap<EnvironmentId, ReadonlyMap<string, number>>;
+  readonly revisions: ReadonlyMap<EnvironmentId, IssueListRevision>;
   /** The first environment that failed outright; the others may still have answered. */
   readonly error: string | null;
   readonly isPending: boolean;
@@ -289,7 +302,7 @@ export interface MergedIssueList {
 
 const NO_ISSUE_LISTS: MergedIssueList = {
   answers: [],
-  scopeRevisions: new Map(),
+  revisions: new Map(),
   error: null,
   isPending: false,
 };
@@ -307,18 +320,18 @@ export function createMergedIssueListAtoms<E>(
   const family = Atom.family((key: string) =>
     Atom.make((get): MergedIssueList => {
       const answers: Array<readonly [EnvironmentId, IssueListResult]> = [];
-      const scopeRevisions = new Map<EnvironmentId, ReadonlyMap<string, number>>();
+      const revisions = new Map<EnvironmentId, IssueListRevision>();
       let error: string | null = null;
       let isPending = false;
       for (const target of JSON.parse(key) as ReadonlyArray<IssueListTarget>) {
-        scopeRevisions.set(target.environmentId, get(listScopeRevisions(target.environmentId)));
+        revisions.set(target.environmentId, get(listRevision(target.environmentId)));
         const result = get(list(target));
         isPending ||= result.waiting;
         if (result._tag === "Failure" && error === null) error = formatError(result.cause);
         const value = Option.getOrNull(AsyncResult.value(result));
         if (value !== null) answers.push([target.environmentId, value]);
       }
-      return { answers, scopeRevisions, error, isPending };
+      return { answers, revisions, error, isPending };
     }).pipe(Atom.withLabel(`issues:merged-list:${key}`)),
   );
   const refresh = (
@@ -336,7 +349,15 @@ export function createMergedIssueListAtoms<E>(
       asked.set(key, targets);
       return family(key);
     },
-    refresh,
+    refresh: (registry: AtomRegistry.AtomRegistry, targets: ReadonlyArray<IssueListTarget>) => {
+      for (const { environmentId } of targets) {
+        registry.update(listRevision(environmentId), (current) => ({
+          ...current,
+          unscopedRefresh: current.unscopedRefresh + 1,
+        }));
+      }
+      refresh(registry, targets);
+    },
     /** Refreshes each listing of `environmentId` that something still reads. */
     refreshEnvironment: (registry: AtomRegistry.AtomRegistry, environmentId: EnvironmentId) => {
       const live = new Set(registry.getNodes().keys());

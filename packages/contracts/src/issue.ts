@@ -255,6 +255,16 @@ export const IssueListCursors = Schema.Record(
 );
 export type IssueListCursors = typeof IssueListCursors.Type;
 
+export function issueListCursorKey(host: string, scope: string): string {
+  return `${host} ${scope.toLowerCase()}`;
+}
+
+export function parseIssueListCursorKey(key: string) {
+  const separator = key.indexOf(" ");
+  if (separator <= 0 || separator === key.length - 1) return undefined;
+  return { host: key.slice(0, separator), scope: key.slice(separator + 1) };
+}
+
 export const IssueListInput = Schema.Struct({
   state: IssueListState,
   involvement: Schema.optional(IssueInvolvement),

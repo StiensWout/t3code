@@ -119,7 +119,18 @@ describe("holdIssuePages", () => {
         entries: change === "moved" ? [moved, entry({ key: "1" }), secondRepo("5")] : first.entries,
       });
       const revisions = new Map(
-        change === "closed" ? [[environmentId, new Map([["github.com acme/api", 1]])]] : [],
+        change === "closed"
+          ? [
+              [
+                environmentId,
+                {
+                  byCursor: new Map([["github.com acme/api", 1]]),
+                  anyHost: new Map(),
+                  unscopedRefresh: 0,
+                },
+              ],
+            ]
+          : [],
       );
       const held = holdIssuePages([[environmentId, refreshed]], pages, listing, revisions).get(
         environmentId,
@@ -133,6 +144,69 @@ describe("holdIssuePages", () => {
       });
     },
   );
+
+  it("restarts pagination on a live refresh even when the first page is unchanged", () => {
+    const first = answer({
+      entries: [entry({ key: "1" })],
+      nextCursors: { "github.com acme/api": "a2" },
+    });
+    const loaded = continueIssuePage(
+      hold(first),
+      answer({ entries: [entry({ key: "2" })], nextCursors: { "github.com acme/api": "a3" } }),
+    );
+    const refreshed = holdIssuePages(
+      [[environmentId, { ...first }]],
+      new Map([[environmentId, loaded]]),
+      listing,
+      new Map([[environmentId, { byCursor: new Map(), anyHost: new Map(), unscopedRefresh: 1 }]]),
+    ).get(environmentId)!;
+
+    expect(refreshed.entries.map((row) => row.key)).toEqual(["1"]);
+    expect(refreshed.nextCursors).toEqual(first.nextCursors);
+  });
+
+  it("keeps a failed continuation only for the repository that still needs to retry", () => {
+    const host = "GitHub.Example.com";
+    const web = "web" as ProjectId;
+    const entries = [
+      entry({ key: "1", host }),
+      entry({ key: "5", host, scope: "acme/web", projectId: web }),
+    ];
+    const apiKey = "GitHub.Example.com acme/api";
+    const webKey = "GitHub.Example.com acme/web";
+    const cursors = { [apiKey]: "a2", [webKey]: "w2" };
+    const first = answer({ entries, nextCursors: cursors });
+    const loaded = continueIssuePage(
+      hold(first),
+      answer({
+        entries: [entry({ key: "2", host })],
+        nextCursors: { ...cursors, [apiKey]: "a3" },
+      }),
+    );
+    const apiError = { projectId: api, projectTitle: "api", message: "api failed" };
+    const webError = { projectId: web, projectTitle: "web", message: "web failed" };
+    const failed = continueIssuePage(
+      loaded,
+      answer({ errors: [apiError, webError], nextCursors: loaded.nextCursors }),
+    );
+    const revisions = new Map([
+      [
+        environmentId,
+        { byCursor: new Map(), anyHost: new Map([["acme/api", 1]]), unscopedRefresh: 0 },
+      ],
+    ]);
+    const refreshed = holdIssuePages(
+      [[environmentId, { ...first }]],
+      new Map([[environmentId, failed]]),
+      listing,
+      revisions,
+    ).get(environmentId)!;
+
+    expect(refreshed.entries.map((row) => row.key).sort()).toEqual(["1", "5"]);
+    expect(refreshed.nextCursors).toEqual(cursors);
+    expect(refreshed.errors).toEqual([webError]);
+    expect(continueIssuePage(refreshed, answer({}), { [webKey]: "w2" }).errors).toEqual([]);
+  });
 
   it("forgets loaded rows and rejects a late continuation when switching away and back", () => {
     const first = answer({

@@ -6,6 +6,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import {
+  issueListCursorKey,
   IssueOperationError,
   IssueTrackerKind,
   IssueUnavailableError,
@@ -104,11 +105,6 @@ function findStandaloneIssueUrl(trackers: ReadonlyArray<StandaloneIssueTrackerAp
     if (link !== null) return { api, tracker: api.kind, link };
   }
   return null;
-}
-
-/** Lower case, so a scope keeps its cursor whichever project's spelling of it is read. */
-function listCursorKey(host: string, scope: string): string {
-  return `${host} ${scope.toLowerCase()}`;
 }
 
 function isTrackerUnusable(error: IssueTrackerError): boolean {
@@ -330,7 +326,7 @@ const make = Effect.gen(function* () {
     const scopes = new Map<string, SupportedProject>();
     for (const project of supported) {
       if (host !== undefined && project.host !== host) continue;
-      const key = listCursorKey(project.host, project.scope);
+      const key = issueListCursorKey(project.host, project.scope);
       if (!scopes.has(key)) scopes.set(key, project);
     }
     const continuing = input.cursors;
@@ -384,7 +380,7 @@ const make = Effect.gen(function* () {
       scopes.values(),
       (project) =>
         Effect.gen(function* () {
-          const key = listCursorKey(project.host, project.scope);
+          const key = issueListCursorKey(project.host, project.scope);
           // A continuation names the scopes it wants; one not named has nothing to add.
           if (continuing !== undefined && continuing[key] === undefined) return;
           const cursor = continuing?.[key];
