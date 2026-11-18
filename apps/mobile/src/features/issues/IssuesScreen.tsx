@@ -165,15 +165,16 @@ export function IssuesScreen(
   const [loadingMore, setLoadingMore] = useState(false);
   const loading = useRef(false);
   const continuable = [...held].filter(([, page]) => Object.keys(page.nextCursors).length > 0);
+  const ready = continuable.filter(([environmentId]) => list.readyToContinue.has(environmentId));
   const moreFailure =
-    continuable.find(([, page]) => page.moreFailures.length > 0)?.[1].moreFailures[0]?.error ??
-    null;
+    (ready.length > 0 ? ready : continuable).find(([, page]) => page.moreFailures.length > 0)?.[1]
+      .moreFailures[0]?.error ?? null;
   const loadMore = async (retry = false) => {
-    if (loading.current || continuable.length === 0 || (moreFailure !== null && !retry)) return;
+    if (loading.current || ready.length === 0 || (moreFailure !== null && !retry)) return;
     loading.current = true;
     setLoadingMore(true);
     const loaded = await Promise.all(
-      continuable.map(async ([environmentId, page]) => {
+      ready.map(async ([environmentId, page]) => {
         const result = await loadPage({
           environmentId,
           input: { ...listInput, cursors: page.nextCursors },
@@ -476,6 +477,7 @@ export function IssuesScreen(
               <Button
                 label={gt("Try again")}
                 accessibilityLabel={gt("Retry loading more issues")}
+                disabled={ready.length === 0}
                 onPress={() => void loadMore(true)}
               />
             </View>
@@ -485,6 +487,7 @@ export function IssuesScreen(
               <Button
                 label={gt("Load more")}
                 accessibilityLabel={gt("Load more issues")}
+                disabled={ready.length === 0}
                 onPress={() => void loadMore()}
               />
             </View>

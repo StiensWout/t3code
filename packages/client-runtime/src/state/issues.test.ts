@@ -5,14 +5,18 @@ import {
   type IssueComment,
   type IssueCommentsPage,
   type IssueListEntry,
+  type IssueListResult,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import { describe, expect, it } from "vite-plus/test";
 
+import { continueIssuePage, holdIssuePages } from "../issueList.ts";
 import {
   createIssueCommentPager,
   createMergedIssueCandidatesAtoms,
+  createMergedIssueListAtoms,
   issueEntryKey,
   mergeIssueListPage,
 } from "./issues.ts";
@@ -65,6 +69,64 @@ describe("mergeIssueListPage", () => {
       issueEntryKey(entry({ key: "1" })),
     );
     expect(issueEntryKey(entry({ key: "ENG-1" }))).not.toBe(issueEntryKey(entry({ key: "eng-1" })));
+  });
+});
+
+describe("createMergedIssueListAtoms", () => {
+  it("keeps loaded rows during refresh and lets another environment continue", () => {
+    const healthy = "healthy" as EnvironmentId;
+    const refreshing = "refreshing" as EnvironmentId;
+    const input = { state: "open" } as const;
+    const targets = [
+      { environmentId: healthy, input },
+      { environmentId: refreshing, input },
+    ];
+    const cursorKey = "github.com acme/app";
+    const first: IssueListResult = {
+      viewers: {},
+      trackers: [],
+      entries: [entry({ key: "1" })],
+      errors: [],
+      nextCursors: { [cursorKey]: "page-2" },
+    };
+    const queries = Atom.family((_id: EnvironmentId) =>
+      Atom.make<AsyncResult.AsyncResult<IssueListResult, string>>(AsyncResult.success(first)),
+    );
+    const registry = AtomRegistry.make();
+    const lists = createMergedIssueListAtoms(
+      ({ environmentId }) => queries(environmentId),
+      () => "Refresh failed",
+    );
+    const listing = lists.atom(targets);
+    const initial = registry.get(listing);
+    const held = holdIssuePages(initial.answers, new Map(), input, initial.revisions);
+    const loaded = new Map(held).set(
+      refreshing,
+      continueIssuePage(held.get(refreshing)!, {
+        ...first,
+        entries: [entry({ key: "2" })],
+        nextCursors: { [cursorKey]: "page-3" },
+      }),
+    );
+
+    const previous = AsyncResult.success(first);
+    lists.refresh(registry, [{ environmentId: refreshing, input }]);
+    registry.set(queries(refreshing), AsyncResult.waiting(previous));
+    const pending = registry.get(listing);
+    expect(pending.isPending).toBe(true);
+    expect(pending.readyToContinue).toEqual(new Set([healthy]));
+    expect(holdIssuePages(pending.answers, loaded, input, pending.revisions)).toBe(loaded);
+
+    registry.set(
+      queries(refreshing),
+      AsyncResult.failWithPrevious("offline", { previous: Option.some(previous) }),
+    );
+    const failed = registry.get(listing);
+    const retained = holdIssuePages(failed.answers, loaded, input, failed.revisions);
+    expect(failed.error).toBe("Refresh failed");
+    expect(failed.readyToContinue).toEqual(new Set([healthy, refreshing]));
+    expect(retained.get(refreshing)?.entries.map((row) => row.key)).toEqual(["1", "2"]);
+    expect(retained.get(refreshing)?.nextCursors).toEqual({ [cursorKey]: "page-3" });
   });
 });
 

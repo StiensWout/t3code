@@ -286,6 +286,8 @@ export interface MergedIssueList {
   /** One answer per environment that has one, in target order. */
   readonly answers: ReadonlyArray<readonly [EnvironmentId, IssueListResult]>;
   readonly revisions: ReadonlyMap<EnvironmentId, IssueListRevision>;
+  /** Environments with a first-page answer and no first-page read in flight. */
+  readonly readyToContinue: ReadonlySet<EnvironmentId>;
   /** The first environment that failed outright; the others may still have answered. */
   readonly error: string | null;
   readonly isPending: boolean;
@@ -294,6 +296,7 @@ export interface MergedIssueList {
 const NO_ISSUE_LISTS: MergedIssueList = {
   answers: [],
   revisions: new Map(),
+  readyToContinue: new Set(),
   error: null,
   isPending: false,
 };
@@ -312,6 +315,7 @@ export function createMergedIssueListAtoms<E>(
     Atom.make((get): MergedIssueList => {
       const answers: Array<readonly [EnvironmentId, IssueListResult]> = [];
       const revisions = new Map<EnvironmentId, IssueListRevision>();
+      const readyToContinue = new Set<EnvironmentId>();
       let error: string | null = null;
       let isPending = false;
       for (const target of JSON.parse(key) as ReadonlyArray<IssueListTarget>) {
@@ -320,9 +324,12 @@ export function createMergedIssueListAtoms<E>(
         isPending ||= result.waiting;
         if (result._tag === "Failure" && error === null) error = formatError(result.cause);
         const value = Option.getOrNull(AsyncResult.value(result));
-        if (value !== null) answers.push([target.environmentId, value]);
+        if (value !== null) {
+          answers.push([target.environmentId, value]);
+          if (!result.waiting) readyToContinue.add(target.environmentId);
+        }
       }
-      return { answers, revisions, error, isPending };
+      return { answers, revisions, readyToContinue, error, isPending };
     }).pipe(Atom.withLabel(`issues:merged-list:${key}`)),
   );
   const refresh = (

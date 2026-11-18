@@ -229,7 +229,12 @@ export function IssuesPage() {
   const loadMore = async (environmentId: EnvironmentId, host: string) => {
     const page = held.get(environmentId);
     const cursors = page ? issueCursorsForHost(page.nextCursors, host) : {};
-    if (!page || Object.keys(cursors).length === 0 || loadingMore !== null || list.isPending)
+    if (
+      !page ||
+      Object.keys(cursors).length === 0 ||
+      loadingMore !== null ||
+      !list.readyToContinue.has(environmentId)
+    )
       return;
     setLoadingMore(`${environmentId} ${host}`);
     const result = await loadPage({ environmentId, input: { ...listInput, cursors } });
@@ -571,7 +576,7 @@ export function IssuesPage() {
                     size="sm"
                     variant="ghost-muted"
                     className="self-start"
-                    disabled={loadingMore !== null || list.isPending}
+                    disabled={loadingMore !== null || !list.readyToContinue.has(environmentId)}
                     onClick={() => void loadMore(environmentId, group.tracker.host)}
                   >
                     {loadingMore === `${environmentId} ${group.tracker.host}` ? (
