@@ -177,7 +177,6 @@ import {
   IssueCreateInput,
   IssueCreateResult,
   IssueDetail,
-  IssueEditResult,
   IssueListInput,
   IssueListResult,
   IssueOperationError,
@@ -1375,14 +1374,13 @@ const WsIssuesCommentRpc = Rpc.make(WS_METHODS.issuesComment, {
 
 const WsIssuesUpdateRpc = Rpc.make(WS_METHODS.issuesUpdate, {
   payload: IssueUpdateInput,
-  // Older servers acknowledge the edit without a resolved scope.
-  success: Schema.UndefinedOr(IssueEditResult),
+  success: Schema.Void,
   error: IssueRpcError,
 });
 
 const WsIssuesSetStateRpc = Rpc.make(WS_METHODS.issuesSetState, {
   payload: IssueSetStateInput,
-  success: Schema.UndefinedOr(IssueEditResult),
+  success: Schema.Void,
   error: IssueRpcError,
 });
 

@@ -7,7 +7,6 @@ import {
   type IssueComment,
   type IssueCommentsPage,
   type IssueDetail,
-  type IssueEditResult,
   type IssueLabelCandidate,
   type IssueListEntry,
   type IssueListInput,
@@ -187,10 +186,12 @@ export function createIssueEnvironmentAtoms<R, E>(
   const refreshAfterEdit = (
     target: { readonly environmentId: EnvironmentId; readonly input: IssueRef },
     registry: AtomRegistry.AtomRegistry,
-    resolved: IssueEditResult | undefined,
   ) =>
     Effect.sync(() => {
-      const { host, scope } = resolved ?? target.input;
+      const input = detailRef(target.input);
+      const detailQuery = detail({ environmentId: target.environmentId, input });
+      const shown = Option.getOrUndefined(AsyncResult.value(registry.get(detailQuery)));
+      const { host, scope } = shown ?? input;
       if (host === undefined) return;
       const key = issueListCursorKey(host.toLowerCase(), scope);
       registry.update(listRevision(target.environmentId), (current) =>

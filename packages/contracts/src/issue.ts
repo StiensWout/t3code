@@ -379,13 +379,6 @@ export const IssueSetStateInput = Schema.Struct({
 });
 export type IssueSetStateInput = typeof IssueSetStateInput.Type;
 
-/** The resolved tracker scope whose listing must restart after an edit. */
-export const IssueEditResult = Schema.Struct({
-  host: TrimmedNonEmptyString,
-  scope: TrimmedNonEmptyString,
-});
-export type IssueEditResult = typeof IssueEditResult.Type;
-
 export const IssueReactionInput = Schema.Struct({
   ...IssueRef.fields,
   /** Absent reacts to the issue itself; present names a comment id as the detail carried it. */
