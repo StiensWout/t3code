@@ -16,6 +16,7 @@ import {
   holdIssuePages,
   issueCursorsForHost,
   issueFilterScopes,
+  issuePageFailuresForHost,
 } from "./issueList.ts";
 
 const environmentId = "env-1" as EnvironmentId;
@@ -126,7 +127,6 @@ describe("holdIssuePages", () => {
                 {
                   byCursor: new Map([["github.com acme/api", 1]]),
                   anyHost: new Map(),
-                  unscopedRefresh: 0,
                 },
               ],
             ]
@@ -145,7 +145,7 @@ describe("holdIssuePages", () => {
     },
   );
 
-  it("restarts pagination on a live refresh even when the first page is unchanged", () => {
+  it("keeps pagination on a live refresh when the first page is unchanged", () => {
     const first = answer({
       entries: [entry({ key: "1" })],
       nextCursors: { "github.com acme/api": "a2" },
@@ -158,11 +158,10 @@ describe("holdIssuePages", () => {
       [[environmentId, { ...first }]],
       new Map([[environmentId, loaded]]),
       listing,
-      new Map([[environmentId, { byCursor: new Map(), anyHost: new Map(), unscopedRefresh: 1 }]]),
     ).get(environmentId)!;
 
-    expect(refreshed.entries.map((row) => row.key)).toEqual(["1"]);
-    expect(refreshed.nextCursors).toEqual(first.nextCursors);
+    expect(refreshed.entries.map((row) => row.key)).toEqual(["1", "2"]);
+    expect(refreshed.nextCursors).toEqual(loaded.nextCursors);
   });
 
   it("keeps a failed continuation only for the repository that still needs to retry", () => {
@@ -190,10 +189,7 @@ describe("holdIssuePages", () => {
       answer({ errors: [apiError, webError], nextCursors: loaded.nextCursors }),
     );
     const revisions = new Map([
-      [
-        environmentId,
-        { byCursor: new Map(), anyHost: new Map([["acme/api", 1]]), unscopedRefresh: 0 },
-      ],
+      [environmentId, { byCursor: new Map(), anyHost: new Map([["acme/api", 1]]) }],
     ]);
     const refreshed = holdIssuePages(
       [[environmentId, { ...first }]],
@@ -206,6 +202,116 @@ describe("holdIssuePages", () => {
     expect(refreshed.nextCursors).toEqual(cursors);
     expect(refreshed.errors).toEqual([webError]);
     expect(continueIssuePage(refreshed, answer({}), { [webKey]: "w2" }).errors).toEqual([]);
+  });
+
+  it("applies only the current scopes of a continuation that overlaps an edit", () => {
+    const github = "github.com acme/api";
+    const gitlab = "gitlab.com acme/web";
+    const webIssue = (key: string) =>
+      entry({ key, tracker: "gitlab" as IssueTrackerKind, host: "gitlab.com", scope: "acme/web" });
+    const first = answer({
+      entries: [entry({ key: "1" }), webIssue("5")],
+      nextCursors: { [github]: "a2", [gitlab]: "w2" },
+    });
+    const requested = hold(first);
+    const refreshed = holdIssuePages(
+      [[environmentId, first]],
+      new Map([[environmentId, requested]]),
+      listing,
+      new Map([[environmentId, { byCursor: new Map([[github, 1]]), anyHost: new Map() }]]),
+    );
+    const finished = finishIssuePage(
+      refreshed,
+      environmentId,
+      requested,
+      answer({
+        entries: [entry({ key: "2" }), webIssue("6")],
+        nextCursors: { [github]: "a3", [gitlab]: "w3" },
+      }),
+    ).get(environmentId)!;
+    expect(finished.entries.map((row) => row.key).sort()).toEqual(["1", "5", "6"]);
+    expect(finished.nextCursors).toEqual({ [github]: "a2", [gitlab]: "w3" });
+  });
+
+  it("keeps an untouched scope's rows and cursor through a first-page failure and recovery", () => {
+    const github = "github.com acme/api";
+    const gitlab = "gitlab.com acme/web";
+    const web = "web" as ProjectId;
+    const webIssue = (key: string) =>
+      entry({
+        key,
+        tracker: "gitlab" as IssueTrackerKind,
+        host: "gitlab.com",
+        scope: "acme/web",
+        projectId: web,
+      });
+    const first = answer({
+      entries: [entry({ key: "1" }), webIssue("5")],
+      nextCursors: { [github]: "a2", [gitlab]: "w2" },
+    });
+    const loaded = continueIssuePage(
+      hold(first),
+      answer({
+        entries: [entry({ key: "2" }), webIssue("6")],
+        nextCursors: { [github]: "a3", [gitlab]: "w3" },
+      }),
+    );
+    const error = {
+      projectId: web,
+      projectTitle: "web",
+      message: "rate limited",
+      cursorKey: gitlab,
+    };
+    const revisions = new Map([
+      [environmentId, { byCursor: new Map([[github, 1]]), anyHost: new Map() }],
+    ]);
+    const failed = holdIssuePages(
+      [
+        [
+          environmentId,
+          answer({
+            entries: [entry({ key: "1", title: "Renamed" })],
+            nextCursors: { [github]: "a2" },
+            errors: [error],
+          }),
+        ],
+      ],
+      new Map([[environmentId, loaded]]),
+      listing,
+      revisions,
+    );
+    expect(
+      failed
+        .get(environmentId)
+        ?.entries.map((row) => row.key)
+        .sort(),
+    ).toEqual(["1", "5", "6"]);
+    expect(failed.get(environmentId)?.nextCursors).toEqual({ [github]: "a2", [gitlab]: "w3" });
+    expect(failed.get(environmentId)?.errors).toEqual([error]);
+
+    const recovered = holdIssuePages([[environmentId, first]], failed, listing, revisions);
+    expect(
+      recovered
+        .get(environmentId)
+        ?.entries.map((row) => row.key)
+        .sort(),
+    ).toEqual(["1", "5", "6"]);
+    expect(recovered.get(environmentId)?.nextCursors).toEqual({ [github]: "a2", [gitlab]: "w3" });
+    expect(recovered.get(environmentId)?.errors).toEqual([]);
+
+    const removed = holdIssuePages(
+      [
+        [
+          environmentId,
+          answer({ entries: [entry({ key: "1" })], nextCursors: { [github]: "a2" }, scopes: [] }),
+        ],
+      ],
+      failed,
+      listing,
+      revisions,
+    );
+    expect(removed.get(environmentId)?.entries.map((row) => row.key)).toEqual(["1"]);
+    expect(removed.get(environmentId)?.nextCursors).toEqual({ [github]: "a2" });
   });
 
   it("forgets loaded rows and rejects a late continuation when switching away and back", () => {
@@ -226,7 +332,7 @@ describe("holdIssuePages", () => {
 
     expect(late.get(environmentId)?.entries.map((row) => row.key)).toEqual(["1"]);
     expect(late.get(environmentId)?.nextCursors).toEqual({ "github.com acme/api": "a2" });
-    expect(late.get(environmentId)?.moreFailure).toBeNull();
+    expect(late.get(environmentId)?.moreFailures).toEqual([]);
   });
 });
 
@@ -246,6 +352,32 @@ describe("continueIssuePage", () => {
     const retried = continueIssuePage(failed, answer({ entries: [entry({ key: "2" })] }), cursors);
     // The first page's failure has no cursor, so no continuation retried it.
     expect(retried.errors.map((error) => error.message)).toEqual(["boom"]);
+  });
+
+  it("clears the retried scope's error when two trackers share a project", () => {
+    const github = "github.com acme/api";
+    const linear = "linear.app ENG";
+    const githubFailure = { ...failure, cursorKey: github };
+    const linearFailure = { ...failure, message: "Linear failed", cursorKey: linear };
+    const first = hold(answer({ nextCursors: cursors }));
+    const failed = continueIssuePage(first, answer({ errors: [githubFailure, linearFailure] }));
+    const retried = continueIssuePage(failed, answer({}), { [github]: cursors[github] });
+    expect(retried.errors).toEqual([linearFailure]);
+    expect(retried.nextCursors).toEqual({ [linear]: cursors[linear] });
+  });
+
+  it("keeps transport failures separate until each host is retried", () => {
+    const first = hold(answer({ nextCursors: cursors }));
+    const github = issueCursorsForHost(cursors, "github.com");
+    const linear = issueCursorsForHost(cursors, "linear.app");
+    const githubFailed = continueIssuePage(first, { failure: "GitHub failed" }, github);
+    const bothFailed = continueIssuePage(githubFailed, { failure: "Linear failed" }, linear);
+    expect(issuePageFailuresForHost(bothFailed, "github.com")).toEqual(["GitHub failed"]);
+    expect(issuePageFailuresForHost(bothFailed, "linear.app")).toEqual(["Linear failed"]);
+
+    const retried = continueIssuePage(bothFailed, answer({}), github);
+    expect(issuePageFailuresForHost(retried, "github.com")).toEqual([]);
+    expect(issuePageFailuresForHost(retried, "linear.app")).toEqual(["Linear failed"]);
   });
 
   it("moves only the cursors asked for and keeps the other trackers' errors", () => {

@@ -166,7 +166,8 @@ export function IssuesScreen(
   const loading = useRef(false);
   const continuable = [...held].filter(([, page]) => Object.keys(page.nextCursors).length > 0);
   const moreFailure =
-    [...held.values()].find((page) => page.moreFailure)?.moreFailure?.error ?? null;
+    continuable.find(([, page]) => page.moreFailures.length > 0)?.[1].moreFailures[0]?.error ??
+    null;
   const loadMore = async (retry = false) => {
     if (loading.current || list.isPending || (moreFailure !== null && !retry)) return;
     loading.current = true;

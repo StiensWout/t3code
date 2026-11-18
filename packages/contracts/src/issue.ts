@@ -303,6 +303,8 @@ export const IssueTrackerSummary = Schema.Struct({
 export type IssueTrackerSummary = typeof IssueTrackerSummary.Type;
 
 export const IssueListProjectError = Schema.Struct({
+  /** The failed scope, as named in nextCursors. Older servers omit this. */
+  cursorKey: Schema.optional(TrimmedNonEmptyString),
   projectId: ProjectId,
   projectTitle: TrimmedNonEmptyString,
   message: TrimmedNonEmptyString,

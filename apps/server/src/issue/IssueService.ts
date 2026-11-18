@@ -412,6 +412,7 @@ const make = Effect.gen(function* () {
             if (cursor !== undefined) nextCursors[key] = cursor;
             recordFailure(project, page.failure);
             errors.push({
+              cursorKey: key,
               projectId: project.project.id,
               projectTitle: project.project.title,
               message: trackerDetail(page.failure),

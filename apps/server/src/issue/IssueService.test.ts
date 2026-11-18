@@ -419,7 +419,12 @@ describe("IssueService", () => {
       ).toEqual(["Acme/Web", "Acme/Web"]);
       expect(result.nextCursors).toEqual({ "github.com acme/web": "next" });
       expect(result.errors).toEqual([
-        { projectId: "api", projectTitle: "api", message: "The issue tracker request failed." },
+        {
+          cursorKey: "github.com acme/api",
+          projectId: "api",
+          projectTitle: "api",
+          message: "The issue tracker request failed.",
+        },
       ]);
       expect(result.viewers).toEqual({});
       expect(result.trackers).toEqual([
@@ -456,7 +461,12 @@ describe("IssueService", () => {
       expect(listed).toEqual(["Acme/Web"]);
       expect(failed.nextCursors).toEqual(result.nextCursors);
       expect(failed.errors).toEqual([
-        { projectId: "web", projectTitle: "web", message: "try again" },
+        {
+          cursorKey: "github.com acme/web",
+          projectId: "web",
+          projectTitle: "web",
+          message: "try again",
+        },
       ]);
       const next = yield* service.list({ state: "open", cursors: failed.nextCursors });
       expect(next.entries.map((entry) => [entry.projectId, entry.key])).toEqual([["web", "4"]]);

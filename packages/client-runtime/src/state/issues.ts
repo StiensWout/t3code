@@ -37,13 +37,11 @@ export function issueEntryKey(
 export interface IssueListRevision {
   readonly byCursor: ReadonlyMap<string, number>;
   readonly anyHost: ReadonlyMap<string, number>;
-  readonly unscopedRefresh: number;
 }
 
 export const INITIAL_ISSUE_LIST_REVISION: IssueListRevision = {
   byCursor: new Map(),
   anyHost: new Map(),
-  unscopedRefresh: 0,
 };
 
 const listRevision = Atom.family((_environmentId: EnvironmentId) =>
@@ -349,15 +347,7 @@ export function createMergedIssueListAtoms<E>(
       asked.set(key, targets);
       return family(key);
     },
-    refresh: (registry: AtomRegistry.AtomRegistry, targets: ReadonlyArray<IssueListTarget>) => {
-      for (const { environmentId } of targets) {
-        registry.update(listRevision(environmentId), (current) => ({
-          ...current,
-          unscopedRefresh: current.unscopedRefresh + 1,
-        }));
-      }
-      refresh(registry, targets);
-    },
+    refresh,
     /** Refreshes each listing of `environmentId` that something still reads. */
     refreshEnvironment: (registry: AtomRegistry.AtomRegistry, environmentId: EnvironmentId) => {
       const live = new Set(registry.getNodes().keys());

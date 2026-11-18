@@ -5,6 +5,7 @@ import {
   holdIssuePages,
   issueCursorsForHost,
   issueFilterScopes,
+  issuePageFailuresForHost,
   issueTrackerKey,
   type HeldIssuePage,
 } from "@t3tools/client-runtime/issue-list";
@@ -559,12 +560,13 @@ export function IssuesPage() {
               );
             })}
             {group.more.map((environmentId) => {
-              const moreFailure = held.get(environmentId)?.moreFailure?.error ?? null;
+              const page = held.get(environmentId);
+              const failures = page ? issuePageFailuresForHost(page, group.tracker.host) : [];
               return (
                 <Fragment key={environmentId}>
-                  {moreFailure === null ? null : (
-                    <p className="px-3 text-xs text-destructive">{moreFailure}</p>
-                  )}
+                  {failures.length > 0 ? (
+                    <p className="px-3 text-xs text-destructive">{failures.join(" ")}</p>
+                  ) : null}
                   <Button
                     size="sm"
                     variant="ghost-muted"
@@ -574,7 +576,7 @@ export function IssuesPage() {
                   >
                     {loadingMore === `${environmentId} ${group.tracker.host}` ? (
                       <T>Loading…</T>
-                    ) : moreFailure === null ? (
+                    ) : failures.length === 0 ? (
                       <T>Load more</T>
                     ) : (
                       <T>Retry</T>

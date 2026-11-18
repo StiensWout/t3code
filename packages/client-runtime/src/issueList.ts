@@ -32,6 +32,11 @@ interface IssuePageError<T> {
   readonly error: T;
 }
 
+interface FirstPageBoundary {
+  readonly rows: ReadonlyArray<readonly [string, string]>;
+  readonly cursor: string | undefined;
+}
+
 /** Rows from every environment that answered, with any continuation pages laid over them. */
 export interface HeldIssuePage {
   readonly answer: IssueListResult;
@@ -39,8 +44,9 @@ export interface HeldIssuePage {
   readonly errors: ReadonlyArray<IssueListProjectError>;
   readonly moreErrors: ReadonlyArray<IssuePageError<IssueListProjectError>>;
   readonly nextCursors: IssueListCursors;
-  /** Why the last "Load more" failed, until a retry succeeds or another listing is asked. */
-  readonly moreFailure: IssuePageError<string> | null;
+  readonly moreFailures: ReadonlyArray<IssuePageError<string>>;
+  /** The last successful boundary of each scope; its identity also guards in-flight reads. */
+  readonly boundaries: ReadonlyMap<string, FirstPageBoundary>;
   /** The listing these pages answer, as `JSON.stringify` of its input. */
   readonly listing: string;
   readonly revision: IssueListRevision;
@@ -66,15 +72,29 @@ export function issueTrackerKey(tracker: Pick<IssueTrackerSummary, "tracker" | "
 }
 
 function firstPageBoundaries(answer: IssueListResult, sort: IssueListSort) {
-  const boundaries = new Map<string, Array<readonly [string, string]>>();
+  const rowsByScope = new Map<string, Array<readonly [string, string]>>();
   for (const row of answer.entries) {
     const key = issueListCursorKey(row.host, row.scope);
     const item = [issueEntryKey(row), sort === "created" ? row.createdAt : row.updatedAt] as const;
-    const rows = boundaries.get(key);
+    const rows = rowsByScope.get(key);
     if (rows) rows.push(item);
-    else boundaries.set(key, [item]);
+    else rowsByScope.set(key, [item]);
   }
-  return boundaries;
+  return new Map(
+    [...new Set([...rowsByScope.keys(), ...Object.keys(answer.nextCursors)])].map(
+      (key) =>
+        [key, { rows: rowsByScope.get(key) ?? [], cursor: answer.nextCursors[key] }] as const,
+    ),
+  );
+}
+
+function errorCursorKeys(error: IssueListProjectError, scopes: ReadonlyArray<IssueScopeRef>) {
+  if (error.cursorKey !== undefined) return [error.cursorKey];
+  return scopes.flatMap((scope) =>
+    scope.projectId === error.projectId && scope.host !== undefined
+      ? [issueListCursorKey(scope.host, scope.scope)]
+      : [],
+  );
 }
 
 /** Keep the current rows and cursor only for scopes whose first page still supports them. */
@@ -101,48 +121,46 @@ export function holdIssuePages(
       continue;
     }
     changed = true;
+    const boundaries = firstPageBoundaries(answer, input.sort ?? "updated");
     const first: HeldIssuePage = {
       answer,
       entries: answer.entries,
       errors: answer.errors,
       moreErrors: [],
       nextCursors: answer.nextCursors,
-      moreFailure: null,
+      moreFailures: [],
+      boundaries,
       listing,
       revision,
     };
-    if (
-      previous?.listing !== listing ||
-      previous.revision.unscopedRefresh !== revision.unscopedRefresh
-    ) {
+    if (previous?.listing !== listing) {
       next.set(environmentId, first);
       continue;
     }
-    const before = firstPageBoundaries(previous.answer, input.sort ?? "updated");
-    const after = firstPageBoundaries(answer, input.sort ?? "updated");
-    const reset = new Set<string>();
-    for (const key of new Set([
-      ...before.keys(),
-      ...after.keys(),
-      ...Object.keys(previous.answer.nextCursors),
-      ...Object.keys(answer.nextCursors),
-    ])) {
-      if (
-        scopeWasEdited(key, previous.revision, revision) ||
-        previous.answer.nextCursors[key] !== answer.nextCursors[key] ||
-        !Equal.equals(before.get(key), after.get(key))
-      ) {
-        reset.add(key);
-      }
-    }
+    const covered = answer.scopes?.flatMap((scope) =>
+      scope.host === undefined ? [] : [issueListCursorKey(scope.host, scope.scope)],
+    );
+    const failed = new Set(
+      answer.errors.flatMap((error) => errorCursorKeys(error, answer.scopes ?? previous.entries)),
+    );
     const nextCursors = { ...answer.nextCursors };
-    for (const key of Object.keys(nextCursors)) {
-      if (reset.has(key)) continue;
+    for (const [key, before] of previous.boundaries) {
+      const after = boundaries.get(key);
+      if (scopeWasEdited(key, previous.revision, revision)) continue;
+      if (after === undefined) {
+        if (!failed.has(key) || (covered !== undefined && !covered.includes(key))) continue;
+      } else if (before.cursor !== after.cursor || !Equal.equals(before.rows, after.rows)) {
+        continue;
+      }
+      boundaries.set(key, before);
       const cursor = previous.nextCursors[key];
       if (cursor === undefined) delete nextCursors[key];
       else nextCursors[key] = cursor;
     }
-    const keepKey = (key: string) => !reset.has(key);
+    const keepKey = (key: string) => {
+      const before = previous.boundaries.get(key);
+      return before !== undefined && boundaries.get(key) === before;
+    };
     const moreErrors = previous.moreErrors.flatMap((failure) => keepPageError(failure, keepKey));
     next.set(environmentId, {
       ...first,
@@ -152,8 +170,7 @@ export function holdIssuePages(
       ),
       errors: [...answer.errors, ...moreErrors.map((failure) => failure.error)],
       moreErrors,
-      moreFailure:
-        previous.moreFailure && (keepPageError(previous.moreFailure, keepKey)[0] ?? null),
+      moreFailures: previous.moreFailures.flatMap((failure) => keepPageError(failure, keepKey)),
       nextCursors,
     });
   }
@@ -169,59 +186,84 @@ function cursorIsOnHost(key: string, host: string): boolean {
   return parseIssueListCursorKey(key)?.host.toLowerCase() === host.toLowerCase();
 }
 
-/**
- * Lays the next page over the rows held; a failure keeps them and says why. `asked` is the
- * cursors the page was asked to carry on: only those move, and what an earlier continuation
- * reported for any of them is replaced, so a retry that works takes its error away.
- */
+export function issuePageFailuresForHost(page: HeldIssuePage, host: string): ReadonlyArray<string> {
+  return page.moreFailures.flatMap(({ keys, error }) =>
+    keys.some((key) => cursorIsOnHost(key, host)) ? [error] : [],
+  );
+}
+
+/** Only the requested scopes advance or replace errors from a previous attempt. */
 export function continueIssuePage(
   page: HeldIssuePage,
   next: IssueListResult | { readonly failure: string },
   asked: IssueListCursors = page.nextCursors,
+  current: IssueListCursors = asked,
 ): HeldIssuePage {
   const keys = Object.keys(asked);
-  if ("failure" in next) return { ...page, moreFailure: { keys, error: next.failure } };
-  const notAsked = (key: string) => !(key in asked);
-  const moreErrors = page.moreErrors.flatMap((failure) => keepPageError(failure, notAsked));
-  if (next.errors.length > 0) {
-    // The server returns the requested cursor unchanged when that scope fails.
-    const failed = keys.filter((key) => asked[key] === next.nextCursors[key]);
-    const scopes = next.scopes ?? page.answer.scopes ?? page.entries;
-    for (const error of next.errors) {
-      const matching = new Set(
-        scopes.flatMap((scope) =>
-          scope.projectId === error.projectId && scope.host !== undefined
-            ? [issueListCursorKey(scope.host, scope.scope)]
-            : [],
-        ),
-      );
-      const failedKeys = failed.filter((key) => matching.has(key));
-      moreErrors.push({ error, keys: failedKeys.length > 0 ? failedKeys : failed });
-    }
+  const isCurrent = (key: string) => key in current;
+  const notCurrent = (key: string) => !isCurrent(key);
+  const moreFailures = page.moreFailures.flatMap((failure) => keepPageError(failure, notCurrent));
+  if ("failure" in next) {
+    return {
+      ...page,
+      moreFailures: [...moreFailures, { keys: Object.keys(current), error: next.failure }],
+    };
+  }
+  const moreErrors = page.moreErrors.flatMap((failure) => keepPageError(failure, notCurrent));
+  const scopes = next.scopes ?? page.answer.scopes ?? page.entries;
+  for (const error of next.errors) {
+    const candidates = errorCursorKeys(error, scopes);
+    const matching = keys.filter((key) => candidates.includes(key));
+    const affected = (
+      matching.length === 0 && error.cursorKey === undefined ? keys : matching
+    ).filter(isCurrent);
+    if (affected.length > 0) moreErrors.push({ error, keys: affected });
+  }
+  const nextCursors = {
+    ...Object.fromEntries(Object.entries(page.nextCursors).filter(([key]) => notCurrent(key))),
+    ...Object.fromEntries(Object.entries(next.nextCursors).filter(([key]) => isCurrent(key))),
+  };
+  for (const { error } of moreErrors) {
+    const key = error.cursorKey;
+    if (key !== undefined && isCurrent(key)) nextCursors[key] = current[key]!;
   }
   return {
     ...page,
-    entries: mergeIssueListPage(page.entries, next.entries),
+    entries: mergeIssueListPage(
+      page.entries,
+      current === asked
+        ? next.entries
+        : next.entries.filter((row) => isCurrent(issueListCursorKey(row.host, row.scope))),
+    ),
     errors: [...page.answer.errors, ...moreErrors.map((failure) => failure.error)],
     moreErrors,
-    nextCursors: {
-      ...Object.fromEntries(Object.entries(page.nextCursors).filter(([key]) => !(key in asked))),
-      ...next.nextCursors,
-    },
-    moreFailure: page.moreFailure && (keepPageError(page.moreFailure, notAsked)[0] ?? null),
+    nextCursors,
+    moreFailures,
   };
 }
 
-/** An answer in flight belongs to the held page that supplied its cursors. */
+/** Apply the slices that still have the boundary and cursor from when they were requested. */
 export function finishIssuePage(
   pages: ReadonlyMap<EnvironmentId, HeldIssuePage>,
   environmentId: EnvironmentId,
-  page: HeldIssuePage,
+  requested: HeldIssuePage,
   next: IssueListResult | { readonly failure: string },
-  asked: IssueListCursors = page.nextCursors,
+  asked: IssueListCursors = requested.nextCursors,
 ): ReadonlyMap<EnvironmentId, HeldIssuePage> {
-  if (pages.get(environmentId) !== page) return pages;
-  return new Map(pages).set(environmentId, continueIssuePage(page, next, asked));
+  const page = pages.get(environmentId);
+  if (page?.listing !== requested.listing) return pages;
+  const current = Object.fromEntries(
+    Object.entries(asked).filter(([key, cursor]) => {
+      const boundary = requested.boundaries.get(key);
+      return (
+        boundary !== undefined &&
+        page.boundaries.get(key) === boundary &&
+        page.nextCursors[key] === cursor
+      );
+    }),
+  );
+  if (Object.keys(current).length === 0) return pages;
+  return new Map(pages).set(environmentId, continueIssuePage(page, next, asked, current));
 }
 
 /** Newest first by the date the trackers were asked to sort on, so merged rows keep that order. */
@@ -282,9 +324,11 @@ export function groupIssues(
       const host = kind
         ? sourceControlClients.changeRequestHost(project?.repositoryIdentity, kind)
         : null;
-      const group =
-        (host ? byTracker.get(`${kind} ${host.toLowerCase()}`) : undefined) ??
-        [...byTracker.values()][0];
+      const cursorKey = error.cursorKey;
+      const group = cursorKey
+        ? [...byTracker.values()].find((group) => cursorIsOnHost(cursorKey, group.tracker.host))
+        : ((host ? byTracker.get(`${kind} ${host.toLowerCase()}`) : undefined) ??
+          [...byTracker.values()][0]);
       group?.errors.push({ ...error, environmentId });
     }
   }
