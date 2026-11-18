@@ -199,7 +199,7 @@ describe("issue edits", () => {
           projectId: issue.input.projectId,
           writable: true,
           capabilities: {
-            setState: true,
+            create: true,
             comment: true,
             edit: true,
             labels: true,
