@@ -574,7 +574,6 @@ interface ComposerDraftStoreState {
   getDraftThreadByRef: (threadRef: ScopedThreadRef) => DraftThreadState | null;
   getDraftThread: (threadRef: ComposerThreadTarget) => DraftThreadState | null;
   listDraftThreadKeys: () => string[];
-  hasDraftThreadsInEnvironment: (environmentId: EnvironmentId) => boolean;
   setLogicalProjectDraftThreadId: (
     logicalProjectKey: string,
     projectRef: ScopedProjectRef,
@@ -2886,10 +2885,6 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
         listDraftThreadKeys: () =>
           Object.values(get().draftThreadsByThreadKey).map((draftThread) =>
             scopedThreadKey(scopeThreadRef(draftThread.environmentId, draftThread.threadId)),
-          ),
-        hasDraftThreadsInEnvironment: (environmentId) =>
-          Object.values(get().draftThreadsByThreadKey).some(
-            (draftThread) => draftThread.environmentId === environmentId,
           ),
         setLogicalProjectDraftThreadId: (logicalProjectKey, projectRef, draftId, options) => {
           const normalizedLogicalProjectKey = logicalProjectDraftKey(logicalProjectKey);
