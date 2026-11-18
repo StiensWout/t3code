@@ -120,17 +120,7 @@ describe("holdIssuePages", () => {
         entries: change === "moved" ? [moved, entry({ key: "1" }), secondRepo("5")] : first.entries,
       });
       const revisions = new Map(
-        change === "closed"
-          ? [
-              [
-                environmentId,
-                {
-                  byCursor: new Map([["github.com acme/api", 1]]),
-                  anyHost: new Map(),
-                },
-              ],
-            ]
-          : [],
+        change === "closed" ? [[environmentId, new Map([["github.com acme/api", 1]])]] : [],
       );
       const held = holdIssuePages([[environmentId, refreshed]], pages, listing, revisions).get(
         environmentId,
@@ -164,6 +154,32 @@ describe("holdIssuePages", () => {
     expect(refreshed.nextCursors).toEqual(loaded.nextCursors);
   });
 
+  it("keeps creation-sorted pages when update times reorder the first page", () => {
+    const byCreation = { ...listing, sort: "created" } as const;
+    const repo = "github.com acme/api";
+    const newest = entry({ key: "1", createdAt: "2026-10-02T00:00:00.000Z" });
+    const tied = entry({ key: "2", createdAt: newest.createdAt });
+    const first = answer({ entries: [newest, tied], nextCursors: { [repo]: "a2" } });
+    const held = holdIssuePages([[environmentId, first]], new Map(), byCreation);
+    const loaded = continueIssuePage(
+      held.get(environmentId)!,
+      answer({ entries: [entry({ key: "3" })], nextCursors: { [repo]: "a3" } }),
+    );
+    const refreshed = holdIssuePages(
+      [
+        [
+          environmentId,
+          { ...first, entries: [{ ...tied, updatedAt: "2026-10-03T00:00:00.000Z" }, newest] },
+        ],
+      ],
+      new Map([[environmentId, loaded]]),
+      byCreation,
+    ).get(environmentId)!;
+
+    expect(refreshed.entries.map((row) => row.key).sort()).toEqual(["1", "2", "3"]);
+    expect(refreshed.nextCursors).toEqual({ [repo]: "a3" });
+  });
+
   it("keeps a failed continuation only for the repository that still needs to retry", () => {
     const host = "GitHub.Example.com";
     const web = "web" as ProjectId;
@@ -188,9 +204,7 @@ describe("holdIssuePages", () => {
       loaded,
       answer({ errors: [apiError, webError], nextCursors: loaded.nextCursors }),
     );
-    const revisions = new Map([
-      [environmentId, { byCursor: new Map(), anyHost: new Map([["acme/api", 1]]) }],
-    ]);
+    const revisions = new Map([[environmentId, new Map([["github.example.com acme/api", 1]])]]);
     const refreshed = holdIssuePages(
       [[environmentId, { ...first }]],
       new Map([[environmentId, failed]]),
@@ -204,13 +218,13 @@ describe("holdIssuePages", () => {
     expect(continueIssuePage(refreshed, answer({}), { [webKey]: "w2" }).errors).toEqual([]);
   });
 
-  it("applies only the current scopes of a continuation that overlaps an edit", () => {
+  it("keeps an in-flight page for a same-named repository on another host", () => {
     const github = "github.com acme/api";
-    const gitlab = "gitlab.com acme/web";
-    const webIssue = (key: string) =>
-      entry({ key, tracker: "gitlab" as IssueTrackerKind, host: "gitlab.com", scope: "acme/web" });
+    const gitlab = "gitlab.com acme/api";
+    const gitlabIssue = (key: string) =>
+      entry({ key, tracker: "gitlab" as IssueTrackerKind, host: "gitlab.com" });
     const first = answer({
-      entries: [entry({ key: "1" }), webIssue("5")],
+      entries: [entry({ key: "1" }), gitlabIssue("5")],
       nextCursors: { [github]: "a2", [gitlab]: "w2" },
     });
     const requested = hold(first);
@@ -218,14 +232,14 @@ describe("holdIssuePages", () => {
       [[environmentId, first]],
       new Map([[environmentId, requested]]),
       listing,
-      new Map([[environmentId, { byCursor: new Map([[github, 1]]), anyHost: new Map() }]]),
+      new Map([[environmentId, new Map([[github, 1]])]]),
     );
     const finished = finishIssuePage(
       refreshed,
       environmentId,
       requested,
       answer({
-        entries: [entry({ key: "2" }), webIssue("6")],
+        entries: [entry({ key: "2" }), gitlabIssue("6")],
         nextCursors: { [github]: "a3", [gitlab]: "w3" },
       }),
     ).get(environmentId)!;
@@ -262,9 +276,7 @@ describe("holdIssuePages", () => {
       message: "rate limited",
       cursorKey: gitlab,
     };
-    const revisions = new Map([
-      [environmentId, { byCursor: new Map([[github, 1]]), anyHost: new Map() }],
-    ]);
+    const revisions = new Map([[environmentId, new Map([[github, 1]])]]);
     const failed = holdIssuePages(
       [
         [
@@ -469,6 +481,32 @@ describe("issueFilterScopes", () => {
 });
 
 describe("groupIssues", () => {
+  it("shows a scoped failure even when that tracker host has no group", () => {
+    const github: IssueTrackerSummary = {
+      tracker: "github" as IssueTrackerKind,
+      host: "github.com",
+      projectCount: 1,
+      capabilities: null,
+      configured: true,
+      detail: null,
+    };
+    const error = {
+      projectId: api,
+      projectTitle: "api",
+      message: "GitLab failed",
+      cursorKey: "gitlab.com acme/api",
+    };
+    const held = holdIssuePages(
+      [[environmentId, answer({ trackers: [github], errors: [error] })]],
+      new Map(),
+      listing,
+    );
+
+    expect(groupIssues(held, "", [])[0]?.errors.map(({ message }) => message)).toEqual([
+      "GitLab failed",
+    ]);
+  });
+
   it("lists an issue once when two environments hold the same repository", () => {
     const github = {
       tracker: "github",

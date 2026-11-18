@@ -61,10 +61,7 @@ function scopeWasEdited(key: string, before: IssueListRevision, after: IssueList
   const target = parseIssueListCursorKey(key);
   if (target === undefined) return false;
   const normalized = issueListCursorKey(target.host.toLowerCase(), target.scope);
-  return (
-    before.byCursor.get(normalized) !== after.byCursor.get(normalized) ||
-    before.anyHost.get(target.scope.toLowerCase()) !== after.anyHost.get(target.scope.toLowerCase())
-  );
+  return before.get(normalized) !== after.get(normalized);
 }
 
 export function issueTrackerKey(tracker: Pick<IssueTrackerSummary, "tracker" | "host">): string {
@@ -83,7 +80,17 @@ function firstPageBoundaries(answer: IssueListResult, sort: IssueListSort) {
   return new Map<string, FirstPageBoundary>(
     [...new Set([...rowsByScope.keys(), ...Object.keys(answer.nextCursors)])].map((key) => [
       key,
-      { rows: rowsByScope.get(key) ?? [], cursor: answer.nextCursors[key] },
+      {
+        rows:
+          rowsByScope
+            .get(key)
+            ?.sort(
+              ([leftKey, leftDate], [rightKey, rightDate]) =>
+                Date.parse(rightDate) - Date.parse(leftDate) ||
+                (leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0),
+            ) ?? [],
+        cursor: answer.nextCursors[key],
+      },
     ]),
   );
 }
@@ -325,10 +332,14 @@ export function groupIssues(
         ? sourceControlClients.changeRequestHost(project?.repositoryIdentity, kind)
         : null;
       const cursorKey = error.cursorKey;
-      const group = cursorKey
-        ? [...byTracker.values()].find((group) => cursorIsOnHost(cursorKey, group.tracker.host))
-        : ((host ? byTracker.get(`${kind} ${host.toLowerCase()}`) : undefined) ??
-          [...byTracker.values()][0]);
+      const group =
+        (cursorKey === undefined
+          ? undefined
+          : [...byTracker.values()].find((group) =>
+              cursorIsOnHost(cursorKey, group.tracker.host),
+            )) ??
+        (host ? byTracker.get(`${kind} ${host.toLowerCase()}`) : undefined) ??
+        byTracker.values().next().value;
       group?.errors.push({ ...error, environmentId });
     }
   }

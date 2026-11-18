@@ -325,6 +325,27 @@ describe("IssueService", () => {
     }),
   );
 
+  it.effect("identifies the tracker scope changed by an edit with no host in the link", () =>
+    Effect.gen(function* () {
+      const service = yield* makeService({
+        projects: [
+          project({ id: "github", repository: "acme/web" }),
+          project({ id: "enterprise", repository: "acme/web", host: "github.example.com" }),
+        ],
+        trackers: [fakeTracker()],
+      });
+      const ref = {
+        projectId: "enterprise" as ProjectId,
+        tracker: GITHUB,
+        scope: "acme/web",
+        key: "42",
+      };
+      const expected = { host: "github.example.com", scope: "acme/web" };
+      expect(yield* service.update({ ...ref, title: "Renamed" })).toEqual(expected);
+      expect(yield* service.setState({ ...ref, state: "closed" })).toEqual(expected);
+    }),
+  );
+
   it.effect("refuses what the tracker did not declare before calling it", () =>
     Effect.gen(function* () {
       let calls = 0;

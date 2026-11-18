@@ -169,7 +169,7 @@ export function IssuesScreen(
     continuable.find(([, page]) => page.moreFailures.length > 0)?.[1].moreFailures[0]?.error ??
     null;
   const loadMore = async (retry = false) => {
-    if (loading.current || list.isPending || (moreFailure !== null && !retry)) return;
+    if (loading.current || continuable.length === 0 || (moreFailure !== null && !retry)) return;
     loading.current = true;
     setLoadingMore(true);
     const loaded = await Promise.all(

@@ -7,6 +7,7 @@ import {
   type IssueComment,
   type IssueCommentsPage,
   type IssueDetail,
+  type IssueEditResult,
   type IssueLabelCandidate,
   type IssueListEntry,
   type IssueListInput,
@@ -34,15 +35,9 @@ export function issueEntryKey(
   return `${entry.projectId}\u0000${entry.host.toLowerCase()}\u0000${entry.scope.toLowerCase()}\u0000${entry.key}`;
 }
 
-export interface IssueListRevision {
-  readonly byCursor: ReadonlyMap<string, number>;
-  readonly anyHost: ReadonlyMap<string, number>;
-}
+export type IssueListRevision = ReadonlyMap<string, number>;
 
-export const INITIAL_ISSUE_LIST_REVISION: IssueListRevision = {
-  byCursor: new Map(),
-  anyHost: new Map(),
-};
+export const INITIAL_ISSUE_LIST_REVISION: IssueListRevision = new Map();
 
 const listRevision = Atom.family((_environmentId: EnvironmentId) =>
   Atom.make(INITIAL_ISSUE_LIST_REVISION),
@@ -192,17 +187,15 @@ export function createIssueEnvironmentAtoms<R, E>(
   const refreshAfterEdit = (
     target: { readonly environmentId: EnvironmentId; readonly input: IssueRef },
     registry: AtomRegistry.AtomRegistry,
+    resolved: IssueEditResult | undefined,
   ) =>
     Effect.sync(() => {
-      // Without a host, invalidate any matching scope in the environment.
-      const host = target.input.host?.toLowerCase();
-      const scope = target.input.scope.toLowerCase();
-      const field = host === undefined ? "anyHost" : "byCursor";
-      const key = host === undefined ? scope : issueListCursorKey(host, scope);
-      registry.update(listRevision(target.environmentId), (current) => ({
-        ...current,
-        [field]: new Map(current[field]).set(key, (current[field].get(key) ?? 0) + 1),
-      }));
+      const { host, scope } = resolved ?? target.input;
+      if (host === undefined) return;
+      const key = issueListCursorKey(host.toLowerCase(), scope);
+      registry.update(listRevision(target.environmentId), (current) =>
+        new Map(current).set(key, (current.get(key) ?? 0) + 1),
+      );
     }).pipe(Effect.andThen(refreshDetail(target, registry)));
   return {
     list: createEnvironmentRpcQueryAtomFamily(runtime, {

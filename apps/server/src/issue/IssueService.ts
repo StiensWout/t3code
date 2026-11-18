@@ -18,6 +18,7 @@ import {
   type IssueCreateInput,
   type IssueCreateResult,
   type IssueDetail,
+  type IssueEditResult,
   type IssueError,
   type IssueListEntry,
   type IssueListInput,
@@ -153,8 +154,8 @@ export class IssueService extends Context.Service<
     readonly candidates: (input: IssueScopeRef) => Effect.Effect<IssueCandidates, IssueError>;
     readonly create: (input: IssueCreateInput) => Effect.Effect<IssueCreateResult, IssueError>;
     readonly comment: (input: IssueCommentInput) => Effect.Effect<void, IssueError>;
-    readonly update: (input: IssueUpdateInput) => Effect.Effect<void, IssueError>;
-    readonly setState: (input: IssueSetStateInput) => Effect.Effect<void, IssueError>;
+    readonly update: (input: IssueUpdateInput) => Effect.Effect<IssueEditResult, IssueError>;
+    readonly setState: (input: IssueSetStateInput) => Effect.Effect<IssueEditResult, IssueError>;
     readonly react: (input: IssueReactionInput) => Effect.Effect<void, IssueError>;
     /** The tracker and container a project's own issues live in. */
     readonly projectScope: (
@@ -606,7 +607,10 @@ const make = Effect.gen(function* () {
             labels: input.labels,
             assignees: input.assignees,
           })
-          .pipe(Effect.mapError(toIssueError("update")));
+          .pipe(
+            Effect.mapError(toIssueError("update")),
+            Effect.as({ host: project.host, scope: project.scope }),
+          );
       }),
     );
 
@@ -623,7 +627,10 @@ const make = Effect.gen(function* () {
             key: input.key,
             state: input.state,
           })
-          .pipe(Effect.mapError(toIssueError("setState")));
+          .pipe(
+            Effect.mapError(toIssueError("setState")),
+            Effect.as({ host: project.host, scope: project.scope }),
+          );
       }),
     );
 
