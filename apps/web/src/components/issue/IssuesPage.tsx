@@ -241,8 +241,7 @@ export function IssuesPage() {
         page,
         result._tag === "Failure"
           ? {
-              failure:
-                failure instanceof Error ? failure.message : m(msg("The next page failed.")),
+              failure: failure instanceof Error ? failure.message : m(msg("The next page failed.")),
             }
           : result.value,
         cursors,
