@@ -24,6 +24,7 @@ import {
   createAtomCommandScheduler,
   createEnvironmentRpcCommand,
   createEnvironmentRpcQueryAtomFamily,
+  executeAtomQuery,
 } from "./runtime.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 
@@ -35,6 +36,10 @@ export function issueEntryKey(
 }
 
 export type IssueListRevision = ReadonlyMap<string, number>;
+
+export function hostlessIssueScopeKey({ projectId, tracker, scope }: IssueScopeRef): string {
+  return JSON.stringify([projectId, tracker, scope.toLowerCase()]);
+}
 
 export const INITIAL_ISSUE_LIST_REVISION: IssueListRevision = new Map();
 
@@ -192,8 +197,10 @@ export function createIssueEnvironmentAtoms<R, E>(
       const detailQuery = detail({ environmentId: target.environmentId, input });
       const shown = Option.getOrUndefined(AsyncResult.value(registry.get(detailQuery)));
       const { host, scope } = shown ?? input;
-      if (host === undefined) return;
-      const key = issueListCursorKey(host.toLowerCase(), scope);
+      const key =
+        host === undefined
+          ? hostlessIssueScopeKey(input)
+          : issueListCursorKey(host.toLowerCase(), scope);
       registry.update(listRevision(target.environmentId), (current) =>
         new Map(current).set(key, (current.get(key) ?? 0) + 1),
       );
@@ -287,6 +294,8 @@ export interface MergedIssueList {
   /** One answer per environment that has one, in target order. */
   readonly answers: ReadonlyArray<readonly [EnvironmentId, IssueListResult]>;
   readonly revisions: ReadonlyMap<EnvironmentId, IssueListRevision>;
+  /** Advances for each listing that answers a manual refresh. */
+  readonly manualRefreshes: ReadonlyMap<EnvironmentId, number>;
   /** Environments with a first-page answer and no first-page read in flight. */
   readonly readyToContinue: ReadonlySet<EnvironmentId>;
   /** The first environment that failed outright; the others may still have answered. */
@@ -297,6 +306,7 @@ export interface MergedIssueList {
 const NO_ISSUE_LISTS: MergedIssueList = {
   answers: [],
   revisions: new Map(),
+  manualRefreshes: new Map(),
   readyToContinue: new Set(),
   error: null,
   isPending: false,
@@ -311,17 +321,23 @@ export function createMergedIssueListAtoms<E>(
   list: (target: IssueListTarget) => Atom.Atom<AsyncResult.AsyncResult<IssueListResult, E>>,
   formatError: (cause: Cause.Cause<E>) => string,
 ) {
+  const manualRefresh = Atom.family(
+    (_query: Atom.Atom<AsyncResult.AsyncResult<IssueListResult, E>>) => Atom.make(0),
+  );
   const empty = Atom.make(NO_ISSUE_LISTS).pipe(Atom.withLabel("issues:merged-list:empty"));
   const family = Atom.family((key: string) =>
     Atom.make((get): MergedIssueList => {
       const answers: Array<readonly [EnvironmentId, IssueListResult]> = [];
       const revisions = new Map<EnvironmentId, IssueListRevision>();
+      const manualRefreshes = new Map<EnvironmentId, number>();
       const readyToContinue = new Set<EnvironmentId>();
       let error: string | null = null;
       let isPending = false;
       for (const target of JSON.parse(key) as ReadonlyArray<IssueListTarget>) {
         revisions.set(target.environmentId, get(listRevision(target.environmentId)));
-        const result = get(list(target));
+        const query = list(target);
+        manualRefreshes.set(target.environmentId, get(manualRefresh(query)));
+        const result = get(query);
         isPending ||= result.waiting;
         if (result._tag === "Failure" && error === null) error = formatError(result.cause);
         const value = Option.getOrNull(AsyncResult.value(result));
@@ -330,7 +346,7 @@ export function createMergedIssueListAtoms<E>(
           if (!result.waiting) readyToContinue.add(target.environmentId);
         }
       }
-      return { answers, revisions, readyToContinue, error, isPending };
+      return { answers, revisions, manualRefreshes, readyToContinue, error, isPending };
     }).pipe(Atom.withLabel(`issues:merged-list:${key}`)),
   );
   const refresh = (
@@ -349,6 +365,22 @@ export function createMergedIssueListAtoms<E>(
       return family(key);
     },
     refresh,
+    refreshManually: async (
+      registry: AtomRegistry.AtomRegistry,
+      targets: ReadonlyArray<IssueListTarget>,
+    ) => {
+      await Promise.all(
+        targets.map(async (target) => {
+          const query = list(target);
+          const result = await executeAtomQuery(registry, query, {
+            refresh: true,
+            reportFailure: false,
+          });
+          if (result._tag === "Success")
+            registry.update(manualRefresh(query), (value) => value + 1);
+        }),
+      );
+    },
     /** Refreshes each listing of `environmentId` that something still reads. */
     refreshEnvironment: (registry: AtomRegistry.AtomRegistry, environmentId: EnvironmentId) => {
       const live = new Set(registry.getNodes().keys());

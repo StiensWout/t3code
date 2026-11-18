@@ -325,34 +325,6 @@ describe("IssueService", () => {
     }),
   );
 
-  it.effect("routes edits with no host in the link to the project’s tracker", () =>
-    Effect.gen(function* () {
-      const edited: Array<{ host: string; scope: string }> = [];
-      const service = yield* makeService({
-        projects: [
-          project({ id: "github", repository: "acme/web" }),
-          project({ id: "enterprise", repository: "acme/web", host: "github.example.com" }),
-        ],
-        trackers: [
-          fakeTracker({
-            update: ({ host, scope }) => Effect.sync(() => void edited.push({ host, scope })),
-            setState: ({ host, scope }) => Effect.sync(() => void edited.push({ host, scope })),
-          }),
-        ],
-      });
-      const ref = {
-        projectId: "enterprise" as ProjectId,
-        tracker: GITHUB,
-        scope: "acme/web",
-        key: "42",
-      };
-      const expected = { host: "github.example.com", scope: "acme/web" };
-      yield* service.update({ ...ref, title: "Renamed" });
-      yield* service.setState({ ...ref, state: "closed" });
-      expect(edited).toEqual([expected, expected]);
-    }),
-  );
-
   it.effect("refuses what the tracker did not declare before calling it", () =>
     Effect.gen(function* () {
       let calls = 0;

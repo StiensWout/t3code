@@ -217,10 +217,10 @@ export function IssuesPage() {
     input: listInput,
   }));
   const list = useIssueList(targets);
-  useLiveRefresh(list.refresh, { key: JSON.stringify(targets) });
+  useLiveRefresh(list.refreshInBackground, { key: JSON.stringify(targets) });
 
   const [pages, setPages] = useState<ReadonlyMap<EnvironmentId, HeldIssuePage>>(new Map());
-  const held = holdIssuePages(list.answers, pages, listInput, list.revisions);
+  const held = holdIssuePages(list.answers, pages, listInput, list.revisions, list.manualRefreshes);
   if (held !== pages) setPages(held);
   const refresh = list.refresh;
   const loadPage = useAtomCommand(issueEnvironment.listPage, { reportFailure: false });

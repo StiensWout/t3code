@@ -16,6 +16,7 @@ import * as Equal from "effect/Equal";
 
 import {
   INITIAL_ISSUE_LIST_REVISION,
+  hostlessIssueScopeKey,
   issueEntryKey,
   mergeIssueListPage,
   type IssueListRevision,
@@ -50,6 +51,7 @@ export interface HeldIssuePage {
   /** The listing these pages answer, as `JSON.stringify` of its input. */
   readonly listing: string;
   readonly revision: IssueListRevision;
+  readonly manualRefresh: number;
 }
 
 function keepPageError<T>(failure: IssuePageError<T>, keepKey: (key: string) => boolean) {
@@ -110,6 +112,7 @@ export function holdIssuePages(
   pages: ReadonlyMap<EnvironmentId, HeldIssuePage>,
   input: IssueListInput,
   revisions?: ReadonlyMap<EnvironmentId, IssueListRevision>,
+  manualRefreshes?: ReadonlyMap<EnvironmentId, number>,
 ): ReadonlyMap<EnvironmentId, HeldIssuePage> {
   const listing = JSON.stringify(input);
   const oldKeys = pages.keys();
@@ -118,11 +121,13 @@ export function holdIssuePages(
   for (const [environmentId, answer] of answers) {
     const previous = pages.get(environmentId);
     const revision = revisions?.get(environmentId) ?? INITIAL_ISSUE_LIST_REVISION;
+    const manualRefresh = manualRefreshes?.get(environmentId) ?? 0;
     if (oldKeys.next().value !== environmentId) changed = true;
     if (
       previous?.answer === answer &&
       previous.listing === listing &&
-      previous.revision === revision
+      previous.revision === revision &&
+      previous.manualRefresh === manualRefresh
     ) {
       next.set(environmentId, previous);
       continue;
@@ -139,6 +144,7 @@ export function holdIssuePages(
       boundaries,
       listing,
       revision,
+      manualRefresh,
     };
     if (previous?.listing !== listing) {
       next.set(environmentId, first);
@@ -150,10 +156,22 @@ export function holdIssuePages(
     const failed = new Set(
       answer.errors.flatMap((error) => errorCursorKeys(error, answer.scopes ?? previous.entries)),
     );
+    // A hostless edit without cached detail names the project that served the scope.
+    const editedScopes = new Set<string>();
+    if (previous.revision !== revision) {
+      for (const scope of previous.answer.scopes ?? previous.entries) {
+        if (scope.host === undefined) continue;
+        const key = hostlessIssueScopeKey(scope);
+        if (previous.revision.get(key) !== revision.get(key)) {
+          editedScopes.add(issueListCursorKey(scope.host, scope.scope));
+        }
+      }
+    }
     const nextCursors = { ...answer.nextCursors };
     for (const [key, before] of previous.boundaries) {
       const after = boundaries.get(key);
-      if (scopeWasEdited(key, previous.revision, revision)) continue;
+      if (editedScopes.has(key) || scopeWasEdited(key, previous.revision, revision)) continue;
+      if (previous.manualRefresh !== manualRefresh && !failed.has(key)) continue;
       if (after === undefined) {
         if (!failed.has(key) || (covered !== undefined && !covered.includes(key))) continue;
       } else if (before.cursor !== after.cursor || !Equal.equals(before.rows, after.rows)) {
@@ -230,10 +248,6 @@ export function continueIssuePage(
     ...Object.fromEntries(Object.entries(page.nextCursors).filter(([key]) => notCurrent(key))),
     ...Object.fromEntries(Object.entries(next.nextCursors).filter(([key]) => isCurrent(key))),
   };
-  for (const { error } of moreErrors) {
-    const key = error.cursorKey;
-    if (key !== undefined && isCurrent(key)) nextCursors[key] = current[key]!;
-  }
   return {
     ...page,
     entries: mergeIssueListPage(

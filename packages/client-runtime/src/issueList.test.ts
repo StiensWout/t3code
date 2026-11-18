@@ -351,7 +351,7 @@ describe("holdIssuePages", () => {
 describe("continueIssuePage", () => {
   const failure = { projectId: api, projectTitle: "api", message: "rate limited" };
   const firstPageFailure = { projectId: "web" as ProjectId, projectTitle: "web", message: "boom" };
-  const cursors = { "github.com acme/api": "c1", "linear.app ENG": "l1" };
+  const cursors = { "github.com acme/api": "c1", "linear.app eng": "l1" };
 
   it("drops a continuation's error once a retry of the same cursors works", () => {
     const first = hold(answer({ errors: [firstPageFailure], nextCursors: cursors }));
@@ -368,11 +368,20 @@ describe("continueIssuePage", () => {
 
   it("clears the retried scope's error when two trackers share a project", () => {
     const github = "github.com acme/api";
-    const linear = "linear.app ENG";
+    const linear = "linear.app eng";
     const githubFailure = { ...failure, cursorKey: github };
     const linearFailure = { ...failure, message: "Linear failed", cursorKey: linear };
     const first = hold(answer({ nextCursors: cursors }));
-    const failed = continueIssuePage(first, answer({ errors: [githubFailure, linearFailure] }));
+    const failed = continueIssuePage(
+      first,
+      answer({ errors: [githubFailure, linearFailure], nextCursors: cursors }),
+    );
+    const linearRetry = continueIssuePage(
+      failed,
+      answer({ errors: [linearFailure], nextCursors: { [linear]: "l2" } }),
+      { [linear]: cursors[linear] },
+    );
+    expect(linearRetry.nextCursors).toEqual({ ...cursors, [linear]: "l2" });
     const retried = continueIssuePage(failed, answer({}), { [github]: cursors[github] });
     expect(retried.errors).toEqual([linearFailure]);
     expect(retried.nextCursors).toEqual({ [linear]: cursors[linear] });
@@ -395,7 +404,7 @@ describe("continueIssuePage", () => {
   it("moves only the cursors asked for and keeps the other trackers' errors", () => {
     const first = hold(answer({ nextCursors: cursors }));
     const linear = issueCursorsForHost(cursors, "linear.app");
-    expect(linear).toEqual({ "linear.app ENG": "l1" });
+    expect(linear).toEqual({ "linear.app eng": "l1" });
     const linearFailed = continueIssuePage(
       first,
       answer({ errors: [failure], nextCursors: linear }),
@@ -407,14 +416,14 @@ describe("continueIssuePage", () => {
       answer({ entries: [entry({ key: "2" })], nextCursors: { "github.com acme/api": "c2" } }),
       github,
     );
-    expect(next.nextCursors).toEqual({ "github.com acme/api": "c2", "linear.app ENG": "l1" });
+    expect(next.nextCursors).toEqual({ "github.com acme/api": "c2", "linear.app eng": "l1" });
     expect(next.errors).toEqual([failure]);
     const done = continueIssuePage(
       next,
       answer({}),
       issueCursorsForHost(next.nextCursors, "github.com"),
     );
-    expect(done.nextCursors).toEqual({ "linear.app ENG": "l1" });
+    expect(done.nextCursors).toEqual({ "linear.app eng": "l1" });
   });
 });
 

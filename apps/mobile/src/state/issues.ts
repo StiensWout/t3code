@@ -22,7 +22,12 @@ const mergedIssueLists = createMergedIssueListAtoms(
 /** One listing read across every environment asked. */
 export function useIssueList(targets: ReadonlyArray<IssueListTarget>) {
   const view = useAtomValue(mergedIssueLists.atom(targets));
-  return { ...view, refresh: () => mergedIssueLists.refresh(appAtomRegistry, targets) };
+  return {
+    ...view,
+    refresh: () => {
+      void mergedIssueLists.refreshManually(appAtomRegistry, targets);
+    },
+  };
 }
 
 /** After a write the list cannot see, such as a new issue filed from a sheet. */

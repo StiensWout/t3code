@@ -1,25 +1,44 @@
 import {
+  AuthSourceControlWriteScope,
   EnvironmentId,
   IssueTrackerKind,
   ProjectId,
+  WS_METHODS,
+  type AuthSessionState,
   type IssueComment,
   type IssueCommentsPage,
+  type IssueDetail,
   type IssueListEntry,
   type IssueListResult,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Stream from "effect/Stream";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it } from "@effect/vitest";
 
-import { continueIssuePage, holdIssuePages } from "../issueList.ts";
+import {
+  AVAILABLE_CONNECTION_STATE,
+  BearerConnectionTarget,
+  type PreparedConnection,
+  type SupervisorConnectionState,
+} from "../connection/model.ts";
+import { EnvironmentRegistry } from "../connection/registry.ts";
+import { EnvironmentSupervisor } from "../connection/supervisor.ts";
+import { continueIssuePage, finishIssuePage, holdIssuePages } from "../issueList.ts";
+import type { RpcSession } from "../rpc/session.ts";
 import {
   createIssueCommentPager,
+  createIssueEnvironmentAtoms,
   createMergedIssueCandidatesAtoms,
   createMergedIssueListAtoms,
   issueEntryKey,
   mergeIssueListPage,
+  type MergedIssueList,
 } from "./issues.ts";
+import { createEnvironmentSessionAtoms } from "./session.ts";
 
 function entry(overrides: Partial<IssueListEntry> & { key: string }): IssueListEntry {
   return {
@@ -73,7 +92,7 @@ describe("mergeIssueListPage", () => {
 });
 
 describe("createMergedIssueListAtoms", () => {
-  it("keeps loaded rows during refresh and lets another environment continue", () => {
+  it("keeps loaded rows while a manual refresh is pending or fails, then resets them on success", async () => {
     const healthy = "healthy" as EnvironmentId;
     const refreshing = "refreshing" as EnvironmentId;
     const input = { state: "open" } as const;
@@ -98,8 +117,12 @@ describe("createMergedIssueListAtoms", () => {
       () => "Refresh failed",
     );
     const listing = lists.atom(targets);
+    using _registry = { [Symbol.dispose]: () => registry.dispose() };
+    registry.mount(listing);
+    const hold = (view: MergedIssueList, pages: ReturnType<typeof holdIssuePages>) =>
+      holdIssuePages(view.answers, pages, input, view.revisions, view.manualRefreshes);
     const initial = registry.get(listing);
-    const held = holdIssuePages(initial.answers, new Map(), input, initial.revisions);
+    const held = hold(initial, new Map());
     const loaded = new Map(held).set(
       refreshing,
       continueIssuePage(held.get(refreshing)!, {
@@ -110,24 +133,190 @@ describe("createMergedIssueListAtoms", () => {
     );
 
     const previous = AsyncResult.success(first);
-    lists.refresh(registry, [{ environmentId: refreshing, input }]);
     registry.set(queries(refreshing), AsyncResult.waiting(previous));
+    const refresh = lists.refreshManually(registry, [{ environmentId: refreshing, input }]);
     const pending = registry.get(listing);
     expect(pending.isPending).toBe(true);
     expect(pending.readyToContinue).toEqual(new Set([healthy]));
-    expect(holdIssuePages(pending.answers, loaded, input, pending.revisions)).toBe(loaded);
+    expect(hold(pending, loaded)).toBe(loaded);
 
     registry.set(
       queries(refreshing),
       AsyncResult.failWithPrevious("offline", { previous: Option.some(previous) }),
     );
+    await refresh;
     const failed = registry.get(listing);
-    const retained = holdIssuePages(failed.answers, loaded, input, failed.revisions);
+    const retained = hold(failed, loaded);
     expect(failed.error).toBe("Refresh failed");
     expect(failed.readyToContinue).toEqual(new Set([healthy, refreshing]));
     expect(retained.get(refreshing)?.entries.map((row) => row.key)).toEqual(["1", "2"]);
     expect(retained.get(refreshing)?.nextCursors).toEqual({ [cursorKey]: "page-3" });
+
+    registry.set(queries(refreshing), AsyncResult.waiting(previous));
+    const retry = lists.refreshManually(registry, [{ environmentId: refreshing, input }]);
+    registry.set(queries(refreshing), previous);
+    await retry;
+    const refreshed = hold(registry.get(listing), retained);
+    expect(refreshed.get(refreshing)?.entries.map((row) => row.key)).toEqual(["1"]);
+    expect(refreshed.get(refreshing)?.nextCursors).toEqual({ [cursorKey]: "page-2" });
+    expect(refreshed.get(healthy)).toBe(held.get(healthy));
+    expect(finishIssuePage(refreshed, refreshing, held.get(refreshing)!, first)).toBe(refreshed);
   });
+});
+
+describe("issue edits", () => {
+  it.effect.each([true, false])(
+    "restarts only the hostless edit's tracker (detail loaded: %s)",
+    (detailLoaded) =>
+      Effect.gen(function* () {
+        const environmentId = EnvironmentId.make("local");
+        const github = entry({ key: "1" });
+        const enterprise = entry({
+          key: "1",
+          projectId: ProjectId.make("enterprise"),
+          host: "github.example.com",
+        });
+        const first: IssueListResult = {
+          viewers: {},
+          trackers: [],
+          entries: [github, enterprise],
+          errors: [],
+          nextCursors: { "github.com acme/app": "g2", "github.example.com acme/app": "e2" },
+        };
+        const input = { state: "open" } as const;
+        const target = { environmentId, input };
+        const issue = {
+          environmentId,
+          input: {
+            projectId: detailLoaded ? ProjectId.make("another-worktree") : enterprise.projectId,
+            tracker: enterprise.tracker,
+            scope: enterprise.scope,
+            key: enterprise.key,
+          },
+        };
+        const issueDetail: IssueDetail = {
+          ...enterprise,
+          projectId: issue.input.projectId,
+          writable: true,
+          capabilities: {
+            setState: true,
+            comment: true,
+            edit: true,
+            labels: true,
+            assignees: true,
+            reactions: false,
+            templates: false,
+            linkedPullRequests: false,
+            events: false,
+            search: true,
+          },
+          viewerPermissions: {
+            setState: true,
+            comment: true,
+            edit: true,
+            labels: true,
+            assignees: true,
+          },
+          states: [enterprise.state],
+          viewer: null,
+          body: "",
+          comments: [],
+          commentsCursor: null,
+          events: [],
+          linkedPullRequests: [],
+        };
+        const supervisor = EnvironmentSupervisor.of({
+          target: new BearerConnectionTarget({
+            environmentId,
+            label: "Test",
+            connectionId: "test",
+          }),
+          state: yield* SubscriptionRef.make<SupervisorConnectionState>({
+            ...AVAILABLE_CONNECTION_STATE,
+            phase: "connected",
+          }),
+          session: yield* SubscriptionRef.make(
+            Option.some({
+              client: {
+                [WS_METHODS.issuesList]: () => Effect.succeed(first),
+                [WS_METHODS.issuesDetail]: () =>
+                  detailLoaded ? Effect.succeed(issueDetail) : Effect.never,
+                [WS_METHODS.issuesSetState]: () => Effect.void,
+              },
+            } as unknown as RpcSession),
+          ),
+          prepared: yield* SubscriptionRef.make(Option.none<PreparedConnection>()),
+          connect: Effect.void,
+          disconnect: Effect.void,
+          retryNow: Effect.void,
+        });
+        const runtime = Atom.runtime(
+          Layer.succeed(EnvironmentRegistry, {
+            run: (_id, effect) => Effect.provideService(effect, EnvironmentSupervisor, supervisor),
+            followStream: (_id, stream) =>
+              Stream.provideService(stream, EnvironmentSupervisor, supervisor),
+          } as EnvironmentRegistry["Service"]),
+        );
+        const auth: AuthSessionState = {
+          authenticated: true,
+          auth: {
+            policy: "remote-reachable",
+            bootstrapMethods: [],
+            sessionMethods: [],
+            sessionCookieName: "test",
+          },
+          scopes: [AuthSourceControlWriteScope],
+        };
+        const registry = AtomRegistry.make({
+          initialValues: [
+            [
+              createEnvironmentSessionAtoms(runtime).sessionStateAtom(environmentId),
+              AsyncResult.success(auth),
+            ],
+          ],
+        });
+        yield* Effect.addFinalizer(() => Effect.sync(() => registry.dispose()));
+        const issues = createIssueEnvironmentAtoms(runtime);
+        const lists = createMergedIssueListAtoms(issues.list, () => "List failed");
+        const listing = lists.atom([target]);
+        registry.mount(listing);
+        const read = (view: MergedIssueList, pages: ReturnType<typeof holdIssuePages>) =>
+          holdIssuePages(view.answers, pages, input, view.revisions);
+        yield* AtomRegistry.getResult(registry, issues.list(target));
+        const held = read(registry.get(listing), new Map());
+        const loaded = new Map(held).set(
+          environmentId,
+          continueIssuePage(held.get(environmentId)!, {
+            ...first,
+            entries: [
+              { ...github, key: "2" },
+              { ...enterprise, key: "2" },
+            ],
+            nextCursors: { "github.com acme/app": "g3", "github.example.com acme/app": "e3" },
+          }),
+        );
+        if (detailLoaded) {
+          const detail = issues.detail(issue);
+          registry.mount(detail);
+          yield* AtomRegistry.getResult(registry, detail);
+        }
+        const edit = yield* Effect.promise(() =>
+          issues.setState.run(registry, {
+            ...issue,
+            input: { ...issue.input, state: "closed" },
+          }),
+        );
+        expect(edit._tag).toBe("Success");
+        const edited = read(registry.get(listing), loaded).get(environmentId);
+        expect(edited?.entries.filter((row) => row.key === "2").map((row) => row.host)).toEqual([
+          "github.com",
+        ]);
+        expect(edited?.nextCursors).toEqual({
+          "github.com acme/app": "g3",
+          "github.example.com acme/app": "e2",
+        });
+      }),
+  );
 });
 
 const comment = (id: string): IssueComment => ({

@@ -158,7 +158,7 @@ export function IssuesScreen(
   const list = useIssueList(targets);
 
   const [pages, setPages] = useState<ReadonlyMap<EnvironmentId, HeldIssuePage>>(new Map());
-  const held = holdIssuePages(list.answers, pages, listInput, list.revisions);
+  const held = holdIssuePages(list.answers, pages, listInput, list.revisions, list.manualRefreshes);
   if (held !== pages) setPages(held);
   const refresh = list.refresh;
   const loadPage = useAtomCommand(issueEnvironment.listPage, { reportFailure: false });
