@@ -80,11 +80,11 @@ function firstPageBoundaries(answer: IssueListResult, sort: IssueListSort) {
     if (rows) rows.push(item);
     else rowsByScope.set(key, [item]);
   }
-  return new Map(
-    [...new Set([...rowsByScope.keys(), ...Object.keys(answer.nextCursors)])].map(
-      (key) =>
-        [key, { rows: rowsByScope.get(key) ?? [], cursor: answer.nextCursors[key] }] as const,
-    ),
+  return new Map<string, FirstPageBoundary>(
+    [...new Set([...rowsByScope.keys(), ...Object.keys(answer.nextCursors)])].map((key) => [
+      key,
+      { rows: rowsByScope.get(key) ?? [], cursor: answer.nextCursors[key] },
+    ]),
   );
 }
 
