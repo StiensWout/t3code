@@ -221,6 +221,44 @@ describe("t3 theme", () => {
     }),
   );
 
+  it.effect.each([
+    { incoming: "first-in-library", publishes: false },
+    { incoming: "past-the-library", publishes: false },
+    { incoming: "library-theme-32", publishes: true },
+  ])(
+    "publishes $incoming into a full library only when every theme stays served",
+    ({ incoming, publishes }) =>
+      Effect.gen(function* () {
+        const baseDir = makeBaseDir();
+        writeSettings(baseDir, {});
+        const themesDir = NodePath.join(baseDir, "userdata", "themes");
+        NodeFS.mkdirSync(themesDir, { recursive: true });
+        const library = Array.from(
+          { length: 32 },
+          (_, index) => `library-theme-${String(index + 1).padStart(2, "0")}.json`,
+        );
+        for (const entry of library) {
+          NodeFS.writeFileSync(NodePath.join(themesDir, entry), NIGHTFALL_THEME_JSON);
+        }
+        const themeFile = NodePath.join(baseDir, "incoming.json");
+        NodeFS.writeFileSync(themeFile, NIGHTFALL_THEME_JSON);
+
+        const result = yield* runCli([
+          "theme",
+          "set",
+          themeFile,
+          "--id",
+          incoming,
+          "--base-dir",
+          baseDir,
+        ]).pipe(Effect.result);
+
+        assert.equal(result._tag === "Success", publishes);
+        assert.deepEqual(NodeFS.readdirSync(themesDir).toSorted(), library);
+        assert.equal(readSettings(baseDir).defaultTheme, publishes ? incoming : undefined);
+      }),
+  );
+
   it.effect.skipIf(!symlinksSupported)("never writes through a symlink at the staging path", () =>
     Effect.gen(function* () {
       const baseDir = makeBaseDir();
