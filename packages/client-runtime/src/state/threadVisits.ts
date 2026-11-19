@@ -68,6 +68,8 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
       let lastAcceptedVisitedAtMs = Number.NEGATIVE_INFINITY;
       let lastObservedVisitedAtMs = Number.NEGATIVE_INFINITY;
       let retryPending = false;
+      // Until the shell changes after a new session, it may still be the pre-offline copy.
+      let shellAtSessionStart: VisitedShell | null = null;
       const sessionGenerationAtom = options.sessionGenerationAtom(ref.environmentId);
       let lastDispatch = {
         at: 0,
@@ -150,6 +152,7 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
           retryPending = false;
         }
         // A rejected visit waits for a new session, even if streaming changes the shell.
+        // It retries on that session's first shell update, or after the throttle if none comes.
         const generation = registry.get(sessionGenerationAtom);
         if (retryPending && generation === lastDispatch.generation) return;
         const failedOpen = pendingOpen?.failedAttempt;
@@ -160,7 +163,7 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
             retryPending ? lastDispatch.at : Number.NEGATIVE_INFINITY,
             canSendOpen && failedOpen ? failedOpen.at : Number.NEGATIVE_INFINITY,
           ) + VISIT_DISPATCH_THROTTLE_MS;
-        if (now < retryAt) {
+        if (shell === shellAtSessionStart && now < retryAt) {
           timer = setTimeout(
             () => onShell(registry.get(options.threadShellAtom(ref))),
             retryAt - now,
@@ -213,9 +216,10 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
       // `subscribe`, not `get`: a rebuild would reset the open and throttle
       // state on every streaming tick.
       get.subscribe(options.threadShellAtom(ref), onShell, { immediate: true });
-      get.subscribe(sessionGenerationAtom, () =>
-        onShell(registry.get(options.threadShellAtom(ref))),
-      );
+      get.subscribe(sessionGenerationAtom, () => {
+        shellAtSessionStart = registry.get(options.threadShellAtom(ref));
+        onShell(shellAtSessionStart);
+      });
     }).pipe(Atom.withLabel(`thread-visit-tracker:${key}`));
   });
   return (ref: ScopedThreadRef | null) => (ref === null ? IDLE_TRACKER : family(threadKey(ref)));

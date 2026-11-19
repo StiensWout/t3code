@@ -230,7 +230,7 @@ it("advances the watermark to a wake without waiting for the throttle", () => {
 });
 
 it.each(["unread", "already read"] as const)(
-  "retries a failed open when the same %s shell returns after reconnect",
+  "retries a failed open on the first %s shell after reconnect",
   async (readState) => {
     using t = setup(`thread-retry-failed-${readState}`, {
       updatedAt: at(10),
@@ -244,7 +244,11 @@ it.each(["unread", "already read"] as const)(
 
     t.setOnline(true);
     t.reconnect();
-    await vi.advanceTimersByTimeAsync(VISIT_DISPATCH_THROTTLE_MS);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t.visits).toEqual([]);
+    // The new session's shell lands, so the retry need not wait for the throttle.
+    t.update({});
+    await vi.advanceTimersByTimeAsync(0);
     expect(t.visits).toEqual([{ threadId: t.ref.threadId, visitedAt: at(10), opened: true }]);
   },
 );
@@ -379,8 +383,8 @@ it("retries an open after a newer visit is acknowledged ahead of its shell updat
   t.update({ lastVisitedAt: at(20) });
 
   expect(t.visits).toEqual([
-    { threadId: t.ref.threadId, visitedAt: at(20) },
     { threadId: t.ref.threadId, visitedAt: at(20), opened: true },
+    { threadId: t.ref.threadId, visitedAt: at(20) },
   ]);
 });
 
