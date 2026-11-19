@@ -1,4 +1,5 @@
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { recordThreadOpen, type ThreadOpenStats } from "@t3tools/shared/paletteSearch";
 import * as Cause from "effect/Cause";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
@@ -230,6 +231,37 @@ it("retries a failed visit when the same shell returns after reconnect", async (
   t.reconnect();
   await vi.advanceTimersByTimeAsync(VISIT_DISPATCH_THROTTLE_MS);
   expect(t.visits).toEqual([{ threadId: t.ref.threadId, visitedAt: at(10), opened: true }]);
+});
+
+it("records an open after leaving an offline thread and reopening it online", async () => {
+  using t = setup("thread-reopen-after-offline", {
+    updatedAt: at(10),
+    lastVisitedAt: at(0),
+    latestRun: null,
+  });
+  t.setOnline(false);
+  const unmount = t.mount();
+  await vi.advanceTimersByTimeAsync(0);
+  unmount();
+  await vi.advanceTimersByTimeAsync(VISIT_DISPATCH_THROTTLE_MS);
+  expect(t.visits).toEqual([]);
+
+  t.setOnline(true);
+  t.reconnect();
+  const reopenedAt = Date.UTC(2026, 0, 1, 0, 0, 10);
+  t.mount();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(t.visits.at(-1)?.visitedAt).toBe(at(10));
+  const recorded = t.visits.reduce<ThreadOpenStats | null>(
+    (opens, visit) =>
+      visit.opened ? recordThreadOpen(opens, reopenedAt, visit.searchQuery) : opens,
+    null,
+  );
+  expect(recorded, "server open history after reconnect").toEqual({
+    openedAt: reopenedAt,
+    score: 1,
+    picks: [],
+  });
 });
 
 it("does not retry a failed visit the server already shows as seen", async () => {
