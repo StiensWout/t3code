@@ -5855,24 +5855,24 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
     {
       own: { name: "origin", url: "https://github.com/wout/web.git" },
       headBranch: "kept",
-      tracks: "refs/heads/feature/shared",
+      upstream: "acme/feature/shared",
       upstreamUrl: "https://github.com/acme/web.git",
     },
     {
       own: { name: "origin", url: "https://github.com/wout/web.git" },
       headBranch: "deleted",
-      tracks: "",
-      upstreamUrl: "",
+      upstream: "",
+      upstreamUrl: "https://github.com/acme/web.git",
     },
     {
       own: { name: "wout", url: "git@github.com:wout/web.git" },
       headBranch: "kept",
-      tracks: "refs/heads/feature/shared",
+      upstream: "acme/feature/shared",
       upstreamUrl: "git@github.com:acme/web.git",
     },
   ] as const)(
     "prepares a worktree for an upstream pull request from a fork ($own.name, head branch $headBranch)",
-    ({ own, headBranch, tracks, upstreamUrl }) =>
+    ({ own, headBranch, upstream, upstreamUrl }) =>
       Effect.gen(function* () {
         const { repoDir, manager, headSha, forkHead, read } = yield* setUpUpstreamPullRequest(
           own,
@@ -5886,14 +5886,11 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
         });
 
         const worktreePath = result.worktreePath as string;
-        // The fixture's `insteadOf` rewrites hide a remote's URL from the lookup that reuses it,
-        // so the tracked remote's name varies; its URL and branch do not.
-        const remote = yield* read(repoDir, ["config", `branch.${result.branch}.remote`]);
         expect({
           branch: result.branch,
           head: yield* read(worktreePath, ["rev-parse", "HEAD"]),
-          tracks: yield* read(repoDir, ["config", `branch.${result.branch}.merge`]),
-          upstreamUrl: yield* read(repoDir, ["config", `remote.${remote}.url`]),
+          upstream: yield* read(worktreePath, ["rev-parse", "--abbrev-ref", "@{upstream}"]),
+          upstreamUrl: yield* read(repoDir, ["config", "remote.acme.url"]),
           own: yield* read(repoDir, ["rev-parse", "feature/shared"]),
           ownUpstream: yield* read(repoDir, [
             "rev-parse",
@@ -5903,7 +5900,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
         }).toEqual({
           branch: "t3code/pr-7/feature/shared",
           head: headSha,
-          tracks,
+          upstream,
           upstreamUrl,
           own: forkHead,
           ownUpstream: `${own.name}/feature/shared`,
@@ -5923,7 +5920,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
         mode: "worktree",
       } as const;
       const first = yield* preparePullRequestThread(manager, input);
-      yield* runGit(repoDir, ["checkout", "--detach", first.branch]);
+      yield* runGit(repoDir, ["checkout", "--detach", "acme/feature/shared"]);
       const updated = yield* pushUpstreamHead("update.txt");
       yield* runGit(repoDir, ["checkout", "main"]);
 

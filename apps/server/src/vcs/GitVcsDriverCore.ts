@@ -2075,14 +2075,30 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       input.cwd,
       ["remote", "-v"],
     ).pipe(Effect.map((stdout) => parseRemoteFetchUrls(stdout)));
-    const findMatchingRemote = (remoteFetchUrls: Map<string, string>) =>
-      Array.from(remoteFetchUrls.entries()).find(
-        ([, remoteUrl]) =>
-          sourceControlDefinitions.repositoryKeyFromRemote(remoteUrl) === normalizedTargetUrl,
-      )?.[0];
+    // `git remote -v` prints a URL after its `insteadOf` rewrite, which can hide the repository a
+    // remote was added for; the config keeps the URL as written.
+    const listWrittenRemoteUrls = runGitStdout(
+      "GitVcsDriver.ensureRemote.listWrittenRemoteUrls",
+      input.cwd,
+      ["config", "--get-regexp", "^remote\\..*\\.url$"],
+      true,
+    ).pipe(
+      Effect.map((stdout) =>
+        stdout.split(/\r?\n/).flatMap((line): Array<[string, string]> => {
+          const match = /^remote\.(.+)\.url (.+)$/.exec(line);
+          return match?.[1] === undefined || match[2] === undefined ? [] : [[match[1], match[2]]];
+        }),
+      ),
+    );
+    const findMatchingRemote = Effect.fnUntraced(function* (remoteFetchUrls: Map<string, string>) {
+      const isTarget = ([, remoteUrl]: readonly [string, string]) =>
+        sourceControlDefinitions.repositoryKeyFromRemote(remoteUrl) === normalizedTargetUrl;
+      return ([...remoteFetchUrls].find(isTarget) ??
+        (yield* listWrittenRemoteUrls).find(isTarget))?.[0];
+    });
 
     const remoteFetchUrls = yield* listRemoteFetchUrls;
-    const existing = findMatchingRemote(remoteFetchUrls);
+    const existing = yield* findMatchingRemote(remoteFetchUrls);
     if (existing !== undefined) return existing;
 
     let remoteName = preferredName;
@@ -2121,10 +2137,10 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       // A parallel launch for the same fork may have added it since the listing above.
       Effect.catch((error) =>
         listRemoteFetchUrls.pipe(
-          Effect.flatMap((current) => {
-            const added = findMatchingRemote(current);
-            return added === undefined ? Effect.fail(error) : Effect.succeed(added);
-          }),
+          Effect.flatMap(findMatchingRemote),
+          Effect.flatMap((added) =>
+            added === undefined ? Effect.fail(error) : Effect.succeed(added),
+          ),
         ),
       ),
     );

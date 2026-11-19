@@ -792,17 +792,6 @@ describe("GitHubSourceControlProvider.checkoutChangeRequest", () => {
     }).pipe(Effect.provide(layer));
   });
 
-  interface UrlCheckout {
-    readonly name: string;
-    /** The checkout's own remote. */
-    readonly own: readonly [name: string, url: string];
-    readonly host?: string;
-    readonly branchRemote?: string;
-    readonly trackingFetchFails?: boolean;
-    readonly outcome: Readonly<
-      Record<"ensured" | "tracked" | "pullRef" | "upstream" | "transport", unknown>
-    >;
-  }
   const fetchedFromAcme = {
     ensured: { cwd: "/repo", preferredName: "acme", url: "git@github.com:acme/web.git" },
     tracked: { cwd: "/repo", remoteName: "acme", remoteBranch: "feature" },
@@ -810,63 +799,65 @@ describe("GitHubSourceControlProvider.checkoutChangeRequest", () => {
     upstream: { cwd: "/repo", branch: "feature", remoteName: "acme", remoteBranch: "feature" },
     transport: "remote.origin.url",
   };
-  const urlCheckouts: ReadonlyArray<UrlCheckout> = [
+  it.effect.each([
     {
       name: "from the upstream",
       own: ["origin", "git@github.com:wout/web.git"],
-      outcome: fetchedFromAcme,
+      host: "github.com",
+      ...fetchedFromAcme,
     },
     {
       name: "from the upstream's pull ref once its head branch is gone",
       own: ["origin", "git@github.com:wout/web.git"],
+      host: "github.com",
       trackingFetchFails: true,
-      outcome: {
-        ...fetchedFromAcme,
-        pullRef: ["fetch", "--quiet", "--no-tags", "--", "acme", "refs/pull/7/head"],
-        upstream: null,
-      },
+      ...fetchedFromAcme,
+      pullRef: ["fetch", "--quiet", "--no-tags", "--", "acme", "refs/pull/7/head"],
+      upstream: null,
     },
     {
       name: "over the transport of a fork remote not named origin",
       own: ["wout", "git@github.com:wout/web.git"],
-      outcome: { ...fetchedFromAcme, transport: "remote.wout.url" },
+      host: "github.com",
+      ...fetchedFromAcme,
+      transport: "remote.wout.url",
     },
     {
       name: "from the upstream on an Enterprise host",
       own: ["origin", "git@ghe.acme.test:wout/web.git"],
       host: "ghe.acme.test",
-      outcome: {
-        ...fetchedFromAcme,
-        ensured: { ...fetchedFromAcme.ensured, url: "git@ghe.acme.test:acme/web.git" },
-      },
+      ...fetchedFromAcme,
+      ensured: { ...fetchedFromAcme.ensured, url: "git@ghe.acme.test:acme/web.git" },
     },
     {
       name: "onto a local branch that keeps the remote it already tracks",
       own: ["origin", "git@github.com:wout/web.git"],
+      host: "github.com",
       branchRemote: "origin",
-      outcome: { ...fetchedFromAcme, upstream: null },
+      ...fetchedFromAcme,
+      upstream: null,
     },
     {
       name: "from an SSH alias of the pull request's own repository",
       own: ["origin", "git@work:acme/web.git"],
-      outcome: {
-        ensured: null,
-        tracked: { ...fetchedFromAcme.tracked, remoteName: "origin" },
-        pullRef: null,
-        upstream: { ...fetchedFromAcme.upstream, remoteName: "origin" },
-        transport: null,
-      },
+      host: "github.com",
+      ...fetchedFromAcme,
+      ensured: null,
+      tracked: { ...fetchedFromAcme.tracked, remoteName: "origin" },
+      upstream: { ...fetchedFromAcme.upstream, remoteName: "origin" },
+      transport: null,
     },
-  ];
-  it.effect.each(urlCheckouts)(
+  ] as const)(
     "checks out a pull request named by URL $name",
-    ({ own, host = "github.com", branchRemote, trackingFetchFails = false, outcome }) => {
+    ({ own, host = "github.com", ensured, tracked, pullRef, upstream, transport, ...options }) => {
       const { layer, git } = harness({
         remotes: remotesOutput(own),
         primaryRemote: own[0],
         originUrls: `${own[1]}\n`,
-        ...(branchRemote === undefined ? {} : { localBranches: ["feature"], branchRemote }),
-        trackingFetchFails,
+        ...("branchRemote" in options
+          ? { localBranches: ["feature"], branchRemote: options.branchRemote }
+          : {}),
+        trackingFetchFails: "trackingFetchFails" in options,
         graphql: () => ({ pullRequest: node(7, "feature") }),
         api: {
           rest: (input) => {
@@ -893,14 +884,16 @@ describe("GitHubSourceControlProvider.checkoutChangeRequest", () => {
           git.flatMap(([name, args]) =>
             name === "execute" && Array.isArray(args) && args[0] === verb ? [args] : [],
           )[0] ?? null;
-        const actual: UrlCheckout["outcome"] = {
-          ensured: call("ensureRemote"),
-          tracked: call("fetchRemoteTrackingBranch"),
-          pullRef: executed("fetch"),
-          upstream: call("setBranchUpstream"),
-          transport: executed("config")?.[2] ?? null,
-        };
-        assert.deepStrictEqual(actual, outcome);
+        assert.deepStrictEqual(
+          {
+            ensured: call("ensureRemote"),
+            tracked: call("fetchRemoteTrackingBranch"),
+            pullRef: executed("fetch"),
+            upstream: call("setBranchUpstream"),
+            transport: executed("config")?.[2] ?? null,
+          },
+          { ensured, tracked, pullRef, upstream, transport },
+        );
       }).pipe(Effect.provide(layer));
     },
   );
