@@ -9,7 +9,7 @@ import * as Dialog from "./ui/Dialog";
 import type { ComposerContextRecord, EnvironmentId } from "@t3tools/contracts";
 import { Pressable, View } from "react-native";
 import { Image } from "expo-image";
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { DraftComposerAttachment } from "../lib/composerImages";
 import { composerAttachmentInlineUri, isFileBackedComposerAttachment } from "../lib/composerImages";
 import {
@@ -47,13 +47,17 @@ export function ComposerContextAttachment(props: {
   const error = localPreview.error ? gt("The local file is unavailable. Attach it again.") : null;
   const [sharing, setSharing] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
+  const request = useRef<AbortController | null>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a share still downloading when the sheet closes must not open the system share sheet over the thread
+  useEffect(() => () => request.current?.abort(), []);
   const uri = local
     ? localPreview.uri
     : (inlineUri ?? (asset._tag === "Success" ? asset.url : null));
   const share = async () => {
-    if (sharing) return;
-    setSharing(true);
+    if (request.current) return;
     const controller = new AbortController();
+    request.current = controller;
+    setSharing(true);
     const result = await settlePromise(async () => {
       if (local) {
         const preview = await loadLocalAttachmentPreview(local, controller.signal);
@@ -74,6 +78,8 @@ export function ComposerContextAttachment(props: {
         sourceIdentifier: shareSourceIdentifier,
       });
     });
+    request.current = null;
+    if (controller.signal.aborted) return;
     setSharing(false);
     if (AsyncResult.isFailure(result)) {
       const cause = squashAtomCommandFailure(result);
