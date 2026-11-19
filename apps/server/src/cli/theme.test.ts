@@ -1,7 +1,10 @@
 // @effect-diagnostics nodeBuiltinImport:off - CLI integration exercises the filesystem boundary.
+import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import * as NodeURL from "node:url";
+import * as NodeUtil from "node:util";
 
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -25,6 +28,17 @@ vi.mock("node:fs", { spy: true });
 
 // Windows chmod cannot force these directory or file permission failures.
 const windowsHost = HostProcess.Platform.defaultValue() === "win32";
+const execFile = NodeUtil.promisify(NodeChildProcess.execFile);
+const runCliProcess = (args: ReadonlyArray<string>, nodeArgs: ReadonlyArray<string> = []) =>
+  Effect.tryPromise({
+    try: (signal) =>
+      execFile(
+        process.execPath,
+        [...nodeArgs, NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)), ...args],
+        { signal },
+      ),
+    catch: (error) => String(error),
+  });
 
 const runCli = (
   args: ReadonlyArray<string>,
@@ -282,7 +296,7 @@ describe("t3 theme", () => {
       }),
   );
 
-  it.effect("allows only one concurrent publish to take the last slot", () =>
+  it.live("allows only one CLI process to take the last slot", () =>
     Effect.gen(function* () {
       const baseDir = makeBaseDir();
       const themesDir = NodePath.join(baseDir, "userdata", "themes");
@@ -312,18 +326,88 @@ describe("t3 theme", () => {
       })).pipe(Effect.forkScoped);
       yield* Deferred.await(listed);
 
-      const last = yield* runCli(args("z-last")).pipe(
-        Effect.result,
+      const failure = yield* runCliProcess(args("z-last")).pipe(
+        Effect.flip,
         Effect.ensuring(Deferred.succeed(resume, undefined)),
       );
       yield* Fiber.join(first);
-      assert.equal(last._tag, "Failure");
+      assert.include(failure, "Could not publish the theme");
       assert.equal(readSettings(baseDir).defaultTheme, "a-first");
       assert.deepEqual(
         NodeFS.readdirSync(themesDir).filter((entry) => !entry.startsWith("theme-")),
         ["a-first.json"],
       );
     }),
+  );
+
+  it.live.skipIf(windowsHost)("keeps the previous theme when the staged file is unreadable", () =>
+    Effect.gen(function* () {
+      const baseDir = makeBaseDir();
+      writeSettings(baseDir, { defaultTheme: "ocean" });
+      const themesDir = NodePath.join(baseDir, "userdata", "themes");
+      NodeFS.mkdirSync(themesDir);
+      const published = NodePath.join(themesDir, "nightfall.json");
+      NodeFS.writeFileSync(published, PREVIOUS_NIGHTFALL_THEME_JSON);
+      const themeFile = NodePath.join(baseDir, "nightfall.json");
+      NodeFS.writeFileSync(themeFile, NIGHTFALL_THEME_JSON);
+
+      const failure = yield* runCliProcess(
+        ["theme", "set", themeFile, "--base-dir", baseDir],
+        ["--import", "data:text/javascript,process.umask(0o400)"],
+      ).pipe(Effect.flip);
+      assert.include(failure, "Could not publish the theme");
+      assert.equal(NodeFS.readFileSync(published, "utf8"), PREVIOUS_NIGHTFALL_THEME_JSON);
+      assert.deepEqual(NodeFS.readdirSync(themesDir), ["nightfall.json"]);
+      assert.equal(readSettings(baseDir).defaultTheme, "ocean");
+    }),
+  );
+
+  it.effect.each(["before commit", "during commit"] as const)(
+    "fails a publish when it loses its lease %s",
+    (when) =>
+      Effect.gen(function* () {
+        const baseDir = makeBaseDir();
+        writeSettings(baseDir, { defaultTheme: "ocean" });
+        const themesDir = NodePath.join(baseDir, "userdata", "themes");
+        const lockPath = NodePath.join(themesDir, ".publish.lock");
+        const published = NodePath.join(themesDir, "nightfall.json");
+        const themeFile = NodePath.join(baseDir, "nightfall.json");
+        NodeFS.writeFileSync(themeFile, NIGHTFALL_THEME_JSON);
+
+        const replaceLease = Effect.sync(() => {
+          NodeFS.renameSync(lockPath, `${lockPath}.moved`);
+          NodeFS.mkdirSync(lockPath);
+        });
+        const failure = yield* runCli(["theme", "set", themeFile, "--base-dir", baseDir], (fs) => ({
+          ...fs,
+          readDirectory: (path, options) =>
+            fs
+              .readDirectory(path, options)
+              .pipe(
+                Effect.tap(() =>
+                  when === "before commit" && path === themesDir ? replaceLease : Effect.void,
+                ),
+              ),
+          rename: (from, to) =>
+            fs
+              .rename(from, to)
+              .pipe(
+                Effect.tap(() =>
+                  when === "during commit" && to === settingsPathFor(baseDir)
+                    ? replaceLease
+                    : Effect.void,
+                ),
+              ),
+        })).pipe(Effect.flip);
+
+        assert.include(String(failure), "Could not publish the theme");
+        assert.isTrue(NodeFS.existsSync(lockPath));
+        assert.equal(NodeFS.existsSync(published), when === "during commit");
+        assert.equal(
+          readSettings(baseDir).defaultTheme,
+          when === "during commit" ? "nightfall" : "ocean",
+        );
+      }),
   );
 
   it.effect.skipIf(!symlinksSupported)("never writes through a symlink at the staging path", () =>

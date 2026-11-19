@@ -21,6 +21,7 @@ import {
   UNPUBLISHABLE_THEME_IDS,
 } from "@t3tools/shared/themePalettes";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -231,10 +232,6 @@ const scanPublishedThemes = Effect.fnUntraced(function* (
   const themes: Array<EnvironmentTheme> = [];
   const entryNames = new Set(entries);
   if (candidate) entryNames.add(candidate.entry);
-  const candidateRaw =
-    candidate && Buffer.byteLength(candidate.contents) <= MAX_THEME_FILE_BYTES
-      ? candidate.contents
-      : null;
   let examined = 0;
   let totalBytes = 0;
   for (const entry of [...entryNames].sort()) {
@@ -256,7 +253,7 @@ const scanPublishedThemes = Effect.fnUntraced(function* (
     const filePath = `${themesDir}/${entry}`;
     const raw =
       entry === candidate?.entry
-        ? candidateRaw
+        ? candidate.contents
         : readThemeFileGuarded(filePath, MAX_THEME_FILE_BYTES);
     if (raw === null) {
       yield* Effect.logWarning("ignoring unusable environment theme file", {
@@ -304,48 +301,130 @@ class ThemeLibraryPublishError extends Schema.TaggedError<ThemeLibraryPublishErr
   },
 ) {}
 
-/** Check the candidate without exposing it, then hold the directory lease through selection and rollback. */
+const PUBLISH_LEASE_STALE_MS = 120_000;
+const publishUnavailable = (cause: unknown) =>
+  new ThemeLibraryPublishError({ reason: "unavailable", cause });
+
+const acquirePublishLease = Effect.fn("EnvironmentTheme.acquirePublishLease")(function* (
+  themesDir: string,
+) {
+  const lockPath = NodePath.join(themesDir, ".publish.lock");
+  const statLease = () => NodeFS.lstatSync(lockPath, { bigint: true, throwIfNoEntry: false });
+  let original: NodeFS.BigIntStats | null | undefined;
+  let compromised: Error | undefined;
+  const isSameLease = (current: NodeFS.BigIntStats | undefined) =>
+    original != null &&
+    current !== undefined &&
+    current.dev === original.dev &&
+    current.ino === original.ino &&
+    current.birthtimeNs === original.birthtimeNs;
+
+  // Both release and the exit hook must leave a successor's lock directory alone.
+  const removeLease = (path: string) => {
+    if (original === undefined || isSameLease(statLease())) NodeFS.rmdirSync(path);
+  };
+  yield* Effect.acquireRelease(
+    Effect.tryPromise({
+      try: () =>
+        lock(themesDir, {
+          lockfilePath: lockPath,
+          stale: PUBLISH_LEASE_STALE_MS,
+          update: 10_000,
+          retries: { retries: 20, factor: 1, minTimeout: 50, maxTimeout: 50 },
+          onCompromised: (error) => {
+            compromised = error;
+          },
+          fs: {
+            ...NodeFS,
+            rmdirSync: removeLease,
+            rmdir: (path: string, callback: (error: NodeJS.ErrnoException | null) => void) => {
+              try {
+                removeLease(path);
+              } catch (error) {
+                callback(error as NodeJS.ErrnoException);
+                return;
+              }
+              callback(null);
+            },
+          },
+        }),
+      catch: publishUnavailable,
+    }),
+    (release) =>
+      Effect.tryPromise({ try: () => release(), catch: publishUnavailable }).pipe(
+        Effect.ignore({ log: true }),
+      ),
+  );
+
+  original = null;
+  original = yield* Effect.try({ try: () => statLease() ?? null, catch: publishUnavailable });
+  return Clock.currentTimeMillis.pipe(
+    Effect.flatMap((now) =>
+      Effect.try({
+        try: () => {
+          if (compromised) throw compromised;
+          const current = statLease();
+          if (
+            !current ||
+            !isSameLease(current) ||
+            current.mtime.getTime() < now - PUBLISH_LEASE_STALE_MS
+          ) {
+            throw new Error("Theme publish lease was lost.");
+          }
+        },
+        catch: publishUnavailable,
+      }),
+    ),
+  );
+});
+
+/** Stage and check the candidate before exposing it. Keep the lease through selection and rollback. */
 export const withThemePublish = Effect.fn("EnvironmentTheme.withThemePublish")(function* <A, E, R>(
   themesDir: string,
   themeId: string,
   contents: string,
-  publish: Effect.Effect<A, E, R>,
+  publish: (
+    staging: string,
+    checkLease: Effect.Effect<void, ThemeLibraryPublishError>,
+  ) => Effect.Effect<A, E, R>,
 ) {
   const fs = yield* FileSystem.FileSystem;
-  const unavailable = (cause: unknown) =>
-    new ThemeLibraryPublishError({ reason: "unavailable", cause });
-  yield* fs.makeDirectory(themesDir, { recursive: true }).pipe(Effect.mapError(unavailable));
+  yield* fs.makeDirectory(themesDir, { recursive: true }).pipe(Effect.mapError(publishUnavailable));
 
   return yield* Effect.scoped(
     Effect.gen(function* () {
-      yield* Effect.acquireRelease(
-        Effect.tryPromise({
-          try: () =>
-            lock(themesDir, {
-              lockfilePath: NodePath.join(themesDir, ".publish.lock"),
-              stale: 120_000,
-              update: 10_000,
-              retries: { retries: 20, factor: 1, minTimeout: 50, maxTimeout: 50 },
-            }),
-          catch: unavailable,
-        }),
-        (release) =>
-          Effect.tryPromise({ try: () => release(), catch: unavailable }).pipe(
-            Effect.ignore({ log: true }),
-          ),
-      );
+      const checkLease = yield* acquirePublishLease(themesDir);
+      yield* checkLease;
 
-      const entries = yield* fs.readDirectory(themesDir).pipe(Effect.mapError(unavailable));
-      const before = yield* scanPublishedThemes(themesDir, entries);
-      const after = yield* scanPublishedThemes(themesDir, entries, {
-        entry: `${themeId}${THEME_FILE_SUFFIX}`,
-        contents,
-      });
-      const served = new Set(after.map(({ id }) => id));
-      if (!served.has(themeId) || before.some(({ id }) => !served.has(id))) {
-        return yield* new ThemeLibraryPublishError({ reason: "full" });
-      }
-      return yield* publish.pipe(Effect.uninterruptible);
+      const entry = `${themeId}${THEME_FILE_SUFFIX}`;
+      // The reader skips the staging suffix, and exclusive create never follows a symlink.
+      const staging = NodePath.join(themesDir, `${entry}.staging-${process.pid}`);
+      const removeStaging = fs.remove(staging, { force: true });
+      return yield* Effect.gen(function* () {
+        yield* removeStaging.pipe(
+          Effect.andThen(fs.writeFileString(staging, contents, { flag: "wx", mode: 0o644 })),
+          Effect.mapError(publishUnavailable),
+        );
+        const staged = readThemeFileGuarded(staging, MAX_THEME_FILE_BYTES);
+        if (staged !== contents) {
+          return yield* publishUnavailable(new Error("Could not read the staged theme."));
+        }
+
+        const entries = yield* fs
+          .readDirectory(themesDir)
+          .pipe(Effect.mapError(publishUnavailable));
+        const before = yield* scanPublishedThemes(themesDir, entries);
+        const after = yield* scanPublishedThemes(themesDir, entries, { entry, contents: staged });
+        yield* checkLease;
+        const served = new Set(after.map(({ id }) => id));
+        if (!served.has(themeId) || before.some(({ id }) => !served.has(id))) {
+          return yield* new ThemeLibraryPublishError({ reason: "full" });
+        }
+        return yield* publish(staging, checkLease).pipe(Effect.uninterruptible);
+      }).pipe(
+        Effect.ensuring(removeStaging.pipe(Effect.ignore)),
+        Effect.tap(() => checkLease),
+      );
     }),
   );
 });
@@ -432,20 +511,8 @@ const make = Effect.gen(function* () {
     }
 
     const destination = `${environmentThemesDir}/${themeId}${THEME_FILE_SUFFIX}`;
-    // The watcher reads only .json names, so it never sees a half-written file.
-    const staging = `${destination}.staging-${process.pid}`;
-    // Exclusive create: a link left at the staging path is removed, never written through.
-    const replace = (next: string) =>
-      fs.remove(staging, { force: true }).pipe(
-        Effect.andThen(fs.writeFileString(staging, next, { flag: "wx" })),
-        Effect.andThen(fs.rename(staging, destination)),
-        Effect.tapError(() => fs.remove(staging, { force: true }).pipe(Effect.ignore)),
-      );
 
-    yield* withThemePublish(
-      environmentThemesDir,
-      themeId,
-      contents,
+    yield* withThemePublish(environmentThemesDir, themeId, contents, (staging, checkLease) =>
       Effect.gen(function* () {
         const previous = Option.fromNullOr(readThemeFileGuarded(destination, MAX_THEME_FILE_BYTES));
         if (Option.isNone(previous) && pathIsTaken(destination)) {
@@ -454,17 +521,40 @@ const make = Effect.gen(function* () {
             problem: "would replace a file that could not be backed up. Use another theme id.",
           });
         }
-        const revert = Option.match(previous, {
+        const staged = yield* Effect.try({
+          try: () => NodeFS.lstatSync(staging),
+          catch: publishUnavailable,
+        });
+        const restore = Option.match(previous, {
           onNone: () => fs.remove(destination, { force: true }),
-          onSome: replace,
-        }).pipe(Effect.ignore, Effect.andThen(refresh), Effect.asVoid);
-
-        yield* replace(contents).pipe(
-          Effect.mapError(
-            (cause) => new EnvironmentThemeRefusedError({ themeId, problem: NOT_PUBLISHED, cause }),
+          onSome: (contents) =>
+            fs
+              .writeFileString(staging, contents, { flag: "wx" })
+              .pipe(Effect.andThen(fs.rename(staging, destination))),
+        });
+        const revert = Effect.try({
+          try: () => NodeFS.lstatSync(destination),
+          catch: publishUnavailable,
+        }).pipe(
+          Effect.flatMap((current) =>
+            current.dev === staged.dev && current.ino === staged.ino ? restore : Effect.void,
           ),
+          Effect.ignore,
+          Effect.andThen(refresh),
+          Effect.asVoid,
         );
+
+        yield* checkLease;
+        yield* fs
+          .rename(staging, destination)
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new EnvironmentThemeRefusedError({ themeId, problem: NOT_PUBLISHED, cause }),
+            ),
+          );
         yield* refresh.pipe(
+          Effect.andThen(checkLease),
           Effect.andThen(select),
           Effect.onError(() => revert),
         );

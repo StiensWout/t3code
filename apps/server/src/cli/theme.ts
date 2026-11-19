@@ -329,7 +329,6 @@ const publishThemeFile = Effect.fn(function* (input: {
   }
 
   const destinationPath = path.join(input.themesDir, `${themeId}.json`);
-  const stagingPath = `${destinationPath}.staging-${process.pid}`;
   const publishFailure = (cause: unknown) =>
     new ThemePublishError({ themesDir: input.themesDir, cause });
 
@@ -341,25 +340,10 @@ const publishThemeFile = Effect.fn(function* (input: {
     return yield* new ThemeDestinationDirectoryError({ themeId, destinationPath });
   }
 
-  yield* withThemePublish(
-    input.themesDir,
-    themeId,
-    raw,
+  yield* withThemePublish(input.themesDir, themeId, raw, (stagingPath, checkLease) =>
     Effect.gen(function* () {
-      // Preserve the validated contents exactly, and never write through a staging symlink.
       const stagedIno = yield* Effect.try({
-        try: () => {
-          try {
-            NodeFS.unlinkSync(stagingPath);
-          } catch {}
-          const fd = NodeFS.openSync(stagingPath, "wx", 0o644);
-          try {
-            NodeFS.writeFileSync(fd, raw);
-            return NodeFS.fstatSync(fd).ino;
-          } finally {
-            NodeFS.closeSync(fd);
-          }
-        },
+        try: () => NodeFS.lstatSync(stagingPath).ino,
         catch: publishFailure,
       });
 
@@ -411,11 +395,12 @@ const publishThemeFile = Effect.fn(function* (input: {
         try: () => NodeFS.renameSync(stagingPath, destinationPath),
         catch: publishFailure,
       }).pipe(
+        Effect.andThen(checkLease),
         Effect.andThen(writeDefaultTheme({ settingsPath: input.settingsPath, themeId })),
         Effect.onError(() => revert),
       );
       if (backupPath !== null) yield* fs.remove(backupPath, { force: true }).pipe(Effect.ignore);
-    }).pipe(Effect.ensuring(fs.remove(stagingPath, { force: true }).pipe(Effect.ignore))),
+    }),
   ).pipe(
     Effect.catchTags({
       ThemeLibraryPublishError: (error) =>
