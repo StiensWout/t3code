@@ -6,7 +6,7 @@ import { expect, it, vi } from "vite-plus/test";
 
 import type { VisitThreadInput } from "../operations/commands.ts";
 import type { AtomCommandResult } from "./runtime.ts";
-import { claimThreadOpen } from "./threadSearch.ts";
+import { claimThreadOpen, recordThreadSearchPick } from "./threadSearch.ts";
 import { createThreadVisitTracker, VISIT_DISPATCH_THROTTLE_MS } from "./threadVisits.ts";
 
 const environmentId = EnvironmentId.make("env-visits");
@@ -26,7 +26,8 @@ function at(seconds: number) {
 
 // claimThreadOpen dedupes per thread in module state, so each test opens its own thread.
 function setup(threadName: string, initial: Omit<Shell, "environmentId" | "id"> | null) {
-  vi.useFakeTimers({ now: Date.UTC(2026, 0, 1) });
+  const start = Date.UTC(2026, 0, 1);
+  vi.useFakeTimers({ now: start });
   const threadId = ThreadId.make(threadName);
   const ref = { environmentId, threadId };
   const shellAtom = Atom.make<Shell | null>(
@@ -39,20 +40,21 @@ function setup(threadName: string, initial: Omit<Shell, "environmentId" | "id"> 
   let pendingResult: Promise<AtomCommandResult<void, string>> | undefined;
   const attempts: Array<VisitThreadInput> = [];
   const sessionGenerationAtom = Atom.make(1);
+  const visit = async ({ input }: { readonly input: VisitThreadInput }) => {
+    attempts.push(input);
+    const pending = pendingResult;
+    pendingResult = undefined;
+    if (online) visits.push(input);
+    if (pending) return pending;
+    if (!online) return AsyncResult.failure(Cause.fail("disconnected"));
+    return AsyncResult.success(undefined);
+  };
   const tracker = createThreadVisitTracker({
     threadShellAtom: () => shellAtom,
     sessionGenerationAtom: () => sessionGenerationAtom,
     visit: {
       label: "test-visit",
-      run: async (_registry, value) => {
-        attempts.push(value.input);
-        const pending = pendingResult;
-        pendingResult = undefined;
-        if (online) visits.push(value.input);
-        if (pending) return pending;
-        if (!online) return AsyncResult.failure(Cause.fail("disconnected"));
-        return AsyncResult.success(undefined);
-      },
+      run: (_registry, value) => visit(value),
     },
     markLocalVisit: (_ref, visitedAt) => localVisits.push(visitedAt),
   });
@@ -74,6 +76,11 @@ function setup(threadName: string, initial: Omit<Shell, "environmentId" | "id"> 
     },
     reconnect: () => registry.set(sessionGenerationAtom, registry.get(sessionGenerationAtom) + 1),
     mount: () => registry.mount(tracker(ref)),
+    pick: () => {
+      const shell = registry.get(shellAtom);
+      if (shell === null) throw new Error("A search pick needs a thread shell");
+      return recordThreadSearchPick(shell, "needle", start, visit);
+    },
     setOnline: (value: boolean) => {
       online = value;
     },
@@ -241,31 +248,116 @@ it.each(["unread", "already read"] as const)(
   },
 );
 
-it.each(["accepted", "rejected"] as const)(
-  "dedupes a reopen based on the in-flight open %s after leaving",
-  async (outcome) => {
+it.each([
+  ["accepted", "before"],
+  ["accepted", "after"],
+  ["rejected", "before"],
+  ["rejected", "after"],
+] as const)(
+  "dedupes a reopen when the in-flight open is %s %s remount",
+  async (outcome, settlement) => {
     const accepted = outcome === "accepted";
-    using t = setup(`thread-left-in-flight-${outcome}`, {
+    using t = setup(`thread-left-in-flight-${outcome}-${settlement}`, {
       updatedAt: at(10),
       lastVisitedAt: at(10),
       latestRun: null,
     });
+    t.setOnline(accepted);
     const settle = t.deferNextVisit();
     const unmount = t.mount();
     unmount();
     await vi.advanceTimersByTimeAsync(1_000);
-    settle(accepted);
-    await vi.advanceTimersByTimeAsync(0);
+    if (settlement === "before") {
+      settle(accepted);
+      await vi.advanceTimersByTimeAsync(0);
+    }
 
+    t.setOnline(true);
+    t.reconnect();
     t.mount();
+    expect(t.attempts).toHaveLength(!accepted && settlement === "before" ? 2 : 1);
+    if (settlement === "after") settle(accepted);
+    await vi.advanceTimersByTimeAsync(VISIT_DISPATCH_THROTTLE_MS);
+
     expect(t.attempts).toHaveLength(accepted ? 1 : 2);
-    expect(t.attempts.at(-1)).toEqual({
-      threadId: t.ref.threadId,
-      visitedAt: at(10),
-      opened: true,
-    });
+    expect(t.visits).toEqual([{ threadId: t.ref.threadId, visitedAt: at(10), opened: true }]);
   },
 );
+
+it.each(["before", "after"] as const)(
+  "records an open when a palette pick fails %s reconnect while the thread stays visible",
+  async (settlement) => {
+    using t = setup(`thread-pick-fails-${settlement}-reconnect`, {
+      updatedAt: at(10),
+      lastVisitedAt: at(10),
+      latestRun: null,
+    });
+    t.setOnline(false);
+    const fail = t.deferNextVisit();
+    const pick = t.pick();
+    t.mount();
+    expect(t.attempts).toEqual([
+      { threadId: t.ref.threadId, visitedAt: at(10), opened: true, searchQuery: "needle" },
+    ]);
+    if (settlement === "before") {
+      fail();
+      await pick;
+    }
+
+    t.setOnline(true);
+    t.reconnect();
+    if (settlement === "after") {
+      fail();
+      await pick;
+    }
+    await vi.advanceTimersByTimeAsync(VISIT_DISPATCH_THROTTLE_MS);
+
+    expect(t.visits).toEqual([{ threadId: t.ref.threadId, visitedAt: at(10), opened: true }]);
+  },
+);
+
+it("records a failed pick's open when a plain visit is accepted ahead of its shell update", async () => {
+  using t = setup("thread-pick-fails-before-visit-echo", {
+    updatedAt: at(10),
+    lastVisitedAt: at(0),
+    latestRun: null,
+  });
+  t.setOnline(false);
+  const fail = t.deferNextVisit();
+  const pick = t.pick();
+  t.setOnline(true);
+  t.reconnect();
+  t.mount();
+  await vi.advanceTimersByTimeAsync(0);
+
+  fail();
+  await pick;
+
+  expect(t.visits).toEqual([
+    { threadId: t.ref.threadId, visitedAt: at(10) },
+    { threadId: t.ref.threadId, visitedAt: at(10), opened: true },
+  ]);
+});
+
+it("preserves mark-unread when a palette pick fails after the thread is marked unread", async () => {
+  using t = setup("thread-pick-fails-after-rewind", {
+    updatedAt: at(10),
+    lastVisitedAt: at(10),
+    latestRun: null,
+  });
+  t.setOnline(false);
+  const fail = t.deferNextVisit();
+  const pick = t.pick();
+  t.mount();
+  t.update({ lastVisitedAt: at(5) });
+  t.setOnline(true);
+  t.reconnect();
+  fail();
+  await pick;
+  await vi.advanceTimersByTimeAsync(VISIT_DISPATCH_THROTTLE_MS);
+
+  expect(t.visits).toEqual([]);
+});
 
 it("records an open after leaving an offline thread and reopening it online", async () => {
   using t = setup("thread-reopen-after-offline", {

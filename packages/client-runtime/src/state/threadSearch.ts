@@ -29,6 +29,7 @@ import { getThreadSortTimestamp } from "./threadSort.ts";
 // together than THREAD_OPEN_DEDUPE_MS anyway, so skipping them saves a command
 // and a broadcast while flipping between threads.
 const sentThreadOpens = new Map<string, number>();
+const threadOpenReleaseListeners = new Map<string, Set<() => void>>();
 // When this client last opened each thread, sent or not, so recent threads
 // follow quick switches the server merges.
 const localThreadOpens = new Map<string, number>();
@@ -49,8 +50,7 @@ export function claimThreadOpen(environmentId: EnvironmentId, threadId: string, 
 }
 
 /**
- * Gives back a claim from `claimThreadOpen` whose open never reached the
- * server, so the next open of the thread is sent. A newer claim is kept.
+ * Gives back an unsent open so a tracker can take over or the next open can be sent.
  */
 export function releaseThreadOpen(
   environmentId: EnvironmentId,
@@ -58,7 +58,32 @@ export function releaseThreadOpen(
   claimedAt: number,
 ) {
   const key = `${environmentId}:${threadId}`;
-  if (sentThreadOpens.get(key) === claimedAt) sentThreadOpens.delete(key);
+  if (sentThreadOpens.get(key) !== claimedAt) return;
+  sentThreadOpens.delete(key);
+  for (const listener of threadOpenReleaseListeners.get(key) ?? []) listener();
+}
+
+/** Lets a visible tracker take over if the claim that suppressed its open is released. */
+export function claimThreadOpenOnRelease(
+  environmentId: EnvironmentId,
+  threadId: string,
+  openedAt: number,
+  onClaim: () => void,
+) {
+  const key = `${environmentId}:${threadId}`;
+  const listeners = threadOpenReleaseListeners.get(key) ?? new Set<() => void>();
+  const unsubscribe = () => {
+    if (listeners.delete(claim) && listeners.size === 0) threadOpenReleaseListeners.delete(key);
+  };
+  const claim = () => {
+    if (sentThreadOpens.has(key)) return;
+    sentThreadOpens.set(key, openedAt);
+    unsubscribe();
+    onClaim();
+  };
+  listeners.add(claim);
+  threadOpenReleaseListeners.set(key, listeners);
+  return unsubscribe;
 }
 
 /** A search pick always sends its query, even if the server merges the open. */
