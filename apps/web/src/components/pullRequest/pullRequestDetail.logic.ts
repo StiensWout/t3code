@@ -148,12 +148,11 @@ export function loadingPullRequestCheckoutCommand(
       : undefined;
   const command = definition?.checkoutCommand({ number: reference.number, headBranch: "" });
   if (!definition || !command) return null;
-  if (
-    definition.kind === "github" &&
-    sourceControlClients.repositorySelector(identity)?.toLowerCase() !==
-      reference.repository.toLowerCase()
-  ) {
-    return null;
+  if (definition.kind === "github") {
+    const repository =
+      sourceControlClients.repositorySelector(identity) ??
+      identity?.canonicalKey.split("/").slice(1).join("/");
+    if (repository?.toLowerCase() !== reference.repository.toLowerCase()) return null;
   }
   if (
     identity?.provider !== undefined &&
