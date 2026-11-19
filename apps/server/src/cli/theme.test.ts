@@ -343,6 +343,49 @@ describe("t3 theme", () => {
     }),
   );
 
+  it.effect("refuses a publish when a direct save takes the last slot after its check", () =>
+    Effect.gen(function* () {
+      const baseDir = makeBaseDir();
+      writeSettings(baseDir, {});
+      const themesDir = NodePath.join(baseDir, "userdata", "themes");
+      NodeFS.mkdirSync(themesDir, { recursive: true });
+      const seeded = [
+        ...Array.from({ length: 30 }, (_, index) => `theme-${index + 10}.json`),
+        "z-existing.json",
+      ];
+      for (const entry of seeded) {
+        NodeFS.writeFileSync(NodePath.join(themesDir, entry), NIGHTFALL_THEME_JSON);
+      }
+      const themeFile = NodePath.join(baseDir, "incoming.json");
+      NodeFS.writeFileSync(themeFile, NIGHTFALL_THEME_JSON);
+
+      let saved = false;
+      const saveDirectly = Effect.sync(() => {
+        saved = true;
+        const temporary = NodePath.join(baseDir, "b-manual.json.tmp");
+        NodeFS.writeFileSync(temporary, NIGHTFALL_THEME_JSON);
+        NodeFS.renameSync(temporary, NodePath.join(themesDir, "b-manual.json"));
+      });
+      const failure = yield* runCli(
+        ["theme", "set", themeFile, "--id", "a-first", "--base-dir", baseDir],
+        (fs) => ({
+          ...fs,
+          readDirectory: (path, options) =>
+            fs
+              .readDirectory(path, options)
+              .pipe(Effect.tap(() => (path === themesDir && !saved ? saveDirectly : Effect.void))),
+        }),
+      ).pipe(Effect.flip);
+
+      assert.include(String(failure), "is full");
+      assert.deepEqual(
+        NodeFS.readdirSync(themesDir).toSorted(),
+        [...seeded, "b-manual.json"].toSorted(),
+      );
+      assert.equal(readSettings(baseDir).defaultTheme, undefined);
+    }),
+  );
+
   it.live.skipIf(windowsHost)("keeps the previous theme when the staged file is unreadable", () =>
     Effect.gen(function* () {
       const baseDir = makeBaseDir();

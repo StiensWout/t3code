@@ -58,6 +58,7 @@ const withEnvironmentThemes = <A, E>(
   >,
   /** Receives each theme and appearance the service makes the environment default. */
   selected: Array<{ readonly theme?: string; readonly appearance?: string }> = [],
+  mapFileSystem: (fs: FileSystem.FileSystem) => FileSystem.FileSystem = (fs) => fs,
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -96,6 +97,7 @@ const withEnvironmentThemes = <A, E>(
           ),
         ),
       ),
+      Effect.updateService(FileSystem.FileSystem, mapFileSystem),
     );
   });
 
@@ -195,6 +197,47 @@ it.layer(NodeServices.layer)("environment theme", (it) => {
       }),
     ),
   );
+
+  it.effect("refuses a publish when a direct save takes the last slot after its check", () => {
+    const selected: Array<{ readonly theme?: string; readonly appearance?: string }> = [];
+    let armed = false;
+    return withEnvironmentThemes(
+      Object.fromEntries([
+        ...Array.from({ length: 30 }, (_, index) => [
+          `theme-${index + 10}.json`,
+          encodeThemeFile(NIGHTFALL_THEME),
+        ]),
+        ["z-existing.json", encodeThemeFile(NIGHTFALL_THEME)],
+      ]),
+      Effect.gen(function* () {
+        const themes = yield* EnvironmentTheme.EnvironmentThemeService;
+        armed = true;
+        const refused = yield* themes
+          .apply({ themeId: "a-first", theme: NIGHTFALL_THEME })
+          .pipe(Effect.flip);
+        assert.match(refused.message, /could not be published/);
+        const served = (yield* themes.current).map((theme) => theme.id);
+        assert.includeMembers(served, ["b-manual", "z-existing"]);
+        assert.notInclude(served, "a-first");
+        assert.deepEqual(selected, []);
+      }),
+      selected,
+      (fs) => ({
+        ...fs,
+        readDirectory: (path, options) =>
+          fs.readDirectory(path, options).pipe(
+            Effect.tap(() => {
+              if (!armed) return Effect.void;
+              armed = false;
+              const temporary = `${path}/../b-manual.json.tmp`;
+              return fs
+                .writeFileString(temporary, encodeThemeFile(NIGHTFALL_THEME))
+                .pipe(Effect.andThen(fs.rename(temporary, `${path}/b-manual.json`)), Effect.orDie);
+            }),
+          ),
+      }),
+    );
+  });
 
   it.effect("does not replace a theme file it could not put back", () => {
     const oversized = JSON.stringify({
