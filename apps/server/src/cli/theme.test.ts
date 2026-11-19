@@ -442,7 +442,7 @@ describe("t3 theme", () => {
       const result = yield* runCli(["theme", "set", source, "--base-dir", baseDir]).pipe(
         Effect.result,
       );
-      assert.equal(result._tag, "Failure");
+      if (result._tag !== "Failure") throw new Error("The publish should have been refused.");
       assert.include(String(result.failure), "is full");
       assert.equal(readSettings(baseDir).defaultTheme, "ocean");
       assert.isFalse(NodeFS.existsSync(destination));
@@ -492,7 +492,8 @@ describe("t3 theme", () => {
       const publication = yield* Fiber.join(publisher).pipe(Effect.flip);
 
       assert.equal(selection._tag, "Failure");
-      assert.equal(unknown._tag, "Failure");
+      if (unknown._tag !== "Failure")
+        throw new Error("The unknown theme should have been refused.");
       assert.include(unknown.failure, 'No theme named "missing"');
       assert.include(String(publication), "is full");
       assert.equal(readSettings(baseDir).defaultTheme, "ocean");
