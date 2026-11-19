@@ -5,6 +5,7 @@ import * as KeyValueStore from "effect/persistence/KeyValueStore";
 import { assert, expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -683,6 +684,73 @@ it.effect("keeps the cursor of a failed upstream repository beside a successful 
     const upstreamKey = "github.com acme/web";
     assert.deepStrictEqual(Object.keys(continued.nextCursors), [upstreamKey]);
     assert.strictEqual(continued.nextCursors[upstreamKey], head.nextCursors[upstreamKey]);
+  }),
+);
+
+it.effect("holds an upstream cursor while its parent lookup fails on a continuation", () =>
+  Effect.gen(function* () {
+    const provider = SourceControlProviderKind.make("github");
+    let parentFails = false;
+    const reads: Array<readonly [string, boolean]> = [];
+    const service = yield* makeService({
+      settings: { ...DEFAULT_SERVER_SETTINGS, includeForkUpstream: true },
+      projects: [
+        project({ id: "fork", title: "fork", workspaceRoot: "/fork", repository: "me/web" }),
+      ],
+      getRepositoryParent: ({ cwd }) =>
+        parentFails
+          ? Effect.fail(
+              new SourceControlProviderError({
+                provider,
+                operation: "getRepositoryParent",
+                cwd,
+                detail: "Repository metadata is unavailable.",
+              }),
+            )
+          : Effect.succeed("acme/web"),
+      providers: [
+        fakePullRequestProvider(provider, {
+          listChangeRequests: ({ repository, cursor }) =>
+            Effect.sync(() => {
+              reads.push([repository, cursor !== undefined]);
+              return {
+                items: [changeRequest(cursor === undefined ? 1 : 2, "2026-07-02T00:00:00Z")],
+                truncated: cursor === undefined,
+                continues: true,
+              };
+            }),
+        }),
+      ],
+    });
+    const upstreamKey = "github.com acme/web";
+    const head = yield* service.list({ state: "open" });
+    const upstreamCursor = head.nextCursors[upstreamKey];
+    assert.isDefined(upstreamCursor);
+
+    // The parent lookup expired and now fails while the fork pages on.
+    yield* TestClock.adjust(Duration.hours(2));
+    parentFails = true;
+    reads.length = 0;
+    const continued = yield* service.list({ state: "open", cursors: head.nextCursors });
+    assert.deepStrictEqual(
+      reads.map(([repository]) => repository),
+      ["me/web"],
+    );
+    assert.deepStrictEqual(
+      continued.errors.map(({ message }) => message),
+      ["The upstream of me/web could not be read. Repository metadata is unavailable."],
+    );
+    assert.strictEqual(continued.nextCursors[upstreamKey], upstreamCursor);
+    assert.isTrue(continued.truncated);
+
+    parentFails = false;
+    reads.length = 0;
+    const retried = yield* service.list({
+      state: "open",
+      cursors: { [upstreamKey]: upstreamCursor! },
+    });
+    assert.deepStrictEqual(reads, [["acme/web", true]]);
+    assert.deepStrictEqual(retried.errors, []);
   }),
 );
 

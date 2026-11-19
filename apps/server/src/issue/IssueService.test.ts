@@ -1,7 +1,9 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as TestClock from "effect/testing/TestClock";
 import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 import {
   IssueTrackerKind,
@@ -644,6 +646,70 @@ describe("IssueService", () => {
           message: "The upstream of me/web could not be read. Repository metadata is unavailable.",
         },
       ]);
+    }),
+  );
+
+  it.effect("holds an upstream cursor while its parent lookup fails on a continuation", () =>
+    Effect.gen(function* () {
+      let parentFails = false;
+      const reads: Array<readonly [string, string | undefined]> = [];
+      const service = yield* makeService({
+        projects: [project({ id: "fork", repository: "me/web" })],
+        settings: { ...DEFAULT_SERVER_SETTINGS, includeForkUpstream: true },
+        getRepositoryParent: ({ cwd }) =>
+          parentFails
+            ? Effect.fail(
+                new SourceControlProviderError({
+                  provider: SourceControlProviderKind.make("github"),
+                  operation: "getRepositoryParent",
+                  cwd,
+                  detail: "Repository metadata is unavailable.",
+                }),
+              )
+            : Effect.succeed("acme/web"),
+        trackers: [
+          fakeTracker({
+            listIssues: ({ scope, cursor }) =>
+              Effect.sync(() => {
+                reads.push([scope, cursor]);
+                return {
+                  items: [issue(cursor === undefined ? "1" : "2")],
+                  nextCursor: `${scope}-next`,
+                };
+              }),
+          }),
+        ],
+      });
+      const head = yield* service.list({ state: "open" });
+      const upstreamKey = Object.keys(head.nextCursors).find((key) => key.endsWith("acme/web"))!;
+      const forkKey = Object.keys(head.nextCursors).find((key) => key.endsWith("me/web"))!;
+
+      // The parent lookup expired and now fails while the fork pages on.
+      yield* TestClock.adjust(Duration.hours(2));
+      parentFails = true;
+      reads.length = 0;
+      const continued = yield* service.list({ state: "open", cursors: head.nextCursors });
+      expect(reads).toEqual([["me/web", "me/web-next"]]);
+      expect(continued.errors.map(({ message }) => message)).toEqual([
+        "The upstream of me/web could not be read. Repository metadata is unavailable.",
+      ]);
+      expect(continued.nextCursors[upstreamKey]).toBe("acme/web-next");
+
+      // A page with no upstream cursor to hold does not repeat the failure.
+      const forkOnly = yield* service.list({
+        state: "open",
+        cursors: { [forkKey]: "me/web-next" },
+      });
+      expect(forkOnly.errors).toEqual([]);
+
+      parentFails = false;
+      reads.length = 0;
+      const retried = yield* service.list({
+        state: "open",
+        cursors: { [upstreamKey]: "acme/web-next" },
+      });
+      expect(reads).toEqual([["acme/web", "acme/web-next"]]);
+      expect(retried.errors).toEqual([]);
     }),
   );
 

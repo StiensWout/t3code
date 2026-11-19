@@ -38,13 +38,36 @@ interface ForkListingRepository extends Omit<ParentLookupInput, "project"> {
   readonly key: string;
 }
 
+interface ParentLookupError {
+  readonly projectId: ProjectId;
+  readonly projectTitle: string;
+  readonly message: string;
+}
+
 interface ParentLookups<A> {
   readonly parents: ReadonlyArray<{ readonly candidate: A; readonly parent: string }>;
-  readonly errors: ReadonlyArray<{
-    readonly projectId: ProjectId;
-    readonly projectTitle: string;
-    readonly message: string;
-  }>;
+  readonly errors: ReadonlyArray<ParentLookupError>;
+}
+
+/**
+ * What a listing page owes for failed parent lookups. A continuation cursor no listed repository
+ * claims may belong to an upstream whose lookup failed: it is passed back unread, so the next page
+ * retries the lookup, and the failures are reported only on a head or when they hold a cursor.
+ */
+export function heldUpstreamCursors(
+  cursors: Readonly<Record<string, string>> | undefined,
+  listedKeys: ReadonlySet<string>,
+  errors: ReadonlyArray<ParentLookupError>,
+): {
+  readonly nextCursors: Record<string, string>;
+  readonly errors: ReadonlyArray<ParentLookupError>;
+} {
+  if (cursors === undefined) return { nextCursors: {}, errors };
+  if (errors.length === 0) return { nextCursors: {}, errors: [] };
+  const nextCursors = Object.fromEntries(
+    Object.entries(cursors).filter(([key]) => !listedKeys.has(key)),
+  );
+  return { nextCursors, errors: Object.keys(nextCursors).length === 0 ? [] : errors };
 }
 
 /** Resolves fork parents for listings without making the fork's own rows depend on the lookup. */
@@ -124,7 +147,7 @@ const make = Effect.gen(function* () {
       { concurrency },
     );
     const parents: Array<ParentLookups<A>["parents"][number]> = [];
-    const errors: Array<ParentLookups<A>["errors"][number]> = [];
+    const errors: Array<ParentLookupError> = [];
     for (const { candidate, repository, result } of lookups) {
       if (result._tag === "Failure") {
         const detail = result.failure.detail.trim();

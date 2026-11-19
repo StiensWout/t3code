@@ -1441,7 +1441,11 @@ export const make = Effect.gen(function* () {
       workspace,
       policy,
     );
-    const discoveryErrors = continuation === null ? upstreamErrors : [];
+    const held = ForkUpstream.heldUpstreamCursors(
+      input.cursors,
+      new Set(projects.map(({ cursorKey }) => cursorKey)),
+      upstreamErrors,
+    );
 
     const viewerResults = yield* resolveViewers(projects, viewerRoots);
     const viewers: Record<string, string> = {};
@@ -1483,7 +1487,7 @@ export const make = Effect.gen(function* () {
     const readable = selected.filter(({ host }) => viewers[host] !== undefined);
     const unreadable = selected.filter(({ host }) => viewers[host] === undefined);
     const errors = [
-      ...discoveryErrors,
+      ...held.errors,
       ...unreadable.map(({ project, repository }) => ({
         projectId: project.id,
         projectTitle: project.title,
@@ -1496,8 +1500,8 @@ export const make = Effect.gen(function* () {
         providers,
         entries: [],
         errors,
-        truncated: false,
-        nextCursors: {},
+        truncated: Object.keys(held.nextCursors).length > 0,
+        nextCursors: held.nextCursors,
       };
       const viewerErrors = viewerResults.flatMap((result) =>
         result.error === null || !selected.some(({ host }) => host === result.host)
@@ -1738,7 +1742,7 @@ export const make = Effect.gen(function* () {
     }
     const batches = (yield* Effect.all(reads, { concurrency: REPOSITORY_CONCURRENCY })).flat();
 
-    const nextCursors: Record<string, string> = {};
+    const nextCursors: Record<string, string> = { ...held.nextCursors };
     // A retry resumes failed repositories from the same cursor while the others can advance.
     for (const { cursorKey } of unreadable) {
       const cursor = input.cursors?.[cursorKey];

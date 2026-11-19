@@ -365,11 +365,16 @@ const make = Effect.gen(function* () {
       if (!scopes.has(key)) scopes.set(key, { project: { ...candidate, scope }, upstream: true });
     }
     const continuing = input.cursors;
+    const held = ForkUpstream.heldUpstreamCursors(
+      continuing,
+      new Set(scopes.keys()),
+      upstreamErrors,
+    );
     const viewers = new Map<string, string>();
     const trackers = new Map<string, IssueTrackerSummary>();
     const entries: IssueListEntry[] = [];
-    const errors: IssueListProjectError[] = [...upstreamErrors];
-    const nextCursors: Record<string, string> = {};
+    const errors: IssueListProjectError[] = [...held.errors];
+    const nextCursors: Record<string, string> = { ...held.nextCursors };
 
     const involvement = input.involvement ?? "all";
     // Only a narrowed listing compares against the signed-in account; `all` never reads it.
