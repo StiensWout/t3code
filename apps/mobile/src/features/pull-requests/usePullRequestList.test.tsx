@@ -60,8 +60,13 @@ vi.mock("@t3tools/client-runtime/state/pull-requests", async (importOriginal) =>
       const list = Atom.family((key: string) => {
         const target: { environmentId: EnvironmentId; input: PullRequestListInput } =
           JSON.parse(key);
-        return Atom.make((get) => {
-          const settings = get(serverEnvironment.forkUpstreamSettingsAtom(target.environmentId));
+        const settingsAtom = serverEnvironment.forkUpstreamSettingsAtom(target.environmentId);
+        // Like the real head query: kept while idle, and read again only when the settings differ
+        // from the ones its answer was read under, so turning one off and back on keeps the head.
+        let readUnder: string | undefined;
+        const query = Atom.make((get) => {
+          const settings = get.once(settingsAtom);
+          readUnder = settings;
           const cursors = target.input.cursors;
           return Effect.gen(function* () {
             if (target.environmentId === "offline")
@@ -100,6 +105,18 @@ vi.mock("@t3tools/client-runtime/state/pull-requests", async (importOriginal) =>
             return response;
           });
         });
+        if (target.input.cursors !== undefined) return query;
+        const head = Atom.keepAlive(query);
+        return Atom.transform(
+          head,
+          (get) => {
+            const current = get(settingsAtom);
+            get.subscribe(head, (value) => get.setSelf(value));
+            if (readUnder !== undefined && readUnder !== current) get.refresh(head);
+            return get.once(head);
+          },
+          { initialValueTarget: head },
+        );
       });
       return {
         listRevision: serverEnvironment.forkUpstreamSettingsAtom,
@@ -257,6 +274,14 @@ it("starts from a fresh head when upstream is turned off and back on", async () 
   expect(probe.latest.continued).toBe(false);
   expect(probe.latest.hasMore).toBe(true);
   expect(probe.latest.entries).toEqual([]);
+
+  mocks.pageRequests = [];
+  await act(async () => probe.latest.loadMore());
+  expect(mocks.pageRequests).toEqual([
+    { "github.com org/repo": "next", "github.com org/other": "retry" },
+  ]);
+  expect(probe.latest.entries.map(({ number }) => number)).toEqual([2]);
+  expect(probe.latest.continued).toBe(true);
 });
 
 it("discards a continuation if its source head is replaced before the page answers", async () => {

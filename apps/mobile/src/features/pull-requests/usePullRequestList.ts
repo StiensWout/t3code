@@ -74,9 +74,11 @@ const sourcesFamily = Atom.family((key: string) => {
 function continuationSource(read: Read, target: ListTarget) {
   const revision = read(composerPullRequests.listRevision(target.environmentId));
   const head = read(pullRequestHostAnswer(composerPullRequests.list(target)));
-  const pages = read(pullRequestListPages(target));
-  // The query can hold the previous settings' head while the new listing is being read.
-  if (!AsyncResult.isSuccess(head) || head.waiting || pages?.head !== head.value) return null;
+  // The query holds the previous settings' head while the new listing is being read.
+  if (!AsyncResult.isSuccess(head) || head.waiting) return null;
+  // A settled head with no recorded pages (settings turned off and back on while the list was
+  // closed, or a cached answer) is where the list continues from.
+  const pages = pullRequestListHead(read(pullRequestListPages(target)), head.value);
   return { revision, head, pages };
 }
 
