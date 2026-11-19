@@ -10,6 +10,7 @@ import { executeAtomQuery, squashAtomCommandFailure } from "@t3tools/client-runt
 import type { EnvironmentId, PullRequestDiffStat, PullRequestListInput } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import { AsyncResult, Atom, type AtomRegistry } from "effect/reactivity";
 import { msg, useMessages } from "gt-react-native";
 import { use, useMemo, useState } from "react";
@@ -38,6 +39,26 @@ import {
 type ListTarget = { readonly environmentId: EnvironmentId; readonly input: PullRequestListInput };
 type Read = <A>(atom: Atom.Atom<A>) => A;
 
+type ListHead = {
+  readonly policy: string;
+  readonly head: PullRequestListPages["head"];
+};
+
+const listHeadFamily = Atom.family((key: string) => {
+  const [environmentId, input] = JSON.parse(key) as [EnvironmentId, PullRequestListInput];
+  const settings = serverEnvironment.forkUpstreamSettingsAtom(environmentId);
+  const query = pullRequestHostAnswer(composerPullRequests.list({ environmentId, input }));
+  return Atom.make((get): ListHead | null => {
+    const policy = get(settings);
+    const result = get(query);
+    const previous = Option.getOrNull(get.self<ListHead | null>());
+    // A waiting query can still be showing its answer from before the policy changed.
+    if (!AsyncResult.isSuccess(result) || result.waiting) return previous;
+    if (previous?.head === result.value && previous.policy === policy) return previous;
+    return { policy, head: result.value };
+  }).pipe(Atom.setIdleTTL(5 * 60_000));
+});
+
 /** The head the list query holds now, cached or answered. */
 function currentHead(read: Read, target: ListTarget) {
   return AsyncResult.getOrElse(
@@ -57,9 +78,11 @@ const sourcesFamily = Atom.family((key: string) => {
   const targets: readonly ListTarget[] = JSON.parse(key);
   return Atom.make((get) =>
     targets.map((target) => {
+      const canContinue = continuationHead(get, target) !== null;
       const pages = currentPages(get, target);
       return {
         target,
+        canContinue,
         result: get(composerPullRequests.list(target)),
         pages:
           pages === null
@@ -76,15 +99,19 @@ const sourcesFamily = Atom.family((key: string) => {
   );
 });
 
-function continuationSource(read: Read, target: ListTarget) {
+function continuationHead(read: Read, target: ListTarget) {
   const policy = read(serverEnvironment.forkUpstreamSettingsAtom(target.environmentId));
-  const result = read(pullRequestHostAnswer(composerPullRequests.list(target)));
+  const answered = read(listHeadFamily(pullRequestListPagesKey(target)));
+  return answered?.policy === policy && answered.head === currentHead(read, target)
+    ? answered
+    : null;
+}
+
+function continuationSource(read: Read, target: ListTarget) {
+  const answer = continuationHead(read, target);
+  if (answer === null) return null;
   const recorded = read(pullRequestListPagesFamily(pullRequestListPagesKey(target)));
-  // A settings change clears the recorded pages. A background refresh keeps them usable.
-  if (!AsyncResult.isSuccess(result) || (result.waiting && recorded?.head !== result.value))
-    return null;
-  const head = result.value;
-  return { policy, head, pages: pullRequestListHead(recorded, head) };
+  return { ...answer, pages: pullRequestListHead(recorded, answer.head) };
 }
 
 function continuations(registry: AtomRegistry.AtomRegistry, targets: readonly ListTarget[]) {
@@ -378,7 +405,8 @@ export function usePullRequestList(targets: readonly ListTarget[]) {
     loadingMore: page.waiting,
     loadMoreError: loadError,
     hasMore: sources.some(
-      ({ pages, target }) => pages && nextPullRequestListInput(pages, target.input),
+      ({ canContinue, pages, target }) =>
+        canContinue && pages && nextPullRequestListInput(pages, target.input),
     ),
   };
 }

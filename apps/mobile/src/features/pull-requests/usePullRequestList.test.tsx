@@ -319,6 +319,21 @@ it.each(["before", "during"])("keeps a page requested %s a background refresh", 
   expect(probe.latest.hasMore).toBe(false);
 });
 
+it("loads more during refresh when the held head differs from the recorded answer", async () => {
+  using probe = await setup(["healthy"]);
+  mocks.copyHeadResult = true;
+  await act(async () => probe.registry.refresh(composerPullRequests.list(probe.targets[0]!)));
+  const head = Promise.withResolvers<void>();
+  mocks.pendingHead = head.promise;
+  await act(async () => probe.registry.refresh(composerPullRequests.list(probe.targets[0]!)));
+
+  expect(probe.latest.hasMore).toBe(true);
+  await act(async () => probe.latest.loadMore());
+  expect(probe.latest.entries.map(({ number }) => number)).toEqual([2]);
+
+  await act(async () => head.resolve());
+});
+
 it("discards a continuation if its source head is replaced before the page answers", async () => {
   using probe = await setup(["healthy"]);
   const page = Promise.withResolvers<void>();
