@@ -103,6 +103,7 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
       let lastVisit: VisitAttempt | null = null;
       let acceptedThrough = Number.NEGATIVE_INFINITY;
       let observedThrough = Number.NEGATIVE_INFINITY;
+      let observedReadActivityThrough = Number.NEGATIVE_INFINITY;
       let active = true;
       let timer: ReturnType<typeof setTimeout> | undefined;
       const clearTimer = () => {
@@ -214,24 +215,31 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
 
         const lastVisitedAtMs =
           shell.lastVisitedAt === null ? Number.NEGATIVE_INFINITY : Date.parse(shell.lastVisitedAt);
+        const completedAtMs = shell.latestRun?.completedAt
+          ? Date.parse(shell.latestRun.completedAt)
+          : NaN;
+        if (completedAtMs <= lastVisitedAtMs) {
+          observedReadActivityThrough = Math.max(observedReadActivityThrough, shellUpdatedAtMs);
+        }
         if (!Number.isNaN(lastVisitedAtMs)) {
           observedThrough = Math.max(observedThrough, lastVisitedAtMs);
           acceptedThrough = Math.max(acceptedThrough, lastVisitedAtMs);
         }
         if (session === null) return;
 
-        // Only a shell that once showed this activity as read can reveal a rewind.
-        const rewound = observedThrough >= updatedAtMs && lastVisitedAtMs < updatedAtMs;
+        // A run can already be read even if later metadata advanced updatedAt.
+        const rewound =
+          (observedThrough >= updatedAtMs && lastVisitedAtMs < updatedAtMs) ||
+          (observedReadActivityThrough >= updatedAtMs &&
+            observedThrough >= completedAtMs &&
+            lastVisitedAtMs < completedAtMs);
         if (updateOpen(session, rewound ? shell.lastVisitedAt : visitedAt, pick)) return;
 
-        if (acceptedThrough >= updatedAtMs) return;
+        if (rewound || acceptedThrough >= updatedAtMs) return;
         const retryVisit = lastVisit?.failed && lastVisit.visitedAtMs > acceptedThrough;
         if (retryVisit && lastVisit?.session === session) return;
         if (!retryVisit && lastVisit && lastVisit.visitedAtMs >= updatedAtMs) return;
 
-        const completedAtMs = shell.latestRun?.completedAt
-          ? Date.parse(shell.latestRun.completedAt)
-          : NaN;
         const elapsed = lastVisit === null ? Infinity : Date.now() - lastVisit.at;
         if (
           retryVisit ||

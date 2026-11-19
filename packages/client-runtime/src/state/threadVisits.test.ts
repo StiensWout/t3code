@@ -531,9 +531,9 @@ it("retries rejected opens only once per connection generation", async () => {
 
 it("waits for reconnect catch-up before retrying an open on a thread marked unread elsewhere", async () => {
   using t = setup("thread-rewind-during-catch-up", {
-    updatedAt: at(10),
+    updatedAt: at(20),
     lastVisitedAt: at(10),
-    latestRun: { completedAt: at(9) },
+    latestRun: { completedAt: at(10) },
   });
   t.setOnline(false);
   t.mount();
@@ -542,11 +542,15 @@ it("waits for reconnect catch-up before retrying an open on a thread marked unre
   t.setOnline(true);
   t.reconnect(false);
   expect(t.attempts).toHaveLength(1);
-  t.update({ lastVisitedAt: at(5) });
+  const rewoundAt = "2026-01-01T00:00:09.999Z";
+  t.update({ lastVisitedAt: rewoundAt });
   t.synchronizeShell();
-  await vi.advanceTimersByTimeAsync(0);
+  await vi.advanceTimersByTimeAsync(VISIT_DISPATCH_THROTTLE_MS);
 
-  expect(t.visits).toEqual([{ threadId: t.ref.threadId, visitedAt: at(5), opened: true }]);
+  expect(t.visits).toEqual([{ threadId: t.ref.threadId, visitedAt: rewoundAt, opened: true }]);
+
+  t.update({ updatedAt: at(30), latestRun: { completedAt: at(30) } });
+  expect(t.visits.slice(1)).toEqual([{ threadId: t.ref.threadId, visitedAt: at(30) }]);
 });
 
 it("does not count a committed open again after its acknowledgment was lost", async () => {
