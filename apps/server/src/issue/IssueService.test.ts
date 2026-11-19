@@ -579,6 +579,39 @@ describe("IssueService", () => {
   );
 
   it.effect(
+    "identifies a failed upstream issue read without marking the checkout unavailable",
+    () =>
+      Effect.gen(function* () {
+        const service = yield* makeService({
+          projects: [project({ id: "fork", repository: "me/web" })],
+          settings: { ...DEFAULT_SERVER_SETTINGS, includeForkUpstream: true },
+          getRepositoryParent: () => Effect.succeed("acme/web"),
+          trackers: [
+            fakeTracker({
+              listIssues: ({ scope }) =>
+                scope === "acme/web"
+                  ? Effect.fail(
+                      new IssueTrackerError({
+                        tracker: GITHUB,
+                        operation: "listIssues",
+                        reason: "failed",
+                        detail: "Issues are disabled.",
+                      }),
+                    )
+                  : Effect.succeed({ items: [issue("1")], nextCursor: null }),
+            }),
+          ],
+        });
+        const listed = yield* service.list({ state: "open" });
+        expect(listed.entries.map(({ scope, key }) => [scope, key])).toEqual([["me/web", "1"]]);
+        expect(listed.trackers).toMatchObject([{ configured: true }]);
+        expect(listed.errors).toMatchObject([
+          { projectId: "fork", message: "acme/web could not be read. Issues are disabled." },
+        ]);
+      }),
+  );
+
+  it.effect(
     "adds upstream issues through the opted-in checkout after resolving a cold project",
     () =>
       Effect.gen(function* () {

@@ -4,12 +4,18 @@ import {
   type PullRequestListInput,
   type PullRequestListResult,
 } from "@t3tools/contracts";
-import { AtomRegistry } from "effect/reactivity";
+import { type Atom, AtomRegistry } from "effect/reactivity";
 import { act, useLayoutEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vite-plus/test";
 
-const mocks = vi.hoisted(() => ({ failPage: false }));
+const mocks = vi.hoisted(() => ({
+  failPage: false,
+  pendingHead: undefined as Promise<void> | undefined,
+  pendingPage: undefined as Promise<void> | undefined,
+  pageRequests: 0,
+  revision: undefined as Atom.Writable<string> | undefined,
+}));
 
 vi.mock("../../connection/catalog", async () => {
   const { Atom } = await import("effect/reactivity");
@@ -36,30 +42,47 @@ vi.mock("../../state/pull-requests", async () => {
     providers: [],
     errors: [],
   });
-  const list = Atom.family((key: string) => {
-    const target: { environmentId: string; input: PullRequestListInput } = JSON.parse(key);
-    const response = page(target.input.cursors ? {} : { "github.com org/repo": "next" });
-    return Atom.make(
-      Effect.suspend(() => {
-        if (target.environmentId === "offline")
-          return Effect.fail(
-            new PullRequestListTestError({ message: "Environment is not connected." }),
-          );
-        if (target.input.cursors && mocks.failPage)
-          return Effect.fail(new PullRequestListTestError({ message: "Page failed." }));
-        return Effect.succeed(response);
-      }),
-    );
-  });
+  const revision = Atom.make("enabled");
+  mocks.revision = revision;
   const { pullRequestListHead } = await import("./pullRequestList");
   const pages = Atom.family((_key: string) =>
     Atom.make<ReturnType<typeof pullRequestListHead> | null>(null),
   );
+  const pagesKey = (target: unknown, settings: string) => JSON.stringify([target, settings]);
+  const list = Atom.family((key: string) => {
+    const target: { environmentId: string; input: PullRequestListInput } = JSON.parse(key);
+    return Atom.make((get) => {
+      const settings = get(revision);
+      const continuation = target.input.cursors !== undefined;
+      return Effect.gen(function* () {
+        if (target.environmentId === "offline")
+          return yield* new PullRequestListTestError({ message: "Environment is not connected." });
+        if (continuation) {
+          mocks.pageRequests += 1;
+          if (mocks.failPage)
+            return yield* new PullRequestListTestError({ message: "Page failed." });
+        }
+        const pending = continuation ? mocks.pendingPage : mocks.pendingHead;
+        yield* Effect.promise(() => pending ?? Promise.resolve());
+        const response = page(
+          continuation || settings === "disabled" ? {} : { "github.com org/repo": "next" },
+        );
+        if (!continuation) {
+          get.registry.update(pages(pagesKey(target, settings)), (previous) =>
+            pullRequestListHead(previous, response),
+          );
+        }
+        return response;
+      });
+    });
+  });
   return {
-    pullRequestListPagesKey: (target: unknown) => JSON.stringify(target),
+    pullRequestListPagesKey: (target: unknown, read: (atom: typeof revision) => string) =>
+      pagesKey(target, read(revision)),
     pullRequestListPagesFamily: pages,
     pullRequestListStatsFamily: Atom.family((_key: string) => Atom.make(new Map())),
     composerPullRequests: {
+      listRevision: () => revision,
       list: (target: unknown) => list(JSON.stringify(target)),
       listStats: Atom.family(() => Atom.make(AsyncResult.success({ stats: [] }))),
       invalidate: {
@@ -69,10 +92,14 @@ vi.mock("../../state/pull-requests", async () => {
   };
 });
 
+import { composerPullRequests } from "../../state/pull-requests";
 import { usePullRequestList } from "./usePullRequestList";
 
-function setup(ids: readonly string[]) {
+async function setup(ids: readonly string[]) {
   mocks.failPage = false;
+  mocks.pendingHead = undefined;
+  mocks.pendingPage = undefined;
+  mocks.pageRequests = 0;
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   const registry = AtomRegistry.make();
   const targets = ids.map((id) => ({
@@ -88,7 +115,7 @@ function setup(ids: readonly string[]) {
     return null;
   }
   const root = createRoot(document.createElement("div"));
-  act(() => {
+  await act(async () => {
     root.render(
       <RegistryContext.Provider value={registry}>
         <Probe />
@@ -96,6 +123,8 @@ function setup(ids: readonly string[]) {
     );
   });
   return {
+    registry,
+    targets,
     get latest() {
       return latest;
     },
@@ -107,7 +136,7 @@ function setup(ids: readonly string[]) {
 }
 
 it("keeps a refresh failure in the source errors and allows healthy pagination", async () => {
-  using probe = setup(["healthy", "offline"]);
+  using probe = await setup(["healthy", "offline"]);
   await act(async () => probe.latest.onRefresh());
   expect(probe.latest.data.errors.map((error) => error.message)).toEqual([
     "Environment is not connected.",
@@ -122,7 +151,7 @@ it("keeps a refresh failure in the source errors and allows healthy pagination",
 });
 
 it("keeps load-more failures retryable", async () => {
-  using probe = setup(["healthy"]);
+  using probe = await setup(["healthy"]);
   await act(async () => probe.latest.onRefresh());
   mocks.failPage = true;
   await act(async () => probe.latest.loadMore());
@@ -135,4 +164,32 @@ it("keeps load-more failures retryable", async () => {
   expect(probe.latest.loadMoreError).toBeNull();
   expect(probe.latest.hasMore).toBe(false);
   expect(probe.latest.continued).toBe(true);
+});
+
+it("waits for the new list head before loading more after upstream is turned off", async () => {
+  using probe = await setup(["healthy"]);
+  expect(probe.latest.hasMore).toBe(true);
+  const head = Promise.withResolvers<void>();
+  mocks.pendingHead = head.promise;
+  await act(async () => probe.registry.set(mocks.revision!, "disabled"));
+
+  await act(async () => probe.latest.loadMore());
+  expect(mocks.pageRequests).toBe(0);
+
+  await act(async () => head.resolve());
+  expect(probe.latest.hasMore).toBe(false);
+  expect(probe.latest.continued).toBe(false);
+});
+
+it("discards a continuation if its source head is replaced before the page answers", async () => {
+  using probe = await setup(["healthy"]);
+  const page = Promise.withResolvers<void>();
+  mocks.pendingPage = page.promise;
+  await act(async () => probe.latest.loadMore());
+  expect(probe.latest.loadingMore).toBe(true);
+
+  await act(async () => probe.registry.refresh(composerPullRequests.list(probe.targets[0]!)));
+  await act(async () => page.resolve());
+  expect(probe.latest.continued).toBe(false);
+  expect(probe.latest.hasMore).toBe(true);
 });

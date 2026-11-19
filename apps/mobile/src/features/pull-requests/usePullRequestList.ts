@@ -75,14 +75,22 @@ const sourcesFamily = Atom.family((key: string) => {
   );
 });
 
+function continuationSource(read: Read, target: ListTarget) {
+  const revision = read(composerPullRequests.listRevision(target.environmentId));
+  const key = pullRequestListPagesKey(target, read);
+  const head = read(pullRequestHostAnswer(composerPullRequests.list(target)));
+  const pages = read(pullRequestListPagesFamily(key));
+  // The query can hold the previous settings' head while the new listing is being read.
+  if (!AsyncResult.isSuccess(head) || head.waiting || pages?.head !== head.value) return null;
+  return { revision, key, head, pages };
+}
+
 function continuations(registry: AtomRegistry.AtomRegistry, targets: readonly ListTarget[]) {
   const read = <A>(atom: Atom.Atom<A>) => registry.get(atom);
   return targets.flatMap((target) => {
-    const pages = currentPages(read, target);
-    const input = pages && nextPullRequestListInput(pages, target.input);
-    return pages && input
-      ? [{ target, pages, input, key: pullRequestListPagesKey(target, read) }]
-      : [];
+    const source = continuationSource(read, target);
+    const input = source && nextPullRequestListInput(source.pages, target.input);
+    return source && input ? [{ target, source, input }] : [];
   });
 }
 
@@ -93,7 +101,7 @@ async function loadNextPages(
   signal: AbortSignal,
 ) {
   const responses = await Promise.allSettled(
-    continuations(registry, targets).map(async ({ target, pages, input, key }) => {
+    continuations(registry, targets).map(async ({ target, source, input }) => {
       const read = <A>(atom: Atom.Atom<A>) => registry.get(atom);
       const response = await executeAtomQuery(
         registry,
@@ -104,17 +112,20 @@ async function loadNextPages(
           reportFailure: false,
         },
       );
-      if (signal.aborted || key !== pullRequestListPagesKey(target, read)) return;
+      if (signal.aborted) return;
+      const current = continuationSource(read, target);
+      if (
+        current === null ||
+        source.key !== current.key ||
+        source.revision !== current.revision ||
+        source.head !== current.head
+      )
+        return;
       if (response._tag === "Failure") throw squashAtomCommandFailure(response);
       if (response.value.errors.length)
         throw new Error(response.value.errors.map((error) => error.message).join("\n"));
-      const pagesAtom = pullRequestListPagesFamily(key);
-      const next = appendPullRequestListPage(
-        currentPages(read, target) ?? pages,
-        response.value,
-        input,
-      );
-      registry.set(pagesAtom, next);
+      const next = appendPullRequestListPage(current.pages, response.value, input);
+      registry.set(pullRequestListPagesFamily(current.key), next);
       if (
         input.cursors &&
         Object.keys(next.nextCursors).length &&
@@ -152,7 +163,9 @@ async function refreshHeads(
       );
       if (signal.aborted || key !== pullRequestListPagesKey(target, read)) return;
       if (response._tag === "Failure") throw squashAtomCommandFailure(response);
-      registry.set(pullRequestListPagesFamily(key), pullRequestListHead(null, response.value));
+      const pagesAtom = pullRequestListPagesFamily(key);
+      if (read(pagesAtom)?.head === response.value)
+        registry.set(pagesAtom, pullRequestListHead(null, response.value));
     }),
   );
   return requestErrors(responses);
@@ -321,13 +334,7 @@ export function usePullRequestList(targets: readonly ListTarget[]) {
     if (!target) return;
     const read = <A>(atom: Atom.Atom<A>) => registry.get(atom);
     const pagesAtom = pullRequestListPagesFamily(pullRequestListPagesKey(target, read));
-    const patched = patchPullRequestListEntry(
-      read(pagesAtom),
-      currentHead(read, target),
-      entry,
-      patch,
-      Date.now(),
-    );
+    const patched = patchPullRequestListEntry(read(pagesAtom), null, entry, patch, Date.now());
     if (patched) registry.set(pagesAtom, patched);
     registry.refresh(composerPullRequests.list(target));
   };

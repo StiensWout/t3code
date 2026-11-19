@@ -1386,57 +1386,46 @@ export const make = Effect.gen(function* () {
     };
   };
 
-  const upstreamOf = (project: SupportedProject) =>
-    forkUpstream
-      .findParent({
-        project: project.project,
-        kind: project.api.kind,
-        host: project.host,
-        repository: project.repository,
-      })
-      .pipe(
-        Effect.map((repository): SupportedProject | null =>
-          repository === null
-            ? null
-            : {
-                ...project,
-                cursorKey: listCursorKey(project.host, repository),
-                repository,
-                remote: sourceControlDefinitions.repositoryKeyFromRemote(
-                  `https://${project.host}/${repository}`,
-                ),
-              },
-        ),
-      );
+  const withRepository = (project: SupportedProject, repository: string): SupportedProject => ({
+    ...project,
+    cursorKey: listCursorKey(project.host, repository),
+    repository,
+    remote: sourceControlDefinitions.repositoryKeyFromRemote(
+      `https://${project.host}/${repository}`,
+    ),
+  });
 
   const listingRepositories = (
     { supported, candidates }: WorkspaceProjects,
     policy: ForkUpstream.ForkUpstreamPolicy,
-  ) => {
-    const forks = new Map<string, SupportedProject>();
-    for (const candidate of candidates) {
-      if (
-        candidate.repositoryKey === null &&
-        policy.includes(candidate.project.id) &&
-        !forks.has(candidate.cursorKey)
-      ) {
-        forks.set(candidate.cursorKey, candidate);
-      }
-    }
-    return Effect.forEach(forks.values(), upstreamOf, {
-      concurrency: REPOSITORY_CONCURRENCY,
-    }).pipe(
-      Effect.map((upstreams) => {
-        const repositories = new Map(supported.map((project) => [project.cursorKey, project]));
-        for (const upstream of upstreams) {
-          if (upstream !== null && !repositories.has(upstream.cursorKey)) {
-            repositories.set(upstream.cursorKey, upstream);
+  ) =>
+    forkUpstream
+      .findParents(
+        candidates,
+        policy,
+        (candidate) =>
+          candidate.repositoryKey !== null
+            ? undefined
+            : {
+                key: candidate.cursorKey,
+                kind: candidate.api.kind,
+                host: candidate.host,
+                repository: candidate.repository,
+              },
+        REPOSITORY_CONCURRENCY,
+      )
+      .pipe(
+        Effect.map((upstreams) => {
+          const repositories = new Map(supported.map((project) => [project.cursorKey, project]));
+          for (const { candidate, parent: repository } of upstreams) {
+            const upstream = withRepository(candidate, repository);
+            if (!repositories.has(upstream.cursorKey)) {
+              repositories.set(upstream.cursorKey, upstream);
+            }
           }
-        }
-        return [...repositories.values()];
-      }),
-    );
-  };
+          return [...repositories.values()];
+        }),
+      );
 
   const listUncached = Effect.fn("PullRequestService.listUncached")(function* (
     input: PullRequestListInput,
@@ -2943,27 +2932,38 @@ export const make = Effect.gen(function* () {
       projectIds: [...new Set(input.refs.map(({ projectId }) => projectId))],
     });
     const byProject = new Map(candidates.map((project) => [project.project.id, project]));
-    const needsParent = new Map<ProjectId, SupportedProject>();
+    const needsParent = new Set<SupportedProject>();
     for (const ref of input.refs) {
       const own = byProject.get(ref.projectId);
       if (
         own !== undefined &&
         own.api.listChangeRequestStats !== undefined &&
         own.repositoryKey === null &&
-        own.repository.toLowerCase() !== ref.repository.trim().toLowerCase() &&
-        policy.includes(ref.projectId)
+        own.repository.toLowerCase() !== ref.repository.trim().toLowerCase()
       ) {
-        needsParent.set(ref.projectId, own);
+        needsParent.add(own);
       }
     }
-    const upstreams = yield* Effect.forEach(needsParent.values(), upstreamOf, {
-      concurrency: REPOSITORY_CONCURRENCY,
-    });
+    const upstreams = yield* forkUpstream.findParents(
+      needsParent,
+      policy,
+      (candidate) => ({
+        key: candidate.project.id,
+        kind: candidate.api.kind,
+        host: candidate.host,
+        repository: candidate.repository,
+      }),
+      REPOSITORY_CONCURRENCY,
+    );
     const byRepository = new Map<string, SupportedProject>();
-    for (const project of [...candidates, ...upstreams]) {
-      if (project !== null) {
-        byRepository.set(`${project.project.id} ${project.repository.toLowerCase()}`, project);
-      }
+    for (const project of candidates) {
+      byRepository.set(`${project.project.id} ${project.repository.toLowerCase()}`, project);
+    }
+    for (const { candidate, parent } of upstreams) {
+      byRepository.set(
+        `${candidate.project.id} ${parent.toLowerCase()}`,
+        withRepository(candidate, parent),
+      );
     }
     const wanted = new Map<
       string,

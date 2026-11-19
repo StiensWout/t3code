@@ -341,41 +341,30 @@ const make = Effect.gen(function* () {
         : yield* forkUpstream.readPolicy(
             Effect.succeed(supported.map(({ project }) => project.id)),
           );
-    const scopes = new Map<string, SupportedProject>();
-    const forks = new Map<
-      string,
-      SupportedProject & { forkRepository: NonNullable<ProjectTrackerBinding["forkRepository"]> }
-    >();
-    for (const project of supported) {
-      if (host !== undefined && project.host !== host) continue;
+    const candidates = supported.filter((project) => host === undefined || project.host === host);
+    const scopes = new Map<string, { project: SupportedProject; upstream: boolean }>();
+    for (const project of candidates) {
       const key = listCursorKey(project.host, project.scope);
-      if (!scopes.has(key)) scopes.set(key, project);
-      if (
-        project.forkRepository !== undefined &&
-        policy.includes(project.project.id) &&
-        !forks.has(key)
-      ) {
-        forks.set(key, { ...project, forkRepository: project.forkRepository });
-      }
+      if (!scopes.has(key)) scopes.set(key, { project, upstream: false });
     }
     // Served by the opted-in fork's checkout, which requireProject keeps read-only.
-    const upstreams = yield* Effect.forEach(
-      forks.values(),
+    const upstreams = yield* forkUpstream.findParents(
+      candidates,
+      policy,
       (project) =>
-        forkUpstream
-          .findParent({
-            project: project.project,
-            kind: project.forkRepository.kind,
-            host: project.host,
-            repository: project.forkRepository.selector,
-          })
-          .pipe(Effect.map((scope) => ({ project, scope }))),
-      { concurrency: SCOPE_CONCURRENCY },
+        project.forkRepository === undefined
+          ? undefined
+          : {
+              key: listCursorKey(project.host, project.scope),
+              kind: project.forkRepository.kind,
+              host: project.host,
+              repository: project.forkRepository.selector,
+            },
+      SCOPE_CONCURRENCY,
     );
-    for (const { project, scope } of upstreams) {
-      if (scope === null) continue;
-      const key = listCursorKey(project.host, scope);
-      if (!scopes.has(key)) scopes.set(key, { ...project, scope });
+    for (const { candidate, parent: scope } of upstreams) {
+      const key = listCursorKey(candidate.host, scope);
+      if (!scopes.has(key)) scopes.set(key, { project: { ...candidate, scope }, upstream: true });
     }
     const continuing = input.cursors;
     const viewers = new Map<string, string>();
@@ -387,7 +376,7 @@ const make = Effect.gen(function* () {
     const involvement = input.involvement ?? "all";
     // Only a narrowed listing compares against the signed-in account; `all` never reads it.
     const viewerRequests = new Map<string, Effect.Effect<string, IssueTrackerError>>();
-    for (const project of involvement === "all" ? [] : scopes.values()) {
+    for (const { project } of involvement === "all" ? [] : scopes.values()) {
       if (viewerRequests.has(project.host)) continue;
       const request = yield* Effect.cached(
         project.api
@@ -425,10 +414,9 @@ const make = Effect.gen(function* () {
     };
 
     yield* Effect.forEach(
-      scopes.values(),
-      (project) =>
+      scopes,
+      ([key, { project, upstream }]) =>
         Effect.gen(function* () {
-          const key = listCursorKey(project.host, project.scope);
           // A continuation names the scopes it wants; one not named has nothing to add.
           if (continuing !== undefined && continuing[key] === undefined) return;
           const cursor = continuing?.[key];
@@ -459,11 +447,12 @@ const make = Effect.gen(function* () {
           );
           if (page._tag === "Failure") {
             if (cursor !== undefined) nextCursors[key] = cursor;
-            recordFailure(project, page.failure);
+            if (!upstream) recordFailure(project, page.failure);
+            const detail = trackerDetail(page.failure);
             errors.push({
               projectId: project.project.id,
               projectTitle: project.project.title,
-              message: trackerDetail(page.failure),
+              message: upstream ? `${project.scope} could not be read. ${detail}` : detail,
             });
             return;
           }
@@ -499,7 +488,7 @@ const make = Effect.gen(function* () {
       entries,
       errors,
       nextCursors,
-      scopes: [...scopes.values()].map((project) => ({
+      scopes: [...scopes.values()].map(({ project }) => ({
         projectId: project.project.id,
         tracker: project.tracker,
         host: project.host,

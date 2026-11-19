@@ -27,6 +27,10 @@ interface ParentLookupInput {
   readonly repository: string;
 }
 
+interface ForkListingRepository extends Omit<ParentLookupInput, "project"> {
+  readonly key: string;
+}
+
 /** Resolves fork parents for listings without making the fork's own rows depend on the lookup. */
 export class ForkUpstream extends Context.Service<
   ForkUpstream,
@@ -34,7 +38,12 @@ export class ForkUpstream extends Context.Service<
     readonly readPolicy: <E>(
       projectIds: Effect.Effect<Iterable<ProjectId>, E>,
     ) => Effect.Effect<ForkUpstreamPolicy, E>;
-    readonly findParent: (input: ParentLookupInput) => Effect.Effect<string | null>;
+    readonly findParents: <A extends { readonly project: OrchestrationProjectShell }>(
+      candidates: Iterable<A>,
+      policy: ForkUpstreamPolicy,
+      repositoryOf: (candidate: A) => ForkListingRepository | undefined,
+      concurrency: number,
+    ) => Effect.Effect<readonly { candidate: A; parent: string }[]>;
   }
 >()("t3/sourceControl/forkUpstream") {}
 
@@ -87,7 +96,36 @@ const make = Effect.gen(function* () {
     );
   });
 
-  return ForkUpstream.of({ readPolicy, findParent });
+  const findParents = Effect.fn("ForkUpstream.findParents")(function* <
+    A extends { readonly project: OrchestrationProjectShell },
+  >(
+    candidates: Iterable<A>,
+    policy: ForkUpstreamPolicy,
+    repositoryOf: (candidate: A) => ForkListingRepository | undefined,
+    concurrency: number,
+  ) {
+    if (policy.length === 0) return [];
+    const enabled = new Set(policy);
+    const forks = new Map<string, { candidate: A; repository: ForkListingRepository }>();
+    for (const candidate of candidates) {
+      if (!enabled.has(candidate.project.id)) continue;
+      const repository = repositoryOf(candidate);
+      if (repository !== undefined && !forks.has(repository.key)) {
+        forks.set(repository.key, { candidate, repository });
+      }
+    }
+    const parents = yield* Effect.forEach(
+      forks.values(),
+      ({ candidate, repository }) =>
+        findParent({ ...repository, project: candidate.project }).pipe(
+          Effect.map((parent) => (parent === null ? null : { candidate, parent })),
+        ),
+      { concurrency },
+    );
+    return parents.filter((parent) => parent !== null);
+  });
+
+  return ForkUpstream.of({ readPolicy, findParents });
 });
 
 export const layer = Layer.effect(ForkUpstream, make);
