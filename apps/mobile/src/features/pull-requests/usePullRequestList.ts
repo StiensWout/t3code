@@ -88,9 +88,8 @@ function continuationSource(read: Read, target: ListTarget) {
 }
 
 function continuations(registry: AtomRegistry.AtomRegistry, targets: readonly ListTarget[]) {
-  const read = <A>(atom: Atom.Atom<A>) => registry.get(atom);
   return targets.flatMap((target) => {
-    const source = continuationSource(read, target);
+    const source = continuationSource((atom) => registry.get(atom), target);
     const input = source && nextPullRequestListInput(source.pages, target.input);
     return source && input ? [{ target, source, input }] : [];
   });
@@ -104,7 +103,6 @@ async function loadNextPages(
 ) {
   const responses = await Promise.allSettled(
     continuations(registry, targets).map(async ({ target, source, input }) => {
-      const read = <A>(atom: Atom.Atom<A>) => registry.get(atom);
       const response = await executeAtomQuery(
         registry,
         pullRequestHostAnswer(composerPullRequests.list({ ...target, input })),
@@ -115,25 +113,23 @@ async function loadNextPages(
         },
       );
       if (signal.aborted) return;
-      const current = continuationSource(read, target);
+      const current = continuationSource((atom) => registry.get(atom), target);
       if (current === null || source.policy !== current.policy || source.head !== current.head)
         return;
       if (response._tag === "Failure") throw squashAtomCommandFailure(response);
       const errors = response.value.errors;
-      const errorMessage = errors.map((error) => error.message).join("\n");
       const next = appendPullRequestListPage(current.pages, response.value, input);
-      const hasNextCursor = Object.keys(next.nextCursors).length > 0;
       const stalled =
         input.cursors &&
         JSON.stringify(Object.entries(input.cursors).sort()) ===
           JSON.stringify(Object.entries(next.nextCursors).sort());
-      const canAdvance = !errors.length || (hasNextCursor && !stalled);
+      const canAdvance = !errors.length || (Object.keys(next.nextCursors).length > 0 && !stalled);
       if (canAdvance || response.value.entries.length)
         registry.set(
           pullRequestListPagesFamily(pullRequestListPagesKey(target)),
           canAdvance ? next : { ...current.pages, entries: next.entries, continued: true },
         );
-      if (errors.length) throw new Error(errorMessage);
+      if (errors.length) throw new Error(errors.map((error) => error.message).join("\n"));
       if (stalled) throw new Error(m(msg("Couldn't advance the list. Try again.")));
     }),
   );
