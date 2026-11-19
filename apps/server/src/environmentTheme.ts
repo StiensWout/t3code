@@ -581,7 +581,6 @@ const make = Effect.gen(function* () {
           Effect.asVoid,
         );
 
-        yield* checkLease;
         yield* fs
           .rename(staging, destination)
           .pipe(
