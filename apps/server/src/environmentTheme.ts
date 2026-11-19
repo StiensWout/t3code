@@ -280,6 +280,19 @@ export const readPublishedThemes = Effect.fn(function* (themesDir: string) {
   return themes;
 });
 
+/**
+ * A publish counts only when the reader serves the new theme and every theme it served before:
+ * its count and size limits can leave the new file unserved, or push another theme out.
+ */
+export const publishKeepsThemesServed = (
+  themeId: string,
+  before: ReadonlyArray<EnvironmentTheme>,
+  after: ReadonlyArray<EnvironmentTheme>,
+): boolean => {
+  const served = new Set(after.map((theme) => theme.id));
+  return served.has(themeId) && before.every((theme) => served.has(theme.id));
+};
+
 const make = Effect.gen(function* () {
   const { environmentThemesDir } = yield* ServerConfig.ServerConfig;
   const fs = yield* FileSystem.FileSystem;
@@ -379,7 +392,7 @@ const make = Effect.gen(function* () {
         problem: "would replace a file that could not be backed up. Use another theme id.",
       });
     }
-    const servedBefore = (yield* refresh).themes.map((theme) => theme.id);
+    const servedBefore = (yield* refresh).themes;
     // Puts back what was there, so a failed apply does not take a working theme away.
     const revert = Option.match(previous, {
       onNone: () => fs.remove(destination, { force: true }),
@@ -392,10 +405,7 @@ const make = Effect.gen(function* () {
         (cause) => new EnvironmentThemeRefusedError({ themeId, problem: NOT_PUBLISHED, cause }),
       ),
     );
-    // The reader stops at its count and size limits, so this file can go unserved, or it can
-    // push another theme out. Both count as a failed publish.
-    const served = new Set((yield* refresh).themes.map((theme) => theme.id));
-    if (served.has(themeId) && servedBefore.every((id) => served.has(id))) return revert;
+    if (publishKeepsThemesServed(themeId, servedBefore, (yield* refresh).themes)) return revert;
     yield* revert;
     return yield* new EnvironmentThemeRefusedError({ themeId, problem: NOT_PUBLISHED });
   });

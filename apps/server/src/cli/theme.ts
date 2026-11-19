@@ -25,6 +25,7 @@ import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
 import * as ServerConfig from "../config.ts";
 import {
   MAX_THEME_FILE_BYTES,
+  publishKeepsThemesServed,
   readPublishedThemes,
   readThemeFileGuarded,
 } from "../environmentTheme.ts";
@@ -131,6 +132,15 @@ export class ThemeDestinationDirectoryError extends Schema.TaggedError<ThemeDest
 }
 
 const isThemeDestinationDirectoryError = Schema.is(ThemeDestinationDirectoryError);
+
+export class ThemeLibraryFullError extends Schema.TaggedError<ThemeLibraryFullError>()(
+  "ThemeLibraryFullError",
+  { themeId: Schema.String, themesDir: Schema.String },
+) {
+  override get message(): string {
+    return `"${this.themeId}" was not published, because ${this.themesDir} is full. Remove a theme from it, then run this again.`;
+  }
+}
 
 const INVALID_THEME_ID_REASON =
   "is not a valid theme id (lowercase letters, digits, and hyphens; not an appearance keyword)";
@@ -325,6 +335,7 @@ const publishThemeFile = Effect.fn(function* (input: {
 
   const publishFailure = (cause: unknown) =>
     new ThemePublishError({ themesDir: input.themesDir, cause });
+  const servedBefore = yield* readPublishedThemes(input.themesDir);
 
   const destinationIsDirectory = yield* Effect.try({
     try: () => NodeFS.lstatSync(destinationPath, { throwIfNoEntry: false })?.isDirectory() ?? false,
@@ -427,6 +438,12 @@ const publishThemeFile = Effect.fn(function* (input: {
     try: () => NodeFS.renameSync(stagingPath, destinationPath),
     catch: publishFailure,
   }).pipe(Effect.onError(() => revert));
+
+  const servedAfter = yield* readPublishedThemes(input.themesDir);
+  if (!publishKeepsThemesServed(themeId, servedBefore, servedAfter)) {
+    yield* revert;
+    return yield* new ThemeLibraryFullError({ themeId, themesDir: input.themesDir });
+  }
 
   return { themeId, revert, cleanup };
 });
