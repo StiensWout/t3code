@@ -24,15 +24,11 @@ const KEY_SEPARATOR = "\0";
 
 export const disabledPolicy = forkUpstreamPolicy(null);
 
-interface ParentLookupInput {
-  readonly project: OrchestrationProjectShell;
+interface ForkListingRepository {
+  readonly key: string;
   readonly kind: SourceControlProviderKind;
   readonly host: string;
   readonly repository: string;
-}
-
-interface ForkListingRepository extends Omit<ParentLookupInput, "project"> {
-  readonly key: string;
 }
 
 interface ParentLookupError {
@@ -90,7 +86,7 @@ const make = Effect.gen(function* () {
     Effect.orElseSucceed(() => disabledPolicy),
     Effect.withSpan("ForkUpstream.readPolicy"),
   );
-  const parents = yield* Cache.makeWith(
+  const parentCache = yield* Cache.makeWith(
     (key: string) => {
       const [kind = "", host = "", repository = "", cwd = ""] = key.split(KEY_SEPARATOR);
       return providers
@@ -107,17 +103,6 @@ const make = Effect.gen(function* () {
       timeToLive: (exit) => (Exit.isSuccess(exit) ? PARENT_TTL : Duration.zero),
     },
   );
-
-  const findParent = Effect.fn("ForkUpstream.findParent")(function* (input: ParentLookupInput) {
-    const key = [input.kind, input.host, input.repository, input.project.workspaceRoot].join(
-      KEY_SEPARATOR,
-    );
-    return yield* Cache.get(parents, key).pipe(
-      Effect.tapError((cause) =>
-        Effect.logWarning("The fork's upstream repository could not be read.", { cause }),
-      ),
-    );
-  });
 
   const findParents = Effect.fn("ForkUpstream.findParents")(function* <
     A extends { readonly project: OrchestrationProjectShell },
@@ -138,7 +123,18 @@ const make = Effect.gen(function* () {
     const lookups = yield* Effect.forEach(
       forks.values(),
       ({ candidate, repository }) =>
-        findParent({ ...repository, project: candidate.project }).pipe(
+        Cache.get(
+          parentCache,
+          [
+            repository.kind,
+            repository.host,
+            repository.repository,
+            candidate.project.workspaceRoot,
+          ].join(KEY_SEPARATOR),
+        ).pipe(
+          Effect.tapError((cause) =>
+            Effect.logWarning("The fork's upstream repository could not be read.", { cause }),
+          ),
           Effect.result,
           Effect.map((result) => ({ candidate, repository, result })),
         ),
