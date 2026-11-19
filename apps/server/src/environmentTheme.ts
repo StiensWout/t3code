@@ -580,6 +580,13 @@ export const withThemePublish = Effect.fn("EnvironmentTheme.withThemePublish")(f
                 undefined,
                 readFile,
               );
+              // Directory metadata can stay the same across writes in a single clock tick.
+              const latestEntries = new Set(yield* readEntries);
+              if (
+                latestEntries.size !== currentEntries.length ||
+                !currentEntries.every((entry) => latestEntries.has(entry))
+              )
+                continue;
               const filesUnchanged = [...versions].every(([path, before]) => {
                 const after = readFileVersion(path);
                 if (before === undefined) return after === undefined;
