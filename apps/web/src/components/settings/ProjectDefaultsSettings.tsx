@@ -110,6 +110,7 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
   const mixedWorkspace = useScopedSettingsMixed(["defaultThreadEnvMode"]);
   const mixedAutoPull = useScopedSettingsMixed(["defaultAutoPull"]);
   const mixedAgentCredits = useScopedSettingsMixed(["removeAgentCreditsOnMerge"]);
+  const mixedForkUpstream = useScopedSettingsMixed(["includeForkUpstream"]);
   const mixedMergeMethod = useScopedSettingsMixed(["pullRequestMergeMethod"]);
   const modelSource = useScopedSettingSource(["defaultModelSelection"]);
   const isProjectScope = scope.kind === "project" || scope.kind === "checkout";
@@ -499,6 +500,32 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
                 onCheckedChange={(enabled) =>
                   updateSettings({ removeAgentCreditsOnMerge: enabled })
                 }
+              />
+            }
+          />
+          <SettingsRow
+            serverScoped
+            settingKeys={["includeForkUpstream"]}
+            mixed={mixedForkUpstream}
+            {...searchableSetting("include-fork-upstream")}
+            description={gt(
+              "When the repository is a fork, the Pull requests and Issues lists also show those of the repository it was forked from.",
+            )}
+            resetAction={
+              settings.includeForkUpstream ? (
+                <SettingResetButton
+                  ariaLabel={gt("Reset upstream pull requests and issues to default")}
+                  tooltip={gt("Show only the fork's own")}
+                  onClick={() => updateSettings({ includeForkUpstream: false })}
+                />
+              ) : null
+            }
+            control={
+              <Switch
+                aria-label={gt("Include upstream pull requests and issues")}
+                mixed={mixedForkUpstream}
+                checked={mixedForkUpstream ? false : settings.includeForkUpstream}
+                onCheckedChange={(enabled) => updateSettings({ includeForkUpstream: enabled })}
               />
             }
           />

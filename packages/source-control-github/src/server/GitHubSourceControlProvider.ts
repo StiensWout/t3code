@@ -413,6 +413,8 @@ const RawRepositorySchema = Schema.Struct({
   html_url: TrimmedNonEmptyString,
   ssh_url: TrimmedNonEmptyString,
   default_branch: Schema.optional(Schema.NullOr(Schema.String)),
+  /** Only a fork has one. */
+  parent: Schema.optional(Schema.Struct({ full_name: TrimmedNonEmptyString })),
 });
 const decodeRawRepository = decodeJsonResult(RawRepositorySchema);
 
@@ -1161,6 +1163,19 @@ export const make = Effect.gen(function* () {
             providerError("getRepositoryCloneUrls", input.cwd, {
               repository: input.repository,
             }),
+          ),
+        ),
+    ),
+    getRepositoryParent: Effect.fn("GitHubSourceControlProvider.getRepositoryParent")(
+      function* (input) {
+        const locator = parseGitHubRepositorySelector(input.repository, input.host.toLowerCase());
+        if (locator === null) return yield* failure("Repositories are named owner/name.");
+        return (yield* readRepository(locator)).parent?.full_name ?? null;
+      },
+      (effect, input) =>
+        effect.pipe(
+          Effect.mapError(
+            providerError("getRepositoryParent", input.cwd, { repository: input.repository }),
           ),
         ),
     ),

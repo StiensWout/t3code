@@ -3609,6 +3609,8 @@
   "13087312bc6a0b45": "Pull requests",
   "efb65f53a2382026": "Remove agent credits when merging",
   "88631d9ea293eccd": "Remove recognized agent credits from merge and squash messages on hosts that support it, keeping human co-authors. Includes auto-merge. Excludes merge queues, stack merges, and existing commits.",
+  "7ceb6a81498c07c8": "Include upstream pull requests and issues",
+  "82a7b1049a71257a": "When the repository is a fork, also list the pull requests and issues of the repository it was forked from.",
   "15ed472fb3ba4a6d": "Default branch",
   "abe5615aea30066d": "Automatically pull",
   "17782375efd2c928": "Keep the default branch current when there are no local changes.",

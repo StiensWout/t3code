@@ -201,6 +201,7 @@ function makeService(input: {
               getSettings: Effect.succeed(input.settings ?? DEFAULT_SERVER_SETTINGS),
             }),
             Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
+              resolveLink: () => undefined,
               get: () =>
                 Effect.succeed({
                   getRepositoryParent: input.getRepositoryParent,

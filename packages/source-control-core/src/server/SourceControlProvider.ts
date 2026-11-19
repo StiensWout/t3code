@@ -201,6 +201,15 @@ export class SourceControlProvider extends Context.Service<
       /** The host the repository is on. Without it, the checkout's host. */
       readonly host?: string;
     }) => Effect.Effect<SourceControlRepositoryCloneUrls, SourceControlProviderError>;
+    /**
+     * The `owner/name` of the repository `repository` was forked from, on the same host, or
+     * null for one that is no fork. Absent for a host that does not say.
+     */
+    readonly getRepositoryParent?: (input: {
+      readonly cwd: string;
+      readonly host: string;
+      readonly repository: string;
+    }) => Effect.Effect<string | null, SourceControlProviderError>;
     readonly createRepository: (input: {
       readonly cwd: string;
       readonly repository: string;

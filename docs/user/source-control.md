@@ -377,6 +377,11 @@ requests.
 To list a Linear team's issues beside a project's, connect Linear with an API key under
 Settings → Source control & issues, then choose the team for that project there.
 
+A project whose repository is a fork lists only the fork's own issues and pull requests. Turn on
+**Include upstream pull requests and issues** in Settings → Source control & issues, for that
+project or as the default, to list those of the repository it was forked from beside them
+(GitHub only). Upstream issues are read-only from the fork's project.
+
 Select an issue to open it beside the list: description, comments, state changes, linked pull
 requests, labels, assignees, and reactions. Linked pull requests open in the same panel. You can
 comment, edit the title and description, change labels and assignees, react, and close or

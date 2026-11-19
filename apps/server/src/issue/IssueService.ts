@@ -46,6 +46,7 @@ import { parseUrl } from "@t3tools/shared/url";
 import * as IssueTrackerBindings from "../persistence/IssueTrackerBindings.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
+import { makeForkUpstreamLookup } from "../sourceControl/forkUpstream.ts";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
 import * as IssueTrackerRegistry from "./IssueTrackerRegistry.ts";
 
@@ -188,6 +189,7 @@ const make = Effect.gen(function* () {
   const projects = yield* ProjectService.ProjectService;
   const repositoryIdentities = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
   const bindings = yield* IssueTrackerBindings.IssueTrackerBindingsRepository;
+  const forkUpstream = yield* makeForkUpstreamLookup;
 
   // Read per resolution so a binding saved in Settings applies without a restart.
   const resolveStandaloneBinding = (
@@ -311,6 +313,19 @@ const make = Effect.gen(function* () {
       }),
     );
 
+  /** A git host's issue scope that is the fork's repository reads its upstream's beside it. */
+  const upstreamScope = (project: SupportedProject) => {
+    const identity = project.project.repositoryIdentity;
+    const kind = identity?.provider;
+    const repository = sourceControlDefinitions.repositorySelector(identity);
+    return kind === undefined ||
+      isStandaloneIssueTracker(project.api) ||
+      repository === null ||
+      repository.toLowerCase() !== project.scope.toLowerCase()
+      ? Effect.succeed(null)
+      : forkUpstream({ project: project.project, kind, host: project.host, repository });
+  };
+
   const requireWritable = (ref: IssueScopeRef, operation: string) =>
     requireProject(ref).pipe(
       Effect.filterOrFail(
@@ -333,6 +348,19 @@ const make = Effect.gen(function* () {
       const key = listCursorKey(project.host, project.scope);
       if (!scopes.has(key)) scopes.set(key, project);
     }
+    // Served by the fork's project, which requireProject keeps read-only.
+    yield* Effect.forEach(
+      [...scopes.values()],
+      (project) =>
+        upstreamScope(project).pipe(
+          Effect.map((scope) => {
+            if (scope === null) return;
+            const key = listCursorKey(project.host, scope);
+            if (!scopes.has(key)) scopes.set(key, { ...project, scope });
+          }),
+        ),
+      { concurrency: SCOPE_CONCURRENCY },
+    );
     const continuing = input.cursors;
     const viewers = new Map<string, string>();
     const trackers = new Map<string, IssueTrackerSummary>();

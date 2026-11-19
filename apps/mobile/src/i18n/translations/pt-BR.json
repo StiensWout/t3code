@@ -3603,6 +3603,8 @@
   "13087312bc6a0b45": "Pull requests",
   "efb65f53a2382026": "Remover créditos de agentes ao mesclar",
   "88631d9ea293eccd": "Remove os créditos de agentes reconhecidos das mensagens de merge e squash nos hosts que oferecem suporte, mantendo os coautores humanos. Inclui o auto-merge. Exclui merge queues, merges de stack e commits existentes.",
+  "7ceb6a81498c07c8": "Incluir pull requests e issues do upstream",
+  "82a7b1049a71257a": "Se o repositório for um fork, lista também os pull requests e issues do repositório de origem.",
   "15ed472fb3ba4a6d": "Branch padrão",
   "abe5615aea30066d": "Fazer pull automaticamente",
   "17782375efd2c928": "Mantém o branch padrão atualizado quando não há alterações locais.",

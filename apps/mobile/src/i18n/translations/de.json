@@ -3608,6 +3608,8 @@
   "13087312bc6a0b45": "Pull Requests",
   "efb65f53a2382026": "Agenten-Credits beim Mergen entfernen",
   "88631d9ea293eccd": "Erkannte Agenten-Credits aus Merge- und Squash-Nachrichten entfernen, sofern der Host das unterstützt; menschliche Co-Autoren bleiben erhalten. Gilt auch für Auto-Merge. Ausgenommen sind Merge-Queues, Stack-Merges und bestehende Commits.",
+  "7ceb6a81498c07c8": "Upstream-Pull-Requests und -Issues einbeziehen",
+  "82a7b1049a71257a": "Wenn das Repository ein Fork ist, auch die Pull Requests und Issues des Repositorys auflisten, von dem es geforkt wurde.",
   "15ed472fb3ba4a6d": "Standard-Branch",
   "abe5615aea30066d": "Automatisch pullen",
   "17782375efd2c928": "Den Standard-Branch aktuell halten, wenn es keine lokalen Änderungen gibt.",

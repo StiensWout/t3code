@@ -84,6 +84,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as PullRequestFilesViewed from "../persistence/PullRequestFilesViewed.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
+import { makeForkUpstreamLookup } from "../sourceControl/forkUpstream.ts";
 import type { SourceControlProviderContext } from "@t3tools/source-control-core/server/SourceControlProvider";
 import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 import {
@@ -772,6 +773,7 @@ export const make = Effect.gen(function* () {
   const projects = yield* ProjectService.ProjectService;
   const repositoryIdentities = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
   const sourceControlProviders = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
+  const forkUpstream = yield* makeForkUpstreamLookup;
   const rateLimits = yield* SourceControlRateLimit.SourceControlRateLimit;
   const filesViewedStore = yield* PullRequestFilesViewed.PullRequestFilesViewedRepository;
   const readCache = yield* PullRequestReadCache.PullRequestReadCache;
@@ -1374,6 +1376,47 @@ export const make = Effect.gen(function* () {
     };
   };
 
+  /**
+   * The upstream repositories of forks whose projects ask for them, read through the fork's
+   * checkout. Hosts that key repositories by more than their path are left out.
+   */
+  const forkUpstreams = (projects: ReadonlyArray<SupportedProject>) =>
+    Effect.forEach(
+      projects,
+      (project) =>
+        project.repositoryKey !== null
+          ? Effect.succeed(null)
+          : forkUpstream({
+              project: project.project,
+              kind: project.api.kind,
+              host: project.host,
+              repository: project.repository,
+            }).pipe(
+              Effect.map((repository): SupportedProject | null =>
+                repository === null
+                  ? null
+                  : {
+                      ...project,
+                      cursorKey: listCursorKey(project.host, repository),
+                      repository,
+                      remote: sourceControlDefinitions.repositoryKeyFromRemote(
+                        `https://${project.host}/${repository}`,
+                      ),
+                    },
+              ),
+            ),
+      { concurrency: REPOSITORY_CONCURRENCY },
+    ).pipe(
+      Effect.map((upstreams) => {
+        const seen = new Set(projects.map(({ cursorKey }) => cursorKey));
+        return upstreams.filter((upstream): upstream is SupportedProject => {
+          if (upstream === null || seen.has(upstream.cursorKey)) return false;
+          seen.add(upstream.cursorKey);
+          return true;
+        });
+      }),
+    );
+
   const listUncached: PullRequestService["Service"]["list"] = Effect.fn(
     "PullRequestService.listUncached",
   )(function* (input) {
@@ -1381,15 +1424,16 @@ export const make = Effect.gen(function* () {
     const epochAtStart = epochCounter;
     const continuation = yield* decodeCursors(input.cursors);
     const {
-      supported: projects,
+      supported: own,
       unimplemented,
       viewerRoots,
       refinedProjectIdsByHost,
     } = yield* listWorkspaceProjects(input);
     const projectCounts = new Map<string, number>();
-    for (const { host } of projects) {
+    for (const { host } of own) {
       projectCounts.set(host, (projectCounts.get(host) ?? 0) + 1);
     }
+    const projects = [...own, ...(yield* forkUpstreams(own))];
 
     const viewerResults = yield* resolveViewers(projects, viewerRoots);
     const viewers: Record<string, string> = {};
