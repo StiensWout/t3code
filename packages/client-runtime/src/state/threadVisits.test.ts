@@ -605,16 +605,20 @@ it("records an open after leaving an offline thread and reopening it online with
   expect(t.visits).toEqual([{ threadId: t.ref.threadId, visitedAt: at(10), opened: true }]);
 });
 
-it.each(["mounted", "remounted"] as const)(
-  "does not count a committed palette pick again after its acknowledgment was lost (%s)",
-  async (lifetime) => {
-    using t = setup(`thread-open-committed-without-ack-${lifetime}`, {
+it.each([
+  ["palette", "mounted"],
+  ["palette", "remounted"],
+  ["plain", "remounted"],
+] as const)(
+  "does not count a committed %s open again after its acknowledgment was lost (%s)",
+  async (source, lifetime) => {
+    using t = setup(`thread-open-committed-without-ack-${source}-${lifetime}`, {
       updatedAt: at(10),
       lastVisitedAt: at(10),
       latestRun: null,
     });
     t.loseNextOpenAck();
-    t.pick();
+    if (source === "palette") t.pick();
     const unmount = t.mount();
     await vi.advanceTimersByTimeAsync(0);
     t.reconnect(false);
@@ -637,12 +641,14 @@ it.each(["mounted", "remounted"] as const)(
     expect(t.serverOpens()).toEqual({
       openedAt: Date.UTC(2026, 0, 1),
       score: 1,
-      picks: [{ query: "needle", at: Date.UTC(2026, 0, 1) }],
+      picks: source === "palette" ? [{ query: "needle", at: Date.UTC(2026, 0, 1) }] : [],
     });
 
     t.pick("newer");
     await vi.advanceTimersByTimeAsync(0);
     expect(t.openCommandIds[2]).not.toBe(t.openCommandIds[0]);
-    expect(t.serverOpens()?.picks.map((pick) => pick.query)).toEqual(["newer", "needle"]);
+    expect(t.serverOpens()?.picks.map((pick) => pick.query)).toEqual(
+      source === "palette" ? ["newer", "needle"] : ["newer"],
+    );
   },
 );

@@ -1,5 +1,6 @@
 // @effect-diagnostics globalTimers:off globalDate:off - The tracker runs in atom subscriptions, outside an Effect runtime.
 import type { CommandId, EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
+import { THREAD_OPEN_DEDUPE_MS } from "@t3tools/shared/paletteSearch";
 import { AsyncResult, Atom } from "effect/reactivity";
 
 import { parseThreadKey, threadKey } from "./entities.ts";
@@ -86,6 +87,11 @@ type OpenState =
  * watermark current, throttling ordinary visits while a run streams.
  */
 export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
+  const openStates = Atom.family((_key: string) =>
+    Atom.make((): { current: OpenState | null } => ({ current: null })).pipe(
+      Atom.setIdleTTL(THREAD_OPEN_DEDUPE_MS),
+    ),
+  );
   const family = Atom.family((key: string) => {
     const ref = parseThreadKey(key);
     const pickAtom = threadSearchPickAtom(ref);
@@ -94,11 +100,13 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
       session: get(options.liveSessionAtom(ref.environmentId)),
       pick: get(pickAtom),
     }));
-    // Keep an in-flight open visible to a quick remount until its result arrives.
-    let open: OpenState | null = null;
 
     return Atom.make((get) => {
       const registry = get.registry;
+      // Keep the receipt across quick remounts while ending visit subscriptions on unmount.
+      const openStateAtom = openStates(key);
+      const open = get.once(openStateAtom);
+      get.mount(openStateAtom);
       const openedAt = Date.now();
       const claimOpen = (at: number) =>
         claimThreadOpen(ref.environmentId, ref.threadId, at) ? at : null;
@@ -106,10 +114,16 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
         if (claim !== null) releaseThreadOpen(ref.environmentId, ref.threadId, claim);
       };
       const claimOnMount = () => {
+        if (
+          open.current !== null &&
+          !(open.current.status === "failed" && open.current.intent.pick === null)
+        ) {
+          return;
+        }
         const claim = claimOpen(openedAt);
-        if (claim !== null) open = { status: "pending", claim };
+        if (claim !== null) open.current = { status: "pending", claim };
       };
-      if (open === null) claimOnMount();
+      claimOnMount();
       let lastVisit: VisitAttempt | null = null;
       let acceptedThrough = Number.NEGATIVE_INFINITY;
       let observedThrough = Number.NEGATIVE_INFINITY;
@@ -123,9 +137,14 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
       get.addFinalizer(() => {
         active = false;
         clearTimer();
-        if (open?.status === "pending") releaseOpen(open.claim);
-        if (open?.status === "failed") releaseOpen(open.intent.claim);
-        if (open?.status !== "sending") open = null;
+        const current = open.current;
+        if (current?.status === "pending") {
+          releaseOpen(current.claim);
+          open.current = null;
+        } else if (current?.status === "failed" && current.intent.pick !== null) {
+          releaseOpen(current.intent.claim);
+          open.current = null;
+        }
       });
 
       const visit = (
@@ -179,14 +198,17 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
       ) => {
         const finished = visit(session, visitedAt, observedLastVisitedAt, intent).then(
           (accepted) => {
-            if (active && !accepted) open = { status: "failed", intent, session, visitedAt };
-            else open = null;
-            if (!active && !accepted) releaseOpen(intent.claim);
+            if (!accepted && (active || intent.pick === null)) {
+              open.current = { status: "failed", intent, session, visitedAt };
+            } else {
+              open.current = null;
+              if (!accepted) releaseOpen(intent.claim);
+            }
             if (accepted && intent.pick !== null) clearThreadSearchPick(registry, ref, intent.pick);
             if (active) update(registry.get(inputsAtom));
           },
         );
-        open = { status: "sending", finished };
+        open.current = { status: "sending", finished };
       };
 
       const updateOpen = (
@@ -195,30 +217,33 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
         observedLastVisitedAt: string | null,
         pick: ThreadSearchPick | null,
       ) => {
-        if (open?.status === "sending") return false;
-        if (open?.status === "failed" && (pick === null || open.intent.pick === pick)) {
-          if (open.session === session) return false;
+        const current = open.current;
+        if (current?.status === "sending") return false;
+        if (current?.status === "failed" && (pick === null || current.intent.pick === pick)) {
+          if (current.session === session) return false;
           if (visitedAt !== null) {
             // A receipt can only prove the original watermark. After a rewind, first
             // execution must use the lower watermark to keep the thread unread.
             const retryAt =
-              Date.parse(visitedAt) < Date.parse(open.visitedAt) ? visitedAt : open.visitedAt;
-            sendOpen(session, retryAt, observedLastVisitedAt, open.intent);
+              Date.parse(visitedAt) < Date.parse(current.visitedAt) ? visitedAt : current.visitedAt;
+            sendOpen(session, retryAt, observedLastVisitedAt, current.intent);
             return true;
           }
-          const { intent } = open;
-          open = null;
+          const { intent } = current;
+          open.current = null;
           releaseOpen(intent.claim);
           if (intent.pick !== null) clearThreadSearchPick(registry, ref, intent.pick);
           return false;
         }
-        if (open === null && pick === null) return false;
+        if (current === null && pick === null) return false;
 
         const claim =
-          open?.status === "failed" ? open.intent.claim : (open?.claim ?? claimOpen(Date.now()));
+          current?.status === "failed"
+            ? current.intent.claim
+            : (current?.claim ?? claimOpen(Date.now()));
         if (visitedAt === null) {
           releaseOpen(claim);
-          open = null;
+          open.current = null;
         } else {
           sendOpen(session, visitedAt, observedLastVisitedAt, {
             claim,
@@ -294,10 +319,10 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
         }
       };
 
-      if (open?.status === "sending") {
-        void open.finished.then(() => {
+      if (open.current?.status === "sending") {
+        void open.current.finished.then(() => {
           if (!active) return;
-          if (open === null) claimOnMount();
+          claimOnMount();
           update(registry.get(inputsAtom));
         });
       }
