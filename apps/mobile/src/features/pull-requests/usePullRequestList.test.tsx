@@ -14,6 +14,7 @@ import { expect, it, vi } from "vite-plus/test";
 
 const mocks = vi.hoisted(() => ({
   failPage: false,
+  headEntries: undefined as PullRequestListEntry[] | undefined,
   pendingHead: undefined as Promise<void> | undefined,
   pendingPage: undefined as Promise<void> | undefined,
   pageRequests: [] as PullRequestListResult["nextCursors"][],
@@ -84,6 +85,7 @@ vi.mock("@t3tools/client-runtime/state/pull-requests", async (importOriginal) =>
             const partial = cursors !== undefined && mocks.partialPage;
             const response: PullRequestListResult = {
               entries: cursors?.["github.com org/repo"] === "next" ? [continuedEntry] : [],
+              ...(cursors === undefined && mocks.headEntries ? { entries: mocks.headEntries } : {}),
               nextCursors: partial
                 ? { "github.com org/other": "retry" }
                 : cursors !== undefined || settings === "disabled"
@@ -157,6 +159,7 @@ const continuedEntry: PullRequestListEntry = {
 };
 
 async function setup(ids: readonly string[]) {
+  mocks.headEntries = undefined;
   mocks.failPage = false;
   mocks.pendingHead = undefined;
   mocks.pendingPage = undefined;
@@ -327,4 +330,15 @@ it("discards a continuation if its source head is replaced before the page answe
   await act(async () => page.resolve());
   expect(probe.latest.continued).toBe(false);
   expect(probe.latest.hasMore).toBe(true);
+});
+
+it("updates a first-page row while its background refresh is pending", async () => {
+  using probe = await setup(["healthy"]);
+  mocks.headEntries = [continuedEntry];
+  await act(async () => probe.registry.refresh(composerPullRequests.list(probe.targets[0]!)));
+  const [entry] = probe.latest.entries;
+  expect(entry?.isDraft).toBe(false);
+  mocks.pendingHead = new Promise(() => {});
+  await act(async () => probe.latest.updateEntry(entry!, { isDraft: true }));
+  expect(probe.latest.entries.map(({ isDraft }) => isDraft)).toEqual([true]);
 });

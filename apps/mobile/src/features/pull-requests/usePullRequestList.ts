@@ -334,7 +334,7 @@ export function usePullRequestList(targets: readonly ListTarget[]) {
     const pagesAtom = pullRequestListPagesFamily(pullRequestListPagesKey(target));
     const patched = patchPullRequestListEntry(
       registry.get(pagesAtom),
-      null,
+      currentHead((atom) => registry.get(atom), target),
       entry,
       patch,
       Date.now(),
