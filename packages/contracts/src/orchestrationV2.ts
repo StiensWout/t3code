@@ -3247,6 +3247,8 @@ export const OrchestrationV2Command = Schema.Union([
     commandId: CommandId,
     threadId: ThreadId,
     visitedAt: IsoDateTime,
+    // Automatic visits cannot overwrite a rewind from the watermark the client saw.
+    observedLastVisitedAt: Schema.optional(IsoDateTime),
     // The user opened the thread, as opposed to new activity on an open one.
     // Older servers ignore both fields and only move the read watermark.
     opened: Schema.optional(Schema.Boolean),

@@ -6,7 +6,7 @@ import { expect, it, vi } from "vite-plus/test";
 
 import type { VisitThreadInput } from "../operations/commands.ts";
 import type { AtomCommandResult } from "./runtime.ts";
-import { claimThreadOpen, threadSearchPickAtom } from "./threadSearch.ts";
+import { claimThreadOpen, queueThreadSearchPick } from "./threadSearch.ts";
 import { createThreadVisitTracker, VISIT_DISPATCH_THROTTLE_MS } from "./threadVisits.ts";
 
 const environmentId = EnvironmentId.make("env-visits");
@@ -42,12 +42,21 @@ function setup(threadName: string, initial: Omit<Shell, "environmentId" | "id"> 
   let serverTime = start;
   let commandCount = 0;
   const received = new Set<CommandId>();
+  const openCommandIds: Array<CommandId | undefined> = [];
   const liveSessionAtom = Atom.make<object | null>({});
   let pendingResult: Promise<AtomCommandResult<void, string>> | undefined;
+  let lastAttempt: VisitThreadInput | undefined;
   const attempts: Array<VisitThreadInput> = [];
   const visit = async ({ input }: { readonly input: VisitThreadInput }) => {
-    const { commandId, expectedSession: _expectedSession, ...payload } = input;
+    lastAttempt = input;
+    const {
+      commandId,
+      expectedSession: _expectedSession,
+      observedLastVisitedAt: _observedLastVisitedAt,
+      ...payload
+    } = input;
     attempts.push(payload);
+    if (input.opened) openCommandIds.push(commandId);
     if (loseNextOpenAck && input.opened) {
       loseNextOpenAck = false;
       acceptOpen();
@@ -87,6 +96,8 @@ function setup(threadName: string, initial: Omit<Shell, "environmentId" | "id"> 
     visits,
     localVisits,
     attempts,
+    lastAttempt: () => lastAttempt,
+    openCommandIds,
     deferNextVisit: () => {
       const deferred = Promise.withResolvers<AtomCommandResult<void, string>>();
       pendingResult = deferred.promise;
@@ -109,7 +120,13 @@ function setup(threadName: string, initial: Omit<Shell, "environmentId" | "id"> 
       serverTime = value;
     },
     mount: () => registry.mount(tracker(ref)),
-    pick: (query = " Needle ") => registry.set(threadSearchPickAtom(ref), query),
+    pick: (query = " Needle ") =>
+      queueThreadSearchPick(
+        registry,
+        ref,
+        query,
+        CommandId.make(`${threadName}:${++commandCount}`),
+      ),
     setOnline: (value: boolean) => {
       online = value;
     },
@@ -277,6 +294,9 @@ it.each(["unread", "already read"] as const)(
     t.synchronizeShell();
     await vi.advanceTimersByTimeAsync(0);
     expect(t.visits).toEqual([{ threadId: t.ref.threadId, visitedAt: at(10), opened: true }]);
+    expect(t.lastAttempt()?.observedLastVisitedAt).toBe(
+      readState === "already read" ? at(10) : at(0),
+    );
   },
 );
 
@@ -563,26 +583,63 @@ it("waits for reconnect catch-up before retrying an open on a thread marked unre
   expect(t.visits.slice(1)).toEqual([{ threadId: t.ref.threadId, visitedAt: at(30) }]);
 });
 
-it("does not count a committed open again after its acknowledgment was lost", async () => {
-  using t = setup("thread-open-committed-without-ack", {
+it("records an open after leaving an offline thread and reopening it online without an initial session", async () => {
+  using t = setup("thread-reopen-without-session", {
     updatedAt: at(10),
-    lastVisitedAt: at(10),
+    lastVisitedAt: at(0),
     latestRun: null,
   });
-  t.loseNextOpenAck();
-  t.mount();
-  const elevenMinutes = 11 * 60_000;
-  await vi.advanceTimersByTimeAsync(elevenMinutes);
-  t.setServerTime(Date.UTC(2026, 0, 1) + elevenMinutes);
-
-  t.reconnect();
-  t.update({});
+  t.reconnect(false);
+  const unmount = t.mount();
   await vi.advanceTimersByTimeAsync(0);
+  expect(t.attempts).toEqual([]);
+  unmount();
+  await vi.advanceTimersByTimeAsync(1_000);
 
-  expect(t.attempts).toHaveLength(2);
-  expect(t.serverOpens()).toEqual({
-    openedAt: Date.UTC(2026, 0, 1),
-    score: 1,
-    picks: [],
-  });
+  t.synchronizeShell();
+  t.mount();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(t.visits).toEqual([{ threadId: t.ref.threadId, visitedAt: at(10), opened: true }]);
 });
+
+it.each(["mounted", "remounted"] as const)(
+  "does not count a committed palette pick again after its acknowledgment was lost (%s)",
+  async (lifetime) => {
+    using t = setup(`thread-open-committed-without-ack-${lifetime}`, {
+      updatedAt: at(10),
+      lastVisitedAt: at(10),
+      latestRun: null,
+    });
+    t.loseNextOpenAck();
+    t.pick();
+    const unmount = t.mount();
+    await vi.advanceTimersByTimeAsync(0);
+    t.reconnect(false);
+    if (lifetime === "remounted") {
+      unmount();
+      await vi.advanceTimersByTimeAsync(1_000);
+      t.mount();
+    }
+    const elevenMinutes = 11 * 60_000;
+    await vi.advanceTimersByTimeAsync(elevenMinutes);
+    t.setServerTime(Date.UTC(2026, 0, 1) + elevenMinutes);
+
+    t.reconnect();
+    t.update({});
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(t.attempts).toHaveLength(2);
+    expect(t.openCommandIds[0]).toBeDefined();
+    expect(t.openCommandIds[1]).toBe(t.openCommandIds[0]);
+    expect(t.serverOpens()).toEqual({
+      openedAt: Date.UTC(2026, 0, 1),
+      score: 1,
+      picks: [{ query: "needle", at: Date.UTC(2026, 0, 1) }],
+    });
+
+    t.pick("newer");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t.openCommandIds[2]).not.toBe(t.openCommandIds[0]);
+    expect(t.serverOpens()?.picks.map((pick) => pick.query)).toEqual(["newer", "needle"]);
+  },
+);

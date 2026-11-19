@@ -195,6 +195,7 @@ describe("V2 environment commands", () => {
         commandId: CommandId.make("queued-visit"),
         threadId: v2ThreadId,
         visitedAt: "2026-06-20T00:00:00.000Z",
+        observedLastVisitedAt: "2026-06-19T00:00:00.000Z",
         opened: true,
       } as const;
       const stale = yield* visitThread({ ...input, expectedSession: firstSession }).pipe(

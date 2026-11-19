@@ -1,11 +1,16 @@
 // @effect-diagnostics globalTimers:off globalDate:off - The tracker runs in atom subscriptions, outside an Effect runtime.
 import type { CommandId, EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
-import { pickedQuery } from "@t3tools/shared/paletteSearch";
 import { AsyncResult, Atom } from "effect/reactivity";
 
 import { parseThreadKey, threadKey } from "./entities.ts";
 import { type AtomCommand, runAtomCommand } from "./runtime.ts";
-import { claimThreadOpen, releaseThreadOpen, threadSearchPickAtom } from "./threadSearch.ts";
+import {
+  claimThreadOpen,
+  clearThreadSearchPick,
+  releaseThreadOpen,
+  threadSearchPickAtom,
+  type ThreadSearchPick,
+} from "./threadSearch.ts";
 import type { VisitThreadInput } from "../operations/commands.ts";
 
 // During an active turn the thread's updatedAt advances several times per
@@ -50,7 +55,7 @@ export interface ThreadVisitTrackerOptions {
 interface VisitInputs {
   readonly shell: VisitedShell | null;
   readonly session: object | null;
-  readonly pick: string | null;
+  readonly pick: ThreadSearchPick | null;
 }
 
 interface VisitAttempt {
@@ -63,11 +68,12 @@ interface VisitAttempt {
 interface OpenIntent {
   readonly claim: number | null;
   readonly commandId: CommandId;
-  readonly pick: string | null;
+  readonly pick: ThreadSearchPick | null;
 }
 
-type PendingOpen =
+type OpenState =
   | { readonly status: "pending"; readonly claim: number }
+  | { readonly status: "sending"; readonly finished: Promise<void> }
   | {
       readonly status: "failed";
       readonly intent: OpenIntent;
@@ -88,7 +94,8 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
       session: get(options.liveSessionAtom(ref.environmentId)),
       pick: get(pickAtom),
     }));
-    let inFlightOpen: Promise<void> | null = null;
+    // Keep an in-flight open visible to a quick remount until its result arrives.
+    let open: OpenState | null = null;
 
     return Atom.make((get) => {
       const registry = get.registry;
@@ -98,19 +105,11 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
       const releaseOpen = (claim: number | null) => {
         if (claim !== null) releaseThreadOpen(ref.environmentId, ref.threadId, claim);
       };
-      const abandonOpen = (intent: OpenIntent) => {
-        releaseOpen(intent.claim);
-        // Restore the pick only while its slot still exists and no newer pick is waiting.
-        if (
-          intent.pick !== null &&
-          registry.getNodes().has(pickAtom) &&
-          registry.get(pickAtom) === null
-        ) {
-          registry.set(pickAtom, intent.pick);
-        }
+      const claimOnMount = () => {
+        const claim = claimOpen(openedAt);
+        if (claim !== null) open = { status: "pending", claim };
       };
-      const claim = claimOpen(openedAt);
-      let open: PendingOpen | null = claim === null ? null : { status: "pending", claim };
+      if (open === null) claimOnMount();
       let lastVisit: VisitAttempt | null = null;
       let acceptedThrough = Number.NEGATIVE_INFINITY;
       let observedThrough = Number.NEGATIVE_INFINITY;
@@ -125,11 +124,17 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
         active = false;
         clearTimer();
         if (open?.status === "pending") releaseOpen(open.claim);
-        if (open?.status === "failed") abandonOpen(open.intent);
+        if (open?.status === "failed") releaseOpen(open.intent.claim);
+        if (open?.status !== "sending") open = null;
       });
 
-      const visit = (session: object, visitedAt: string, intent?: OpenIntent) => {
-        const searchQuery = intent?.pick ? pickedQuery(intent.pick) : null;
+      const visit = (
+        session: object,
+        visitedAt: string,
+        observedLastVisitedAt: string | null,
+        intent?: OpenIntent,
+      ) => {
+        const searchQuery = intent?.pick?.query;
         const attempt: VisitAttempt = {
           at: Date.now(),
           session,
@@ -153,6 +158,7 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
               threadId: ref.threadId,
               visitedAt,
               expectedSession: session,
+              ...(observedLastVisitedAt === null ? {} : { observedLastVisitedAt }),
               ...(intent ? { opened: true, commandId: intent.commandId } : {}),
               ...(searchQuery ? { searchQuery } : {}),
             },
@@ -165,46 +171,62 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
         });
       };
 
-      const sendOpen = (session: object, visitedAt: string, intent: OpenIntent) => {
-        open = null;
-        inFlightOpen = visit(session, visitedAt, intent).then((accepted) => {
-          if (!active && !accepted) abandonOpen(intent);
-          inFlightOpen = null;
-          if (!active) return;
-          if (!accepted) open = { status: "failed", intent, session, visitedAt };
-          update(registry.get(inputsAtom));
-        });
+      const sendOpen = (
+        session: object,
+        visitedAt: string,
+        observedLastVisitedAt: string | null,
+        intent: OpenIntent,
+      ) => {
+        const finished = visit(session, visitedAt, observedLastVisitedAt, intent).then(
+          (accepted) => {
+            if (active && !accepted) open = { status: "failed", intent, session, visitedAt };
+            else open = null;
+            if (!active && !accepted) releaseOpen(intent.claim);
+            if (accepted && intent.pick !== null) clearThreadSearchPick(registry, ref, intent.pick);
+            if (active) update(registry.get(inputsAtom));
+          },
+        );
+        open = { status: "sending", finished };
       };
 
-      const updateOpen = (session: object, visitedAt: string | null, pick: string | null) => {
-        if (inFlightOpen !== null) return false;
-        if (open?.status === "failed") {
+      const updateOpen = (
+        session: object,
+        visitedAt: string | null,
+        observedLastVisitedAt: string | null,
+        pick: ThreadSearchPick | null,
+      ) => {
+        if (open?.status === "sending") return false;
+        if (open?.status === "failed" && (pick === null || open.intent.pick === pick)) {
           if (open.session === session) return false;
           if (visitedAt !== null) {
             // A receipt can only prove the original watermark. After a rewind, first
             // execution must use the lower watermark to keep the thread unread.
             const retryAt =
               Date.parse(visitedAt) < Date.parse(open.visitedAt) ? visitedAt : open.visitedAt;
-            sendOpen(session, retryAt, open.intent);
+            sendOpen(session, retryAt, observedLastVisitedAt, open.intent);
             return true;
           }
-          releaseOpen(open.intent.claim);
+          const { intent } = open;
           open = null;
+          releaseOpen(intent.claim);
+          if (intent.pick !== null) clearThreadSearchPick(registry, ref, intent.pick);
+          return false;
         }
         if (open === null && pick === null) return false;
 
-        const claim = open?.claim ?? claimOpen(Date.now());
+        const claim =
+          open?.status === "failed" ? open.intent.claim : (open?.claim ?? claimOpen(Date.now()));
         if (visitedAt === null) {
           releaseOpen(claim);
           open = null;
         } else {
-          sendOpen(session, visitedAt, {
+          sendOpen(session, visitedAt, observedLastVisitedAt, {
             claim,
-            commandId: options.newCommandId(),
+            commandId: pick?.commandId ?? options.newCommandId(),
             pick,
           });
         }
-        if (pick !== null) registry.set(pickAtom, null);
+        if (visitedAt === null && pick !== null) clearThreadSearchPick(registry, ref, pick);
         return visitedAt !== null;
       };
 
@@ -220,7 +242,7 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
         const updatedAtMs = wakeIsLatest ? wokeAtMs : shellUpdatedAtMs;
         if (shell.lastVisitedAt === undefined) {
           options.markLocalVisit?.(ref, visitedAt);
-          if (pick !== null) registry.set(pickAtom, null);
+          if (pick !== null) clearThreadSearchPick(registry, ref, pick);
           return;
         }
 
@@ -244,7 +266,10 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
           (observedReadActivityThrough >= updatedAtMs &&
             observedThrough >= completedAtMs &&
             lastVisitedAtMs < completedAtMs);
-        if (updateOpen(session, rewound ? shell.lastVisitedAt : visitedAt, pick)) return;
+        if (
+          updateOpen(session, rewound ? shell.lastVisitedAt : visitedAt, shell.lastVisitedAt, pick)
+        )
+          return;
 
         if (rewound || acceptedThrough >= updatedAtMs) return;
         const retryVisit = lastVisit?.failed && lastVisit.visitedAtMs > acceptedThrough;
@@ -258,7 +283,7 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
           wakeIsLatest ||
           elapsed >= VISIT_DISPATCH_THROTTLE_MS
         ) {
-          void visit(session, visitedAt).then((accepted) => {
+          void visit(session, visitedAt, shell.lastVisitedAt).then((accepted) => {
             if (!accepted && active) update(registry.get(inputsAtom));
           });
         } else {
@@ -269,14 +294,10 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
         }
       };
 
-      // A quick remount can share the outcome of an open that is still in flight.
-      if (inFlightOpen !== null) {
-        void inFlightOpen.then(() => {
+      if (open?.status === "sending") {
+        void open.finished.then(() => {
           if (!active) return;
-          if (open === null) {
-            const claim = claimOpen(openedAt);
-            if (claim !== null) open = { status: "pending", claim };
-          }
+          if (open === null) claimOnMount();
           update(registry.get(inputsAtom));
         });
       }

@@ -1,4 +1,5 @@
 import {
+  type CommandId,
   EnvironmentId,
   OrchestrationSearchThreadsInput,
   ProjectId,
@@ -10,10 +11,11 @@ import {
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { AsyncResult, Atom } from "effect/reactivity";
+import { AsyncResult, Atom, type AtomRegistry } from "effect/reactivity";
 import {
   foldSearchQuery,
   messageSearchTokens,
+  pickedQuery,
   THREAD_OPEN_DEDUPE_MS,
   type ThreadSearchSubject,
 } from "@t3tools/shared/paletteSearch";
@@ -59,13 +61,36 @@ export function releaseThreadOpen(
   sentThreadOpens.delete(key);
 }
 
+export interface ThreadSearchPick {
+  readonly query: string;
+  readonly commandId: CommandId;
+}
+
 const searchPicks = Atom.family((_key: string) =>
-  Atom.make<string | null>(null).pipe(Atom.setIdleTTL(THREAD_OPEN_DEDUPE_MS)),
+  Atom.make<ThreadSearchPick | null>(null).pipe(Atom.setIdleTTL(THREAD_OPEN_DEDUPE_MS)),
 );
 
-/** Holds a palette pick until navigation mounts the thread's visit tracker. */
 export function threadSearchPickAtom(ref: ScopedThreadRef) {
   return searchPicks(threadSearchMatchKey(ref));
+}
+
+/** Keep the pick's identity until acknowledged, including across tracker remounts. */
+export function queueThreadSearchPick(
+  registry: AtomRegistry.AtomRegistry,
+  ref: ScopedThreadRef,
+  query: string,
+  commandId: CommandId,
+) {
+  registry.set(threadSearchPickAtom(ref), { query: pickedQuery(query), commandId });
+}
+
+export function clearThreadSearchPick(
+  registry: AtomRegistry.AtomRegistry,
+  ref: ScopedThreadRef,
+  pick: ThreadSearchPick,
+) {
+  const atom = threadSearchPickAtom(ref);
+  if (registry.getNodes().has(atom) && registry.get(atom) === pick) registry.set(atom, null);
 }
 
 export interface EnvironmentThreadSearchMatch extends OrchestrationThreadSearchMatch {

@@ -4022,9 +4022,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         cause: `Thread ${command.threadId} visit time ${command.visitedAt} is not a valid timestamp.`,
       });
     }
+    const watermark = thread.lastVisitedAt;
+    const watermarkMs = watermark === null ? -Infinity : DateTime.toEpochMillis(watermark);
     const movesForward =
-      thread.lastVisitedAt === null ||
-      DateTime.toEpochMillis(visitedAt.value) > DateTime.toEpochMillis(thread.lastVisitedAt);
+      DateTime.toEpochMillis(visitedAt.value) > watermarkMs &&
+      (command.observedLastVisitedAt === undefined ||
+        watermarkMs >= Date.parse(command.observedLastVisitedAt));
     const occurredAt = yield* DateTime.now;
     // Opens are timed by the server clock so devices with skewed clocks agree.
     const opens = command.opened

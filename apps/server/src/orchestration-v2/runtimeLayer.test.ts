@@ -12310,6 +12310,20 @@ it.layer(layerSharedApplicationDataPlaneTest)("visited projection", (it) => {
       });
 
       yield* orchestrator.dispatch({
+        type: "thread.visit",
+        commandId: CommandId.make(`${threadId}:first-visit`),
+        threadId,
+        visitedAt: DateTime.formatIso(turnCompletedAt),
+      });
+      yield* TestClock.setTime(DateTime.toEpochMillis(DateTime.add(turnCompletedAt, { hours: 2 })));
+      yield* orchestrator.dispatch({
+        type: "thread.metadata.update",
+        commandId: CommandId.make(`${threadId}:title`),
+        threadId,
+        title: "Renamed thread",
+      });
+      const synchronized = (yield* orchestrator.getThreadShell(threadId))!;
+      yield* orchestrator.dispatch({
         type: "thread.mark-unread",
         commandId: CommandId.make(`${threadId}:mark-unread`),
         threadId,
@@ -12322,6 +12336,21 @@ it.layer(layerSharedApplicationDataPlaneTest)("visited projection", (it) => {
       const shell = yield* orchestrator.getThreadShell(threadId);
       assert.deepEqual(shell!.latestRunCompletedAt, turnCompletedAt);
       assert.deepEqual(shell!.lastVisitedAt, projection.thread.lastVisitedAt);
+
+      // The client caught up before mark-unread committed and has not received its live delta.
+      const rankingRetry = {
+        type: "thread.visit",
+        commandId: CommandId.make(`${threadId}:ranking-retry`),
+        threadId,
+        visitedAt: DateTime.formatIso(synchronized.updatedAt),
+        observedLastVisitedAt: DateTime.formatIso(synchronized.lastVisitedAt!),
+        opened: true,
+        searchQuery: "compacted",
+      } as const;
+      yield* orchestrator.dispatch(rankingRetry);
+      const ranked = yield* orchestrator.getThreadShell(threadId);
+      assert.deepEqual(ranked!.lastVisitedAt, shell!.lastVisitedAt);
+      assert.equal(ranked!.opens?.picks[0]?.query, "compacted");
 
       yield* orchestrator.dispatch({
         type: "thread.visit",

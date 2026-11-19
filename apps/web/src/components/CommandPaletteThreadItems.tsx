@@ -2,7 +2,7 @@ import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environ
 import { findForMessageMatch, openThreadFindOnQuery } from "./chat/threadFindStore";
 import {
   nextShownOrder,
-  threadSearchPickAtom,
+  queueThreadSearchPick,
   type EnvironmentThreadSearchMatch,
   type ShownOrder,
 } from "@t3tools/client-runtime/state/thread-search";
@@ -11,13 +11,14 @@ import {
   PALETTE_MESSAGE_LIMIT,
   rankMessageMatches,
 } from "@t3tools/shared/paletteSearch";
-import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { CommandId, type EnvironmentId, type ThreadId } from "@t3tools/contracts";
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import { useNavigate } from "@tanstack/react-router";
 import { MessageSquareIcon } from "lucide-react";
 import { useContext, useState } from "react";
 import { useGT, useMessages } from "gt-react";
 
+import { randomUUID } from "../lib/utils";
 import {
   applyProviderInstanceSettings,
   deriveProviderInstanceEntries,
@@ -167,9 +168,11 @@ export function useCommandPaletteThreadItems(input: {
         const isOpen =
           activeThread?.environmentId === thread.environmentId && activeThread.id === thread.id;
         if (threadSearchQuery.trim().length > 0 && !threadSearchQuery.startsWith(">") && !isOpen) {
-          registry.set(
-            threadSearchPickAtom(scopeThreadRef(thread.environmentId, thread.id)),
+          queueThreadSearchPick(
+            registry,
+            scopeThreadRef(thread.environmentId, thread.id),
             threadSearchQuery,
+            CommandId.make(randomUUID()),
           );
         }
         await navigate({

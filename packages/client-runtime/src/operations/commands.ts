@@ -135,6 +135,7 @@ export interface UnsnoozeThreadInput extends ThreadCommandInput {
 
 export interface VisitThreadInput extends ThreadCommandInput {
   readonly visitedAt: string;
+  readonly observedLastVisitedAt?: string;
   /** A shell-derived visit must stay on the session that synchronized that shell. */
   readonly expectedSession?: object;
   /** Counts toward search frecency; `searchQuery` is the palette query that picked it. */
@@ -685,6 +686,9 @@ export const visitThread = Effect.fn("EnvironmentCommands.visitThread")(function
     commandId,
     threadId: input.threadId,
     visitedAt: input.visitedAt,
+    ...(input.observedLastVisitedAt === undefined
+      ? {}
+      : { observedLastVisitedAt: input.observedLastVisitedAt }),
     ...(input.opened ? { opened: true } : {}),
     ...(input.searchQuery ? { searchQuery: input.searchQuery } : {}),
   });

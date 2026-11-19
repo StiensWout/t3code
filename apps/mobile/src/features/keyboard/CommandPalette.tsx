@@ -4,13 +4,13 @@ import { uuidv4 } from "../../lib/uuid";
 import { useNavigation } from "@react-navigation/native";
 import {
   nextShownOrder,
-  threadSearchPickAtom,
+  queueThreadSearchPick,
   threadSearchSubject,
   type EnvironmentThreadSearchMatch,
   type ShownOrder,
 } from "@t3tools/client-runtime/state/thread-search";
 import { isShownUnderParent } from "@t3tools/client-runtime/state/threads";
-import { THREAD_JUMP_KEYBINDING_COMMANDS } from "@t3tools/contracts";
+import { CommandId, THREAD_JUMP_KEYBINDING_COMMANDS } from "@t3tools/contracts";
 import {
   foldSearchQuery,
   PALETTE_MESSAGE_LIMIT,
@@ -554,9 +554,11 @@ export function CommandPalette(props: {
     const messageId = item.fromMessages ? contentMatchByKey.get(item.key)?.messageId : undefined;
     if (messageId) requestThreadMessageJump(item.key, messageId);
     if (thread && !item.secondary) {
-      registry.set(
-        threadSearchPickAtom({ environmentId: thread.environmentId, threadId: thread.id }),
+      queueThreadSearchPick(
+        registry,
+        { environmentId: thread.environmentId, threadId: thread.id },
         query,
+        CommandId.make(uuidv4()),
       );
     }
     item.run();
