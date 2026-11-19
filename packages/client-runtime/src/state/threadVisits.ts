@@ -61,9 +61,9 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
       // Recorded even when the server cannot take opens, so recents follow
       // it. A palette pick already sent the open with its query.
       const openedAt = Date.now();
-      let openPending = claimThreadOpen(ref.environmentId, ref.threadId, openedAt);
-      // Until the server accepts it, leaving gives the claim back so the next open is sent.
-      let openUnconfirmed = openPending;
+      let pendingOpen: { failedAttempt?: { at: number; generation: number } } | null =
+        claimThreadOpen(ref.environmentId, ref.threadId, openedAt) ? {} : null;
+      const releaseOpen = () => releaseThreadOpen(ref.environmentId, ref.threadId, openedAt);
       // Dedupe per watermark: the shell updates again before the command's echo
       // lands. It also keeps a mark-unread on the open thread sticky, since the
       // rewind leaves updatedAt untouched.
@@ -71,9 +71,8 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
       let lastAcceptedUpdatedAt: string | null = null;
       let retryPending = false;
       const sessionGenerationAtom = options.sessionGenerationAtom(ref.environmentId);
-      let lastDispatchGeneration = registry.get(sessionGenerationAtom);
+      let lastDispatch = { at: 0, generation: registry.get(sessionGenerationAtom) };
       let active = true;
-      let lastDispatchAt = 0;
       let timer: ReturnType<typeof setTimeout> | undefined;
       const clearTimer = () => {
         if (timer === undefined) return;
@@ -83,7 +82,7 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
       get.addFinalizer(() => {
         active = false;
         clearTimer();
-        if (openUnconfirmed) releaseThreadOpen(ref.environmentId, ref.threadId, openedAt);
+        if (pendingOpen !== null) releaseOpen();
       });
 
       const accept = (visitedAt: string) => {
@@ -97,8 +96,8 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
         clearTimer();
         retryPending = false;
         lastDispatchedUpdatedAt = visitedAt;
-        lastDispatchAt = Date.now();
-        lastDispatchGeneration = registry.get(sessionGenerationAtom);
+        const attempt = { at: Date.now(), generation: registry.get(sessionGenerationAtom) };
+        lastDispatch = attempt;
         void runAtomCommand(
           registry,
           options.visit,
@@ -112,22 +111,24 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
           },
           { reportFailure: false },
         ).then((result) => {
-          if (!active) return;
+          if (!active) {
+            if (opened && AsyncResult.isFailure(result)) releaseOpen();
+            return;
+          }
           if (!AsyncResult.isFailure(result)) {
-            if (opened) openUnconfirmed = false;
             accept(visitedAt);
             return;
           }
           // Keep acceptance across a subsequent mark-unread, even if the ack was lost.
           if (
-            lastAcceptedUpdatedAt !== null &&
-            Date.parse(lastAcceptedUpdatedAt) >= Date.parse(visitedAt)
-          )
-            return;
-          if (lastDispatchedUpdatedAt !== visitedAt) return;
-          if (opened) openPending = true;
-          retryPending = true;
-          onShell(registry.get(options.threadShellAtom(ref)));
+            lastDispatch === attempt &&
+            (lastAcceptedUpdatedAt === null ||
+              Date.parse(lastAcceptedUpdatedAt) < Date.parse(visitedAt))
+          ) {
+            retryPending = true;
+          }
+          if (opened) pendingOpen = { failedAttempt: attempt };
+          if (opened || retryPending) onShell(registry.get(options.threadShellAtom(ref)));
         });
       };
 
@@ -153,26 +154,36 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
           Date.parse(lastAcceptedUpdatedAt) >= Date.parse(lastDispatchedUpdatedAt)
         ) {
           retryPending = false;
-          openPending = false;
         }
         // A rejected visit waits for a new session, even if streaming changes the shell.
-        if (retryPending && registry.get(sessionGenerationAtom) === lastDispatchGeneration) return;
-        const elapsed = Date.now() - lastDispatchAt;
-        if (retryPending && elapsed < VISIT_DISPATCH_THROTTLE_MS) {
+        const retry = pendingOpen?.failedAttempt ?? (retryPending ? lastDispatch : undefined);
+        if (retry && registry.get(sessionGenerationAtom) === retry.generation) return;
+        const now = Date.now();
+        if (retry && now - retry.at < VISIT_DISPATCH_THROTTLE_MS) {
           timer = setTimeout(
             () => onShell(registry.get(options.threadShellAtom(ref))),
-            VISIT_DISPATCH_THROTTLE_MS - elapsed,
+            VISIT_DISPATCH_THROTTLE_MS - (now - retry.at),
           );
           return;
         }
+        const elapsed = now - lastDispatch.at;
+        const lastVisitedAtMs = shell.lastVisitedAt ? Date.parse(shell.lastVisitedAt) : NaN;
         // The open rides on the first visit the server hears, however late
         // the shell arrives, so it still counts toward search ranking.
-        if (openPending) {
-          openPending = false;
-          dispatch(shell, visitedAt, true);
-          return;
+        if (pendingOpen !== null) {
+          // Retrying an open must not undo a mark-unread on this watermark.
+          const rewound =
+            lastAcceptedUpdatedAt !== null &&
+            Date.parse(lastAcceptedUpdatedAt) >= updatedAtMs &&
+            !(lastVisitedAtMs >= updatedAtMs);
+          const retryingOpen = pendingOpen.failedAttempt !== undefined;
+          pendingOpen = null;
+          if (!retryingOpen || !rewound) {
+            dispatch(shell, visitedAt, true);
+            return;
+          }
+          releaseOpen();
         }
-        const lastVisitedAtMs = shell.lastVisitedAt ? Date.parse(shell.lastVisitedAt) : NaN;
         if (!Number.isNaN(lastVisitedAtMs) && lastVisitedAtMs >= updatedAtMs) {
           // Already seen, so a later mark-unread stays sticky even when no open was sent.
           if (lastDispatchedUpdatedAt === null || Date.parse(lastDispatchedUpdatedAt) < updatedAtMs)

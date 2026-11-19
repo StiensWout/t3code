@@ -3,8 +3,8 @@ import { useAtomValue } from "@effect/atom-react";
 import { uuidv4 } from "../../lib/uuid";
 import { useNavigation } from "@react-navigation/native";
 import {
-  claimThreadOpen,
   nextShownOrder,
+  recordThreadSearchPick,
   threadSearchSubject,
   type EnvironmentThreadSearchMatch,
   type ShownOrder,
@@ -16,7 +16,6 @@ import {
   PALETTE_MESSAGE_LIMIT,
   rankMessageMatches,
   splitSearchText,
-  pickedQuery,
   threadRecentUse,
 } from "@t3tools/shared/paletteSearch";
 import { searchMatchHintLabel } from "@t3tools/shared/paletteSearchCopy";
@@ -556,19 +555,8 @@ export function CommandPalette(props: {
     // A message result opens the thread at that message.
     const messageId = item.fromMessages ? contentMatchByKey.get(item.key)?.messageId : undefined;
     if (messageId) requestThreadMessageJump(item.key, messageId);
-    // A pick sends its open with the query, always, so the server records it;
-    // the thread screen then skips its own open. The open thread is no pick.
-    if (thread && !item.secondary) claimThreadOpen(thread.environmentId, thread.id, Date.now());
-    if (thread && thread.lastVisitedAt !== undefined && !item.secondary) {
-      void visitThread({
-        environmentId: thread.environmentId,
-        input: {
-          threadId: thread.id,
-          visitedAt: thread.updatedAt,
-          opened: true,
-          searchQuery: pickedQuery(query),
-        },
-      });
+    if (thread && !item.secondary) {
+      void recordThreadSearchPick(thread, query, Date.now(), visitThread);
     }
     item.run();
   };

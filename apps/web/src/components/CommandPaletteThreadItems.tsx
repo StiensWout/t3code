@@ -1,15 +1,14 @@
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { findForMessageMatch, openThreadFindOnQuery } from "./chat/threadFindStore";
 import {
-  claimThreadOpen,
   nextShownOrder,
+  recordThreadSearchPick,
   type EnvironmentThreadSearchMatch,
   type ShownOrder,
 } from "@t3tools/client-runtime/state/thread-search";
 import {
   foldSearchQuery,
   PALETTE_MESSAGE_LIMIT,
-  pickedQuery,
   rankMessageMatches,
 } from "@t3tools/shared/paletteSearch";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
@@ -167,29 +166,11 @@ export function useCommandPaletteThreadItems(input: {
         );
       },
       runThread: async (thread) => {
-        // A pick sends its open with the query, always, so the server records
-        // it; the thread view then skips its own open. The open thread is no pick.
         const isOpen =
           activeThread?.environmentId === thread.environmentId && activeThread.id === thread.id;
         if (threadSearchQuery.trim().length > 0 && !threadSearchQuery.startsWith(">") && !isOpen) {
           // oxlint-disable-next-line react/purity -- runs in an event handler (oxc#27309)
-          claimThreadOpen(thread.environmentId, thread.id, Date.now());
-        }
-        if (
-          threadSearchQuery.trim().length > 0 &&
-          !threadSearchQuery.startsWith(">") &&
-          thread.lastVisitedAt !== undefined &&
-          !isOpen
-        ) {
-          void visitThread({
-            environmentId: thread.environmentId,
-            input: {
-              threadId: thread.id,
-              visitedAt: thread.updatedAt,
-              opened: true,
-              searchQuery: pickedQuery(threadSearchQuery),
-            },
-          });
+          void recordThreadSearchPick(thread, threadSearchQuery, Date.now(), visitThread);
         }
         await navigate({
           to: "/$environmentId/$threadId",

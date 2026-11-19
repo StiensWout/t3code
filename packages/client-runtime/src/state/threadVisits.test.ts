@@ -65,7 +65,12 @@ function setup(threadName: string, initial: Omit<Shell, "environmentId" | "id"> 
     deferNextVisit: () => {
       const deferred = Promise.withResolvers<AtomCommandResult<void, string>>();
       pendingResult = deferred.promise;
-      return () => deferred.resolve(AsyncResult.failure(Cause.fail("disconnected")));
+      return (accepted = false) =>
+        deferred.resolve(
+          accepted
+            ? AsyncResult.success(undefined)
+            : AsyncResult.failure(Cause.fail("disconnected")),
+        );
     },
     reconnect: () => registry.set(sessionGenerationAtom, registry.get(sessionGenerationAtom) + 1),
     mount: () => registry.mount(tracker(ref)),
@@ -216,22 +221,51 @@ it("advances the watermark to a wake without waiting for the throttle", () => {
   expect(t.visits).toHaveLength(2);
 });
 
-it("retries a failed visit when the same shell returns after reconnect", async () => {
-  using t = setup("thread-retry-failed", {
-    updatedAt: at(10),
-    lastVisitedAt: at(0),
-    latestRun: null,
-  });
-  t.setOnline(false);
-  t.mount();
-  await vi.advanceTimersByTimeAsync(0);
-  expect(t.visits).toEqual([]);
+it.each(["unread", "already read"] as const)(
+  "retries a failed open when the same %s shell returns after reconnect",
+  async (readState) => {
+    using t = setup(`thread-retry-failed-${readState}`, {
+      updatedAt: at(10),
+      lastVisitedAt: readState === "already read" ? at(10) : at(0),
+      latestRun: null,
+    });
+    t.setOnline(false);
+    t.mount();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t.visits).toEqual([]);
 
-  t.setOnline(true);
-  t.reconnect();
-  await vi.advanceTimersByTimeAsync(VISIT_DISPATCH_THROTTLE_MS);
-  expect(t.visits).toEqual([{ threadId: t.ref.threadId, visitedAt: at(10), opened: true }]);
-});
+    t.setOnline(true);
+    t.reconnect();
+    await vi.advanceTimersByTimeAsync(VISIT_DISPATCH_THROTTLE_MS);
+    expect(t.visits).toEqual([{ threadId: t.ref.threadId, visitedAt: at(10), opened: true }]);
+  },
+);
+
+it.each(["accepted", "rejected"] as const)(
+  "dedupes a reopen based on the in-flight open %s after leaving",
+  async (outcome) => {
+    const accepted = outcome === "accepted";
+    using t = setup(`thread-left-in-flight-${outcome}`, {
+      updatedAt: at(10),
+      lastVisitedAt: at(10),
+      latestRun: null,
+    });
+    const settle = t.deferNextVisit();
+    const unmount = t.mount();
+    unmount();
+    await vi.advanceTimersByTimeAsync(1_000);
+    settle(accepted);
+    await vi.advanceTimersByTimeAsync(0);
+
+    t.mount();
+    expect(t.attempts).toHaveLength(accepted ? 1 : 2);
+    expect(t.attempts.at(-1)).toEqual({
+      threadId: t.ref.threadId,
+      visitedAt: at(10),
+      opened: true,
+    });
+  },
+);
 
 it("records an open after leaving an offline thread and reopening it online", async () => {
   using t = setup("thread-reopen-after-offline", {

@@ -13,12 +13,15 @@ import { AsyncResult, Atom } from "effect/reactivity";
 import {
   foldSearchQuery,
   messageSearchTokens,
+  pickedQuery,
   THREAD_OPEN_DEDUPE_MS,
   type ThreadSearchSubject,
 } from "@t3tools/shared/paletteSearch";
 import { threadSearchPullRequests } from "@t3tools/shared/threadPullRequests";
 
 import type { EnvironmentThreadShell } from "./models.ts";
+import type { VisitThreadInput } from "../operations/commands.ts";
+import type { AtomCommandResult } from "./runtime.ts";
 import { getThreadSortTimestamp } from "./threadSort.ts";
 
 // When this client last sent an open per thread, by its own clock: a server
@@ -56,6 +59,29 @@ export function releaseThreadOpen(
 ) {
   const key = `${environmentId}:${threadId}`;
   if (sentThreadOpens.get(key) === claimedAt) sentThreadOpens.delete(key);
+}
+
+/** A search pick always sends its query, even if the server merges the open. */
+export async function recordThreadSearchPick(
+  thread: Pick<EnvironmentThreadShell, "environmentId" | "id" | "updatedAt" | "lastVisitedAt">,
+  query: string,
+  now: number,
+  visit: (value: {
+    readonly environmentId: EnvironmentId;
+    readonly input: VisitThreadInput;
+  }) => Promise<AtomCommandResult<unknown, unknown>>,
+) {
+  const { environmentId, id, updatedAt, lastVisitedAt } = thread;
+  const claimed = claimThreadOpen(environmentId, id, now);
+  if (lastVisitedAt === undefined) {
+    if (claimed) releaseThreadOpen(environmentId, id, now);
+    return;
+  }
+  const result = await visit({
+    environmentId,
+    input: { threadId: id, visitedAt: updatedAt, opened: true, searchQuery: pickedQuery(query) },
+  });
+  if (claimed && AsyncResult.isFailure(result)) releaseThreadOpen(environmentId, id, now);
 }
 
 export interface EnvironmentThreadSearchMatch extends OrchestrationThreadSearchMatch {

@@ -15,6 +15,7 @@ import {
   nextShownOrder,
   createThreadSearchResultsAtomFamily,
   makeThreadSearchKey,
+  recordThreadSearchPick,
   threadSearchMatchKey,
   threadSearchSubject,
   visibleThreadSearch,
@@ -255,3 +256,36 @@ it("sends one open per thread every ten minutes by this client's clock", () => {
   expect(claimThreadOpen(envB, "thread-open", 9 * minute)).toBe(true);
   expect(claimThreadOpen(envA, "thread-open", 10 * minute)).toBe(true);
 });
+
+it.each(["accepted", "rejected", "untracked", "already claimed"] as const)(
+  "dedupes the next open after a %s search pick",
+  async (outcome) => {
+    const id = ThreadId.make(`thread-pick-${outcome}`);
+    const updatedAt = "2026-01-01T00:00:00.000Z";
+    const claimed = outcome === "already claimed";
+    if (claimed) claimThreadOpen(envA, id, 0);
+    await recordThreadSearchPick(
+      {
+        environmentId: envA,
+        id,
+        updatedAt,
+        ...(outcome === "untracked" ? {} : { lastVisitedAt: null }),
+      },
+      "  Needle  ",
+      1_000,
+      async (value) => {
+        expect(outcome).not.toBe("untracked");
+        expect(value).toEqual({
+          environmentId: envA,
+          input: { threadId: id, visitedAt: updatedAt, opened: true, searchQuery: "needle" },
+        });
+        return outcome === "accepted"
+          ? AsyncResult.success(undefined)
+          : AsyncResult.failure(Cause.fail("disconnected"));
+      },
+    );
+    expect(claimThreadOpen(envA, id, 11_000)).toBe(
+      outcome === "rejected" || outcome === "untracked",
+    );
+  },
+);
