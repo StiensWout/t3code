@@ -451,66 +451,78 @@ describe("t3 theme", () => {
     }),
   );
 
-  it.live("refuses to select a provisional theme while a direct save fills the library", () =>
-    Effect.gen(function* () {
-      const baseDir = makeBaseDir();
-      writeSettings(baseDir, { defaultTheme: "ocean" });
-      const themesDir = NodePath.join(baseDir, "userdata", "themes");
-      NodeFS.mkdirSync(themesDir, { recursive: true });
-      for (let index = 1; index <= 31; index++) {
-        NodeFS.writeFileSync(NodePath.join(themesDir, `theme-${index}.json`), NIGHTFALL_THEME_JSON);
-      }
-      const themeFile = NodePath.join(baseDir, "a-first.json");
-      NodeFS.writeFileSync(themeFile, NIGHTFALL_THEME_JSON);
+  it.live.each(["create", "rename"] as const)(
+    "refuses to select a provisional theme while a direct save fills the library (%s)",
+    (save) =>
+      Effect.gen(function* () {
+        const baseDir = makeBaseDir();
+        writeSettings(baseDir, { defaultTheme: "ocean" });
+        const themesDir = NodePath.join(baseDir, "userdata", "themes");
+        NodeFS.mkdirSync(themesDir, { recursive: true });
+        for (let index = 1; index <= 31; index++) {
+          NodeFS.writeFileSync(
+            NodePath.join(themesDir, `theme-${index}.json`),
+            NIGHTFALL_THEME_JSON,
+          );
+        }
+        const themeFile = NodePath.join(baseDir, "a-first.json");
+        NodeFS.writeFileSync(themeFile, NIGHTFALL_THEME_JSON);
+        const manualTheme = NodePath.join(themesDir, "b-manual.json");
+        const temporary = `${manualTheme}.tmp`;
+        if (save === "rename") NodeFS.writeFileSync(temporary, NIGHTFALL_THEME_JSON);
 
-      const saved = yield* Deferred.make<void>();
-      const resume = yield* Deferred.make<void>();
-      const { statSync } = yield* Effect.promise(() => vi.importActual<typeof NodeFS>("node:fs"));
-      let beforeSave: NodeFS.BigIntStats | undefined;
-      // A filesystem can report the same directory metadata across two writes in one tick.
-      using _directoryStat = vi
-        .spyOn(NodeFS, "statSync")
-        .mockImplementation(((path: NodeFS.PathLike, options?: NodeFS.StatSyncOptions) =>
-          path === themesDir && options?.bigint && beforeSave
-            ? beforeSave
-            : statSync(path, options)) as typeof statSync);
-      let inserted = false;
-      const publisher = yield* runCli(["theme", "set", themeFile, "--base-dir", baseDir], (fs) => ({
-        ...fs,
-        readDirectory: (path, options) =>
-          fs.readDirectory(path, options).pipe(
-            Effect.tap((entries) => {
-              if (path !== themesDir || inserted || !entries.includes("a-first.json")) {
-                return Effect.void;
-              }
-              inserted = true;
-              beforeSave = statSync(themesDir, { bigint: true });
-              NodeFS.writeFileSync(NodePath.join(themesDir, "b-manual.json"), NIGHTFALL_THEME_JSON);
-              return Deferred.succeed(saved, undefined).pipe(
-                Effect.andThen(Deferred.await(resume)),
-              );
-            }),
-          ),
-      })).pipe(Effect.forkScoped);
-      yield* Deferred.await(saved);
+        const saved = yield* Deferred.make<void>();
+        const resume = yield* Deferred.make<void>();
+        const { statSync } = yield* Effect.promise(() => vi.importActual<typeof NodeFS>("node:fs"));
+        let beforeSave: NodeFS.BigIntStats | undefined;
+        // A filesystem can report the same directory metadata across two writes in one tick.
+        using _directoryStat = vi
+          .spyOn(NodeFS, "statSync")
+          .mockImplementation(((path: NodeFS.PathLike, options?: NodeFS.StatSyncOptions) =>
+            path === themesDir && options?.bigint && beforeSave
+              ? beforeSave
+              : statSync(path, options)) as typeof statSync);
+        let inserted = false;
+        const publisher = yield* runCli(
+          ["theme", "set", themeFile, "--base-dir", baseDir],
+          (fs) => ({
+            ...fs,
+            readDirectory: (path, options) =>
+              fs.readDirectory(path, options).pipe(
+                Effect.tap((entries) => {
+                  if (path !== themesDir || inserted || !entries.includes("a-first.json")) {
+                    return Effect.void;
+                  }
+                  inserted = true;
+                  beforeSave = statSync(themesDir, { bigint: true });
+                  if (save === "rename") NodeFS.renameSync(temporary, manualTheme);
+                  else NodeFS.writeFileSync(manualTheme, NIGHTFALL_THEME_JSON);
+                  return Deferred.succeed(saved, undefined).pipe(
+                    Effect.andThen(Deferred.await(resume)),
+                  );
+                }),
+              ),
+          }),
+        ).pipe(Effect.forkScoped);
+        yield* Deferred.await(saved);
 
-      const select = (id: string) =>
-        runCliProcess(["theme", "set", id, "--base-dir", baseDir]).pipe(Effect.result);
-      const [selection, unknown] = yield* Effect.all([select("a-first"), select("missing")], {
-        concurrency: "unbounded",
-      }).pipe(Effect.ensuring(Deferred.succeed(resume, undefined)));
-      const publication = yield* Fiber.join(publisher).pipe(Effect.result);
+        const select = (id: string) =>
+          runCliProcess(["theme", "set", id, "--base-dir", baseDir]).pipe(Effect.result);
+        const [selection, unknown] = yield* Effect.all([select("a-first"), select("missing")], {
+          concurrency: "unbounded",
+        }).pipe(Effect.ensuring(Deferred.succeed(resume, undefined)));
+        const publication = yield* Fiber.join(publisher).pipe(Effect.result);
 
-      assert.equal(selection._tag, "Failure");
-      if (unknown._tag !== "Failure") assert.fail("The unknown theme should have been refused.");
-      assert.include(unknown.failure, 'No theme named "missing"');
-      if (publication._tag !== "Failure") assert.fail("The publish should have been refused.");
-      assert.include(String(publication.failure), "is full");
-      assert.equal(readSettings(baseDir).defaultTheme, "ocean");
-      assert.isFalse(NodeFS.existsSync(NodePath.join(themesDir, "a-first.json")));
-      assert.isTrue(NodeFS.existsSync(NodePath.join(themesDir, "b-manual.json")));
-      assert.isTrue(NodeFS.existsSync(NodePath.join(themesDir, "theme-9.json")));
-    }),
+        assert.equal(selection._tag, "Failure");
+        if (unknown._tag !== "Failure") assert.fail("The unknown theme should have been refused.");
+        assert.include(unknown.failure, 'No theme named "missing"');
+        if (publication._tag !== "Failure") assert.fail("The publish should have been refused.");
+        assert.include(String(publication.failure), "is full");
+        assert.equal(readSettings(baseDir).defaultTheme, "ocean");
+        assert.isFalse(NodeFS.existsSync(NodePath.join(themesDir, "a-first.json")));
+        assert.isTrue(NodeFS.existsSync(manualTheme));
+        assert.isTrue(NodeFS.existsSync(NodePath.join(themesDir, "theme-9.json")));
+      }),
   );
 
   it.live.skipIf(windowsHost)("keeps the previous theme when the staged file is unreadable", () =>
