@@ -465,6 +465,15 @@ describe("t3 theme", () => {
 
       const saved = yield* Deferred.make<void>();
       const resume = yield* Deferred.make<void>();
+      const { statSync } = yield* Effect.promise(() => vi.importActual<typeof NodeFS>("node:fs"));
+      let beforeSave: NodeFS.BigIntStats | undefined;
+      // A filesystem can report the same directory metadata across two writes in one tick.
+      using _directoryStat = vi
+        .spyOn(NodeFS, "statSync")
+        .mockImplementation(((path: NodeFS.PathLike, options?: NodeFS.StatSyncOptions) =>
+          path === themesDir && options?.bigint && beforeSave
+            ? beforeSave
+            : statSync(path, options)) as typeof statSync);
       let inserted = false;
       const publisher = yield* runCli(["theme", "set", themeFile, "--base-dir", baseDir], (fs) => ({
         ...fs,
@@ -475,6 +484,7 @@ describe("t3 theme", () => {
                 return Effect.void;
               }
               inserted = true;
+              beforeSave = statSync(themesDir, { bigint: true });
               NodeFS.writeFileSync(NodePath.join(themesDir, "b-manual.json"), NIGHTFALL_THEME_JSON);
               return Deferred.succeed(saved, undefined).pipe(
                 Effect.andThen(Deferred.await(resume)),
@@ -489,12 +499,13 @@ describe("t3 theme", () => {
       const [selection, unknown] = yield* Effect.all([select("a-first"), select("missing")], {
         concurrency: "unbounded",
       }).pipe(Effect.ensuring(Deferred.succeed(resume, undefined)));
-      const publication = yield* Fiber.join(publisher).pipe(Effect.flip);
+      const publication = yield* Fiber.join(publisher).pipe(Effect.result);
 
       assert.equal(selection._tag, "Failure");
       if (unknown._tag !== "Failure") assert.fail("The unknown theme should have been refused.");
       assert.include(unknown.failure, 'No theme named "missing"');
-      assert.include(String(publication), "is full");
+      if (publication._tag !== "Failure") assert.fail("The publish should have been refused.");
+      assert.include(String(publication.failure), "is full");
       assert.equal(readSettings(baseDir).defaultTheme, "ocean");
       assert.isFalse(NodeFS.existsSync(NodePath.join(themesDir, "a-first.json")));
       assert.isTrue(NodeFS.existsSync(NodePath.join(themesDir, "b-manual.json")));
