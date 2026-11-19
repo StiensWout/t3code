@@ -1,7 +1,12 @@
 import type { RepositoryIdentity, SourceControlProviderError } from "@t3tools/contracts";
 import { parseGitRemoteHost } from "@t3tools/source-control-core/shared/definition";
 import { repositoryPathFromRemoteUrl } from "@t3tools/source-control-core/server/SourceControlProvider";
-import { canonicalRepositoryPath, normalizeGitRemoteUrl } from "@t3tools/shared/git";
+import {
+  canonicalRepositoryPath,
+  CHECKOUT_REMOTE_CONFIG,
+  normalizeGitRemoteUrl,
+  parseCheckoutRemoteNames,
+} from "@t3tools/shared/git";
 import { isSshRemoteUrl } from "@t3tools/shared/sourceControl";
 import * as Cache from "effect/Cache";
 import * as Context from "effect/Context";
@@ -51,7 +56,7 @@ function isLocalRemoteUrl(url: string): boolean {
   return colonIndex === -1 || (slashIndex !== -1 && slashIndex < colonIndex);
 }
 
-function parseRemoteFetchUrls(stdout: string): Map<string, string> {
+function parseRemoteFetchUrls(stdout: string, skipped: ReadonlySet<string>): Map<string, string> {
   const remotes = new Map<string, string>();
   for (const line of stdout.split(/\r?\n/)) {
     // Git uses a tab before the URL and one space before the direction; both can occur in URLs.
@@ -62,6 +67,7 @@ function parseRemoteFetchUrls(stdout: string): Map<string, string> {
     if (
       direction !== "fetch" ||
       remoteName.length === 0 ||
+      skipped.has(remoteName) ||
       remoteUrl.length === 0 ||
       isLocalRemoteUrl(remoteUrl)
     ) {
@@ -333,19 +339,25 @@ const resolveRepositoryIdentityFromCacheKey = Effect.fn(
       })
       .pipe(Effect.option);
   const [remoteResult, resolvedResult] = yield* Effect.all(
-    [runGit(["remote", "-v"]), runGit(["config", "--get-regexp", "^remote\\..*\\.gh-resolved$"])],
+    [
+      runGit(["remote", "-v"]),
+      runGit(["config", "--get-regexp", `^remote\\..*\\.(gh-resolved|${CHECKOUT_REMOTE_CONFIG})$`]),
+    ],
     { concurrency: "unbounded" },
   );
   if (remoteResult._tag === "None" || remoteResult.value.code !== 0) {
     return null;
   }
 
-  const remotes = parseRemoteFetchUrls(remoteResult.value.stdout);
   // Exits 1 when no remote has a mark.
   const resolved =
     resolvedResult._tag === "Some" && resolvedResult.value.code === 0
       ? resolvedResult.value.stdout
       : "";
+  const remotes = parseRemoteFetchUrls(
+    remoteResult.value.stdout,
+    parseCheckoutRemoteNames(resolved),
+  );
   const remote = pickPrimaryRemote(remotes, resolved);
   if (!remote) return null;
   const originUrl = remotes.get("origin");

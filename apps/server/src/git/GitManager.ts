@@ -58,6 +58,7 @@ import {
 import { isSshRemoteUrl } from "@t3tools/shared/sourceControl";
 import {
   type ChangeRequestTerminology,
+  parseGitRemoteHost,
   UNKNOWN_SOURCE_CONTROL_CLIENT,
 } from "@t3tools/source-control-core/shared/definition";
 import {
@@ -278,6 +279,9 @@ interface PullRequestHeadRemoteInfo {
   headRepositoryOwnerLogin?: string | null | undefined;
 }
 
+/** Where a change request's head ref is fetched from: `remote`, or the primary remote without one. */
+type ChangeRequestRepository = Pick<GitVcsDriver.GitFetchRefInput, "remote">;
+
 interface BranchHeadContext {
   localBranch: string;
   headBranch: string;
@@ -296,6 +300,21 @@ export function pullRequestRepositoryKey(value: string): string | null {
   return repositoryUrl === undefined
     ? null
     : sourceControlDefinitions.repositoryKeyFromRemote(repositoryUrl);
+}
+
+/**
+ * Whether a remote fetches the repository at `repositoryUrl`, or null for a remote with no host,
+ * which cannot say. An SSH alias hides the host, so one path is one repository.
+ */
+function remoteServesRepository(remoteUrl: string, repositoryUrl: string): boolean | null {
+  if (parseGitRemoteHost(remoteUrl) === null) return null;
+  const [remoteKey = "", repositoryKey = ""] = [remoteUrl, repositoryUrl].map((url) =>
+    sourceControlDefinitions.canonicalRepositoryKey(
+      sourceControlDefinitions.repositoryKeyFromRemote(url),
+    ),
+  );
+  const path = (key: string) => key.slice(key.indexOf("/") + 1);
+  return remoteKey === repositoryKey || path(remoteKey) === path(repositoryKey);
 }
 
 /** Null when the host did not name the repository the head lives in. */
@@ -1010,6 +1029,37 @@ export const make = Effect.gen(function* () {
     return host ? { host } : {};
   };
 
+  // The repository's own remote, which need not be named origin.
+  const readPrimaryRemoteUrl = (cwd: string) =>
+    gitCore.resolvePrimaryRemoteName(cwd).pipe(
+      Effect.flatMap((remoteName) => readRemoteUrl(cwd, remoteName)),
+      Effect.orElseSucceed(() => null),
+    );
+
+  // A change request's head ref is published by the repository it targets. In a fork's checkout
+  // that is not the primary remote, where the same number is another change request or none:
+  // the clone URL to fetch it from, or null when the primary remote serves it.
+  const changeRequestRepositoryUrl = Effect.fn("GitManager.changeRequestRepositoryUrl")(function* (
+    cwd: string,
+    changeRequestUrl: string,
+  ) {
+    const link = sourceControlDefinitions.parseChangeRequestUrl(changeRequestUrl)?.link;
+    const primaryUrl = yield* readPrimaryRemoteUrl(cwd);
+    if (
+      link === undefined ||
+      primaryUrl === null ||
+      remoteServesRepository(primaryUrl, link.repositoryUrl) !== false
+    ) {
+      return null;
+    }
+    const cloneUrls = yield* (yield* sourceControlProvider(cwd)).getRepositoryCloneUrls({
+      cwd,
+      repository: link.repository,
+      ...pullRequestHostOptions(changeRequestUrl),
+    });
+    return shouldPreferSshRemote(primaryUrl) ? cloneUrls.sshUrl : cloneUrls.url;
+  });
+
   const configurePullRequestHeadUpstreamBase = Effect.fn("configurePullRequestHeadUpstream")(
     function* (
       cwd: string,
@@ -1042,8 +1092,8 @@ export const make = Effect.gen(function* () {
         repository: repositoryNameWithOwner,
         ...pullRequestHostOptions(pullRequest.url),
       });
-      const originRemoteUrl = yield* readRemoteUrl(cwd, "origin");
-      const remoteUrl = shouldPreferSshRemote(originRemoteUrl) ? cloneUrls.sshUrl : cloneUrls.url;
+      const ownRemoteUrl = yield* readPrimaryRemoteUrl(cwd);
+      const remoteUrl = shouldPreferSshRemote(ownRemoteUrl) ? cloneUrls.sshUrl : cloneUrls.url;
       const preferredRemoteName =
         pullRequest.headRepositoryOwnerLogin?.trim() ||
         repositoryNameWithOwner.split("/")[0]?.trim() ||
@@ -1052,6 +1102,7 @@ export const make = Effect.gen(function* () {
         cwd,
         preferredName: preferredRemoteName,
         url: remoteUrl,
+        checkout: true,
       });
 
       yield* gitCore.fetchRemoteTrackingBranch({
@@ -1103,9 +1154,9 @@ export const make = Effect.gen(function* () {
   });
 
   const fetchChangeRequestHeadIntoBranch = Effect.fn("GitManager.fetchChangeRequestHeadIntoBranch")(
-    function* (cwd: string, number: number, branch: string) {
+    function* (cwd: string, number: number, branch: string, repository: ChangeRequestRepository) {
       const ref = yield* changeRequestHeadRef(cwd, number);
-      yield* gitCore.fetchRefIntoBranch({ cwd, ref, branch });
+      yield* gitCore.fetchRefIntoBranch({ cwd, ref, branch, ...repository });
     },
   );
 
@@ -1113,12 +1164,18 @@ export const make = Effect.gen(function* () {
     function* (
       cwd: string,
       pullRequest: ResolvedPullRequest & PullRequestHeadRemoteInfo,
-      localBranch = pullRequest.headBranch,
+      localBranch: string,
+      repository: ChangeRequestRepository,
     ) {
       const repositoryNameWithOwner = resolveHeadRepositoryNameWithOwner(pullRequest) ?? "";
 
       if (repositoryNameWithOwner.length === 0) {
-        yield* fetchChangeRequestHeadIntoBranch(cwd, pullRequest.number, localBranch).pipe(
+        yield* fetchChangeRequestHeadIntoBranch(
+          cwd,
+          pullRequest.number,
+          localBranch,
+          repository,
+        ).pipe(
           // Fall back to a branch fetch only for an open PR in the primary remote's repository.
           // A host can resolve a PR number from another repository, so verify the repository first.
           // Closed PR branches may have moved past the head recorded at closure.
@@ -1156,8 +1213,8 @@ export const make = Effect.gen(function* () {
         repository: repositoryNameWithOwner,
         ...pullRequestHostOptions(pullRequest.url),
       });
-      const originRemoteUrl = yield* readRemoteUrl(cwd, "origin");
-      const remoteUrl = shouldPreferSshRemote(originRemoteUrl) ? cloneUrls.sshUrl : cloneUrls.url;
+      const ownRemoteUrl = yield* readPrimaryRemoteUrl(cwd);
+      const remoteUrl = shouldPreferSshRemote(ownRemoteUrl) ? cloneUrls.sshUrl : cloneUrls.url;
       const preferredRemoteName =
         pullRequest.headRepositoryOwnerLogin?.trim() ||
         repositoryNameWithOwner.split("/")[0]?.trim() ||
@@ -1166,6 +1223,7 @@ export const make = Effect.gen(function* () {
         cwd,
         preferredName: preferredRemoteName,
         url: remoteUrl,
+        checkout: true,
       });
 
       yield* gitCore.fetchRemoteBranch({
@@ -1186,11 +1244,12 @@ export const make = Effect.gen(function* () {
   const materializePullRequestHeadBranch = (
     cwd: string,
     pullRequest: ResolvedPullRequest & PullRequestHeadRemoteInfo,
-    localBranch = pullRequest.headBranch,
+    localBranch: string,
+    repository: ChangeRequestRepository,
   ) =>
-    materializePullRequestHeadBranchBase(cwd, pullRequest, localBranch).pipe(
+    materializePullRequestHeadBranchBase(cwd, pullRequest, localBranch, repository).pipe(
       Effect.catch((primaryCause) =>
-        fetchChangeRequestHeadIntoBranch(cwd, pullRequest.number, localBranch).pipe(
+        fetchChangeRequestHeadIntoBranch(cwd, pullRequest.number, localBranch, repository).pipe(
           Effect.mapError(
             (fallbackCause) =>
               new GitPullRequestMaterializationError({
@@ -3178,6 +3237,16 @@ export const make = Effect.gen(function* () {
         reference: normalizedReference,
       });
       const pullRequest = toResolvedPullRequest(pullRequestSummary);
+      const repositoryUrl = yield* changeRequestRepositoryUrl(input.cwd, pullRequest.url);
+      const repository: ChangeRequestRepository =
+        repositoryUrl === null ? {} : { remote: repositoryUrl };
+      const pullRequestWithRemoteInfo = {
+        ...pullRequest,
+        ...toPullRequestHeadRemoteInfo(pullRequestSummary),
+        // From this checkout, a head in another repository is a fork's, whichever repository the
+        // pull request targets: it gets its own branch name and never tracks the primary remote.
+        ...(repositoryUrl === null ? {} : { isCrossRepository: true }),
+      } as const;
 
       if (input.mode === "local") {
         yield* ensureNoTrackedChanges(input.cwd, pullRequest.number);
@@ -3187,14 +3256,10 @@ export const make = Effect.gen(function* () {
         });
         const details = yield* gitCore.statusDetails(input.cwd);
         const branch = details.branch ?? pullRequest.headBranch;
-        yield* configurePullRequestHeadUpstream(
-          input.cwd,
-          {
-            ...pullRequest,
-            ...toPullRequestHeadRemoteInfo(pullRequestSummary),
-          },
-          branch,
-        );
+        // A branch that already tracks a remote keeps it: its pushes may go elsewhere on purpose.
+        if (details.upstreamRef === null) {
+          yield* configurePullRequestHeadUpstream(input.cwd, pullRequestWithRemoteInfo, branch);
+        }
         return {
           pullRequest,
           branch,
@@ -3209,18 +3274,11 @@ export const make = Effect.gen(function* () {
         const details = yield* gitCore.statusDetails(worktreePath);
         yield* configurePullRequestHeadUpstream(
           worktreePath,
-          {
-            ...pullRequest,
-            ...toPullRequestHeadRemoteInfo(pullRequestSummary),
-          },
+          pullRequestWithRemoteInfo,
           details.branch ?? pullRequest.headBranch,
         );
       });
 
-      const pullRequestWithRemoteInfo = {
-        ...pullRequest,
-        ...toPullRequestHeadRemoteInfo(pullRequestSummary),
-      } as const;
       const localBranches = pullRequestWithRemoteInfo.isCrossRepository
         ? new Set(
             (yield* gitCore.execute({
@@ -3268,7 +3326,9 @@ export const make = Effect.gen(function* () {
         // from `origin/main` whose head branch has since been deleted still resolves — and
         // following it would move the checkout onto main and call that the pull request.
         const refreshed = yield* changeRequestHeadRef(worktreePath, pullRequest.number).pipe(
-          Effect.flatMap((ref) => gitCore.fetchRefCommit({ cwd: worktreePath, ref })),
+          Effect.flatMap((ref) =>
+            gitCore.fetchRefCommit({ cwd: worktreePath, ref, ...repository }),
+          ),
           // A host that publishes no head ref leaves the remote-tracking branch,
           // taken only where it is the head branch's own rather than whatever the checkout
           // happened to be cut from.
@@ -3371,7 +3431,7 @@ export const make = Effect.gen(function* () {
           localPullRequestBranch,
         );
         const target = yield* changeRequestHeadRef(cwd, pullRequest.number).pipe(
-          Effect.flatMap((ref) => gitCore.fetchRefCommit({ cwd, ref })),
+          Effect.flatMap((ref) => gitCore.fetchRefCommit({ cwd, ref, ...repository })),
           Effect.filterOrFail(
             (resolved) =>
               pullRequestSummary.headSha === undefined ||
@@ -3504,6 +3564,7 @@ export const make = Effect.gen(function* () {
         input.cwd,
         pullRequestWithRemoteInfo,
         localPullRequestBranch,
+        repository,
       );
 
       const existingBranchAfterFetch = yield* findLocalHeadBranch(input.cwd);

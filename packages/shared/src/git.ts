@@ -19,6 +19,21 @@ const TEMP_WORKTREE_BRANCH_PATTERN = new RegExp(
   `^(?:${WORKTREE_BRANCH_PREFIX}[-/]${TEMP_WORKTREE_HEX_TOKEN}|t3code(?:[-/]${TEMP_WORKTREE_HEX_TOKEN}|\\/${TEMP_WORKTREE_UUID_V4_TOKEN}))$`,
 );
 
+/**
+ * `remote.<name>.t3-checkout` marks a remote a change request checkout added to reach another
+ * repository. It is never the repository's own remote, whatever its name sorts as.
+ */
+export const CHECKOUT_REMOTE_CONFIG = "t3-checkout";
+
+/** The marked remotes in `git config --get-regexp` output. */
+export function parseCheckoutRemoteNames(config: string): ReadonlySet<string> {
+  return new Set(
+    config
+      .split("\n")
+      .flatMap((line) => /^remote\.(.+)\.t3-checkout\s+true$/u.exec(line.trim())?.[1] ?? []),
+  );
+}
+
 export function sanitizeBranchFragment(raw: string): string {
   const normalized = foldLatinDiacritics(raw)
     .trim()

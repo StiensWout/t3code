@@ -20,7 +20,11 @@ import {
   type SourceControlProviderDiscoveryItem,
   type SourceControlRepositoryCloneUrls,
 } from "@t3tools/contracts";
-import { normalizeGitRemoteUrl } from "@t3tools/shared/git";
+import {
+  CHECKOUT_REMOTE_CONFIG,
+  normalizeGitRemoteUrl,
+  parseCheckoutRemoteNames,
+} from "@t3tools/shared/git";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 import { isSshRemoteUrl } from "@t3tools/shared/sourceControl";
@@ -561,13 +565,25 @@ export const make = Effect.gen(function* () {
   const readRemotes = (cwd: string) =>
     Effect.all([
       gitRead(cwd, ["remote", "-v"]),
-      gitRead(cwd, ["config", "--get-regexp", "^remote\\..*\\.gh-resolved$"]),
+      gitRead(cwd, [
+        "config",
+        "--get-regexp",
+        `^remote\\..*\\.(gh-resolved|${CHECKOUT_REMOTE_CONFIG})$`,
+      ]),
     ]).pipe(
       Effect.orElseSucceed(() => [null, null] as const),
-      Effect.map(([remotes, resolved]) => ({
-        remotes: remotes?.exitCode === 0 ? remotes.stdout : "",
-        resolved: resolved?.exitCode === 0 ? resolved.stdout : "",
-      })),
+      Effect.map(([remotes, config]) => {
+        const resolved = config?.exitCode === 0 ? config.stdout : "";
+        const added = parseCheckoutRemoteNames(resolved);
+        return {
+          // A remote a checkout added reaches another repository; it never names this one.
+          remotes: (remotes?.exitCode === 0 ? remotes.stdout : "")
+            .split("\n")
+            .filter((line) => !added.has(line.split(/\s/u, 1)[0] ?? ""))
+            .join("\n"),
+          resolved,
+        };
+      }),
     );
 
   const resolveRepository = Effect.fn("GitHubSourceControlProvider.resolveRepository")(
@@ -820,18 +836,54 @@ export const make = Effect.gen(function* () {
         Effect.map((result) => (result.exitCode === 0 ? result.stdout : "")),
         Effect.mapError(gitFailure),
       );
+      const fetchRemotes = parseFetchRemotes(remotes);
+      const repositoryOf = (url: string) =>
+        normalizeGitRemoteUrl(url).split("/").slice(1).join("/");
       const remoteFor = (nameWithOwner: string) =>
-        parseFetchRemotes(remotes).find(
+        fetchRemotes.find(
           (remote) =>
             (gitHubApiHostForRemote(remote.url) ??
               normalizeGitRemoteUrl(remote.url).split("/")[0]) === base.host &&
-            normalizeGitRemoteUrl(remote.url).split("/").slice(1).join("/") ===
-              nameWithOwner.toLowerCase(),
+            repositoryOf(remote.url) === nameWithOwner.toLowerCase(),
         )?.name ?? null;
-      const baseRemote = Effect.suspend(() => {
-        const known = remoteFor(baseNameWithOwner);
-        return known === null ? git.resolvePrimaryRemoteName(input.cwd) : Effect.succeed(known);
+      const primaryRemote = yield* Effect.cached(git.resolvePrimaryRemoteName(input.cwd));
+      // A remote for a repository the checkout has none for, over its own remote's transport.
+      const addRemoteFor = Effect.fn("GitHubSourceControlProvider.addRemoteFor")(function* (
+        nameWithOwner: string,
+        preferredName: string,
+      ) {
+        const [owner, name] = nameWithOwner.split("/");
+        const repository = yield* readRepository({ host: base.host, owner: owner!, name: name! });
+        // Git fetches from a remote's first URL; `config --get` returns the last of several, and
+        // `git remote -v` applies `insteadOf` rewrites.
+        const ownUrl = yield* primaryRemote.pipe(
+          Effect.flatMap((primary) =>
+            runGit(input.cwd, "readOriginUrl", ["config", "--get-all", `remote.${primary}.url`]),
+          ),
+          Effect.map((result) => result.stdout.split("\n", 1)[0]?.trim() || null),
+          Effect.orElseSucceed(() => null),
+        );
+        return yield* git.ensureRemote({
+          cwd: input.cwd,
+          preferredName,
+          url: ownUrl !== null && isSshRemoteUrl(ownUrl) ? repository.ssh_url : repository.html_url,
+        });
       });
+      const baseRemote = yield* Effect.cached(
+        Effect.gen(function* () {
+          const known = remoteFor(baseNameWithOwner);
+          if (known !== null) return known;
+          const primary = yield* primaryRemote;
+          // A URL can name a repository no remote serves, as a fork's upstream. The primary
+          // remote is that repository when its path is: an SSH alias hides the host.
+          const primaryUrl = fetchRemotes.find((remote) => remote.name === primary)?.url;
+          return reference.kind !== "url" ||
+            primaryUrl === undefined ||
+            repositoryOf(primaryUrl) === baseNameWithOwner
+            ? primary
+            : yield* addRemoteFor(baseNameWithOwner, base.owner);
+        }),
+      );
       // Avoid resetting the default branch; prefix colliding forks and fail if it is unknown.
       const defaultBranch = isCrossRepository
         ? yield* readRepository(base).pipe(
@@ -848,25 +900,10 @@ export const make = Effect.gen(function* () {
       const headRemote = Effect.gen(function* () {
         if (!isCrossRepository) return yield* baseRemote;
         if (headNameWithOwner === null) return yield* failure("The fork is gone.");
-        const known = remoteFor(headNameWithOwner);
-        if (known !== null) return known;
-        const [owner, name] = headNameWithOwner.split("/");
-        const fork = yield* readRepository({ host: base.host, owner: owner!, name: name! });
-        // Git fetches from a remote's first URL; `config --get` returns the last of several, and
-        // `git remote -v` applies `insteadOf` rewrites.
-        const originUrl = yield* runGit(input.cwd, "readOriginUrl", [
-          "config",
-          "--get-all",
-          "remote.origin.url",
-        ]).pipe(
-          Effect.map((result) => result.stdout.split("\n", 1)[0]?.trim() || null),
-          Effect.orElseSucceed(() => null),
+        return (
+          remoteFor(headNameWithOwner) ??
+          (yield* addRemoteFor(headNameWithOwner, headOwner ?? "fork"))
         );
-        return yield* git.ensureRemote({
-          cwd: input.cwd,
-          preferredName: headOwner ?? "fork",
-          url: originUrl !== null && isSshRemoteUrl(originUrl) ? fork.ssh_url : fork.html_url,
-        });
       });
 
       const exists = (yield* git
@@ -920,7 +957,11 @@ export const make = Effect.gen(function* () {
           );
         }
         // Set tracking after sync succeeds so a failed checkout preserves the existing upstream.
-        if (target.upstream !== null) {
+        // A branch that already tracks a remote keeps it: its pushes may go elsewhere on purpose.
+        const tracked = exists
+          ? yield* git.readConfigValue(input.cwd, `branch.${localBranch}.remote`)
+          : null;
+        if (target.upstream !== null && tracked === null) {
           yield* git.setBranchUpstream({ cwd: input.cwd, branch: localBranch, ...target.upstream });
         }
       }).pipe(Effect.mapError(gitFailure));

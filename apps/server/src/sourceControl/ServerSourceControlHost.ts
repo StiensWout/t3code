@@ -43,7 +43,8 @@ export const layer = Layer.effect(
           vcsRegistry.resolve({ cwd }).pipe(Effect.map((handle) => handle.driver.listRemotes(cwd))),
         readConfigValue: git.readConfigValue,
         resolvePrimaryRemoteName: git.resolvePrimaryRemoteName,
-        ensureRemote: git.ensureRemote,
+        // A host driver adds a remote only to check a change request out.
+        ensureRemote: (input) => git.ensureRemote({ ...input, checkout: true }),
         listLocalBranchNames: git.listLocalBranchNames,
         fetchRemoteBranch: git.fetchRemoteBranch,
         fetchRemoteTrackingBranch: git.fetchRemoteTrackingBranch,

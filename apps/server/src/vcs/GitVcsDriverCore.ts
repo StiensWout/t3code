@@ -36,7 +36,11 @@ import {
   type ReviewDiffPreviewSource,
   type VcsRef,
 } from "@t3tools/contracts";
-import { dedupeRemoteBranchesWithLocalMatches } from "@t3tools/shared/git";
+import {
+  CHECKOUT_REMOTE_CONFIG,
+  dedupeRemoteBranchesWithLocalMatches,
+  parseCheckoutRemoteNames,
+} from "@t3tools/shared/git";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { compactTraceAttributes } from "@t3tools/shared/observability";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
@@ -1925,13 +1929,32 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     return parsedRemoteRef?.branchName ?? branchName;
   });
 
+  // The repository's own remotes: one a change request checkout added only reaches another
+  // repository, and must not become where branches publish or what names the default branch.
+  const listOwnRemoteNames = Effect.fn("GitVcsDriver.listOwnRemoteNames")(function* (
+    cwd: string,
+    gitDirArgs: ReadonlyArray<string> = [],
+  ) {
+    const remoteNames = yield* listRemoteNames(cwd, gitDirArgs);
+    if (remoteNames.length < 2) return remoteNames;
+    const added = parseCheckoutRemoteNames(
+      yield* runGitStdout(
+        "GitVcsDriver.listOwnRemoteNames.checkoutRemotes",
+        cwd,
+        [...gitDirArgs, "config", "--get-regexp", `^remote\\..*\\.${CHECKOUT_REMOTE_CONFIG}$`],
+        true,
+      ),
+    );
+    return remoteNames.filter((remoteName) => !added.has(remoteName));
+  });
+
   // Local-only repositories are normal and status polls them, so the span succeeds with null.
   // Callers that need a remote fail in their own span.
   const findPrimaryRemoteName = Effect.fn("resolvePrimaryRemoteName")(function* (cwd: string) {
     if (yield* originRemoteExists(cwd)) {
       return "origin";
     }
-    const [firstRemote] = yield* listRemoteNames(cwd);
+    const [firstRemote] = yield* listOwnRemoteNames(cwd);
     return firstRemote ?? null;
   });
 
@@ -1939,7 +1962,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     function* (cwd: string, gitDirArgs: ReadonlyArray<string> = []) {
       const originDefault = yield* resolveDefaultBranchName(cwd, "origin", gitDirArgs);
       if (originDefault !== null) return originDefault;
-      const remoteNames = yield* listRemoteNames(cwd, gitDirArgs);
+      const remoteNames = yield* listOwnRemoteNames(cwd, gitDirArgs);
       const [firstRemote] = remoteNames;
       return firstRemote === undefined || remoteNames.includes("origin")
         ? null
@@ -2069,6 +2092,23 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       suffix += 1;
     }
 
+    const markAsCheckoutRemote = executeGitWithStableDiagnostics(
+      "GitVcsDriver.ensureRemote.mark",
+      input.cwd,
+      ["config", `remote.${remoteName}.${CHECKOUT_REMOTE_CONFIG}`, "true"],
+      { writesSharedConfig: true },
+    ).pipe(
+      retryWhileConfigLocked,
+      // An unmarked remote could become the repository's own: take it back so a retry adds it whole.
+      Effect.tapError(() =>
+        executeGit("GitVcsDriver.ensureRemote.unmark", input.cwd, [
+          "remote",
+          "remove",
+          remoteName,
+        ]).pipe(Effect.ignore),
+      ),
+    );
+
     return yield* executeGitWithStableDiagnostics(
       "GitVcsDriver.ensureRemote.add",
       input.cwd,
@@ -2076,6 +2116,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       { writesSharedConfig: true },
     ).pipe(
       retryWhileConfigLocked,
+      Effect.andThen(input.checkout === true ? markAsCheckoutRemote : Effect.void),
       Effect.as(remoteName),
       // A parallel launch for the same fork may have added it since the listing above.
       Effect.catch((error) =>
@@ -5621,7 +5662,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const fetchRefIntoBranch: GitVcsDriver.GitVcsDriver["Service"]["fetchRefIntoBranch"] = Effect.fn(
     "GitVcsDriver.fetchRefIntoBranch",
   )(function* (input) {
-    const remoteName = yield* resolvePrimaryRemoteName(input.cwd);
+    const remoteName = input.remote ?? (yield* resolvePrimaryRemoteName(input.cwd));
     yield* executeGit(
       "GitVcsDriver.fetchRefIntoBranch",
       input.cwd,
@@ -5654,7 +5695,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const fetchRefCommit: GitVcsDriver.GitVcsDriver["Service"]["fetchRefCommit"] = Effect.fn(
     "GitVcsDriver.fetchRefCommit",
   )(function* (input) {
-    const remoteName = yield* resolvePrimaryRemoteName(input.cwd);
+    const remoteName = input.remote ?? (yield* resolvePrimaryRemoteName(input.cwd));
     // No refspec destination: the ref lands in FETCH_HEAD (per worktree) instead of a branch,
     // which is the only way to read it while that branch is checked out somewhere.
     yield* executeGit(
