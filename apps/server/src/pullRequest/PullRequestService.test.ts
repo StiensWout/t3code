@@ -466,7 +466,7 @@ it.effect("lists a fork's upstream pull requests beside its own when its project
       both.entries
         .filter((entry) => entry.repository === "acme/web")
         .map((entry) => [entry.projectId, entry.upstream]),
-      [["home", undefined]],
+      [["home" as ProjectId, undefined]],
     );
   }),
 );
