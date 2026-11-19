@@ -165,6 +165,10 @@ function harness(input: {
   readonly resolved?: string;
   readonly gitFailure?: unknown;
   readonly originUrls?: string;
+  readonly primaryRemote?: string;
+  /** The remote the local branch already tracks. */
+  readonly branchRemote?: string;
+  readonly trackingFetchFails?: boolean;
 }) {
   const git: Array<readonly [string, unknown]> = [];
   const graphqlCalls: Array<GraphQlCall> = [];
@@ -183,14 +187,25 @@ function harness(input: {
           args.args[0] === "config" ? (input.originUrls ?? "git@github.com:acme/web.git\n") : "",
         );
       }),
-    resolvePrimaryRemoteName: () => Effect.succeed("origin"),
-    readConfigValue: () => Effect.succeed("git@github.com:acme/web.git"),
+    resolvePrimaryRemoteName: () => Effect.succeed(input.primaryRemote ?? "origin"),
+    readConfigValue: (_cwd, key) =>
+      Effect.succeed(
+        key.startsWith("branch.") ? (input.branchRemote ?? null) : "git@github.com:acme/web.git",
+      ),
     ensureRemote: (args) =>
       Effect.sync(() => {
         git.push(["ensureRemote", args]);
         return args.preferredName;
       }),
-    fetchRemoteTrackingBranch: (args) => record("fetchRemoteTrackingBranch", undefined)(args),
+    fetchRemoteTrackingBranch: (args) =>
+      record(
+        "fetchRemoteTrackingBranch",
+        undefined,
+      )(args).pipe(
+        Effect.andThen(
+          input.trackingFetchFails ? Effect.fail(new Error("gone") as never) : Effect.void,
+        ),
+      ),
     setBranchUpstream: (args) => record("setBranchUpstream", undefined)(args),
     createBranch: (args) => record("createBranch", undefined)(args),
     writeConfigValue: (args) => record("writeConfigValue", undefined)(args),
@@ -318,6 +333,34 @@ describe("GitHubSourceControlProvider repository resolution", () => {
       const gh = yield* GitHubSourceControlProvider.make;
       assert.strictEqual(yield* gh.getDefaultBranch({ cwd: "/repo" }), "trunk");
       assert.deepStrictEqual(paths, ["github.com repos/acme/web"]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("picks the repository from the remotes a checkout did not add", () => {
+    const paths: string[] = [];
+    const { layer } = harness({
+      remotes: remotesOutput(
+        ["acme", "git@github.com:acme/web.git"],
+        ["wout", "git@github.com:wout/web.git"],
+      ),
+      resolved: "remote.acme.t3-checkout true",
+      api: {
+        rest: (input) =>
+          Effect.sync(() => {
+            paths.push(`${input.host} ${input.path}`);
+            return restResponse({
+              full_name: "wout/web",
+              html_url: "https://github.com/wout/web",
+              ssh_url: "git@github.com:wout/web.git",
+              default_branch: "trunk",
+            });
+          }),
+      },
+    });
+    return Effect.gen(function* () {
+      const gh = yield* GitHubSourceControlProvider.make;
+      yield* gh.getDefaultBranch({ cwd: "/repo" });
+      assert.deepStrictEqual(paths, ["github.com repos/wout/web"]);
     }).pipe(Effect.provide(layer));
   });
 
@@ -748,6 +791,107 @@ describe("GitHubSourceControlProvider.checkoutChangeRequest", () => {
       });
     }).pipe(Effect.provide(layer));
   });
+
+  const fetchedFromAcme = {
+    ensured: { cwd: "/repo", preferredName: "acme", url: "git@github.com:acme/web.git" },
+    tracked: { cwd: "/repo", remoteName: "acme", remoteBranch: "feature" },
+    pullRef: null,
+    upstream: { cwd: "/repo", branch: "feature", remoteName: "acme", remoteBranch: "feature" },
+    transport: "remote.origin.url",
+  };
+  it.effect.each([
+    {
+      name: "from the upstream",
+      own: ["origin", "git@github.com:wout/web.git"],
+      ...fetchedFromAcme,
+    },
+    {
+      name: "from the upstream's pull ref once its head branch is gone",
+      own: ["origin", "git@github.com:wout/web.git"],
+      trackingFetchFails: true,
+      ...fetchedFromAcme,
+      pullRef: ["fetch", "--quiet", "--no-tags", "--", "acme", "refs/pull/7/head"],
+      upstream: null,
+    },
+    {
+      name: "over the transport of a fork remote not named origin",
+      own: ["wout", "git@github.com:wout/web.git"],
+      ...fetchedFromAcme,
+      transport: "remote.wout.url",
+    },
+    {
+      name: "from the upstream on an Enterprise host",
+      own: ["origin", "git@ghe.acme.test:wout/web.git"],
+      host: "ghe.acme.test",
+      ...fetchedFromAcme,
+      ensured: { ...fetchedFromAcme.ensured, url: "git@ghe.acme.test:acme/web.git" },
+    },
+    {
+      name: "onto a local branch that keeps the remote it already tracks",
+      own: ["origin", "git@github.com:wout/web.git"],
+      branchRemote: "origin",
+      ...fetchedFromAcme,
+      upstream: null,
+    },
+    {
+      name: "from an SSH alias of the pull request's own repository",
+      own: ["origin", "git@work:acme/web.git"],
+      ...fetchedFromAcme,
+      ensured: null,
+      tracked: { ...fetchedFromAcme.tracked, remoteName: "origin" },
+      upstream: { ...fetchedFromAcme.upstream, remoteName: "origin" },
+      transport: null,
+    },
+  ] as const)(
+    "checks out a pull request named by URL $name",
+    ({ own, host = "github.com", ensured, tracked, pullRef, upstream, transport, ...options }) => {
+      const { layer, git } = harness({
+        remotes: remotesOutput(own),
+        primaryRemote: own[0],
+        originUrls: `${own[1]}\n`,
+        ...("branchRemote" in options
+          ? { localBranches: ["feature"], branchRemote: options.branchRemote }
+          : {}),
+        trackingFetchFails: "trackingFetchFails" in options,
+        graphql: () => ({ pullRequest: node(7, "feature") }),
+        api: {
+          rest: (input) => {
+            const fullName = input.path.slice("repos/".length);
+            return Effect.succeed(
+              restResponse({
+                full_name: fullName,
+                html_url: `https://${input.host}/${fullName}`,
+                ssh_url: `git@${input.host}:${fullName}.git`,
+                default_branch: "main",
+              }),
+            );
+          },
+        },
+      });
+      return Effect.gen(function* () {
+        const gh = yield* GitHubSourceControlProvider.make;
+        yield* gh.checkoutChangeRequest({
+          cwd: "/repo",
+          reference: `https://${host}/acme/web/pull/7`,
+        });
+        const call = (name: string) => git.find((entry) => entry[0] === name)?.[1] ?? null;
+        const executed = (verb: string) =>
+          git.flatMap(([name, args]) =>
+            name === "execute" && Array.isArray(args) && args[0] === verb ? [args] : [],
+          )[0] ?? null;
+        assert.deepStrictEqual(
+          {
+            ensured: call("ensureRemote"),
+            tracked: call("fetchRemoteTrackingBranch"),
+            pullRef: executed("fetch"),
+            upstream: call("setBranchUpstream"),
+            transport: executed("config")?.[2] ?? null,
+          },
+          { ensured, tracked, pullRef, upstream, transport },
+        );
+      }).pipe(Effect.provide(layer));
+    },
+  );
 
   it.effect("keeps git's own output out of what a failed checkout reports", () => {
     const { layer } = harness({

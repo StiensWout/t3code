@@ -5787,6 +5787,177 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
     }),
   );
 
+  // A fork's checkout whose own remote is wout/web, with its own `feature/shared` branch and pull
+  // request #7, and acme/web's pull request #7 from acme's `feature/shared`.
+  const setUpUpstreamPullRequest = Effect.fnUntraced(function* (
+    own: { readonly name: string; readonly url: string },
+    headBranch: "kept" | "deleted" = "kept",
+  ) {
+    const repoDir = yield* makeTempDir("t3code-git-manager-");
+    yield* initRepo(repoDir);
+    const forkDir = yield* createBareRemote();
+    const upstreamDir = yield* createBareRemote();
+    const cloneUrls = {
+      url: "https://github.com/acme/web.git",
+      sshUrl: "git@github.com:acme/web.git",
+    };
+    yield* runGit(repoDir, ["remote", "add", own.name, own.url]);
+    yield* runGit(repoDir, ["config", `url.${forkDir}.insteadOf`, own.url]);
+    for (const url of Object.values(cloneUrls)) {
+      yield* runGit(repoDir, ["config", "--add", `url.${upstreamDir}.insteadOf`, url]);
+    }
+    const commit = Effect.fnUntraced(function* (file: string) {
+      NodeFS.writeFileSync(NodePath.join(repoDir, file), `${file}\n`);
+      yield* runGit(repoDir, ["add", file]);
+      yield* runGit(repoDir, ["commit", "-m", file]);
+      return (yield* runGit(repoDir, ["rev-parse", "HEAD"])).stdout.trim();
+    });
+    yield* runGit(repoDir, ["push", "-u", own.name, "main"]);
+    yield* runGit(repoDir, ["checkout", "-b", "feature/shared"]);
+    const forkHead = yield* commit("fork.txt");
+    yield* runGit(repoDir, ["push", "-u", own.name, "feature/shared", "HEAD:refs/pull/7/head"]);
+    yield* runGit(repoDir, ["checkout", "--detach", "main"]);
+    const pushUpstreamHead = Effect.fnUntraced(function* (file: string) {
+      const headSha = yield* commit(file);
+      yield* runGit(repoDir, [
+        "push",
+        upstreamDir,
+        "HEAD:refs/pull/7/head",
+        ...(headBranch === "kept" ? ["HEAD:refs/heads/feature/shared"] : []),
+      ]);
+      const { manager } = yield* makeManager({
+        providerScenario: {
+          pullRequest: {
+            number: 7,
+            title: "Upstream PR",
+            url: "https://github.com/acme/web/pull/7",
+            baseRefName: "main",
+            headRefName: "feature/shared",
+            state: "open",
+            isCrossRepository: false,
+            headRepositoryNameWithOwner: "acme/web",
+            headRepositoryOwnerLogin: "acme",
+            headSha,
+          },
+          repositoryCloneUrls: { "acme/web": cloneUrls },
+        },
+      });
+      return { manager, headSha };
+    });
+    const upstream = yield* pushUpstreamHead("upstream.txt");
+    yield* runGit(repoDir, ["checkout", "main"]);
+    const read = (cwd: string, args: ReadonlyArray<string>) =>
+      runGit(cwd, args, true).pipe(Effect.map((result) => result.stdout.trim()));
+    return { repoDir, forkHead, pushUpstreamHead, read, ...upstream };
+  });
+
+  it.effect.each([
+    {
+      own: { name: "origin", url: "https://github.com/wout/web.git" },
+      headBranch: "kept",
+      upstream: "acme/feature/shared",
+      upstreamUrl: "https://github.com/acme/web.git",
+    },
+    {
+      own: { name: "origin", url: "https://github.com/wout/web.git" },
+      headBranch: "deleted",
+      upstream: "",
+      upstreamUrl: "https://github.com/acme/web.git",
+    },
+    {
+      own: { name: "wout", url: "git@github.com:wout/web.git" },
+      headBranch: "kept",
+      upstream: "acme/feature/shared",
+      upstreamUrl: "git@github.com:acme/web.git",
+    },
+  ] as const)(
+    "prepares a worktree for an upstream pull request from a fork ($own.name, head branch $headBranch)",
+    ({ own, headBranch, upstream, upstreamUrl }) =>
+      Effect.gen(function* () {
+        const { repoDir, manager, headSha, forkHead, read } = yield* setUpUpstreamPullRequest(
+          own,
+          headBranch,
+        );
+
+        const result = yield* preparePullRequestThread(manager, {
+          cwd: repoDir,
+          reference: "https://github.com/acme/web/pull/7",
+          mode: "worktree",
+        });
+
+        const worktreePath = result.worktreePath as string;
+        expect({
+          branch: result.branch,
+          head: yield* read(worktreePath, ["rev-parse", "HEAD"]),
+          upstream: yield* read(worktreePath, ["rev-parse", "--abbrev-ref", "@{upstream}"]),
+          upstreamUrl: yield* read(repoDir, ["config", "remote.acme.url"]),
+          own: yield* read(repoDir, ["rev-parse", "feature/shared"]),
+          ownUpstream: yield* read(repoDir, [
+            "rev-parse",
+            "--abbrev-ref",
+            "feature/shared@{upstream}",
+          ]),
+        }).toEqual({
+          branch: "t3code/pr-7/feature/shared",
+          head: headSha,
+          upstream,
+          upstreamUrl,
+          own: forkHead,
+          ownUpstream: `${own.name}/feature/shared`,
+        });
+      }),
+  );
+
+  it.effect("refreshes a reused upstream pull request worktree from the upstream", () =>
+    Effect.gen(function* () {
+      const { repoDir, manager, pushUpstreamHead, read } = yield* setUpUpstreamPullRequest({
+        name: "origin",
+        url: "https://github.com/wout/web.git",
+      });
+      const input = {
+        cwd: repoDir,
+        reference: "https://github.com/acme/web/pull/7",
+        mode: "worktree",
+      } as const;
+      const first = yield* preparePullRequestThread(manager, input);
+      yield* runGit(repoDir, ["checkout", "--detach", "acme/feature/shared"]);
+      const updated = yield* pushUpstreamHead("update.txt");
+      yield* runGit(repoDir, ["checkout", "main"]);
+
+      const second = yield* preparePullRequestThread(updated.manager, input);
+
+      expect({
+        worktreePath: second.worktreePath,
+        isOnPullRequestHead: second.isOnPullRequestHead,
+        head: yield* read(first.worktreePath as string, ["rev-parse", "HEAD"]),
+      }).toEqual({
+        worktreePath: first.worktreePath,
+        isOnPullRequestHead: true,
+        head: updated.headSha,
+      });
+    }),
+  );
+
+  it.effect("local checkout of an upstream pull request keeps a namesake branch's tracking", () =>
+    Effect.gen(function* () {
+      const { repoDir, manager, read } = yield* setUpUpstreamPullRequest({
+        name: "origin",
+        url: "https://github.com/wout/web.git",
+      });
+
+      const result = yield* preparePullRequestThread(manager, {
+        cwd: repoDir,
+        reference: "https://github.com/acme/web/pull/7",
+        mode: "local",
+      });
+
+      expect(result.branch).toBe("feature/shared");
+      expect(yield* read(repoDir, ["rev-parse", "--abbrev-ref", "@{upstream}"])).toBe(
+        "origin/feature/shared",
+      );
+    }),
+  );
+
   it.effect.each([{ blocker: null }, { blocker: "t3code" }, { blocker: "t3code/pr-81" }])(
     "preserves fork upstream tracking when preparing a worktree PR thread (local branch $blocker)",
     ({ blocker }) =>

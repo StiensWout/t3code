@@ -8139,6 +8139,51 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         assert.equal(yield* git(cwd, ["remote"]), "octocat\norigin");
       }),
     );
+
+    it.effect("publishes to the fork after a checkout adds a remote to a repo without origin", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const fork = yield* makeTmpDir("git-remote-fork-");
+        const upstream = yield* makeTmpDir("git-remote-upstream-");
+        yield* initRepoWithCommit(cwd);
+        yield* git(cwd, ["branch", "-M", "trunk"]);
+        yield* git(fork, ["init", "--bare"]);
+        yield* git(upstream, ["init", "--bare"]);
+        yield* git(cwd, ["remote", "add", "wout", fork]);
+        yield* git(cwd, ["push", "-u", "wout", "trunk"]);
+        yield* git(cwd, ["symbolic-ref", "refs/remotes/wout/HEAD", "refs/remotes/wout/trunk"]);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+
+        // Git lists `acme` before `wout`.
+        const added = yield* driver.ensureRemote({
+          cwd,
+          preferredName: "acme",
+          url: upstream,
+          checkout: true,
+        });
+        const reused = yield* driver.ensureRemote({
+          cwd,
+          preferredName: "mine",
+          url: fork,
+          checkout: true,
+        });
+        assert.deepEqual([added, reused], ["acme", "wout"]);
+
+        assert.equal(yield* driver.resolvePrimaryRemoteName(cwd), "wout");
+        assert.equal((yield* driver.statusDetailsRemote(cwd)).defaultBranch, "trunk");
+
+        yield* git(cwd, ["checkout", "-b", "feature/unrelated"]);
+        yield* writeTextFile(cwd, "feature.txt", "feature\n");
+        yield* git(cwd, ["add", "-A"]);
+        yield* git(cwd, ["commit", "-m", "Add feature"]);
+        yield* driver.pushCurrentBranch(cwd, null);
+        assert.equal(
+          yield* git(cwd, ["rev-parse", "--abbrev-ref", "@{upstream}"]),
+          "wout/feature/unrelated",
+        );
+        assert.equal(yield* git(upstream, ["--git-dir=.", "for-each-ref"]), "");
+      }),
+    );
   });
 
   describe("commit context", () => {

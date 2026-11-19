@@ -63,6 +63,22 @@ it.layer(NodeServices.layer)("RepositoryIdentityResolverLive", (it) => {
     }).pipe(Effect.provide(RepositoryIdentityResolver.layer)),
   );
 
+  it.effect("skips a remote a checkout added to a repository without origin", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const cwd = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-repository-identity-test-",
+      });
+      yield* git(cwd, ["init"]);
+      yield* git(cwd, ["remote", "add", "acme", "git@github.com:acme/web.git"]);
+      yield* git(cwd, ["config", "remote.acme.t3-checkout", "true"]);
+      yield* git(cwd, ["remote", "add", "wout", "git@github.com:wout/web.git"]);
+
+      const resolver = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
+      expect((yield* resolver.resolve(cwd))?.canonicalKey).toBe("github.com/wout/web");
+    }).pipe(Effect.provide(RepositoryIdentityResolver.layer)),
+  );
+
   it.effect("identifies the host of an SSH remote that leaves its user to ssh config", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
