@@ -465,8 +465,9 @@ it.effect("lists a fork's upstream pull requests beside its own when its project
     assert.deepStrictEqual(
       both.entries
         .filter((entry) => entry.repository === "acme/web")
+        .map(({ projectId, upstream }) => ({ projectId: String(projectId), upstream }))
         .map((entry) => [entry.projectId, entry.upstream]),
-      [["home" as ProjectId, undefined]],
+      [["home", undefined]],
     );
   }),
 );
