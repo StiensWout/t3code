@@ -1,8 +1,9 @@
 import {
   type OrchestrationProjectShell,
-  ProjectId,
+  type ProjectId,
   SourceControlProviderKind,
 } from "@t3tools/contracts";
+import { forkUpstreamPolicy, type ForkUpstreamPolicy } from "@t3tools/shared/projectSettings";
 import * as Cache from "effect/Cache";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
@@ -17,12 +18,9 @@ import * as SourceControlProviderRegistry from "./SourceControlProviderRegistry.
 const PARENT_TTL = Duration.hours(1);
 const KEY_SEPARATOR = "\0";
 
-export interface ForkUpstreamPolicy {
-  readonly defaultEnabled: boolean;
-  readonly overrides: Readonly<Record<string, boolean>>;
-}
+export type { ForkUpstreamPolicy };
 
-export const disabledPolicy: ForkUpstreamPolicy = { defaultEnabled: false, overrides: {} };
+export const disabledPolicy = forkUpstreamPolicy(null);
 
 export function includesUpstream(policy: ForkUpstreamPolicy, projectId: ProjectId): boolean {
   const override = policy.overrides[projectId];
@@ -67,20 +65,7 @@ const make = Effect.gen(function* () {
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const providers = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
   const readPolicy = serverSettings.getSettings.pipe(
-    Effect.map((settings): ForkUpstreamPolicy => {
-      const defaultEnabled = settings.includeForkUpstream;
-      // The policy also keys listing caches, so equivalent settings must serialize identically.
-      const overrides = Object.keys(settings.projectSettingsOverrides)
-        .sort()
-        .flatMap((id) => {
-          const enabled =
-            settings.projectSettingsOverrides[ProjectId.make(id)]?.includeForkUpstream;
-          return enabled === undefined || enabled === defaultEnabled
-            ? []
-            : [[id, enabled] as const];
-        });
-      return { defaultEnabled, overrides: Object.fromEntries(overrides) };
-    }),
+    Effect.map(forkUpstreamPolicy),
     Effect.orElseSucceed(() => disabledPolicy),
     Effect.withSpan("ForkUpstream.readPolicy"),
   );

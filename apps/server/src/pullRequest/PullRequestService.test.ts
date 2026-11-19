@@ -594,7 +594,7 @@ it.effect("serves a cached upstream listing when the project catalog becomes una
   }),
 );
 
-it.effect("reports an upstream lookup failure beside the fork's pull requests", () =>
+it.effect("reports an upstream lookup failure on the head and still pages through the fork", () =>
   Effect.gen(function* () {
     const provider = SourceControlProviderKind.make("github");
     const fork = project({
@@ -617,11 +617,11 @@ it.effect("reports an upstream lookup failure beside the fork's pull requests", 
         ),
       providers: [
         fakePullRequestProvider(provider, {
-          listChangeRequests: () =>
+          listChangeRequests: ({ cursor }) =>
             Effect.succeed({
-              items: [changeRequest(1, "2026-07-02T00:00:00Z")],
-              truncated: false,
-              continues: false,
+              items: [changeRequest(cursor === undefined ? 1 : 2, "2026-07-02T00:00:00Z")],
+              truncated: cursor === undefined,
+              continues: true,
             }),
         }),
       ],
@@ -638,6 +638,51 @@ it.effect("reports an upstream lookup failure beside the fork's pull requests", 
         message: "The upstream of me/web could not be read. Repository metadata is unavailable.",
       },
     ]);
+    assert.isNotEmpty(listed.nextCursors);
+    const continued = yield* service.list({ state: "open", cursors: listed.nextCursors });
+    assert.deepStrictEqual(
+      continued.entries.map(({ number }) => number),
+      [2],
+    );
+    assert.deepStrictEqual(continued.errors, []);
+  }),
+);
+
+it.effect("keeps the cursor of a failed upstream repository beside a successful continuation", () =>
+  Effect.gen(function* () {
+    const provider = SourceControlProviderKind.make("github");
+    const service = yield* makeService({
+      settings: { ...DEFAULT_SERVER_SETTINGS, includeForkUpstream: true },
+      projects: [
+        project({ id: "fork", title: "fork", workspaceRoot: "/fork", repository: "me/web" }),
+      ],
+      getRepositoryParent: () => Effect.succeed("acme/web"),
+      providers: [
+        fakePullRequestProvider(provider, {
+          listChangeRequests: ({ repository, cursor }) =>
+            cursor !== undefined && repository === "acme/web"
+              ? Effect.fail(requestFailed)
+              : Effect.succeed({
+                  items: [changeRequest(cursor === undefined ? 1 : 2, "2026-07-02T00:00:00Z")],
+                  truncated: cursor === undefined,
+                  continues: true,
+                }),
+        }),
+      ],
+    });
+    const head = yield* service.list({ state: "open" });
+    const continued = yield* service.list({ state: "open", cursors: head.nextCursors });
+    assert.deepStrictEqual(
+      continued.entries.map(({ repository, number }) => [repository, number]),
+      [["me/web", 2]],
+    );
+    assert.deepStrictEqual(
+      continued.errors.map(({ message }) => message),
+      ["acme/web could not be read."],
+    );
+    const upstreamKey = "github.com acme/web";
+    assert.deepStrictEqual(Object.keys(continued.nextCursors), [upstreamKey]);
+    assert.strictEqual(continued.nextCursors[upstreamKey], head.nextCursors[upstreamKey]);
   }),
 );
 

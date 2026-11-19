@@ -16,8 +16,7 @@ import { environmentCatalog } from "../../connection/catalog";
 import { m } from "../../i18n/messages";
 import {
   composerPullRequests,
-  pullRequestListPagesFamily,
-  pullRequestListPagesKey,
+  pullRequestListPages,
   pullRequestListStatsFamily,
 } from "../../state/pull-requests";
 import {
@@ -46,10 +45,7 @@ function currentHead(read: Read, target: ListTarget) {
 }
 
 function currentPages(read: Read, target: ListTarget): PullRequestListPages | null {
-  return shownPullRequestListPages(
-    read(pullRequestListPagesFamily(pullRequestListPagesKey(target, read))),
-    currentHead(read, target),
-  );
+  return shownPullRequestListPages(read(pullRequestListPages(target)), currentHead(read, target));
 }
 
 const sourcesFamily = Atom.family((key: string) => {
@@ -77,12 +73,11 @@ const sourcesFamily = Atom.family((key: string) => {
 
 function continuationSource(read: Read, target: ListTarget) {
   const revision = read(composerPullRequests.listRevision(target.environmentId));
-  const key = pullRequestListPagesKey(target, read);
   const head = read(pullRequestHostAnswer(composerPullRequests.list(target)));
-  const pages = read(pullRequestListPagesFamily(key));
+  const pages = read(pullRequestListPages(target));
   // The query can hold the previous settings' head while the new listing is being read.
   if (!AsyncResult.isSuccess(head) || head.waiting || pages?.head !== head.value) return null;
-  return { revision, key, head, pages };
+  return { revision, head, pages };
 }
 
 function continuations(registry: AtomRegistry.AtomRegistry, targets: readonly ListTarget[]) {
@@ -114,25 +109,24 @@ async function loadNextPages(
       );
       if (signal.aborted) return;
       const current = continuationSource(read, target);
-      if (
-        current === null ||
-        source.key !== current.key ||
-        source.revision !== current.revision ||
-        source.head !== current.head
-      )
+      if (current === null || source.revision !== current.revision || source.head !== current.head)
         return;
       if (response._tag === "Failure") throw squashAtomCommandFailure(response);
-      if (response.value.errors.length)
-        throw new Error(response.value.errors.map((error) => error.message).join("\n"));
       const next = appendPullRequestListPage(current.pages, response.value, input);
-      registry.set(pullRequestListPagesFamily(current.key), next);
-      if (
+      const hasNextCursor = Object.keys(next.nextCursors).length > 0;
+      const stalled =
         input.cursors &&
-        Object.keys(next.nextCursors).length &&
         JSON.stringify(Object.entries(input.cursors).sort()) ===
-          JSON.stringify(Object.entries(next.nextCursors).sort())
-      )
-        throw new Error(m(msg("Couldn't advance the list. Try again.")));
+          JSON.stringify(Object.entries(next.nextCursors).sort());
+      const errors = response.value.errors;
+      const canAdvance = !errors.length || (hasNextCursor && !stalled);
+      if (canAdvance || response.value.entries.length)
+        registry.set(
+          pullRequestListPages(target),
+          canAdvance ? next : { ...current.pages, entries: next.entries, continued: true },
+        );
+      if (errors.length) throw new Error(errors.map((error) => error.message).join("\n"));
+      if (stalled) throw new Error(m(msg("Couldn't advance the list. Try again.")));
     }),
   );
   return requestErrors(responses);
@@ -145,8 +139,7 @@ async function refreshHeads(
 ) {
   const responses = await Promise.allSettled(
     targets.map(async (target) => {
-      const read = <A>(atom: Atom.Atom<A>) => registry.get(atom);
-      const key = pullRequestListPagesKey(target, read);
+      const pagesAtom = pullRequestListPages(target);
       await composerPullRequests.invalidate.run(registry, {
         environmentId: target.environmentId,
         input: {},
@@ -161,10 +154,9 @@ async function refreshHeads(
           reportFailure: false,
         },
       );
-      if (signal.aborted || key !== pullRequestListPagesKey(target, read)) return;
+      if (signal.aborted) return;
       if (response._tag === "Failure") throw squashAtomCommandFailure(response);
-      const pagesAtom = pullRequestListPagesFamily(key);
-      if (read(pagesAtom)?.head === response.value)
+      if (registry.get(pagesAtom)?.head === response.value)
         registry.set(pagesAtom, pullRequestListHead(null, response.value));
     }),
   );
@@ -332,9 +324,14 @@ export function usePullRequestList(targets: readonly ListTarget[]) {
   ) => {
     const target = targets.find((target) => target.environmentId === entry.environmentId);
     if (!target) return;
-    const read = <A>(atom: Atom.Atom<A>) => registry.get(atom);
-    const pagesAtom = pullRequestListPagesFamily(pullRequestListPagesKey(target, read));
-    const patched = patchPullRequestListEntry(read(pagesAtom), null, entry, patch, Date.now());
+    const pagesAtom = pullRequestListPages(target);
+    const patched = patchPullRequestListEntry(
+      registry.get(pagesAtom),
+      null,
+      entry,
+      patch,
+      Date.now(),
+    );
     if (patched) registry.set(pagesAtom, patched);
     registry.refresh(composerPullRequests.list(target));
   };

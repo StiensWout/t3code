@@ -20,27 +20,34 @@ import {
   type PullRequestStatsCache,
 } from "../features/pull-requests/pullRequestList";
 
-export const pullRequestListPagesKey = (
-  target: { readonly environmentId: EnvironmentId; readonly input: PullRequestListInput },
-  read: <A>(atom: Atom.Atom<A>) => A,
-) =>
-  JSON.stringify([
-    target.environmentId,
-    target.input,
-    read(serverEnvironment.forkUpstreamSettingsAtom(target.environmentId)),
-  ]);
-
 // Which listing each pages atom holds, so an action's reply can reach the pages past its head.
 const pullRequestListPagesTargets = new WeakMap<
   object,
   readonly [EnvironmentId, PullRequestListInput]
 >();
-/** The pages loaded past each listing's head, keyed by {@link pullRequestListPagesKey}. */
-export const pullRequestListPagesFamily = Atom.family((key: string) => {
-  const atom = Atom.make<PullRequestListPages | null>(null).pipe(Atom.setIdleTTL(5 * 60_000));
-  pullRequestListPagesTargets.set(atom, JSON.parse(key));
+const pullRequestListPagesFamily = Atom.family((key: string) => {
+  const target: readonly [EnvironmentId, PullRequestListInput] = JSON.parse(key);
+  const settings = serverEnvironment.forkUpstreamSettingsAtom(target[0]);
+  const atom = Atom.writable<PullRequestListPages | null, PullRequestListPages | null>(
+    (get) => {
+      get(settings);
+      return null;
+    },
+    (context, next) => context.setSelf(next),
+  ).pipe(
+    // Reset on policy changes even while the list is idle and the pages are retained.
+    Atom.setLazy(false),
+    Atom.setIdleTTL(5 * 60_000),
+  );
+  pullRequestListPagesTargets.set(atom, target);
   return atom;
 });
+
+/** The pages loaded past a listing's head. */
+export const pullRequestListPages = (target: {
+  readonly environmentId: EnvironmentId;
+  readonly input: PullRequestListInput;
+}) => pullRequestListPagesFamily(JSON.stringify([target.environmentId, target.input]));
 
 /** Diff stats each environment has answered so far, so rows keep them when they scroll away. */
 export const pullRequestListStatsFamily = Atom.family((_environmentId: string) =>
@@ -121,9 +128,8 @@ export const composerPullRequests = createPullRequestEnvironmentAtoms(connection
           composerPullRequests.listStats({ environmentId: target.environmentId, input }),
         );
       if (target.input.cursors === undefined)
-        registry.update(
-          pullRequestListPagesFamily(pullRequestListPagesKey(target, (atom) => registry.get(atom))),
-          (previous) => pullRequestListHead(previous, value),
+        registry.update(pullRequestListPages(target), (previous) =>
+          pullRequestListHead(previous, value),
         );
     }),
   listStats: (target, value, registry) =>

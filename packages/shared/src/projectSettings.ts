@@ -46,6 +46,26 @@ export function hasProjectSettingsOverrides(
   return false;
 }
 
+export interface ForkUpstreamPolicy {
+  readonly defaultEnabled: boolean;
+  readonly overrides: Readonly<Record<string, boolean>>;
+}
+
+/** Equivalent fork listing settings serialize identically for cache and refresh keys. */
+export function forkUpstreamPolicy(
+  settings: Pick<ServerSettings, "includeForkUpstream" | "projectSettingsOverrides"> | null,
+): ForkUpstreamPolicy {
+  const defaultEnabled = settings?.includeForkUpstream ?? false;
+  const overrides = Object.entries(settings?.projectSettingsOverrides ?? {})
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+    .flatMap(([id, { includeForkUpstream }]) =>
+      includeForkUpstream === undefined || includeForkUpstream === defaultEnabled
+        ? []
+        : [[id, includeForkUpstream] as const],
+    );
+  return { defaultEnabled, overrides: Object.fromEntries(overrides) };
+}
+
 /** Legacy aggregate fields apply only until folded into overrides, so stale values cannot undo later resets. */
 export interface LegacyProjectSettingsFields {
   readonly defaultModelSelection?: ModelSelection | null | undefined;

@@ -1,5 +1,7 @@
 import {
+  DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
+  ProjectId,
   ProviderDriverKind,
   ServerSelfUpdateError,
   ProviderInstanceId,
@@ -96,6 +98,40 @@ const TARGET = new PrimaryConnectionTarget({
   label: "Test environment",
   httpBaseUrl: "https://environment.example.test",
   wsBaseUrl: "wss://environment.example.test",
+});
+
+it("keeps the fork listing policy unchanged when a redundant project override is cleared", () => {
+  const projectId = ProjectId.make("project");
+  const settings = {
+    ...DEFAULT_SERVER_SETTINGS,
+    includeForkUpstream: true,
+    projectSettingsOverrides: { [projectId]: { includeForkUpstream: true } },
+  };
+  const config = Atom.make<ServerConfig>({ ...CONFIG, settings });
+  const runtime = Atom.runtime(
+    Layer.mergeAll(
+      Layer.effect(EnvironmentRegistry.EnvironmentRegistry, Effect.never),
+      Layer.effect(Persistence.EnvironmentCacheStore, Effect.never),
+    ),
+  );
+  const server = createServerEnvironmentAtoms(runtime, { initialConfigValueAtom: () => config });
+  const registry = AtomRegistry.make();
+  try {
+    const policy = server.forkUpstreamSettingsAtom(TARGET.environmentId);
+    const before = registry.get(policy);
+    registry.set(config, { ...CONFIG, settings: { ...settings, projectSettingsOverrides: {} } });
+    expect(registry.get(policy)).toBe(before);
+    registry.set(config, {
+      ...CONFIG,
+      settings: {
+        ...settings,
+        projectSettingsOverrides: { [projectId]: { includeForkUpstream: false } },
+      },
+    });
+    expect(registry.get(policy)).not.toBe(before);
+  } finally {
+    registry.dispose();
+  }
 });
 
 function session(client: WsRpcProtocolClient): RpcSession {

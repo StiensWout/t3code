@@ -1441,6 +1441,7 @@ export const make = Effect.gen(function* () {
       workspace,
       policy,
     );
+    const discoveryErrors = continuation === null ? upstreamErrors : [];
 
     const viewerResults = yield* resolveViewers(projects, viewerRoots);
     const viewers: Record<string, string> = {};
@@ -1480,28 +1481,30 @@ export const make = Effect.gen(function* () {
         ? projects
         : projects.filter(({ cursorKey }) => continuation.has(cursorKey));
     const readable = selected.filter(({ host }) => viewers[host] !== undefined);
-    const unreadable = selected
-      .filter(({ host }) => viewers[host] === undefined)
-      .map(({ project, repository }) => ({
+    const unreadable = selected.filter(({ host }) => viewers[host] === undefined);
+    const errors = [
+      ...discoveryErrors,
+      ...unreadable.map(({ project, repository }) => ({
         projectId: project.id,
         projectTitle: project.title,
         message: `${repository} could not be read.`,
-      }));
+      })),
+    ];
     if (readable.length === 0) {
       const listResult: PullRequestListResult = {
         viewers: viewers as PullRequestListResult["viewers"],
         providers,
         entries: [],
-        errors: [...upstreamErrors, ...unreadable],
+        errors,
         truncated: false,
         nextCursors: {},
       };
-      const errors = viewerResults.flatMap((result) =>
+      const viewerErrors = viewerResults.flatMap((result) =>
         result.error === null || !selected.some(({ host }) => host === result.host)
           ? []
           : [result.error],
       );
-      const blocking = errors.find(isProviderUnusable) ?? errors[0];
+      const blocking = viewerErrors.find(isProviderUnusable) ?? viewerErrors[0];
       if (blocking) {
         // Preserve failure/retry semantics while letting clients try another server for these hosts.
         const error = toPullRequestError("list")(blocking);
@@ -1736,8 +1739,15 @@ export const make = Effect.gen(function* () {
     const batches = (yield* Effect.all(reads, { concurrency: REPOSITORY_CONCURRENCY })).flat();
 
     const nextCursors: Record<string, string> = {};
+    // A retry resumes failed repositories from the same cursor while the others can advance.
+    for (const { cursorKey } of unreadable) {
+      const cursor = input.cursors?.[cursorKey];
+      if (cursor !== undefined) nextCursors[cursorKey] = cursor;
+    }
     for (const batch of batches) {
-      if (batch.nextCursor !== null) nextCursors[batch.key] = batch.nextCursor;
+      const cursor =
+        batch.nextCursor ?? (batch.errors.length ? input.cursors?.[batch.key] : undefined);
+      if (cursor !== undefined) nextCursors[batch.key] = cursor;
     }
     const entries = batches
       .flatMap((batch) => batch.entries)
@@ -1758,8 +1768,8 @@ export const make = Effect.gen(function* () {
       viewers: viewers as PullRequestListResult["viewers"],
       providers,
       entries,
-      errors: [...upstreamErrors, ...unreadable, ...batches.flatMap((batch) => batch.errors)],
-      truncated: batches.some((batch) => batch.truncated),
+      errors: [...errors, ...batches.flatMap((batch) => batch.errors)],
+      truncated: Object.keys(nextCursors).length > 0 || batches.some((batch) => batch.truncated),
       nextCursors,
     };
   });
