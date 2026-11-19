@@ -2,6 +2,7 @@ import { SourceControlProviderError, SourceControlProviderKind } from "@t3tools/
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as ServerConfig from "../config.ts";
+import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as ForkUpstream from "../sourceControl/forkUpstream.ts";
 import * as GitManager from "../git/GitManager.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
@@ -35,6 +36,7 @@ export const layer = Layer.merge(
 // Keep repository detection, branch selection and worktree creation on the real Git path.
 export const layerRealGit = GitWorkflow.layer.pipe(
   Layer.provide(GitManager.layer),
+  Layer.provide(RepositoryIdentityResolver.layer),
   Layer.provide(
     Layer.mergeAll(
       Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({

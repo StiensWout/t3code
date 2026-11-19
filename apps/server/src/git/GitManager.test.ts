@@ -22,7 +22,7 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as HostProcess from "@t3tools/shared/HostProcess";
-import { ChildProcessSpawner } from "effect/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { expect } from "vite-plus/test";
 import type {
   ChangeRequest,
@@ -69,6 +69,7 @@ import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as ForkUpstream from "../sourceControl/forkUpstream.ts";
 import * as GitManager from "./GitManager.ts";
 
@@ -638,6 +639,7 @@ function makeManager(input?: {
   setupScriptRunner?: ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"];
   gitConfigReads?: string[];
   gitCommands?: string[];
+  gitFetchConfig?: readonly string[];
   gitSpawnGate?: {
     readonly matches: (args: ReadonlyArray<string>) => boolean;
     readonly reached: Deferred.Deferred<void>;
@@ -661,7 +663,9 @@ function makeManager(input?: {
 
   const gitCommands = input?.gitCommands;
   const gitSpawnGate = input?.gitSpawnGate;
-  const watchesGitSpawns = gitCommands !== undefined || gitSpawnGate !== undefined;
+  const gitFetchConfig = input?.gitFetchConfig;
+  const watchesGitSpawns =
+    gitCommands !== undefined || gitSpawnGate !== undefined || gitFetchConfig !== undefined;
   const layerGitDriverSpawner = watchesGitSpawns
     ? Layer.effect(
         ChildProcessSpawner.ChildProcessSpawner,
@@ -675,6 +679,12 @@ function makeManager(input?: {
                 ? command.args.map(String)
                 : null;
             if (args !== null) gitCommands?.push(args.join(" "));
+            if (command._tag === "StandardCommand" && args?.[0] === "fetch" && gitFetchConfig) {
+              const config = gitFetchConfig.flatMap((entry) => ["-c", entry]);
+              return spawner.spawn(
+                ChildProcess.make(command.command, [...config, ...args], command.options),
+              );
+            }
             if (args === null || gitSpawnGate === undefined || !gitSpawnGate.matches(args)) {
               return spawner.spawn(command);
             }
@@ -740,6 +750,7 @@ function makeManager(input?: {
 
   const layerManager = Layer.mergeAll(
     Layer.succeed(TextGeneration.TextGeneration, textGeneration),
+    RepositoryIdentityResolver.layer,
     Layer.mock(ForkUpstream.ForkUpstream)({
       getParent: input?.getParent ?? (() => Effect.succeed(null)),
     }),
@@ -5449,6 +5460,89 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
         expect(error.message).toContain("cannot be checked out from this repository");
       }
     }),
+  );
+
+  it.effect.each(["unmarked", "upstream", "origin"])(
+    "prepares a PR from the selected checkout remote (%s)",
+    (mark) =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTempDir("t3code-primary-pr-");
+        yield* initRepo(cwd);
+        const fork = yield* createBareRemote();
+        const parent = yield* createBareRemote();
+        const forkUrl = "https://github.com/me/web.git";
+        const parentUrl = "https://github.com/acme/web.git";
+        yield* runGit(cwd, ["remote", "add", "origin", forkUrl]);
+        yield* runGit(cwd, ["remote", "add", "upstream", parentUrl]);
+        if (mark !== "unmarked")
+          yield* runGit(cwd, ["config", `remote.${mark}.gh-resolved`, "base"]);
+
+        yield* runGit(cwd, ["checkout", "-b", "feature/pr"]);
+        const forkHead = (yield* runGit(cwd, ["rev-parse", "HEAD"])).stdout.trim();
+        yield* runGit(cwd, ["push", fork, "HEAD:refs/pull/42/head", "HEAD:refs/heads/feature/pr"]);
+        yield* runGit(cwd, ["commit", "--allow-empty", "-m", "Parent PR"]);
+        const parentHead = (yield* runGit(cwd, ["rev-parse", "HEAD"])).stdout.trim();
+        yield* runGit(cwd, [
+          "push",
+          parent,
+          "HEAD:refs/pull/42/head",
+          "HEAD:refs/heads/feature/pr",
+        ]);
+        yield* runGit(cwd, ["checkout", "main"]);
+
+        const reference =
+          mark === "origin"
+            ? "https://github.com/me/web/pull/42"
+            : "https://github.com/acme/web/pull/42";
+        const headSha = mark === "origin" ? forkHead : parentHead;
+        const { manager } = yield* makeManager({
+          // Keep the hosted URLs visible to repository discovery while Git fetches local fixtures.
+          gitFetchConfig: [
+            `url.${fork}.insteadOf=${forkUrl}`,
+            `url.${parent}.insteadOf=${parentUrl}`,
+          ],
+          getParent: ({ repository }) =>
+            Effect.succeed(repository === "me/web" ? "acme/web" : null),
+          providerScenario: {
+            pullRequest: {
+              number: 42,
+              title: "Pull request",
+              url: reference,
+              baseRefName: "main",
+              headRefName: "feature/pr",
+              headSha,
+            },
+          },
+        });
+        if (mark === "origin") {
+          const error = yield* manager
+            .preparePullRequestThread({
+              cwd,
+              mode: "local",
+              reference: "https://github.com/acme/web/pull/42",
+            })
+            .pipe(Effect.flip);
+          expect(error.message).toContain("cannot be checked out from this repository");
+        }
+        yield* runGit(cwd, ["branch", "-f", "feature/pr", headSha]);
+        const local = yield* manager.preparePullRequestThread({ cwd, mode: "local", reference });
+        expect(local).toMatchObject({ branch: "feature/pr", isOnPullRequestHead: true });
+        yield* runGit(cwd, ["checkout", "main"]);
+        yield* runGit(cwd, ["branch", "-D", "feature/pr"]);
+        if (mark !== "origin") {
+          // An existing fork checkout must never supply the same numbered ref for the parent.
+          yield* runGit(cwd, ["branch", "feature/pr", forkHead]);
+        }
+        const worktree = yield* manager.preparePullRequestThread({
+          cwd,
+          mode: "worktree",
+          reference,
+        });
+        expect(worktree.isOnPullRequestHead).toBe(true);
+        expect((yield* runGit(worktree.worktreePath!, ["rev-parse", "HEAD"])).stdout.trim()).toBe(
+          headSha,
+        );
+      }),
   );
 
   it.effect.each([false, true])(

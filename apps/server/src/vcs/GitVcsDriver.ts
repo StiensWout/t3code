@@ -216,7 +216,8 @@ export interface GitRenameBranchResult {
 
 export interface GitFetchRefInput {
   cwd: string;
-  /** A ref on the primary remote, such as a host's change request head ref. */
+  remoteName?: string | undefined;
+  /** A ref on the given remote, defaulting to the primary remote. */
   ref: string;
 }
 
@@ -401,7 +402,7 @@ export class GitVcsDriver extends Context.Service<
     ) => Effect.Effect<VcsCreateWorktreeResult, GitCommandError>;
     /** Deletes the macOS worktree checkout cache in the background. */
     readonly clearWorktreeCheckoutCache: Effect.Effect<void>;
-    /** Force-updates local `branch` to the primary remote's `ref`. */
+    /** Force-updates local `branch` to the remote's `ref`. */
     readonly fetchRefIntoBranch: (
       input: GitFetchRefInput & { readonly branch: string },
     ) => Effect.Effect<void, GitCommandError>;

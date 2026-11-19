@@ -38,6 +38,7 @@ import {
   ModelSelection,
   type OrchestrationV2TurnItem,
   type ProjectId,
+  type RepositoryIdentity,
   SourceControlProviderError,
   type SourceControlWritingStyleSettings,
   type ThreadId,
@@ -51,7 +52,6 @@ import {
 } from "@t3tools/shared/projectSettings";
 import {
   mergeGitStatusParts,
-  parseGitRemoteRepository,
   resolveAutoFeatureBranchName,
   sanitizeBranchFragment,
   sanitizeFeatureBranchName,
@@ -94,6 +94,7 @@ import { isNonRepositoryGitStderr } from "../vcs/GitVcsDriverCore.ts";
 import * as SourceControlProvider from "@t3tools/source-control-core/server/SourceControlProvider";
 import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
+import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as ForkUpstream from "../sourceControl/forkUpstream.ts";
 import { pullRequestCheckoutAllowed } from "./pullRequestCheckout.ts";
 import type { ChangeRequest } from "@t3tools/contracts";
@@ -773,6 +774,7 @@ export const make = Effect.gen(function* () {
   const serverSettingsService = yield* ServerSettings.ServerSettingsService;
   const pullRequests = yield* PullRequestService.PullRequestService;
   const forkUpstream = yield* ForkUpstream.ForkUpstream;
+  const repositoryIdentities = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
   const threads = yield* ProjectionStore.ProjectionStoreV2;
   const projects = yield* ProjectStore.ProjectStoreV2;
   const projectSettingsFor = Effect.fnUntraced(function* (input: {
@@ -1018,11 +1020,12 @@ export const make = Effect.gen(function* () {
     function* (
       cwd: string,
       pullRequest: ResolvedPullRequest & PullRequestHeadRemoteInfo,
-      localBranch = pullRequest.headBranch,
+      localBranch: string,
+      baseRemoteName: string | undefined,
     ) {
       const repositoryNameWithOwner = resolveHeadRepositoryNameWithOwner(pullRequest) ?? "";
       if (repositoryNameWithOwner.length === 0 && pullRequest.isCrossRepository !== true) {
-        const remoteName = yield* gitCore.resolvePrimaryRemoteName(cwd);
+        const remoteName = baseRemoteName ?? (yield* gitCore.resolvePrimaryRemoteName(cwd));
         yield* gitCore.fetchRemoteTrackingBranch({
           cwd,
           remoteName,
@@ -1075,9 +1078,10 @@ export const make = Effect.gen(function* () {
   const configurePullRequestHeadUpstream = (
     cwd: string,
     pullRequest: ResolvedPullRequest & PullRequestHeadRemoteInfo,
-    localBranch = pullRequest.headBranch,
+    localBranch: string,
+    baseRemoteName: string | undefined,
   ) =>
-    configurePullRequestHeadUpstreamBase(cwd, pullRequest, localBranch).pipe(
+    configurePullRequestHeadUpstreamBase(cwd, pullRequest, localBranch, baseRemoteName).pipe(
       Effect.catch((error) =>
         Effect.logWarning("GitManager.configurePullRequestHeadUpstream failed", {
           cwd,
@@ -1107,9 +1111,9 @@ export const make = Effect.gen(function* () {
   });
 
   const fetchChangeRequestHeadIntoBranch = Effect.fn("GitManager.fetchChangeRequestHeadIntoBranch")(
-    function* (cwd: string, number: number, branch: string) {
+    function* (cwd: string, number: number, branch: string, remoteName?: string) {
       const ref = yield* changeRequestHeadRef(cwd, number);
-      yield* gitCore.fetchRefIntoBranch({ cwd, ref, branch });
+      yield* gitCore.fetchRefIntoBranch({ cwd, ref, branch, remoteName });
     },
   );
 
@@ -1117,20 +1121,27 @@ export const make = Effect.gen(function* () {
     function* (
       cwd: string,
       pullRequest: ResolvedPullRequest & PullRequestHeadRemoteInfo,
-      localBranch = pullRequest.headBranch,
+      localBranch: string,
+      baseRemoteName: string | undefined,
     ) {
       const repositoryNameWithOwner = resolveHeadRepositoryNameWithOwner(pullRequest) ?? "";
 
       if (repositoryNameWithOwner.length === 0) {
-        yield* fetchChangeRequestHeadIntoBranch(cwd, pullRequest.number, localBranch).pipe(
-          // Fall back to a branch fetch only for an open PR in the primary remote's repository.
+        yield* fetchChangeRequestHeadIntoBranch(
+          cwd,
+          pullRequest.number,
+          localBranch,
+          baseRemoteName,
+        ).pipe(
+          // Fall back to a branch fetch only for an open PR in the selected remote's repository.
           // A host can resolve a PR number from another repository, so verify the repository first.
           // Closed PR branches may have moved past the head recorded at closure.
           Effect.catch((cause) =>
             pullRequest.isCrossRepository === true || pullRequest.state !== "open"
               ? Effect.fail(cause)
               : Effect.gen(function* () {
-                  const remoteName = yield* gitCore.resolvePrimaryRemoteName(cwd);
+                  const remoteName =
+                    baseRemoteName ?? (yield* gitCore.resolvePrimaryRemoteName(cwd));
                   const remoteUrl = yield* readRemoteUrl(cwd, remoteName);
                   const pullRequestKey = pullRequestRepositoryKey(pullRequest.url);
                   if (
@@ -1190,11 +1201,12 @@ export const make = Effect.gen(function* () {
   const materializePullRequestHeadBranch = (
     cwd: string,
     pullRequest: ResolvedPullRequest & PullRequestHeadRemoteInfo,
-    localBranch = pullRequest.headBranch,
+    localBranch: string,
+    baseRemoteName: string | undefined,
   ) =>
-    materializePullRequestHeadBranchBase(cwd, pullRequest, localBranch).pipe(
+    materializePullRequestHeadBranchBase(cwd, pullRequest, localBranch, baseRemoteName).pipe(
       Effect.catch((primaryCause) =>
-        fetchChangeRequestHeadIntoBranch(cwd, pullRequest.number, localBranch).pipe(
+        fetchChangeRequestHeadIntoBranch(cwd, pullRequest.number, localBranch, baseRemoteName).pipe(
           Effect.mapError(
             (fallbackCause) =>
               new GitPullRequestMaterializationError({
@@ -3152,43 +3164,18 @@ export const make = Effect.gen(function* () {
         );
 
   const ensurePullRequestCheckoutAllowed = Effect.fn("GitManager.ensurePullRequestCheckoutAllowed")(
-    function* (
-      cwd: string,
-      reference: string,
-      provider: SourceControlProvider.SourceControlProvider["Service"],
-    ) {
-      if (provider.kind !== "github") return;
+    function* (cwd: string, reference: string, identity: RepositoryIdentity | null) {
       const target = sourceControlDefinitions.parseChangeRequestUrl(reference);
-      if (target?.definition.kind !== "github") return;
-      const remoteName = yield* gitCore
-        .resolvePrimaryRemoteName(cwd)
-        .pipe(Effect.orElseSucceed(() => null));
-      if (remoteName === null) return;
-      const remoteUrl = yield* readRemoteUrl(cwd, remoteName);
-      if (remoteUrl === null) return;
-      const repository = parseGitRemoteRepository(remoteUrl);
-      const recognized = sourceControlDefinitions.recognizeRemote(remoteUrl);
-      if (repository === null || recognized === null) return;
-      const context = { remoteName, remoteUrl, provider: { ...recognized, kind: provider.kind } };
-      const webHost = yield* (
-        provider
-          .resolveRemoteWebHost?.({
-            cwd,
-            context,
-            resolveContext: (input) =>
-              sourceControlProviders
-                .resolveHandle(input)
-                .pipe(Effect.map((handle) => handle.context)),
-          })
-          .pipe(Effect.orElseSucceed(() => null)) ?? Effect.succeed(null)
-      );
+      if (identity?.provider !== "github" || target?.definition.kind !== "github") return;
+      const repository = sourceControlDefinitions.repositorySelector(identity);
+      if (repository === null) return;
       const allowed = yield* pullRequestCheckoutAllowed(
         forkUpstream.getParent,
         {
           cwd,
-          kind: provider.kind,
-          host: webHost ?? repository.host,
-          repository: repository.path,
+          kind: identity.provider,
+          host: sourceControlDefinitions.changeRequestHost(identity, identity.provider),
+          repository,
         },
         { ...target.link, host: target.link.authority ?? target.link.host },
       );
@@ -3230,16 +3217,30 @@ export const make = Effect.gen(function* () {
       const normalizedReference = normalizePullRequestReference(input.reference);
       const rootWorktreePath = yield* canonicalizeExistingPath(input.cwd);
       const provider = yield* sourceControlProvider(input.cwd);
-      yield* ensurePullRequestCheckoutAllowed(input.cwd, normalizedReference, provider);
+      const identity =
+        provider.kind === "github"
+          ? yield* repositoryIdentities.resolve(input.cwd, { refresh: true })
+          : null;
+      yield* ensurePullRequestCheckoutAllowed(input.cwd, normalizedReference, identity);
       const pullRequestSummary = yield* provider.getChangeRequest({
         cwd: input.cwd,
         reference: normalizedReference,
       });
       const pullRequest = toResolvedPullRequest(pullRequestSummary);
+      if (pullRequest.url !== normalizedReference) {
+        yield* ensurePullRequestCheckoutAllowed(input.cwd, pullRequest.url, identity);
+      }
+      const parsed = sourceControlDefinitions.parseChangeRequestUrl(pullRequest.url);
+      const baseRemoteName =
+        identity &&
+        parsed?.definition.kind === "github" &&
+        parsed.definition.isChangeRequestInRepository(identity, parsed.link)
+          ? identity.locator.remoteName
+          : undefined;
 
       if (input.mode === "local") {
         yield* ensureNoTrackedChanges(input.cwd, pullRequest.number);
-        yield* (yield* sourceControlProvider(input.cwd)).checkoutChangeRequest({
+        yield* provider.checkoutChangeRequest({
           cwd: input.cwd,
           reference: normalizedReference,
         });
@@ -3252,6 +3253,7 @@ export const make = Effect.gen(function* () {
             ...toPullRequestHeadRemoteInfo(pullRequestSummary),
           },
           branch,
+          baseRemoteName,
         );
         return {
           pullRequest,
@@ -3272,6 +3274,7 @@ export const make = Effect.gen(function* () {
             ...toPullRequestHeadRemoteInfo(pullRequestSummary),
           },
           details.branch ?? pullRequest.headBranch,
+          baseRemoteName,
         );
       });
 
@@ -3326,7 +3329,9 @@ export const make = Effect.gen(function* () {
         // from `origin/main` whose head branch has since been deleted still resolves — and
         // following it would move the checkout onto main and call that the pull request.
         const refreshed = yield* changeRequestHeadRef(worktreePath, pullRequest.number).pipe(
-          Effect.flatMap((ref) => gitCore.fetchRefCommit({ cwd: worktreePath, ref })),
+          Effect.flatMap((ref) =>
+            gitCore.fetchRefCommit({ cwd: worktreePath, ref, remoteName: baseRemoteName }),
+          ),
           // A host that publishes no head ref leaves the remote-tracking branch,
           // taken only where it is the head branch's own rather than whatever the checkout
           // happened to be cut from.
@@ -3427,9 +3432,10 @@ export const make = Effect.gen(function* () {
           cwd,
           pullRequestWithRemoteInfo,
           localPullRequestBranch,
+          baseRemoteName,
         );
         const target = yield* changeRequestHeadRef(cwd, pullRequest.number).pipe(
-          Effect.flatMap((ref) => gitCore.fetchRefCommit({ cwd, ref })),
+          Effect.flatMap((ref) => gitCore.fetchRefCommit({ cwd, ref, remoteName: baseRemoteName })),
           Effect.filterOrFail(
             (resolved) =>
               pullRequestSummary.headSha === undefined ||
@@ -3562,6 +3568,7 @@ export const make = Effect.gen(function* () {
         input.cwd,
         pullRequestWithRemoteInfo,
         localPullRequestBranch,
+        baseRemoteName,
       );
 
       const existingBranchAfterFetch = yield* findLocalHeadBranch(input.cwd);

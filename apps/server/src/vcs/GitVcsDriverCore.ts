@@ -5621,7 +5621,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const fetchRefIntoBranch: GitVcsDriver.GitVcsDriver["Service"]["fetchRefIntoBranch"] = Effect.fn(
     "GitVcsDriver.fetchRefIntoBranch",
   )(function* (input) {
-    const remoteName = yield* resolvePrimaryRemoteName(input.cwd);
+    const remoteName = input.remoteName ?? (yield* resolvePrimaryRemoteName(input.cwd));
     yield* executeGit(
       "GitVcsDriver.fetchRefIntoBranch",
       input.cwd,
@@ -5654,7 +5654,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const fetchRefCommit: GitVcsDriver.GitVcsDriver["Service"]["fetchRefCommit"] = Effect.fn(
     "GitVcsDriver.fetchRefCommit",
   )(function* (input) {
-    const remoteName = yield* resolvePrimaryRemoteName(input.cwd);
+    const remoteName = input.remoteName ?? (yield* resolvePrimaryRemoteName(input.cwd));
     // No refspec destination: the ref lands in FETCH_HEAD (per worktree) instead of a branch,
     // which is the only way to read it while that branch is checked out somewhere.
     yield* executeGit(
