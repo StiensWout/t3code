@@ -36,7 +36,7 @@ export class ForkUpstream extends Context.Service<
     ) => Effect.Effect<ForkUpstreamPolicy, E>;
     readonly findParent: (input: ParentLookupInput) => Effect.Effect<string | null>;
   }
->()("t3/sourceControl/ForkUpstream") {}
+>()("t3/sourceControl/forkUpstream") {}
 
 const make = Effect.gen(function* () {
   const serverSettings = yield* ServerSettings.ServerSettingsService;
