@@ -109,7 +109,7 @@ function setup(threadName: string, initial: Omit<Shell, "environmentId" | "id"> 
       serverTime = value;
     },
     mount: () => registry.mount(tracker(ref)),
-    pick: () => registry.set(threadSearchPickAtom(ref), " Needle "),
+    pick: (query = " Needle ") => registry.set(threadSearchPickAtom(ref), query),
     setOnline: (value: boolean) => {
       online = value;
     },
@@ -281,38 +281,48 @@ it.each(["unread", "already read"] as const)(
 );
 
 it.each([
-  ["accepted", "before"],
-  ["accepted", "after"],
-  ["rejected", "before"],
-  ["rejected", "after"],
+  ["accepted", "before", null],
+  ["accepted", "after", null],
+  ["rejected", "before", null],
+  ["rejected", "after", null],
+  ["rejected", "after", "newer"],
 ] as const)(
-  "dedupes a reopen when the in-flight open is %s %s remount",
-  async (outcome, settlement) => {
+  "records the palette pick when the in-flight open is %s %s remount (new pick %s)",
+  async (outcome, settlement, newerPick) => {
     const accepted = outcome === "accepted";
-    using t = setup(`thread-left-in-flight-${outcome}-${settlement}`, {
+    using t = setup(`thread-left-in-flight-${outcome}-${settlement}-${newerPick}`, {
       updatedAt: at(10),
       lastVisitedAt: at(10),
       latestRun: null,
     });
     t.setOnline(accepted);
     const settle = t.deferNextVisit();
+    t.pick();
     const unmount = t.mount();
-    unmount();
-    await vi.advanceTimersByTimeAsync(1_000);
     if (settlement === "before") {
       settle(accepted);
       await vi.advanceTimersByTimeAsync(0);
     }
+    unmount();
+    await vi.advanceTimersByTimeAsync(1_000);
 
     t.setOnline(true);
     t.reconnect();
+    if (newerPick !== null) t.pick(newerPick);
     t.mount();
     expect(t.attempts).toHaveLength(!accepted && settlement === "before" ? 2 : 1);
     if (settlement === "after") settle(accepted);
     await vi.advanceTimersByTimeAsync(VISIT_DISPATCH_THROTTLE_MS);
 
     expect(t.attempts).toHaveLength(accepted ? 1 : 2);
-    expect(t.visits).toEqual([{ threadId: t.ref.threadId, visitedAt: at(10), opened: true }]);
+    expect(t.visits).toEqual([
+      {
+        threadId: t.ref.threadId,
+        visitedAt: at(10),
+        opened: true,
+        searchQuery: newerPick ?? "needle",
+      },
+    ]);
   },
 );
 

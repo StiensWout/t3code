@@ -63,7 +63,7 @@ interface VisitAttempt {
 interface OpenIntent {
   readonly claim: number | null;
   readonly commandId: CommandId;
-  readonly searchQuery: string | null;
+  readonly pick: string | null;
 }
 
 type PendingOpen =
@@ -98,6 +98,17 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
       const releaseOpen = (claim: number | null) => {
         if (claim !== null) releaseThreadOpen(ref.environmentId, ref.threadId, claim);
       };
+      const abandonOpen = (intent: OpenIntent) => {
+        releaseOpen(intent.claim);
+        // Restore the pick only while its slot still exists and no newer pick is waiting.
+        if (
+          intent.pick !== null &&
+          registry.getNodes().has(pickAtom) &&
+          registry.get(pickAtom) === null
+        ) {
+          registry.set(pickAtom, intent.pick);
+        }
+      };
       const claim = claimOpen(openedAt);
       let open: PendingOpen | null = claim === null ? null : { status: "pending", claim };
       let lastVisit: VisitAttempt | null = null;
@@ -114,10 +125,11 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
         active = false;
         clearTimer();
         if (open?.status === "pending") releaseOpen(open.claim);
-        if (open?.status === "failed") releaseOpen(open.intent.claim);
+        if (open?.status === "failed") abandonOpen(open.intent);
       });
 
       const visit = (session: object, visitedAt: string, intent?: OpenIntent) => {
+        const searchQuery = intent?.pick ? pickedQuery(intent.pick) : null;
         const attempt: VisitAttempt = {
           at: Date.now(),
           session,
@@ -141,7 +153,7 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
               threadId: ref.threadId,
               visitedAt,
               ...(intent ? { opened: true, commandId: intent.commandId } : {}),
-              ...(intent?.searchQuery ? { searchQuery: intent.searchQuery } : {}),
+              ...(searchQuery ? { searchQuery } : {}),
             },
           },
           { reportFailure: false },
@@ -155,11 +167,9 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
       const sendOpen = (session: object, visitedAt: string, intent: OpenIntent) => {
         open = null;
         inFlightOpen = visit(session, visitedAt, intent).then((accepted) => {
+          if (!active && !accepted) abandonOpen(intent);
           inFlightOpen = null;
-          if (!active) {
-            if (!accepted) releaseOpen(intent.claim);
-            return;
-          }
+          if (!active) return;
           if (!accepted) open = { status: "failed", intent, session, visitedAt };
           update(registry.get(inputsAtom));
         });
@@ -190,7 +200,7 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
           sendOpen(session, visitedAt, {
             claim,
             commandId: options.newCommandId(),
-            searchQuery: pick === null ? null : pickedQuery(pick),
+            pick,
           });
         }
         if (pick !== null) registry.set(pickAtom, null);
