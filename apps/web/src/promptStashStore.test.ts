@@ -49,6 +49,54 @@ function resetPromptStashStore() {
   removeLocalStorageItem(PROMPT_STASH_STORAGE_KEY);
 }
 
+async function withStashStorageEvents(
+  run: (fixture: {
+    store: typeof usePromptStashStore;
+    write: (entries: ReadonlyArray<PromptStashEntry>) => string;
+    remove: () => void;
+    notify: (event?: Partial<StorageEvent>) => void;
+    failRead: () => void;
+    corrupt: () => void;
+  }) => void,
+) {
+  const storage = createMemoryStorage();
+  const read = vi.fn(storage.getItem);
+  const localStorage = { ...storage, getItem: read };
+  const window = Object.assign(new EventTarget(), { sessionStorage: createMemoryStorage() });
+  vi.stubGlobal("localStorage", localStorage);
+  vi.stubGlobal("window", window);
+  vi.resetModules();
+  try {
+    const { usePromptStashStore: store } = await import("./promptStashStore");
+    run({
+      store,
+      write: (entries) => {
+        const raw = JSON.stringify({ version: 2, state: { entries } });
+        storage.setItem(PROMPT_STASH_STORAGE_KEY, raw);
+        return raw;
+      },
+      remove: () => storage.removeItem(PROMPT_STASH_STORAGE_KEY),
+      notify: (event) => {
+        window.dispatchEvent(
+          Object.assign(new Event("storage"), {
+            key: PROMPT_STASH_STORAGE_KEY,
+            storageArea: localStorage,
+            ...event,
+          }),
+        );
+      },
+      failRead: () =>
+        read.mockImplementationOnce(() => {
+          throw new Error("Storage unavailable");
+        }),
+      corrupt: () => storage.setItem(PROMPT_STASH_STORAGE_KEY, "{"),
+    });
+  } finally {
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  }
+}
+
 describe("partitionStashAttachments", () => {
   it("keeps attachments within the budget and reports dropped names in order", () => {
     const small = {
@@ -290,6 +338,69 @@ describe("promptStashStore", () => {
       vi.unstubAllGlobals();
       vi.resetModules();
     }
+  });
+
+  it("drops a removed prompt without losing a surviving prompt's local image encoding", async () => {
+    await withStashStorageEvents(({ store, write, notify }) => {
+      const pending = { ...makeEntry({ id: "pending", prompt: "Draft" }), pendingImageCount: 1 };
+      store.getState().stashEntry(pending);
+      store.getState().stashEntry(makeEntry({ id: "removed", prompt: "Draft" }));
+
+      write([pending]);
+      notify();
+
+      expect(store.getState().entries).toEqual([pending]);
+    });
+  });
+
+  it.each([
+    ["the stash key", PROMPT_STASH_STORAGE_KEY],
+    ["all local storage", null],
+  ])("empties the stash when another tab clears %s", async (_label, key) => {
+    await withStashStorageEvents(({ store, remove, notify }) => {
+      store.getState().stashEntry(makeEntry({ id: "removed" }));
+
+      remove();
+      notify({ key });
+
+      expect(store.getState().entries).toEqual([]);
+    });
+  });
+
+  it("reads the latest stash after a delayed event and ignores unrelated storage events", async () => {
+    await withStashStorageEvents(({ store, write, notify }) => {
+      const original = makeEntry({ id: "original" });
+      store.getState().stashEntry(original);
+      const older = write([makeEntry({ id: "older" })]);
+      const latest = makeEntry({ id: "latest" });
+      write([latest]);
+
+      notify({ key: `${PROMPT_STASH_STORAGE_KEY}-unrelated` });
+      expect(store.getState().entries).toEqual([original]);
+      notify({ storageArea: window.sessionStorage });
+      expect(store.getState().entries).toEqual([original]);
+      notify({ newValue: older });
+      expect(store.getState().entries).toEqual([latest]);
+    });
+  });
+
+  it("keeps the visible stash through invalid or unavailable storage and picks up the next write", async () => {
+    await withStashStorageEvents(({ store, write, notify, failRead, corrupt }) => {
+      const original = makeEntry({ id: "original" });
+      store.getState().stashEntry(original);
+      corrupt();
+      notify();
+      expect(store.getState().entries).toEqual([original]);
+
+      const latest = makeEntry({ id: "latest" });
+      write([latest]);
+      failRead();
+      notify();
+      expect(store.getState().entries).toEqual([original]);
+
+      notify();
+      expect(store.getState().entries).toEqual([latest]);
+    });
   });
 
   it.each(["restore", "take"] as const)(
