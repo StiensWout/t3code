@@ -67,14 +67,16 @@ describe("pull request checkout commands", () => {
   it("quotes shell metacharacters in Forgejo repository URLs", () => {
     expect(
       pullRequestCheckoutCommand(
-        SourceControlProviderKind.make("forgejo"),
-        42,
-        "feature",
-        null,
-        "https://forgejo.local/maria/repo'$(echo nope)",
+        {
+          provider: SourceControlProviderKind.make("forgejo"),
+          number: 42,
+          headBranch: "feature",
+          url: "https://forgejo.local/maria/repo'$(echo nope)/pulls/42",
+        },
+        undefined,
       ),
     ).toBe(
-      "git fetch 'https://forgejo.local/maria/repo'\\''$(echo nope)' refs/pull/42/head && git checkout -B pulls/42 FETCH_HEAD",
+      "git fetch 'https://forgejo.local/maria/repo'\\''$(echo%20nope)' refs/pull/42/head && git checkout -B pulls/42 FETCH_HEAD",
     );
   });
 
@@ -89,7 +91,7 @@ describe("pull request checkout commands", () => {
     locator: {
       source: "git-remote",
       remoteName: "origin",
-      remoteUrl: "git@github.com:acme/web.git",
+      remoteUrl: `https://${canonicalKey}.git`,
     },
     provider: SourceControlProviderKind.make(provider),
   });
@@ -97,7 +99,7 @@ describe("pull request checkout commands", () => {
   it("uses a matching enterprise identity and rejects an explicit host mismatch", () => {
     const enterprise = identity("github", "github.example.test/acme/web");
     expect(loadingPullRequestCheckoutCommand(reference("github.example.test"), enterprise)).toBe(
-      "gh pr checkout 42",
+      "gh pr checkout 42 --repo github.example.test/acme/web",
     );
     expect(loadingPullRequestCheckoutCommand(reference("github.com"), enterprise)).toBeNull();
   });
@@ -113,19 +115,26 @@ describe("pull request checkout commands", () => {
     };
     expect(
       loadingPullRequestCheckoutCommand(reference("github.example.test:8443"), enterprise),
-    ).toBe("gh pr checkout 42");
+    ).toBe("gh pr checkout 42 --repo github.example.test:8443/acme/web");
     expect(
       loadingPullRequestCheckoutCommand(reference("github.example.test:9443"), enterprise),
     ).toBeNull();
   });
 
-  it("withholds the number-only checkout command for another repository on the same host", () => {
-    expect(
-      loadingPullRequestCheckoutCommand(
-        reference("github.com"),
-        identity("github", "github.com/fork/web"),
-      ),
-    ).toBeNull();
+  it("only offers a GitHub checkout command for the selected repository before and after loading", () => {
+    const project = identity("github", "github.com/fork/web");
+    const detail = {
+      provider: SourceControlProviderKind.make("github"),
+      url: "https://github.com/acme/web/pull/42",
+      number: 42,
+      headBranch: "feature",
+      checkoutAllowed: true,
+    };
+    expect(loadingPullRequestCheckoutCommand(reference("github.com"), project)).toBeNull();
+    expect(pullRequestCheckoutCommand(detail, project)).toBeNull();
+    expect(pullRequestCheckoutCommand(detail, identity("github", "github.com/acme/web"))).toBe(
+      "gh pr checkout 42 --repo github.com/acme/web",
+    );
   });
 
   // regression: #12721 loading layout showed a checkout command guessed from the PR number alone

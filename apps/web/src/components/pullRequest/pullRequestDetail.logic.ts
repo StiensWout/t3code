@@ -36,7 +36,6 @@ import {
   type PullRequestReviewThread,
   type PullRequestState,
   type PullRequestUpdateMethod,
-  SourceControlProviderKind,
   type ThreadLinkedPullRequest,
   type ThreadPullRequestLink,
   type VcsRef,
@@ -125,15 +124,29 @@ export function resolvePullRequestPrimaryControl(input: {
 }
 
 export function pullRequestCheckoutCommand(
-  provider: SourceControlProviderKind,
-  number: number,
-  headBranch: string,
-  headRepositoryNameWithOwner?: string | null,
-  repositoryUrl?: string | null,
+  detail: Pick<
+    PullRequestDetail,
+    "provider" | "url" | "number" | "headBranch" | "headRepositoryNameWithOwner" | "checkoutAllowed"
+  >,
+  identity: RepositoryIdentity | null | undefined,
 ): string | null {
-  return sourceControlClients
-    .get(provider)
-    .checkoutCommand({ number, headBranch, headRepositoryNameWithOwner, repositoryUrl });
+  if (detail.checkoutAllowed === false) return null;
+  const definition = sourceControlClients.get(detail.provider);
+  const parsed = sourceControlClients.parseChangeRequestUrl(detail.url);
+  if (
+    definition.kind === "github" &&
+    (!identity ||
+      identity.provider !== definition.kind ||
+      !parsed ||
+      parsed.definition.kind !== definition.kind ||
+      !definition.isChangeRequestInRepository(identity, {
+        ...parsed.link,
+        authority: new URL(parsed.link.repositoryUrl).host,
+      }))
+  ) {
+    return null;
+  }
+  return definition.checkoutCommand({ ...detail, repositoryUrl: parsed?.link.repositoryUrl });
 }
 
 export function loadingPullRequestCheckoutCommand(
@@ -146,27 +159,30 @@ export function loadingPullRequestCheckoutCommand(
     : host
       ? sourceControlClients.findByPublicHost(host)
       : undefined;
-  const command = definition?.checkoutCommand({ number: reference.number, headBranch: "" });
-  if (!definition || !command) return null;
+  if (!definition) return null;
+  const projectHost = sourceControlClients.changeRequestHost(identity, definition.kind);
   if (definition.kind === "github") {
-    const authority = host || sourceControlClients.changeRequestHost(identity, definition.kind);
-    return identity &&
-      definition.isChangeRequestInRepository(identity, {
-        ...reference,
-        host: authority,
-        ...(host ? { authority: host } : {}),
-      })
-      ? command
-      : null;
+    if (!identity) return null;
+    const url = definition.changeRequestUrl({
+      host: host || projectHost,
+      repository: reference.repository,
+      number: reference.number,
+      remoteUrl: host ? undefined : identity.locator.remoteUrl,
+    });
+    return url === null
+      ? null
+      : pullRequestCheckoutCommand(
+          {
+            provider: definition.kind,
+            number: reference.number,
+            headBranch: "",
+            url,
+          },
+          identity,
+        );
   }
-  if (
-    identity?.provider !== undefined &&
-    host &&
-    sourceControlClients.changeRequestHost(identity, definition.kind) !== host
-  ) {
-    return null;
-  }
-  return command;
+  if (identity?.provider !== undefined && host && projectHost !== host) return null;
+  return definition.checkoutCommand({ number: reference.number, headBranch: "" });
 }
 
 export function shouldRefreshPullRequestActivity(

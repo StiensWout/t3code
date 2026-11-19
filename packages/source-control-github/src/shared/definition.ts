@@ -20,6 +20,8 @@ import { icon } from "./icon.ts";
 import { gitHubReferenceAutolinks } from "./referenceAutolinks.ts";
 
 const CHECKOUT_COMMAND = /^gh\s+pr\s+checkout\s+(.+)$/i;
+const QUALIFIED_CHECKOUT_ARGUMENT = /^(\d+)\s+--repo\s+([\w.-]+(?::\d+)?)\/([^\s]+)$/u;
+const CHECKOUT_HOST = /^[\w.-]+(?::\d+)?$/u;
 const CHANGE_REQUEST_REFERENCE =
   /^https?:\/\/[^/?#\s]+\/[^/\s]+\/[^/\s]+\/pull\/(\d+)(?:[/?#].*)?$/i;
 
@@ -128,7 +130,15 @@ export const definition = defineSourceControl({
     "revert",
     "approve-workflows",
   ] as const),
-  checkoutCommand: ({ number }) => `gh pr checkout ${number}`,
+  checkoutCommand: ({ number, repositoryUrl }) => {
+    if (!repositoryUrl || !Number.isSafeInteger(number) || number < 1) return null;
+    const url = URL.parse(repositoryUrl);
+    if (!url || (url.protocol !== "https:" && url.protocol !== "http:")) return null;
+    const repository = url.pathname.slice(1);
+    return CHECKOUT_HOST.test(url.host) && isRepositoryPath(repository)
+      ? `gh pr checkout ${number} --repo ${url.host}/${repository}`
+      : null;
+  },
   changeRequestCloseCommand: /\bgh\s+(?:pr\s+(?:merge|close)|stack\s+merge)\b/u,
   // `new` is gh's alias for `create`.
   changeRequestCreateCommand: /\bgh\s+pr\s+(?:create|new)\b/u,
@@ -144,7 +154,16 @@ export const definition = defineSourceControl({
   changeRequestListScope: "host",
   hardLineBreaks: true,
   reviewSummaryRequired: () => false,
-  checkoutCommandArgument: (input) => CHECKOUT_COMMAND.exec(input)?.[1]?.trim() ?? null,
+  checkoutCommandArgument: (input) => {
+    const argument = CHECKOUT_COMMAND.exec(input)?.[1]?.trim();
+    if (!argument) return null;
+    const qualified = QUALIFIED_CHECKOUT_ARGUMENT.exec(argument);
+    if (!qualified) return argument;
+    const [, number, host, repository] = qualified;
+    return repository && isRepositoryPath(repository)
+      ? `https://${host}/${repository}/pull/${number}`
+      : null;
+  },
   isChangeRequestReference: (url) => CHANGE_REQUEST_REFERENCE.test(url),
   checkoutChangeRequestHost: (identity) => projectChangeRequestHost(identity, KIND),
   changeRequestHeadRef: (number) => `refs/pull/${number}/head`,

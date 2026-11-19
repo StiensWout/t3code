@@ -82,6 +82,19 @@ describe("GitHub change request URLs", () => {
     }
   });
 
+  it("round-trips a checkout command with the explicit Enterprise authority", () => {
+    const command = definition.checkoutCommand({
+      number: 42,
+      headBranch: "feature",
+      repositoryUrl: "https://github.example.test:8443/acme/web",
+    });
+    expect(command).toBe("gh pr checkout 42 --repo github.example.test:8443/acme/web");
+    expect(definition.checkoutCommandArgument(command!)).toBe(
+      "https://github.example.test:8443/acme/web/pull/42",
+    );
+    expect(definition.checkoutCommandArgument("gh pr checkout 42")).toBe("42");
+  });
+
   it("turns GitHub's shared issue route into a pull request candidate", () => {
     const candidate = (url: string) =>
       definition.changeRequestUrlFromReferenceAutolink(new URL(url));

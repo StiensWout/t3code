@@ -658,23 +658,10 @@ export function PullRequestDetailPanel({
       ? hostClient.authorProfileUrl(detail.author.login, repositoryUrl)
       : null;
   const checkoutAvailable = detail !== null && detail.checkoutAllowed !== false;
-  const canCopyCheckout =
-    checkoutAvailable &&
-    (detail.provider !== "github" ||
-      detail.projectId === reference.projectId ||
-      loadingCheckoutCommand !== null);
   const checkoutCommand =
     detail === null
       ? loadingCheckoutCommand
-      : canCopyCheckout
-        ? pullRequestCheckoutCommand(
-            detail.provider,
-            detail.number,
-            detail.headBranch,
-            detail.headRepositoryNameWithOwner,
-            repositoryUrl,
-          )
-        : null;
+      : pullRequestCheckoutCommand(detail, repositoryIdentity);
   const branchRefsQuery = useEnvironmentQuery(
     detail === null
       ? null
