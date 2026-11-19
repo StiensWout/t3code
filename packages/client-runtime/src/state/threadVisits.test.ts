@@ -44,10 +44,13 @@ function setup(threadName: string, initial: Omit<Shell, "environmentId" | "id"> 
     attempts.push(input);
     const pending = pendingResult;
     pendingResult = undefined;
-    if (online) visits.push(input);
-    if (pending) return pending;
-    if (!online) return AsyncResult.failure(Cause.fail("disconnected"));
-    return AsyncResult.success(undefined);
+    const result = pending
+      ? await pending
+      : online
+        ? AsyncResult.success(undefined)
+        : AsyncResult.failure(Cause.fail("disconnected"));
+    if (AsyncResult.isSuccess(result)) visits.push(input);
+    return result;
   };
   const tracker = createThreadVisitTracker({
     threadShellAtom: () => shellAtom,
@@ -69,9 +72,7 @@ function setup(threadName: string, initial: Omit<Shell, "environmentId" | "id"> 
       pendingResult = deferred.promise;
       return (accepted = false) =>
         deferred.resolve(
-          accepted
-            ? AsyncResult.success(undefined)
-            : AsyncResult.failure(Cause.fail("disconnected")),
+          accepted ? AsyncResult.success(undefined) : AsyncResult.failure(Cause.fail("rejected")),
         );
     },
     reconnect: () => registry.set(sessionGenerationAtom, registry.get(sessionGenerationAtom) + 1),
@@ -339,7 +340,7 @@ it("records a failed pick's open when a plain visit is accepted ahead of its she
   ]);
 });
 
-it("preserves mark-unread when a palette pick fails after the thread is marked unread", async () => {
+it("records a failed palette pick's open without undoing mark-unread", async () => {
   using t = setup("thread-pick-fails-after-rewind", {
     updatedAt: at(10),
     lastVisitedAt: at(10),
@@ -356,7 +357,53 @@ it("preserves mark-unread when a palette pick fails after the thread is marked u
   await pick;
   await vi.advanceTimersByTimeAsync(VISIT_DISPATCH_THROTTLE_MS);
 
-  expect(t.visits).toEqual([]);
+  expect(t.visits).toEqual([{ threadId: t.ref.threadId, visitedAt: at(5), opened: true }]);
+});
+
+it("retries an open after a newer visit is acknowledged ahead of its shell update", async () => {
+  using t = setup("thread-retry-before-visit-echo", {
+    updatedAt: at(10),
+    lastVisitedAt: at(0),
+    latestRun: null,
+  });
+  const rejectOpen = t.deferNextVisit();
+  t.mount();
+  t.reconnect();
+  const acceptVisit = t.deferNextVisit();
+  t.update({ updatedAt: at(20), latestRun: { completedAt: at(20) } });
+
+  rejectOpen();
+  await vi.advanceTimersByTimeAsync(0);
+  acceptVisit(true);
+  await vi.advanceTimersByTimeAsync(VISIT_DISPATCH_THROTTLE_MS);
+  t.update({ lastVisitedAt: at(20) });
+
+  expect(t.visits).toEqual([
+    { threadId: t.ref.threadId, visitedAt: at(20) },
+    { threadId: t.ref.threadId, visitedAt: at(20), opened: true },
+  ]);
+});
+
+it("keeps recording visits when a newer visit overtakes a rejected open", async () => {
+  using t = setup("thread-visit-after-superseded-open", {
+    updatedAt: at(10),
+    lastVisitedAt: at(0),
+    latestRun: null,
+  });
+  const rejectOpen = t.deferNextVisit();
+  t.mount();
+  t.update({ updatedAt: at(20), latestRun: { completedAt: at(20) } });
+  await vi.advanceTimersByTimeAsync(0);
+  rejectOpen();
+  await vi.advanceTimersByTimeAsync(0);
+
+  t.update({ updatedAt: at(30), lastVisitedAt: at(20) });
+  await vi.advanceTimersByTimeAsync(VISIT_DISPATCH_THROTTLE_MS);
+
+  expect(t.visits).toEqual([
+    { threadId: t.ref.threadId, visitedAt: at(20) },
+    { threadId: t.ref.threadId, visitedAt: at(30) },
+  ]);
 });
 
 it("records an open after leaving an offline thread and reopening it online", async () => {
@@ -390,7 +437,7 @@ it("records an open after leaving an offline thread and reopening it online", as
   });
 });
 
-it("does not retry a failed visit the server already shows as seen", async () => {
+it("leaves a null watermark untouched when retrying an open after a rewind", async () => {
   using t = setup("thread-failed-seen", {
     updatedAt: at(10),
     lastVisitedAt: at(0),
@@ -403,12 +450,12 @@ it("does not retry a failed visit the server already shows as seen", async () =>
 
   t.setOnline(true);
   t.reconnect();
-  t.update({ lastVisitedAt: at(0) });
+  t.update({ lastVisitedAt: null });
   await vi.advanceTimersByTimeAsync(VISIT_DISPATCH_THROTTLE_MS);
   expect(t.visits).toEqual([]);
 });
 
-it("preserves mark unread when an accepted visit fails after the rewind", async () => {
+it("retries an open at the rewound watermark after losing its acknowledgment", async () => {
   using t = setup("thread-accepted-rewound-failure", {
     updatedAt: at(10),
     lastVisitedAt: at(0),
@@ -423,7 +470,10 @@ it("preserves mark unread when an accepted visit fails after the rewind", async 
   t.reconnect();
   t.update({});
   await vi.advanceTimersByTimeAsync(VISIT_DISPATCH_THROTTLE_MS);
-  expect(t.attempts).toEqual([{ threadId: t.ref.threadId, visitedAt: at(10), opened: true }]);
+  expect(t.attempts).toEqual([
+    { threadId: t.ref.threadId, visitedAt: at(10), opened: true },
+    { threadId: t.ref.threadId, visitedAt: at(5), opened: true },
+  ]);
 });
 
 it.each(["unchanged shell", "new shell snapshot"] as const)(
