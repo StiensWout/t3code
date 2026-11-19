@@ -409,7 +409,7 @@ describe("t3 theme", () => {
   );
 
   it.effect.each(["before commit", "during commit"] as const)(
-    "fails a publish when it loses its lease %s",
+    "reports whether a publish went through when it loses its lease %s",
     (when) =>
       Effect.gen(function* () {
         const baseDir = makeBaseDir();
@@ -424,7 +424,7 @@ describe("t3 theme", () => {
           NodeFS.renameSync(lockPath, `${lockPath}.moved`);
           NodeFS.mkdirSync(lockPath);
         });
-        const failure = yield* runCli(["theme", "set", themeFile, "--base-dir", baseDir], (fs) => ({
+        const result = yield* runCli(["theme", "set", themeFile, "--base-dir", baseDir], (fs) => ({
           ...fs,
           readDirectory: (path, options) =>
             fs
@@ -444,9 +444,13 @@ describe("t3 theme", () => {
                     : Effect.void,
                 ),
               ),
-        })).pipe(Effect.flip);
+        })).pipe(Effect.result);
 
-        assert.include(String(failure), "Could not publish the theme");
+        // A lease lost after the settings are written cannot undo the publish.
+        assert.equal(result._tag, when === "before commit" ? "Failure" : "Success");
+        if (result._tag === "Failure") {
+          assert.include(String(result.failure), "Could not publish the theme");
+        }
         assert.isTrue(NodeFS.existsSync(lockPath));
         assert.equal(NodeFS.existsSync(published), when === "during commit");
         assert.equal(

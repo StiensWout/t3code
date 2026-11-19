@@ -227,11 +227,13 @@ export const readPublishedThemes = Effect.fn(function* (themesDir: string) {
 const scanPublishedThemes = Effect.fnUntraced(function* (
   themesDir: string,
   entries: ReadonlyArray<string>,
-  candidate?: { readonly entry: string; readonly contents: string },
+  /** Contents read in place of one entry's file; `null` leaves the entry out. */
+  override?: { readonly entry: string; readonly contents: string | null },
 ) {
   const themes: Array<EnvironmentTheme> = [];
   const entryNames = new Set(entries);
-  if (candidate) entryNames.add(candidate.entry);
+  if (override?.contents === null) entryNames.delete(override.entry);
+  else if (override) entryNames.add(override.entry);
   let examined = 0;
   let totalBytes = 0;
   for (const entry of [...entryNames].sort()) {
@@ -252,8 +254,8 @@ const scanPublishedThemes = Effect.fnUntraced(function* (
 
     const filePath = `${themesDir}/${entry}`;
     const raw =
-      entry === candidate?.entry
-        ? candidate.contents
+      entry === override?.entry
+        ? override.contents
         : readThemeFileGuarded(filePath, MAX_THEME_FILE_BYTES);
     if (raw === null) {
       yield* Effect.logWarning("ignoring unusable environment theme file", {
@@ -378,15 +380,50 @@ const acquirePublishLease = Effect.fn("EnvironmentTheme.acquirePublishLease")(fu
   );
 });
 
-/** Stage and check the candidate before exposing it. Keep the lease through selection and rollback. */
+/**
+ * Fails unless `themeId` and every theme served with `before` in its place stay served with
+ * `after`. Undefined contents read the file on disk; `null` means no file.
+ */
+const checkLibraryServes = Effect.fnUntraced(function* (
+  themesDir: string,
+  themeId: string,
+  before: string | null | undefined,
+  after: string | undefined,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const entry = `${themeId}${THEME_FILE_SUFFIX}`;
+  const entries = yield* fs.readDirectory(themesDir).pipe(Effect.mapError(publishUnavailable));
+  const scan = (contents: string | null | undefined) =>
+    scanPublishedThemes(
+      themesDir,
+      entries,
+      contents === undefined ? undefined : { entry, contents },
+    );
+  const previous = yield* scan(before);
+  const served = new Set((yield* scan(after)).map(({ id }) => id));
+  if (!served.has(themeId) || previous.some(({ id }) => !served.has(id))) {
+    return yield* new ThemeLibraryPublishError({ reason: "full" });
+  }
+});
+
+/**
+ * Stage and check the candidate before exposing it. Keep the lease through selection and rollback.
+ * After renaming `staging` into place, `publish` calls `checkServed` with the contents it replaced,
+ * because a direct save into the directory can take the last slot after the first check.
+ */
 export const withThemePublish = Effect.fn("EnvironmentTheme.withThemePublish")(function* <A, E, R>(
   themesDir: string,
   themeId: string,
   contents: string,
-  publish: (
-    staging: string,
-    checkLease: Effect.Effect<void, ThemeLibraryPublishError>,
-  ) => Effect.Effect<A, E, R>,
+  publish: (staged: {
+    readonly staging: string;
+    readonly checkLease: Effect.Effect<void, ThemeLibraryPublishError>;
+    readonly checkServed: (
+      previous: string | null,
+    ) => Effect.Effect<void, ThemeLibraryPublishError>;
+    /** True while `path` is the staged file, so a rollback leaves another writer's file alone. */
+    readonly isStaged: (path: string) => boolean;
+  }) => Effect.Effect<A, E, R>,
 ) {
   const fs = yield* FileSystem.FileSystem;
   yield* fs.makeDirectory(themesDir, { recursive: true }).pipe(Effect.mapError(publishUnavailable));
@@ -396,35 +433,44 @@ export const withThemePublish = Effect.fn("EnvironmentTheme.withThemePublish")(f
       const checkLease = yield* acquirePublishLease(themesDir);
       yield* checkLease;
 
-      const entry = `${themeId}${THEME_FILE_SUFFIX}`;
       // The reader skips the staging suffix, and exclusive create never follows a symlink.
-      const staging = NodePath.join(themesDir, `${entry}.staging-${process.pid}`);
+      const staging = NodePath.join(
+        themesDir,
+        `${themeId}${THEME_FILE_SUFFIX}.staging-${process.pid}`,
+      );
       const removeStaging = fs.remove(staging, { force: true });
       return yield* Effect.gen(function* () {
         yield* removeStaging.pipe(
           Effect.andThen(fs.writeFileString(staging, contents, { flag: "wx", mode: 0o644 })),
           Effect.mapError(publishUnavailable),
         );
+        const stagedStat = yield* Effect.try({
+          try: () => NodeFS.lstatSync(staging),
+          catch: publishUnavailable,
+        });
         const staged = readThemeFileGuarded(staging, MAX_THEME_FILE_BYTES);
         if (staged !== contents) {
           return yield* publishUnavailable(new Error("Could not read the staged theme."));
         }
+        const isStaged = (path: string) => {
+          try {
+            const current = NodeFS.lstatSync(path, { throwIfNoEntry: false });
+            return current?.dev === stagedStat.dev && current.ino === stagedStat.ino;
+          } catch {
+            return false;
+          }
+        };
+        const checkServed = (previous: string | null) =>
+          checkLibraryServes(themesDir, themeId, previous, undefined).pipe(
+            Effect.provideService(FileSystem.FileSystem, fs),
+          );
 
-        const entries = yield* fs
-          .readDirectory(themesDir)
-          .pipe(Effect.mapError(publishUnavailable));
-        const before = yield* scanPublishedThemes(themesDir, entries);
-        const after = yield* scanPublishedThemes(themesDir, entries, { entry, contents: staged });
+        yield* checkLibraryServes(themesDir, themeId, undefined, staged);
         yield* checkLease;
-        const served = new Set(after.map(({ id }) => id));
-        if (!served.has(themeId) || before.some(({ id }) => !served.has(id))) {
-          return yield* new ThemeLibraryPublishError({ reason: "full" });
-        }
-        return yield* publish(staging, checkLease).pipe(Effect.uninterruptible);
-      }).pipe(
-        Effect.ensuring(removeStaging.pipe(Effect.ignore)),
-        Effect.tap(() => checkLease),
-      );
+        return yield* publish({ staging, checkLease, checkServed, isStaged }).pipe(
+          Effect.uninterruptible,
+        );
+      }).pipe(Effect.ensuring(removeStaging.pipe(Effect.ignore)));
     }),
   );
 });
@@ -512,8 +558,9 @@ const make = Effect.gen(function* () {
 
     const destination = `${environmentThemesDir}/${themeId}${THEME_FILE_SUFFIX}`;
 
-    yield* withThemePublish(environmentThemesDir, themeId, contents, (staging, checkLease) =>
+    yield* withThemePublish(environmentThemesDir, themeId, contents, (staged) =>
       Effect.gen(function* () {
+        const { staging, checkLease, checkServed, isStaged } = staged;
         const previous = Option.fromNullOr(readThemeFileGuarded(destination, MAX_THEME_FILE_BYTES));
         if (Option.isNone(previous) && pathIsTaken(destination)) {
           return yield* new EnvironmentThemeRefusedError({
@@ -521,10 +568,6 @@ const make = Effect.gen(function* () {
             problem: "would replace a file that could not be backed up. Use another theme id.",
           });
         }
-        const staged = yield* Effect.try({
-          try: () => NodeFS.lstatSync(staging),
-          catch: publishUnavailable,
-        });
         const restore = Option.match(previous, {
           onNone: () => fs.remove(destination, { force: true }),
           onSome: (contents) =>
@@ -532,13 +575,7 @@ const make = Effect.gen(function* () {
               .writeFileString(staging, contents, { flag: "wx" })
               .pipe(Effect.andThen(fs.rename(staging, destination))),
         });
-        const revert = Effect.try({
-          try: () => NodeFS.lstatSync(destination),
-          catch: publishUnavailable,
-        }).pipe(
-          Effect.flatMap((current) =>
-            current.dev === staged.dev && current.ino === staged.ino ? restore : Effect.void,
-          ),
+        const revert = Effect.suspend(() => (isStaged(destination) ? restore : Effect.void)).pipe(
           Effect.ignore,
           Effect.andThen(refresh),
           Effect.asVoid,
@@ -553,8 +590,10 @@ const make = Effect.gen(function* () {
                 new EnvironmentThemeRefusedError({ themeId, problem: NOT_PUBLISHED, cause }),
             ),
           );
-        yield* refresh.pipe(
+        // Check what is served before refresh broadcasts it.
+        yield* checkServed(Option.getOrNull(previous)).pipe(
           Effect.andThen(checkLease),
+          Effect.andThen(refresh),
           Effect.andThen(select),
           Effect.onError(() => revert),
         );

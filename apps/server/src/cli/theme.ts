@@ -340,13 +340,9 @@ const publishThemeFile = Effect.fn(function* (input: {
     return yield* new ThemeDestinationDirectoryError({ themeId, destinationPath });
   }
 
-  yield* withThemePublish(input.themesDir, themeId, raw, (stagingPath, checkLease) =>
+  yield* withThemePublish(input.themesDir, themeId, raw, (staged) =>
     Effect.gen(function* () {
-      const stagedIno = yield* Effect.try({
-        try: () => NodeFS.lstatSync(stagingPath).ino,
-        catch: publishFailure,
-      });
-
+      const { staging, checkLease, checkServed, isStaged } = staged;
       const backupPath = yield* Effect.try({
         try: () => {
           // A fresh path leaves any backup from a crashed publish intact.
@@ -378,23 +374,27 @@ const publishThemeFile = Effect.fn(function* (input: {
       const revert = Effect.sync(() => {
         try {
           // Leave a manual replacement alone if it landed during the settings write.
-          const destinationIno = NodeFS.lstatSync(destinationPath, { throwIfNoEntry: false })?.ino;
+          const ours = isStaged(destinationPath);
           if (backupPath !== null) {
-            if (destinationIno === undefined || destinationIno === stagedIno) {
+            if (ours || !NodeFS.lstatSync(destinationPath, { throwIfNoEntry: false })) {
               NodeFS.renameSync(backupPath, destinationPath);
             } else {
               NodeFS.unlinkSync(backupPath);
             }
-          } else if (destinationIno === stagedIno) {
+          } else if (ours) {
             NodeFS.unlinkSync(destinationPath);
           }
         } catch {}
       });
+      // An unreadable backup took a slot without being served, as an empty file does.
+      const previous =
+        backupPath === null ? null : (readThemeFileGuarded(backupPath, MAX_THEME_FILE_BYTES) ?? "");
 
       yield* Effect.try({
-        try: () => NodeFS.renameSync(stagingPath, destinationPath),
+        try: () => NodeFS.renameSync(staging, destinationPath),
         catch: publishFailure,
       }).pipe(
+        Effect.andThen(checkServed(previous)),
         Effect.andThen(checkLease),
         Effect.andThen(writeDefaultTheme({ settingsPath: input.settingsPath, themeId })),
         Effect.onError(() => revert),
