@@ -2138,8 +2138,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       Effect.catch((error) =>
         listRemoteFetchUrls.pipe(
           Effect.flatMap(findMatchingRemote),
-          Effect.flatMap((added) =>
-            added === undefined ? Effect.fail(error) : Effect.succeed(added),
+          Effect.filterOrFail(
+            (added) => added !== undefined,
+            () => error,
           ),
         ),
       ),
