@@ -329,7 +329,10 @@ export const withThemePublish = Effect.fn("EnvironmentTheme.withThemePublish")(f
             }),
           catch: unavailable,
         }),
-        (release) => Effect.tryPromise(() => release()).pipe(Effect.ignore({ log: true })),
+        (release) =>
+          Effect.tryPromise({ try: () => release(), catch: unavailable }).pipe(
+            Effect.ignore({ log: true }),
+          ),
       );
 
       const entries = yield* fs.readDirectory(themesDir).pipe(Effect.mapError(unavailable));
@@ -467,6 +470,7 @@ const make = Effect.gen(function* () {
         );
       }),
     ).pipe(
+      Effect.provideService(FileSystem.FileSystem, fs),
       Effect.catchTags({
         ThemeLibraryPublishError: (cause) =>
           new EnvironmentThemeRefusedError({ themeId, problem: NOT_PUBLISHED, cause }),
