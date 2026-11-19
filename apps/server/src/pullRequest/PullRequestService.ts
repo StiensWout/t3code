@@ -84,6 +84,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as PullRequestFilesViewed from "../persistence/PullRequestFilesViewed.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
+import { pullRequestCheckoutAllowed } from "../git/pullRequestCheckout.ts";
 import * as ForkUpstream from "../sourceControl/forkUpstream.ts";
 import type { SourceControlProviderContext } from "@t3tools/source-control-core/server/SourceControlProvider";
 import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
@@ -1989,6 +1990,25 @@ export const make = Effect.gen(function* () {
       }),
     );
 
+  const checkoutAllowed = Effect.fn("PullRequestService.checkoutAllowed")(function* (
+    input: PullRequestRef,
+    project: SupportedProject,
+  ) {
+    if (project.api.kind !== "github") return true;
+    const { supported } = yield* listWorkspaceProjects({ projectId: input.projectId });
+    const own = supported[0];
+    return yield* pullRequestCheckoutAllowed(
+      forkUpstream.getParent,
+      own && {
+        cwd: own.project.workspaceRoot,
+        kind: own.api.kind,
+        host: own.host,
+        repository: own.repository,
+      },
+      project,
+    );
+  });
+
   const detailUncached: PullRequestService["Service"]["detail"] = (input) =>
     requireProject(input).pipe(
       Effect.flatMap((project) =>
@@ -2003,15 +2023,17 @@ export const make = Effect.gen(function* () {
               })
               .pipe(Effect.mapError(toPullRequestError("detail")), observeRead),
             viewerOf(project),
+            checkoutAllowed(input, project),
           ],
-          { concurrency: 2 },
+          { concurrency: 3 },
         ).pipe(
-          Effect.map(([{ value: changeRequest, observedAt }, viewer]): PullRequestDetail => ({
+          Effect.map(([{ value: changeRequest, observedAt }, viewer, allowed]) => ({
             provider: project.api.kind,
             capabilities: project.api.capabilities,
             projectId: project.project.id,
             projectTitle: project.project.title,
             workspaceRoot: project.project.workspaceRoot,
+            checkoutAllowed: allowed,
             repository: project.repository,
             number: changeRequest.number,
             title: changeRequest.title,
@@ -2070,6 +2092,7 @@ export const make = Effect.gen(function* () {
           })),
         ),
       ),
+      withSharedProjectReads,
     );
 
   const previewFields = (value: PullRequestPreview): PullRequestPreview => ({

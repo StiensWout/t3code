@@ -2,6 +2,7 @@ import { SourceControlProviderError, SourceControlProviderKind } from "@t3tools/
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as ServerConfig from "../config.ts";
+import * as ForkUpstream from "../sourceControl/forkUpstream.ts";
 import * as GitManager from "../git/GitManager.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
@@ -53,6 +54,7 @@ export const layerRealGit = GitWorkflow.layer.pipe(
       Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({}),
       Layer.mock(ProjectionStore.ProjectionStoreV2)({}),
       Layer.mock(ProjectStore.ProjectStoreV2)({}),
+      Layer.mock(ForkUpstream.ForkUpstream)({ getParent: () => Effect.succeed(null) }),
       Layer.mock(PullRequestService.PullRequestService)({}),
       ServerSettings.layerTest(),
     ),

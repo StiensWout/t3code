@@ -657,15 +657,19 @@ export function PullRequestDetailPanel({
     detail?.author && repositoryUrl !== null
       ? hostClient.authorProfileUrl(detail.author.login, repositoryUrl)
       : null;
-  const checkoutCommand = handoffSummary
-    ? pullRequestCheckoutCommand(
-        handoffSummary.provider,
-        handoffSummary.number,
-        handoffSummary.headBranch,
-        detail?.headRepositoryNameWithOwner,
-        sourceControlClients.parseChangeRequestUrl(handoffSummary.url)?.link.repositoryUrl ?? null,
-      )
-    : loadingCheckoutCommand;
+  const checkoutAvailable = detail !== null && detail.checkoutAllowed !== false;
+  const checkoutCommand =
+    detail === null
+      ? loadingCheckoutCommand
+      : checkoutAvailable
+        ? pullRequestCheckoutCommand(
+            detail.provider,
+            detail.number,
+            detail.headBranch,
+            detail.headRepositoryNameWithOwner,
+            repositoryUrl,
+          )
+        : null;
   const branchRefsQuery = useEnvironmentQuery(
     detail === null
       ? null
@@ -847,11 +851,7 @@ export function PullRequestDetailPanel({
   const acting =
     pickableEnvironments.find((entry) => entry.environmentId === chosenEnvironmentId) ?? null;
   const actingEnvironmentId = acting?.environmentId ?? environmentId;
-  // A fork's checkout fetches from the fork, so its upstream's rows are read here and not checked out.
-  const browseOnly = matchingListEntry?.upstream === true;
-  const checkoutRoot = browseOnly
-    ? null
-    : (acting?.workspaceRoot ?? detail?.workspaceRoot ?? project?.workspaceRoot ?? null);
+  const checkoutRoot = checkoutAvailable ? (acting?.workspaceRoot ?? detail.workspaceRoot) : null;
   const canOperateThread = useEnvironmentScope(actingEnvironmentId, AuthOrchestrationOperateScope);
   const prepareThread = usePreparePullRequestThreadAction({
     environmentId: actingEnvironmentId,
@@ -948,7 +948,7 @@ export function PullRequestDetailPanel({
   };
 
   const attachTarget = composerDraftTarget ?? null;
-  const canPrepareWorktree = !browseOnly && prepareThread.isAllowed && canOperateThread;
+  const canPrepareWorktree = checkoutAvailable && prepareThread.isAllowed && canOperateThread;
   const canFixFindings = attachTarget !== null || canPrepareWorktree;
   const handoffLabels = pullRequestHandoffLabels(attachTarget !== null, resolve);
   const guideWriter = useReviewGuideWriter({
@@ -1500,7 +1500,7 @@ export function PullRequestDetailPanel({
       : 0;
 
   const checkoutControl =
-    context === "page" && !browseOnly ? (
+    context === "page" && checkoutAvailable ? (
       <PullRequestCheckoutMenu
         term={changeRequestTermKind(terminology)}
         handoff={handoff}

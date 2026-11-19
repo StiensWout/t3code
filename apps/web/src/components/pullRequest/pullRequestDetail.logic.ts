@@ -149,6 +149,13 @@ export function loadingPullRequestCheckoutCommand(
   const command = definition?.checkoutCommand({ number: reference.number, headBranch: "" });
   if (!definition || !command) return null;
   if (
+    definition.kind === "github" &&
+    sourceControlClients.repositorySelector(identity)?.toLowerCase() !==
+      reference.repository.toLowerCase()
+  ) {
+    return null;
+  }
+  if (
     identity?.provider !== undefined &&
     host &&
     sourceControlClients.changeRequestHost(identity, definition.kind) !== host

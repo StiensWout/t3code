@@ -102,6 +102,15 @@ describe("pull request checkout commands", () => {
     expect(loadingPullRequestCheckoutCommand(reference("github.com"), enterprise)).toBeNull();
   });
 
+  it("withholds the number-only checkout command for another repository on the same host", () => {
+    expect(
+      loadingPullRequestCheckoutCommand(
+        reference("github.com"),
+        identity("github", "github.com/fork/web"),
+      ),
+    ).toBeNull();
+  });
+
   // regression: #12721 loading layout showed a checkout command guessed from the PR number alone
   it("does not infer a number-only command without a trusted provider", () => {
     expect(loadingPullRequestCheckoutCommand(reference(), undefined)).toBeNull();

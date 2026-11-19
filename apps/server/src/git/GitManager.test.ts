@@ -69,6 +69,7 @@ import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as ForkUpstream from "../sourceControl/forkUpstream.ts";
 import * as GitManager from "./GitManager.ts";
 
 /** A change request the fake host reports. Omitted fields read as an open, undated request. */
@@ -629,6 +630,7 @@ function preparePullRequestThread(
 
 function makeManager(input?: {
   providerScenario?: FakeProviderScenario;
+  getParent?: ForkUpstream.ForkUpstream["Service"]["getParent"];
   pullRequests?: Partial<PullRequestService.PullRequestService["Service"]>;
   sourceControlProvider?: SourceControlProvider["Service"];
   textGeneration?: Partial<FakeGitTextGeneration>;
@@ -738,6 +740,9 @@ function makeManager(input?: {
 
   const layerManager = Layer.mergeAll(
     Layer.succeed(TextGeneration.TextGeneration, textGeneration),
+    Layer.mock(ForkUpstream.ForkUpstream)({
+      getParent: input?.getParent ?? (() => Effect.succeed(null)),
+    }),
     Layer.mock(PullRequestService.PullRequestService)(input?.pullRequests ?? {}),
     Layer.mock(ProviderRegistry.ProviderRegistry)({
       getProviders: Effect.succeed([]),
@@ -5422,6 +5427,28 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
           expect((yield* runGit(repoDir, ["rev-parse", "HEAD^"])).stdout.trim()).toBe(pullHead);
         }
       }),
+  );
+
+  it.effect("refuses a fork parent's PR URL before preparing a checkout", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-parent-checkout-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["remote", "add", "origin", "https://github.com/me/web.git"]);
+      const { manager } = yield* makeManager({
+        getParent: ({ host, repository }) =>
+          Effect.succeed(host === "github.com" && repository === "me/web" ? "acme/web" : null),
+      });
+      for (const mode of ["local", "worktree"] as const) {
+        const error = yield* manager
+          .preparePullRequestThread({
+            cwd: repoDir,
+            mode,
+            reference: "https://github.com/acme/web/pull/42",
+          })
+          .pipe(Effect.flip);
+        expect(error.message).toContain("cannot be checked out from this repository");
+      }
+    }),
   );
 
   it.effect.each([false, true])(

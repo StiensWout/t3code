@@ -90,11 +90,7 @@ export function usePullRequestThreads(
   const canOperate = useEnvironmentScope(target.environmentId, AuthOrchestrationOperateScope);
   const canAsk = !connected || canOperate;
   const canCheckout = useEnvironmentScope(target.environmentId, AuthSourceControlWriteScope);
-  // A fork's checkout fetches from the fork, so an upstream row's new thread starts without one.
-  const checksOut =
-    params.initialSummary === undefined ||
-    !("upstream" in params.initialSummary) ||
-    params.initialSummary.upstream !== true;
+  const checksOut = pr?.checkoutAllowed !== false;
   const navigation = useNavigation();
   const gt = useGT();
   const pending = useRef(false);

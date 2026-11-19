@@ -5862,3 +5862,69 @@ it.effect.each(["expiry", "commit expiry", "cache hit", "commit cache hit", "ref
       assert.strictEqual(diffReads, 2);
     }),
 );
+
+it.effect(
+  "reports checkout eligibility for matching fork and parent numbers from detail alone",
+  () =>
+    Effect.gen(function* () {
+      const projectId = "fork" as ProjectId;
+      const fork = "me/web";
+      const parent = "acme/web";
+      let settings = DEFAULT_SERVER_SETTINGS;
+      const service = yield* makeService({
+        projects: [
+          project({ id: projectId, title: "fork", workspaceRoot: "/fork", repository: fork }),
+        ],
+        getSettings: Effect.sync(() => settings),
+        getRepositoryParent: () => Effect.succeed(parent),
+        providers: [
+          fakePullRequestProvider(SourceControlProviderKind.make("github"), {
+            readsPublicHostWithoutCheckout: true,
+            listChangeRequests: () =>
+              Effect.succeed({
+                items: [hostedChangeRequest("")],
+                truncated: false,
+                continues: false,
+              }),
+            getChangeRequest: ({ repository }) =>
+              Effect.succeed({
+                ...hostedChangeRequest(repository),
+                url: `https://github.com/${repository}/pull/1`,
+              }),
+          }),
+        ],
+      });
+
+      const query = { projectId, state: "open" as const };
+      const { entries } = yield* service.list(query);
+      assert.deepStrictEqual(
+        entries.map((row) => row.repository),
+        [fork],
+      );
+      const parentDetail = yield* service.detail({
+        projectId,
+        repository: parent,
+        host: "github.com",
+        number: 1,
+      });
+      assert.strictEqual(parentDetail.checkoutAllowed, false);
+      assert.strictEqual(parentDetail.body, parent);
+
+      settings = { ...DEFAULT_SERVER_SETTINGS, includeForkUpstream: true };
+      const listed = yield* service.list(query);
+      const details = yield* Effect.forEach(
+        listed.entries,
+        ({ projectId, repository, host, number }) =>
+          service.detail({ projectId, repository, host, number }),
+      );
+      assert.deepStrictEqual(
+        details
+          .map(({ repository, number, checkoutAllowed }) => [repository, number, checkoutAllowed])
+          .toSorted(),
+        [
+          [parent, 1, false],
+          [fork, 1, true],
+        ],
+      );
+    }),
+);

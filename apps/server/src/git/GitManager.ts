@@ -51,6 +51,7 @@ import {
 } from "@t3tools/shared/projectSettings";
 import {
   mergeGitStatusParts,
+  parseGitRemoteRepository,
   resolveAutoFeatureBranchName,
   sanitizeBranchFragment,
   sanitizeFeatureBranchName,
@@ -93,6 +94,8 @@ import { isNonRepositoryGitStderr } from "../vcs/GitVcsDriverCore.ts";
 import * as SourceControlProvider from "@t3tools/source-control-core/server/SourceControlProvider";
 import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
+import * as ForkUpstream from "../sourceControl/forkUpstream.ts";
+import { pullRequestCheckoutAllowed } from "./pullRequestCheckout.ts";
 import type { ChangeRequest } from "@t3tools/contracts";
 
 export interface GitActionProgressReporter {
@@ -769,6 +772,7 @@ export const make = Effect.gen(function* () {
   });
   const serverSettingsService = yield* ServerSettings.ServerSettingsService;
   const pullRequests = yield* PullRequestService.PullRequestService;
+  const forkUpstream = yield* ForkUpstream.ForkUpstream;
   const threads = yield* ProjectionStore.ProjectionStoreV2;
   const projects = yield* ProjectStore.ProjectStoreV2;
   const projectSettingsFor = Effect.fnUntraced(function* (input: {
@@ -3147,6 +3151,58 @@ export const make = Effect.gen(function* () {
           Effect.orElseSucceed(() => false),
         );
 
+  const ensurePullRequestCheckoutAllowed = Effect.fn("GitManager.ensurePullRequestCheckoutAllowed")(
+    function* (
+      cwd: string,
+      reference: string,
+      provider: SourceControlProvider.SourceControlProvider["Service"],
+    ) {
+      if (provider.kind !== "github") return;
+      const target = sourceControlDefinitions.parseChangeRequestUrl(reference);
+      if (target?.definition.kind !== "github") return;
+      const remoteName = yield* gitCore
+        .resolvePrimaryRemoteName(cwd)
+        .pipe(Effect.orElseSucceed(() => null));
+      if (remoteName === null) return;
+      const remoteUrl = yield* readRemoteUrl(cwd, remoteName);
+      if (remoteUrl === null) return;
+      const repository = parseGitRemoteRepository(remoteUrl);
+      const recognized = sourceControlDefinitions.recognizeRemote(remoteUrl);
+      if (repository === null || recognized === null) return;
+      const context = { remoteName, remoteUrl, provider: { ...recognized, kind: provider.kind } };
+      const webHost = yield* (
+        provider
+          .resolveRemoteWebHost?.({
+            cwd,
+            context,
+            resolveContext: (input) =>
+              sourceControlProviders
+                .resolveHandle(input)
+                .pipe(Effect.map((handle) => handle.context)),
+          })
+          .pipe(Effect.orElseSucceed(() => null)) ?? Effect.succeed(null)
+      );
+      const allowed = yield* pullRequestCheckoutAllowed(
+        forkUpstream.getParent,
+        {
+          cwd,
+          kind: provider.kind,
+          host: webHost ?? repository.host,
+          repository: repository.path,
+        },
+        { ...target.link, host: target.link.authority ?? target.link.host },
+      );
+      if (!allowed) {
+        return yield* new GitManagerError({
+          operation: "preparePullRequestThread",
+          cwd,
+          detail:
+            "This pull request cannot be checked out from this repository. Open it in a project for its own repository.",
+        });
+      }
+    },
+  );
+
   const preparePullRequestThread: GitManager["Service"]["preparePullRequestThread"] = Effect.fn(
     "preparePullRequestThread",
   )(function* (input) {
@@ -3173,7 +3229,9 @@ export const make = Effect.gen(function* () {
     return yield* Effect.gen(function* () {
       const normalizedReference = normalizePullRequestReference(input.reference);
       const rootWorktreePath = yield* canonicalizeExistingPath(input.cwd);
-      const pullRequestSummary = yield* (yield* sourceControlProvider(input.cwd)).getChangeRequest({
+      const provider = yield* sourceControlProvider(input.cwd);
+      yield* ensurePullRequestCheckoutAllowed(input.cwd, normalizedReference, provider);
+      const pullRequestSummary = yield* provider.getChangeRequest({
         cwd: input.cwd,
         reference: normalizedReference,
       });

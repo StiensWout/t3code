@@ -2,6 +2,7 @@ import {
   type OrchestrationProjectShell,
   type ProjectId,
   SourceControlProviderKind,
+  type SourceControlProviderError,
 } from "@t3tools/contracts";
 import {
   forkUpstreamPolicy,
@@ -69,6 +70,12 @@ export class ForkUpstream extends Context.Service<
   ForkUpstream,
   {
     readonly readPolicy: Effect.Effect<ForkUpstreamPolicy>;
+    readonly getParent: (input: {
+      readonly cwd: string;
+      readonly kind: SourceControlProviderKind;
+      readonly host: string;
+      readonly repository: string;
+    }) => Effect.Effect<string | null, SourceControlProviderError>;
     readonly findParents: <A extends { readonly project: OrchestrationProjectShell }>(
       candidates: Iterable<A>,
       policy: ForkUpstreamPolicy,
@@ -104,6 +111,9 @@ const make = Effect.gen(function* () {
     },
   );
 
+  const getParent: ForkUpstream["Service"]["getParent"] = ({ cwd, kind, host, repository }) =>
+    Cache.get(parentCache, [kind, host, repository, cwd].join(KEY_SEPARATOR));
+
   const findParents = Effect.fn("ForkUpstream.findParents")(function* <
     A extends { readonly project: OrchestrationProjectShell },
   >(
@@ -123,15 +133,7 @@ const make = Effect.gen(function* () {
     const lookups = yield* Effect.forEach(
       forks.values(),
       ({ candidate, repository }) =>
-        Cache.get(
-          parentCache,
-          [
-            repository.kind,
-            repository.host,
-            repository.repository,
-            candidate.project.workspaceRoot,
-          ].join(KEY_SEPARATOR),
-        ).pipe(
+        getParent({ ...repository, cwd: candidate.project.workspaceRoot }).pipe(
           Effect.tapError((cause) =>
             Effect.logWarning("The fork's upstream repository could not be read.", { cause }),
           ),
@@ -158,7 +160,7 @@ const make = Effect.gen(function* () {
     return { parents, errors };
   });
 
-  return ForkUpstream.of({ readPolicy, findParents });
+  return ForkUpstream.of({ readPolicy, getParent, findParents });
 });
 
 export const layer = Layer.effect(ForkUpstream, make);

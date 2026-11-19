@@ -650,6 +650,7 @@ export const PullRequestDetail = Schema.Struct({
   projectId: ProjectId,
   projectTitle: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
+  checkoutAllowed: Schema.optionalKey(Schema.Boolean),
   repository: TrimmedNonEmptyString,
   number: PositiveInt,
   title: TrimmedNonEmptyString,
