@@ -226,7 +226,7 @@ it("keeps mark unread sticky after an expired wake is retired", () => {
   vi.advanceTimersByTime(VISIT_DISPATCH_THROTTLE_MS);
   expect(t.visits).toHaveLength(1);
 
-  t.update({ updatedAt: at(30) });
+  t.update({ wokeAt: at(30) });
   expect(t.visits.slice(1)).toEqual([{ threadId: t.ref.threadId, visitedAt: at(30) }]);
 });
 
@@ -566,6 +566,7 @@ it("waits for reconnect catch-up before retrying an open on a thread marked unre
     latestRun: { completedAt: at(10) },
   });
   t.setOnline(false);
+  t.pick();
   t.mount();
   await vi.advanceTimersByTimeAsync(2 * VISIT_DISPATCH_THROTTLE_MS);
 
@@ -573,14 +574,16 @@ it("waits for reconnect catch-up before retrying an open on a thread marked unre
   t.reconnect(false);
   expect(t.attempts).toHaveLength(1);
   const rewoundAt = "2026-01-01T00:00:09.999Z";
-  t.update({ lastVisitedAt: rewoundAt });
+  t.update({ updatedAt: at(30), lastVisitedAt: rewoundAt });
   t.synchronizeShell();
   await vi.advanceTimersByTimeAsync(VISIT_DISPATCH_THROTTLE_MS);
 
-  expect(t.visits).toEqual([{ threadId: t.ref.threadId, visitedAt: rewoundAt, opened: true }]);
+  expect(t.visits).toEqual([
+    { threadId: t.ref.threadId, visitedAt: rewoundAt, opened: true, searchQuery: "needle" },
+  ]);
 
-  t.update({ updatedAt: at(30), latestRun: { completedAt: at(30) } });
-  expect(t.visits.slice(1)).toEqual([{ threadId: t.ref.threadId, visitedAt: at(30) }]);
+  t.update({ updatedAt: at(40), latestRun: { completedAt: at(40) } });
+  expect(t.visits.slice(1)).toEqual([{ threadId: t.ref.threadId, visitedAt: at(40) }]);
 });
 
 it("records an open after leaving an offline thread and reopening it online without an initial session", async () => {

@@ -113,7 +113,7 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
       let lastVisit: VisitAttempt | null = null;
       let acceptedThrough = Number.NEGATIVE_INFINITY;
       let observedThrough = Number.NEGATIVE_INFINITY;
-      let observedReadActivityThrough = Number.NEGATIVE_INFINITY;
+      let observedReadCompletion = Number.NEGATIVE_INFINITY;
       let active = true;
       let timer: ReturnType<typeof setTimeout> | undefined;
       const clearTimer = () => {
@@ -252,7 +252,7 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
           ? Date.parse(shell.latestRun.completedAt)
           : NaN;
         if (completedAtMs <= lastVisitedAtMs) {
-          observedReadActivityThrough = Math.max(observedReadActivityThrough, shellUpdatedAtMs);
+          observedReadCompletion = Math.max(observedReadCompletion, completedAtMs);
         }
         if (!Number.isNaN(lastVisitedAtMs)) {
           observedThrough = Math.max(observedThrough, lastVisitedAtMs);
@@ -260,11 +260,11 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
         }
         if (session === null) return;
 
-        // A watermark that once covered this activity and now falls short signals a rewind.
+        // Metadata edits can bump updatedAt without changing the completed run a user marked unread.
         const rewound =
           (observedThrough >= updatedAtMs && lastVisitedAtMs < updatedAtMs) ||
-          (observedReadActivityThrough >= updatedAtMs &&
-            observedThrough >= completedAtMs &&
+          (!wakeIsLatest &&
+            observedReadCompletion === completedAtMs &&
             lastVisitedAtMs < completedAtMs);
         if (
           updateOpen(session, rewound ? shell.lastVisitedAt : visitedAt, shell.lastVisitedAt, pick)
