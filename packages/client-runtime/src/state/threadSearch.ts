@@ -45,6 +45,19 @@ export function claimThreadOpen(environmentId: EnvironmentId, threadId: string, 
   return true;
 }
 
+/**
+ * Gives back a claim from `claimThreadOpen` whose open never reached the
+ * server, so the next open of the thread is sent. A newer claim is kept.
+ */
+export function releaseThreadOpen(
+  environmentId: EnvironmentId,
+  threadId: string,
+  claimedAt: number,
+) {
+  const key = `${environmentId}:${threadId}`;
+  if (sentThreadOpens.get(key) === claimedAt) sentThreadOpens.delete(key);
+}
+
 export interface EnvironmentThreadSearchMatch extends OrchestrationThreadSearchMatch {
   readonly environmentId: EnvironmentId;
 }

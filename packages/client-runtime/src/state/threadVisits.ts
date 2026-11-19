@@ -4,7 +4,7 @@ import { AsyncResult, Atom } from "effect/reactivity";
 
 import { parseThreadKey, threadKey } from "./entities.ts";
 import { type AtomCommand, runAtomCommand } from "./runtime.ts";
-import { claimThreadOpen } from "./threadSearch.ts";
+import { claimThreadOpen, releaseThreadOpen } from "./threadSearch.ts";
 import type { VisitThreadInput } from "../operations/commands.ts";
 
 // During an active turn the thread's updatedAt advances several times per
@@ -60,7 +60,10 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
       // the shell only decides when the server hears about it.
       // Recorded even when the server cannot take opens, so recents follow
       // it. A palette pick already sent the open with its query.
-      let openPending = claimThreadOpen(ref.environmentId, ref.threadId, Date.now());
+      const openedAt = Date.now();
+      let openPending = claimThreadOpen(ref.environmentId, ref.threadId, openedAt);
+      // Until the server accepts it, leaving gives the claim back so the next open is sent.
+      let openUnconfirmed = openPending;
       // Dedupe per watermark: the shell updates again before the command's echo
       // lands. It also keeps a mark-unread on the open thread sticky, since the
       // rewind leaves updatedAt untouched.
@@ -80,6 +83,7 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
       get.addFinalizer(() => {
         active = false;
         clearTimer();
+        if (openUnconfirmed) releaseThreadOpen(ref.environmentId, ref.threadId, openedAt);
       });
 
       const accept = (visitedAt: string) => {
@@ -110,6 +114,7 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
         ).then((result) => {
           if (!active) return;
           if (!AsyncResult.isFailure(result)) {
+            if (opened) openUnconfirmed = false;
             accept(visitedAt);
             return;
           }
