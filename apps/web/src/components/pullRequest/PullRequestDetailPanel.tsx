@@ -848,10 +848,10 @@ export function PullRequestDetailPanel({
     pickableEnvironments.find((entry) => entry.environmentId === chosenEnvironmentId) ?? null;
   const actingEnvironmentId = acting?.environmentId ?? environmentId;
   // A fork's checkout fetches from the fork, so its upstream's rows are read here and not checked out.
-  const checkoutRoot =
-    matchingListEntry?.upstream === true
-      ? null
-      : (acting?.workspaceRoot ?? detail?.workspaceRoot ?? project?.workspaceRoot ?? null);
+  const browseOnly = matchingListEntry?.upstream === true;
+  const checkoutRoot = browseOnly
+    ? null
+    : (acting?.workspaceRoot ?? detail?.workspaceRoot ?? project?.workspaceRoot ?? null);
   const canOperateThread = useEnvironmentScope(actingEnvironmentId, AuthOrchestrationOperateScope);
   const prepareThread = usePreparePullRequestThreadAction({
     environmentId: actingEnvironmentId,
@@ -948,7 +948,7 @@ export function PullRequestDetailPanel({
   };
 
   const attachTarget = composerDraftTarget ?? null;
-  const canPrepareWorktree = checkoutRoot !== null && prepareThread.isAllowed && canOperateThread;
+  const canPrepareWorktree = !browseOnly && prepareThread.isAllowed && canOperateThread;
   const canFixFindings = attachTarget !== null || canPrepareWorktree;
   const handoffLabels = pullRequestHandoffLabels(attachTarget !== null, resolve);
   const guideWriter = useReviewGuideWriter({
@@ -1500,7 +1500,7 @@ export function PullRequestDetailPanel({
       : 0;
 
   const checkoutControl =
-    context === "page" && matchingListEntry?.upstream !== true ? (
+    context === "page" && !browseOnly ? (
       <PullRequestCheckoutMenu
         term={changeRequestTermKind(terminology)}
         handoff={handoff}
