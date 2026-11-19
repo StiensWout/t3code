@@ -42,10 +42,12 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import {
+  currentSession,
   EnvironmentRpcUnavailableError,
   getInitialServerConfig,
   isRpcClientError,
   request,
+  requestInSession,
 } from "../rpc/client.ts";
 
 interface CommandMetadata {
@@ -133,6 +135,8 @@ export interface UnsnoozeThreadInput extends ThreadCommandInput {
 
 export interface VisitThreadInput extends ThreadCommandInput {
   readonly visitedAt: string;
+  /** A shell-derived visit must stay on the session that synchronized that shell. */
+  readonly expectedSession?: object;
   /** Counts toward search frecency; `searchQuery` is the palette query that picked it. */
   readonly opened?: boolean;
   readonly searchQuery?: string;
@@ -667,9 +671,18 @@ export const unsnoozeThread = Effect.fn("EnvironmentCommands.unsnoozeThread")(fu
 export const visitThread = Effect.fn("EnvironmentCommands.visitThread")(function* (
   input: VisitThreadInput,
 ) {
-  return yield* dispatch({
+  const commandId = yield* allocateCommandId(input);
+  const session = yield* currentSession();
+  if (input.expectedSession !== undefined && input.expectedSession !== session) {
+    const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
+    return yield* new EnvironmentRpcUnavailableError({
+      environmentId: supervisor.target.environmentId,
+      message: "The connection changed before the thread visit was sent.",
+    });
+  }
+  return yield* requestInSession(session, ORCHESTRATION_V2_WS_METHODS.dispatchCommand, {
     type: "thread.visit",
-    commandId: yield* allocateCommandId(input),
+    commandId,
     threadId: input.threadId,
     visitedAt: input.visitedAt,
     ...(input.opened ? { opened: true } : {}),

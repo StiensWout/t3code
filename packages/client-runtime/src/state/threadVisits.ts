@@ -152,6 +152,7 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
             input: {
               threadId: ref.threadId,
               visitedAt,
+              expectedSession: session,
               ...(intent ? { opened: true, commandId: intent.commandId } : {}),
               ...(searchQuery ? { searchQuery } : {}),
             },
@@ -237,7 +238,7 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
         }
         if (session === null) return;
 
-        // A run can already be read even if later metadata advanced updatedAt.
+        // A watermark that once covered this activity and now falls short signals a rewind.
         const rewound =
           (observedThrough >= updatedAtMs && lastVisitedAtMs < updatedAtMs) ||
           (observedReadActivityThrough >= updatedAtMs &&

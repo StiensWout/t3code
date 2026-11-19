@@ -48,6 +48,7 @@ import {
   revertThreadCheckpoint,
   resumeThreadQueue,
   startThreadTurn,
+  visitThread,
 } from "./commands.ts";
 
 const layerTestRandom = Layer.succeed(
@@ -179,6 +180,34 @@ describe("V2 environment commands", () => {
       expect(commands).toEqual([
         { type: "thread.archive", commandId: "queued-command", threadId: "thread-1" },
       ]);
+    }).pipe(Effect.provide(layerTestRandom)),
+  );
+
+  it.effect("keeps a queued visit from using a replacement session", () =>
+    Effect.gen(function* () {
+      const commands: OrchestrationV2Command[] = [];
+      const supervisor = yield* makeSupervisor({ commands, projects: [] });
+      const firstSession = Option.getOrThrow(yield* SubscriptionRef.get(supervisor.session));
+      const replacement = { ...firstSession };
+      yield* SubscriptionRef.set(supervisor.session, Option.some(replacement));
+
+      const input = {
+        commandId: CommandId.make("queued-visit"),
+        threadId: v2ThreadId,
+        visitedAt: "2026-06-20T00:00:00.000Z",
+        opened: true,
+      } as const;
+      const stale = yield* visitThread({ ...input, expectedSession: firstSession }).pipe(
+        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        Effect.exit,
+      );
+      expect(Exit.isFailure(stale)).toBe(true);
+      expect(commands).toEqual([]);
+
+      yield* visitThread({ ...input, expectedSession: replacement }).pipe(
+        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+      );
+      expect(commands).toEqual([{ ...input, type: "thread.visit" }]);
     }).pipe(Effect.provide(layerTestRandom)),
   );
 

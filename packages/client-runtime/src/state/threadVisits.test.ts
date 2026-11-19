@@ -46,7 +46,7 @@ function setup(threadName: string, initial: Omit<Shell, "environmentId" | "id"> 
   let pendingResult: Promise<AtomCommandResult<void, string>> | undefined;
   const attempts: Array<VisitThreadInput> = [];
   const visit = async ({ input }: { readonly input: VisitThreadInput }) => {
-    const { commandId, ...payload } = input;
+    const { commandId, expectedSession: _expectedSession, ...payload } = input;
     attempts.push(payload);
     if (loseNextOpenAck && input.opened) {
       loseNextOpenAck = false;
