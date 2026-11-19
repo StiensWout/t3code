@@ -266,6 +266,34 @@ const githubContext = (host: string) => ({
 
 describe("GitHubSourceControlProvider repository resolution", () => {
   // regression: #38251 an Enterprise Server's hostname need not say "github"; a gh login vouches for it
+  it.effect("looks up upstreams without using the reserve and ignores a self-parent", () => {
+    const { layer } = harness({
+      remotes: remotesOutput(["origin", "https://github.com/Me/Web.git"]),
+      api: {
+        rest: (input) => {
+          assert.strictEqual(input.path, "repos/Me/Web");
+          assert.strictEqual(input.allowReserve, false);
+          return Effect.succeed(
+            restResponse({
+              full_name: "Me/Web",
+              html_url: "https://github.com/Me/Web",
+              ssh_url: "git@github.com:Me/Web.git",
+              parent: { full_name: "me/web" },
+            }),
+          );
+        },
+      },
+    });
+    return Effect.gen(function* () {
+      const gh = yield* GitHubSourceControlProvider.make;
+      assert.ok(gh.getRepositoryParent);
+      assert.strictEqual(
+        yield* gh.getRepositoryParent({ cwd: "/repo", host: "github.com", repository: "Me/Web" }),
+        null,
+      );
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect.each([
     ["github", "github"],
     ["unknown", "unknown"],

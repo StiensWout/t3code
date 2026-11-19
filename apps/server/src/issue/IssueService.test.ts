@@ -163,6 +163,7 @@ function makeService(input: {
   readonly bindings?: Record<string, IssueTrackerProjectBinding>;
   readonly bindingsFailure?: PersistenceSqlError;
   readonly settings?: ServerSettings;
+  readonly resolveRepositoryIdentity?: RepositoryIdentityResolver.RepositoryIdentityResolver["Service"]["resolve"];
   readonly getRepositoryParent?: SourceControlProvider["Service"]["getRepositoryParent"];
 }) {
   return IssueService.IssueService.pipe(
@@ -195,7 +196,7 @@ function makeService(input: {
                 ),
             }),
             Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
-              resolve: () => Effect.succeed(null),
+              resolve: input.resolveRepositoryIdentity ?? (() => Effect.succeed(null)),
             }),
             Layer.mock(ServerSettingsService.ServerSettingsService)({
               getSettings: Effect.succeed(input.settings ?? DEFAULT_SERVER_SETTINGS),
@@ -573,6 +574,59 @@ describe("IssueService", () => {
           .map((entry) => [entry.projectId, entry.key]),
       ).toEqual([["fork", "2"]]);
     }),
+  );
+
+  it.effect(
+    "adds upstream issues through the opted-in checkout after resolving a cold project",
+    () =>
+      Effect.gen(function* () {
+        const projectId = "fork" as ProjectId;
+        const fork = "Me/Web";
+        const upstream = "Acme/Web";
+        const identity = project({ id: projectId, repository: fork }).repositoryIdentity;
+        const parentReads: Array<{ cwd: string; repository: string }> = [];
+        const service = yield* makeService({
+          projects: [project({ id: "off", repository: fork }), project({ id: projectId })],
+          resolveRepositoryIdentity: () => Effect.succeed(identity ?? null),
+          settings: {
+            ...DEFAULT_SERVER_SETTINGS,
+            projectSettingsOverrides: { [projectId]: { includeForkUpstream: true } },
+          },
+          getRepositoryParent: ({ cwd, repository }) =>
+            Effect.sync(() => {
+              parentReads.push({ cwd, repository });
+              return upstream;
+            }),
+          trackers: [
+            fakeTracker({
+              listIssues: ({ host, scope }) =>
+                Effect.succeed({
+                  items: [{ ...issue("12"), url: `https://${host}/${scope}/issues/12` }],
+                  nextCursor: null,
+                }),
+            }),
+          ],
+        });
+        const listed = yield* service.list({ state: "open" });
+        expect(
+          listed.entries.map(({ projectId, scope, key }) => [projectId, scope, key]).toSorted(),
+        ).toEqual([
+          [projectId, upstream, "12"],
+          ["off", fork, "12"],
+        ]);
+
+        const request = { state: "open", projectId } as const;
+        const projectOnly = yield* service.list(request, { includeUpstream: false });
+        expect(projectOnly.entries.map(({ scope, key }) => [scope, key])).toEqual([[fork, "12"]]);
+
+        const parentIssue = listed.entries.find((row) => row.scope === upstream);
+        expect(parentIssue).toBeDefined();
+        const refused = yield* service
+          .comment({ ...parentIssue!, body: "This belongs upstream." })
+          .pipe(Effect.result);
+        expect(refused).toMatchObject({ _tag: "Failure", failure: { reason: "read-only" } });
+        expect(parentReads).toEqual([{ cwd: "/w/fork", repository: fork }]);
+      }),
   );
 });
 

@@ -756,13 +756,14 @@ export const make = Effect.gen(function* () {
 
   const readRepository = Effect.fn("GitHubSourceControlProvider.readRepository")(function* (
     locator: GitHubRepositoryLocator,
+    allowReserve = true,
   ) {
     const response = yield* rest(
       {
         host: locator.host,
         operation: "getRepository",
         path: `repos/${encodeURIComponent(locator.owner)}/${encodeURIComponent(locator.name)}`,
-        allowReserve: true,
+        allowReserve,
       },
       REPOSITORY_NOT_FOUND,
     );
@@ -1170,7 +1171,11 @@ export const make = Effect.gen(function* () {
       function* (input) {
         const locator = parseGitHubRepositorySelector(input.repository, input.host.toLowerCase());
         if (locator === null) return yield* failure("Repositories are named owner/name.");
-        return (yield* readRepository(locator)).parent?.full_name ?? null;
+        const repository = yield* readRepository(locator, false);
+        const parent = repository.parent?.full_name;
+        return parent !== undefined && parent.toLowerCase() !== repository.full_name.toLowerCase()
+          ? parent
+          : null;
       },
       (effect, input) =>
         effect.pipe(

@@ -440,7 +440,7 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
                     subtitle={managedSubtitle(
                       "includeForkUpstream",
                       gt(
-                        "When the repository is a fork, also list the pull requests and issues of the repository it was forked from.",
+                        "For GitHub forks, also show pull requests and issues from the parent of the project's selected repository.",
                       ),
                     )}
                     value={uniform("includeForkUpstream")}

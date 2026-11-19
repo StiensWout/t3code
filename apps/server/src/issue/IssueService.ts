@@ -46,7 +46,7 @@ import { parseUrl } from "@t3tools/shared/url";
 import * as IssueTrackerBindings from "../persistence/IssueTrackerBindings.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
-import { makeForkUpstreamLookup } from "../sourceControl/forkUpstream.ts";
+import { includesForkUpstream, makeForkUpstreamLookup } from "../sourceControl/forkUpstream.ts";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
 import * as IssueTrackerRegistry from "./IssueTrackerRegistry.ts";
 
@@ -73,6 +73,7 @@ interface ProjectTrackerBinding {
   readonly tracker: IssueTrackerKind;
   readonly host: string;
   readonly scope: string;
+  readonly forkRepository?: { readonly kind: SourceControlProviderKind; readonly selector: string };
 }
 
 /** A project the registry has a tracker for, ready to serve reads and writes. */
@@ -85,15 +86,19 @@ interface SupportedProject extends ProjectTrackerBinding {
  * The git-host path of resolution: the tracker is the host's own, named like the remote's
  * provider kind. Null for a project with no remote or a kind no tracker claims.
  */
-function resolveGitHostBinding(project: OrchestrationProjectShell): ProjectTrackerBinding | null {
-  const identity = project.repositoryIdentity;
+function resolveGitHostBinding(
+  identity: OrchestrationProjectShell["repositoryIdentity"],
+): ProjectTrackerBinding | null {
   const scope = sourceControlDefinitions.issueScope(identity);
   const kind = identity?.provider;
   if (!identity || kind === undefined || kind === "unknown" || scope === null) return null;
+  const selector = sourceControlDefinitions.repositorySelector(identity);
   return {
     tracker: IssueTrackerKind.make(kind),
     host: sourceControlDefinitions.changeRequestHost(identity, kind),
     scope,
+    // Only a repository's own issue scope has an equivalent scope on the fork parent.
+    ...(selector === scope ? { forkRepository: { kind, selector } } : {}),
   };
 }
 
@@ -149,7 +154,10 @@ const unsupported = (operation: string, what: string) =>
 export class IssueService extends Context.Service<
   IssueService,
   {
-    readonly list: (input: IssueListInput) => Effect.Effect<IssueListResult, IssueError>;
+    readonly list: (
+      input: IssueListInput,
+      options?: { readonly includeUpstream: false },
+    ) => Effect.Effect<IssueListResult, IssueError>;
     readonly detail: (input: IssueRef) => Effect.Effect<IssueDetail, IssueError>;
     readonly comments: (
       input: IssueCommentsPageInput,
@@ -229,11 +237,7 @@ const make = Effect.gen(function* () {
       (project.repositoryIdentity != null
         ? Effect.succeed(project.repositoryIdentity)
         : repositoryIdentities.resolve(project.workspaceRoot)
-      ).pipe(
-        Effect.map((repositoryIdentity) =>
-          resolveGitHostBinding({ ...project, repositoryIdentity }),
-        ),
-      ),
+      ).pipe(Effect.map(resolveGitHostBinding)),
     ]).pipe(Effect.map((resolved) => resolved.filter((binding) => binding !== null)));
 
   const listProjects = (filter: {
@@ -313,19 +317,6 @@ const make = Effect.gen(function* () {
       }),
     );
 
-  /** A git host's issue scope that is the fork's repository reads its upstream's beside it. */
-  const upstreamScope = (project: SupportedProject) => {
-    const identity = project.project.repositoryIdentity;
-    const kind = identity?.provider;
-    const repository = sourceControlDefinitions.repositorySelector(identity);
-    return kind === undefined ||
-      isStandaloneIssueTracker(project.api) ||
-      repository === null ||
-      repository.toLowerCase() !== project.scope.toLowerCase()
-      ? Effect.succeed(null)
-      : forkUpstream({ project: project.project, kind, host: project.host, repository });
-  };
-
   const requireWritable = (ref: IssueScopeRef, operation: string) =>
     requireProject(ref).pipe(
       Effect.filterOrFail(
@@ -334,7 +325,10 @@ const make = Effect.gen(function* () {
       ),
     );
 
-  const list: IssueService["Service"]["list"] = Effect.fn("IssueService.list")(function* (input) {
+  const list = Effect.fn("IssueService.list")(function* (
+    input: IssueListInput,
+    options?: { readonly includeUpstream: false },
+  ) {
     // Trackers name every host so a client narrowed to one can switch to another; only the
     // narrowed host's scopes are read.
     const { supported, unimplemented } = yield* listProjects({ projectId: input.projectId });
@@ -342,25 +336,43 @@ const make = Effect.gen(function* () {
     const limit = input.limit ?? DEFAULT_LIST_LIMIT;
     // Worktrees of one repository are separate projects, and every repository of an Azure
     // DevOps project shares its work items; read each scope once.
+    const policy = options?.includeUpstream === false ? null : yield* forkUpstream.readPolicy;
     const scopes = new Map<string, SupportedProject>();
+    const forks = new Map<
+      string,
+      SupportedProject & { forkRepository: NonNullable<ProjectTrackerBinding["forkRepository"]> }
+    >();
     for (const project of supported) {
       if (host !== undefined && project.host !== host) continue;
       const key = listCursorKey(project.host, project.scope);
       if (!scopes.has(key)) scopes.set(key, project);
+      if (
+        project.forkRepository !== undefined &&
+        includesForkUpstream(policy, project.project.id) &&
+        !forks.has(key)
+      ) {
+        forks.set(key, { ...project, forkRepository: project.forkRepository });
+      }
     }
-    // Served by the fork's project, which requireProject keeps read-only.
-    yield* Effect.forEach(
-      [...scopes.values()],
+    // Served by the opted-in fork's checkout, which requireProject keeps read-only.
+    const upstreams = yield* Effect.forEach(
+      forks.values(),
       (project) =>
-        upstreamScope(project).pipe(
-          Effect.map((scope) => {
-            if (scope === null) return;
-            const key = listCursorKey(project.host, scope);
-            if (!scopes.has(key)) scopes.set(key, { ...project, scope });
-          }),
-        ),
+        forkUpstream
+          .findParent({
+            project: project.project,
+            kind: project.forkRepository.kind,
+            host: project.host,
+            repository: project.forkRepository.selector,
+          })
+          .pipe(Effect.map((scope) => ({ project, scope }))),
       { concurrency: SCOPE_CONCURRENCY },
     );
+    for (const { project, scope } of upstreams) {
+      if (scope === null) continue;
+      const key = listCursorKey(project.host, scope);
+      if (!scopes.has(key)) scopes.set(key, { ...project, scope });
+    }
     const continuing = input.cursors;
     const viewers = new Map<string, string>();
     const trackers = new Map<string, IssueTrackerSummary>();

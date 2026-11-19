@@ -3604,7 +3604,7 @@
   "efb65f53a2382026": "Quitar créditos de agentes al fusionar",
   "88631d9ea293eccd": "Quita los créditos de agentes reconocidos de los mensajes de fusión y squash en los hosts compatibles, manteniendo a los coautores humanos. Incluye la fusión automática. Excluye las colas de fusión, las fusiones de pilas y los commits existentes.",
   "7ceb6a81498c07c8": "Incluir pull requests e issues del upstream",
-  "82a7b1049a71257a": "Si el repositorio es un fork, también lista los pull requests e issues del repositorio del que se bifurcó.",
+  "78fa47b73fdc0f13": "En los forks de GitHub, muestra también las solicitudes de incorporación y los problemas del repositorio padre del repositorio seleccionado para el proyecto.",
   "15ed472fb3ba4a6d": "Rama predeterminada",
   "abe5615aea30066d": "Hacer pull automáticamente",
   "17782375efd2c928": "Mantiene actualizada la rama predeterminada cuando no hay cambios locales.",

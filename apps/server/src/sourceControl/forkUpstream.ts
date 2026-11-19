@@ -1,5 +1,8 @@
-import { type OrchestrationProjectShell, SourceControlProviderKind } from "@t3tools/contracts";
-import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
+import {
+  type OrchestrationProjectShell,
+  type ProjectId,
+  SourceControlProviderKind,
+} from "@t3tools/contracts";
 import * as Cache from "effect/Cache";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -12,15 +15,35 @@ import * as SourceControlProviderRegistry from "./SourceControlProviderRegistry.
 const PARENT_TTL = Duration.hours(1);
 const KEY_SEPARATOR = "\0";
 
-/**
- * Builds the lookup of the repository a project's fork was made from, which pull request and
- * issue listings read beside the fork when the project's `includeForkUpstream` setting is on.
- * Null when the setting is off, for a repository that is no fork, and when the host does not say
- * or cannot be read: the fork's own listing goes on without it.
- */
+export type ForkUpstreamPolicy = readonly [
+  enabledByDefault: boolean,
+  exceptions: ReadonlyArray<string>,
+];
+
+export function includesForkUpstream(policy: ForkUpstreamPolicy | null, projectId: ProjectId) {
+  return policy !== null && policy[0] !== policy[1].includes(projectId);
+}
+
+/** Resolves fork parents for listings without making the fork's own rows depend on the lookup. */
 export const makeForkUpstreamLookup = Effect.gen(function* () {
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const providers = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
+  // A stable, settings-only key lets cached listings use the same policy they were keyed on.
+  const readPolicy = serverSettings.getSettings.pipe(
+    Effect.map((settings): ForkUpstreamPolicy => {
+      const enabledByDefault = settings.includeForkUpstream;
+      const exceptions = Object.entries(settings.projectSettingsOverrides)
+        .filter(
+          ([, overrides]) =>
+            overrides.includeForkUpstream !== undefined &&
+            overrides.includeForkUpstream !== enabledByDefault,
+        )
+        .map(([projectId]) => projectId)
+        .sort();
+      return [enabledByDefault, exceptions];
+    }),
+    Effect.orElseSucceed((): ForkUpstreamPolicy => [false, []]),
+  );
   const parents = yield* Cache.makeWith(
     (key: string) => {
       const [kind = "", host = "", repository = "", cwd = ""] = key.split(KEY_SEPARATOR);
@@ -39,33 +62,22 @@ export const makeForkUpstreamLookup = Effect.gen(function* () {
     },
   );
 
-  return Effect.fn("ForkUpstream.lookup")(function* (input: {
+  const findParent = Effect.fn("ForkUpstream.lookup")(function* (input: {
     readonly project: OrchestrationProjectShell;
     readonly kind: SourceControlProviderKind;
     readonly host: string;
     readonly repository: string;
   }) {
-    const settings = yield* serverSettings.getSettings.pipe(Effect.orElseSucceed(() => null));
-    if (
-      settings === null ||
-      !resolveProjectSettings(settings, input.project.id).settings.includeForkUpstream
-    ) {
-      return null;
-    }
-    const key = [
-      input.kind,
-      input.host,
-      input.repository.toLowerCase(),
-      input.project.workspaceRoot,
-    ].join(KEY_SEPARATOR);
-    const parent = yield* Cache.get(parents, key).pipe(
+    const key = [input.kind, input.host, input.repository, input.project.workspaceRoot].join(
+      KEY_SEPARATOR,
+    );
+    return yield* Cache.get(parents, key).pipe(
       Effect.tapError((cause) =>
         Effect.logWarning("The fork's upstream repository could not be read.", { cause }),
       ),
       Effect.orElseSucceed(() => null),
     );
-    return parent !== null && parent.toLowerCase() !== input.repository.toLowerCase()
-      ? parent
-      : null;
   });
+
+  return { readPolicy, findParent };
 });

@@ -160,13 +160,16 @@ const make = Effect.gen(function* () {
     list_issues: McpToolAccess.reads((input) =>
       Effect.gen(function* () {
         const { projectId } = yield* requireProjectScope(input.projectId);
-        const result = yield* issues.list({
-          projectId,
-          state: input.state ?? "open",
-          ...(input.query === undefined ? {} : { query: input.query }),
-          ...(input.limit === undefined ? {} : { limit: input.limit }),
-          ...(input.cursors === undefined ? {} : { cursors: input.cursors }),
-        });
+        const result = yield* issues.list(
+          {
+            projectId,
+            state: input.state ?? "open",
+            ...(input.query === undefined ? {} : { query: input.query }),
+            ...(input.limit === undefined ? {} : { limit: input.limit }),
+            ...(input.cursors === undefined ? {} : { cursors: input.cursors }),
+          },
+          { includeUpstream: false },
+        );
         return {
           issues: result.entries.map((entry) => ({
             projectId: entry.projectId,

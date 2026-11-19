@@ -509,13 +509,13 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
             mixed={mixedForkUpstream}
             {...searchableSetting("include-fork-upstream")}
             description={gt(
-              "When the repository is a fork, the Pull requests and Issues lists also show those of the repository it was forked from.",
+              "For GitHub forks, also show pull requests and issues from the parent of the project's selected repository.",
             )}
             resetAction={
               settings.includeForkUpstream ? (
                 <SettingResetButton
                   ariaLabel={gt("Reset upstream pull requests and issues to default")}
-                  tooltip={gt("Show only the fork's own")}
+                  tooltip={gt("Show the selected repository only")}
                   onClick={() => updateSettings({ includeForkUpstream: false })}
                 />
               ) : null
