@@ -586,6 +586,32 @@ it("waits for reconnect catch-up before retrying an open on a thread marked unre
   expect(t.visits.slice(1)).toEqual([{ threadId: t.ref.threadId, visitedAt: at(40) }]);
 });
 
+it("keeps a thread marked unread elsewhere after a committed open whose read update never arrived", async () => {
+  using t = setup("thread-rewind-after-unseen-read", {
+    updatedAt: at(20),
+    lastVisitedAt: null,
+    latestRun: { completedAt: at(10) },
+  });
+  t.loseNextOpenAck();
+  t.mount();
+  await vi.advanceTimersByTimeAsync(0);
+
+  t.reconnect(false);
+  const rewoundAt = "2026-01-01T00:00:09.999Z";
+  t.update({ updatedAt: at(30), lastVisitedAt: rewoundAt });
+  t.synchronizeShell();
+  await vi.advanceTimersByTimeAsync(VISIT_DISPATCH_THROTTLE_MS);
+
+  expect(t.attempts).toEqual([
+    { threadId: t.ref.threadId, visitedAt: at(20), opened: true },
+    { threadId: t.ref.threadId, visitedAt: at(20), opened: true },
+  ]);
+  expect(t.openCommandIds[1]).toBe(t.openCommandIds[0]);
+
+  t.update({ updatedAt: at(40), latestRun: { completedAt: at(40) } });
+  expect(t.attempts.slice(2)).toEqual([{ threadId: t.ref.threadId, visitedAt: at(40) }]);
+});
+
 it("records an open after leaving an offline thread and reopening it online without an initial session", async () => {
   using t = setup("thread-reopen-without-session", {
     updatedAt: at(10),

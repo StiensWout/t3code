@@ -147,10 +147,12 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
         }
       });
 
+      // completedAtMs is the run completion the shell showed when the visit was sent.
       const visit = (
         session: object,
         visitedAt: string,
         observedLastVisitedAt: string | null,
+        completedAtMs: number,
         intent?: OpenIntent,
       ) => {
         const searchQuery = intent?.pick?.query;
@@ -185,7 +187,13 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
           { reportFailure: false },
         ).then((result) => {
           attempt.failed = AsyncResult.isFailure(result);
-          if (!attempt.failed) acceptedThrough = Math.max(acceptedThrough, attempt.visitedAtMs);
+          if (!attempt.failed) {
+            acceptedThrough = Math.max(acceptedThrough, attempt.visitedAtMs);
+            // The server read this completion even when its shell update never reaches us.
+            if (completedAtMs <= attempt.visitedAtMs) {
+              observedReadCompletion = Math.max(observedReadCompletion, completedAtMs);
+            }
+          }
           return !attempt.failed;
         });
       };
@@ -194,20 +202,25 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
         session: object,
         visitedAt: string,
         observedLastVisitedAt: string | null,
+        completedAtMs: number,
         intent: OpenIntent,
       ) => {
-        const finished = visit(session, visitedAt, observedLastVisitedAt, intent).then(
-          (accepted) => {
-            if (!accepted && (active || intent.pick === null)) {
-              open.current = { status: "failed", intent, session, visitedAt };
-            } else {
-              open.current = null;
-              if (!accepted) releaseOpen(intent.claim);
-            }
-            if (accepted && intent.pick !== null) clearThreadSearchPick(registry, ref, intent.pick);
-            if (active) update(registry.get(inputsAtom));
-          },
-        );
+        const finished = visit(
+          session,
+          visitedAt,
+          observedLastVisitedAt,
+          completedAtMs,
+          intent,
+        ).then((accepted) => {
+          if (!accepted && (active || intent.pick === null)) {
+            open.current = { status: "failed", intent, session, visitedAt };
+          } else {
+            open.current = null;
+            if (!accepted) releaseOpen(intent.claim);
+          }
+          if (accepted && intent.pick !== null) clearThreadSearchPick(registry, ref, intent.pick);
+          if (active) update(registry.get(inputsAtom));
+        });
         open.current = { status: "sending", finished };
       };
 
@@ -215,6 +228,7 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
         session: object,
         visitedAt: string | null,
         observedLastVisitedAt: string | null,
+        completedAtMs: number,
         pick: ThreadSearchPick | null,
       ) => {
         const current = open.current;
@@ -226,7 +240,7 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
             // execution must use the lower watermark to keep the thread unread.
             const retryAt =
               Date.parse(visitedAt) < Date.parse(current.visitedAt) ? visitedAt : current.visitedAt;
-            sendOpen(session, retryAt, observedLastVisitedAt, current.intent);
+            sendOpen(session, retryAt, observedLastVisitedAt, completedAtMs, current.intent);
             return true;
           }
           const { intent } = current;
@@ -245,7 +259,7 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
           releaseOpen(claim);
           open.current = null;
         } else {
-          sendOpen(session, visitedAt, observedLastVisitedAt, {
+          sendOpen(session, visitedAt, observedLastVisitedAt, completedAtMs, {
             claim,
             commandId: pick?.commandId ?? options.newCommandId(),
             pick,
@@ -292,7 +306,13 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
             observedReadCompletion === completedAtMs &&
             lastVisitedAtMs < completedAtMs);
         if (
-          updateOpen(session, rewound ? shell.lastVisitedAt : visitedAt, shell.lastVisitedAt, pick)
+          updateOpen(
+            session,
+            rewound ? shell.lastVisitedAt : visitedAt,
+            shell.lastVisitedAt,
+            completedAtMs,
+            pick,
+          )
         )
           return;
 
@@ -308,7 +328,7 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
           wakeIsLatest ||
           elapsed >= VISIT_DISPATCH_THROTTLE_MS
         ) {
-          void visit(session, visitedAt, shell.lastVisitedAt).then((accepted) => {
+          void visit(session, visitedAt, shell.lastVisitedAt, completedAtMs).then((accepted) => {
             if (!accepted && active) update(registry.get(inputsAtom));
           });
         } else {
