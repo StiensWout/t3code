@@ -199,7 +199,6 @@ export function createIssueEnvironmentAtoms<R, E>(
   const list = createEnvironmentQueryAtomFamily(runtime, {
     label: "environment-data:issues:list",
     staleTimeMs: 30_000,
-    refreshTrigger: ({ environmentId }) => forkUpstreamSettingsAtom?.(environmentId),
     execute: Effect.fnUntraced(function* (
       input: IssueListInput,
     ): Effect.fn.Return<
@@ -225,6 +224,8 @@ export function createIssueEnvironmentAtoms<R, E>(
         ),
       );
     }),
+    refreshTrigger: ({ environmentId }: { environmentId: EnvironmentId; input: IssueListInput }) =>
+      forkUpstreamSettingsAtom?.(environmentId),
   });
   return {
     /** The threads an issue is linked to, reread when the server signals a link changed. */
