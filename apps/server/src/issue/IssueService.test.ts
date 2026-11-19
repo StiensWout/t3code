@@ -6,6 +6,7 @@ import * as SourceControlRateLimit from "@t3tools/source-control-core/server/Sou
 import {
   IssueTrackerKind,
   type IssueTrackerProjectBinding,
+  SourceControlProviderError,
   SourceControlProviderKind,
   type OrchestrationProjectShell,
   type ProjectId,
@@ -594,8 +595,8 @@ describe("IssueService", () => {
                       new IssueTrackerError({
                         tracker: GITHUB,
                         operation: "listIssues",
-                        reason: "failed",
-                        detail: "Issues are disabled.",
+                        reason: "unauthenticated",
+                        detail: "Sign in to read upstream issues.",
                       }),
                     )
                   : Effect.succeed({ items: [issue("1")], nextCursor: null }),
@@ -606,9 +607,44 @@ describe("IssueService", () => {
         expect(listed.entries.map(({ scope, key }) => [scope, key])).toEqual([["me/web", "1"]]);
         expect(listed.trackers).toMatchObject([{ configured: true }]);
         expect(listed.errors).toMatchObject([
-          { projectId: "fork", message: "acme/web could not be read. Issues are disabled." },
+          {
+            projectId: "fork",
+            message: "acme/web could not be read. Sign in to read upstream issues.",
+          },
         ]);
       }),
+  );
+
+  it.effect("reports an upstream lookup failure beside the fork's issues", () =>
+    Effect.gen(function* () {
+      const service = yield* makeService({
+        projects: [project({ id: "fork", repository: "me/web" })],
+        settings: { ...DEFAULT_SERVER_SETTINGS, includeForkUpstream: true },
+        getRepositoryParent: ({ cwd }) =>
+          Effect.fail(
+            new SourceControlProviderError({
+              provider: SourceControlProviderKind.make("github"),
+              operation: "getRepositoryParent",
+              cwd,
+              detail: "Repository metadata is unavailable.",
+            }),
+          ),
+        trackers: [
+          fakeTracker({
+            listIssues: () => Effect.succeed({ items: [issue("1")], nextCursor: null }),
+          }),
+        ],
+      });
+      const listed = yield* service.list({ state: "open" });
+      expect(listed.entries.map(({ scope, key }) => [scope, key])).toEqual([["me/web", "1"]]);
+      expect(listed.trackers).toMatchObject([{ configured: true }]);
+      expect(listed.errors).toMatchObject([
+        {
+          projectId: "fork",
+          message: "The upstream of me/web could not be read. Repository metadata is unavailable.",
+        },
+      ]);
+    }),
   );
 
   it.effect(

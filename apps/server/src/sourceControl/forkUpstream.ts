@@ -3,7 +3,6 @@ import {
   ProjectId,
   SourceControlProviderKind,
 } from "@t3tools/contracts";
-import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import * as Cache from "effect/Cache";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
@@ -18,7 +17,17 @@ import * as SourceControlProviderRegistry from "./SourceControlProviderRegistry.
 const PARENT_TTL = Duration.hours(1);
 const KEY_SEPARATOR = "\0";
 
-export type ForkUpstreamPolicy = ReadonlyArray<ProjectId>;
+export interface ForkUpstreamPolicy {
+  readonly defaultEnabled: boolean;
+  readonly overrides: Readonly<Record<string, boolean>>;
+}
+
+export const disabledPolicy: ForkUpstreamPolicy = { defaultEnabled: false, overrides: {} };
+
+export function includesUpstream(policy: ForkUpstreamPolicy, projectId: ProjectId): boolean {
+  const override = policy.overrides[projectId];
+  return typeof override === "boolean" ? override : policy.defaultEnabled;
+}
 
 interface ParentLookupInput {
   readonly project: OrchestrationProjectShell;
@@ -31,41 +40,50 @@ interface ForkListingRepository extends Omit<ParentLookupInput, "project"> {
   readonly key: string;
 }
 
+interface ParentLookups<A> {
+  readonly parents: ReadonlyArray<{ readonly candidate: A; readonly parent: string }>;
+  readonly errors: ReadonlyArray<{
+    readonly projectId: ProjectId;
+    readonly projectTitle: string;
+    readonly message: string;
+  }>;
+}
+
 /** Resolves fork parents for listings without making the fork's own rows depend on the lookup. */
 export class ForkUpstream extends Context.Service<
   ForkUpstream,
   {
-    readonly readPolicy: <E>(
-      projectIds: Effect.Effect<Iterable<ProjectId>, E>,
-    ) => Effect.Effect<ForkUpstreamPolicy, E>;
+    readonly readPolicy: Effect.Effect<ForkUpstreamPolicy>;
     readonly findParents: <A extends { readonly project: OrchestrationProjectShell }>(
       candidates: Iterable<A>,
       policy: ForkUpstreamPolicy,
       repositoryOf: (candidate: A) => ForkListingRepository | undefined,
       concurrency: number,
-    ) => Effect.Effect<readonly { candidate: A; parent: string }[]>;
+    ) => Effect.Effect<ParentLookups<A>>;
   }
 >()("t3/sourceControl/forkUpstream") {}
 
 const make = Effect.gen(function* () {
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const providers = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
-  const readPolicy = Effect.fn("ForkUpstream.readPolicy")(function* <E>(
-    projectIds: Effect.Effect<Iterable<ProjectId>, E>,
-  ) {
-    const settings = yield* serverSettings.getSettings.pipe(Effect.orElseSucceed(() => null));
-    if (settings === null) return [];
-    const enabled = (projectId: ProjectId | null) =>
-      resolveProjectSettings(settings, projectId).settings.includeForkUpstream;
-    // Skip reading the project catalog when no project could be opted in.
-    if (
-      !enabled(null) &&
-      !Object.keys(settings.projectSettingsOverrides).some((id) => enabled(ProjectId.make(id)))
-    ) {
-      return [];
-    }
-    return [...new Set(yield* projectIds)].filter(enabled).sort();
-  });
+  const readPolicy = serverSettings.getSettings.pipe(
+    Effect.map((settings): ForkUpstreamPolicy => {
+      const defaultEnabled = settings.includeForkUpstream;
+      // The policy also keys listing caches, so equivalent settings must serialize identically.
+      const overrides = Object.keys(settings.projectSettingsOverrides)
+        .sort()
+        .flatMap((id) => {
+          const enabled =
+            settings.projectSettingsOverrides[ProjectId.make(id)]?.includeForkUpstream;
+          return enabled === undefined || enabled === defaultEnabled
+            ? []
+            : [[id, enabled] as const];
+        });
+      return { defaultEnabled, overrides: Object.fromEntries(overrides) };
+    }),
+    Effect.orElseSucceed(() => disabledPolicy),
+    Effect.withSpan("ForkUpstream.readPolicy"),
+  );
   const parents = yield* Cache.makeWith(
     (key: string) => {
       const [kind = "", host = "", repository = "", cwd = ""] = key.split(KEY_SEPARATOR);
@@ -92,7 +110,6 @@ const make = Effect.gen(function* () {
       Effect.tapError((cause) =>
         Effect.logWarning("The fork's upstream repository could not be read.", { cause }),
       ),
-      Effect.orElseSucceed(() => null),
     );
   });
 
@@ -104,25 +121,38 @@ const make = Effect.gen(function* () {
     repositoryOf: (candidate: A) => ForkListingRepository | undefined,
     concurrency: number,
   ) {
-    if (policy.length === 0) return [];
-    const enabled = new Set(policy);
     const forks = new Map<string, { candidate: A; repository: ForkListingRepository }>();
     for (const candidate of candidates) {
-      if (!enabled.has(candidate.project.id)) continue;
+      if (!includesUpstream(policy, candidate.project.id)) continue;
       const repository = repositoryOf(candidate);
       if (repository !== undefined && !forks.has(repository.key)) {
         forks.set(repository.key, { candidate, repository });
       }
     }
-    const parents = yield* Effect.forEach(
+    const lookups = yield* Effect.forEach(
       forks.values(),
       ({ candidate, repository }) =>
         findParent({ ...repository, project: candidate.project }).pipe(
-          Effect.map((parent) => (parent === null ? null : { candidate, parent })),
+          Effect.result,
+          Effect.map((result) => ({ candidate, repository, result })),
         ),
       { concurrency },
     );
-    return parents.filter((parent) => parent !== null);
+    const parents: Array<ParentLookups<A>["parents"][number]> = [];
+    const errors: Array<ParentLookups<A>["errors"][number]> = [];
+    for (const { candidate, repository, result } of lookups) {
+      if (result._tag === "Failure") {
+        const detail = result.failure.detail.trim();
+        errors.push({
+          projectId: candidate.project.id,
+          projectTitle: candidate.project.title,
+          message: `The upstream of ${repository.repository} could not be read.${detail === "" ? "" : ` ${detail}`}`,
+        });
+      } else if (result.success !== null) {
+        parents.push({ candidate, parent: result.success });
+      }
+    }
+    return { parents, errors };
   });
 
   return ForkUpstream.of({ readPolicy, findParents });

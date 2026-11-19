@@ -337,10 +337,8 @@ const make = Effect.gen(function* () {
     // DevOps project shares its work items; read each scope once.
     const policy =
       options?.includeUpstream === false
-        ? []
-        : yield* forkUpstream.readPolicy(
-            Effect.succeed(supported.map(({ project }) => project.id)),
-          );
+        ? ForkUpstream.disabledPolicy
+        : yield* forkUpstream.readPolicy;
     const candidates = supported.filter((project) => host === undefined || project.host === host);
     const scopes = new Map<string, { project: SupportedProject; upstream: boolean }>();
     for (const project of candidates) {
@@ -348,7 +346,7 @@ const make = Effect.gen(function* () {
       if (!scopes.has(key)) scopes.set(key, { project, upstream: false });
     }
     // Served by the opted-in fork's checkout, which requireProject keeps read-only.
-    const upstreams = yield* forkUpstream.findParents(
+    const { parents, errors: upstreamErrors } = yield* forkUpstream.findParents(
       candidates,
       policy,
       (project) =>
@@ -362,7 +360,7 @@ const make = Effect.gen(function* () {
             },
       SCOPE_CONCURRENCY,
     );
-    for (const { candidate, parent: scope } of upstreams) {
+    for (const { candidate, parent: scope } of parents) {
       const key = listCursorKey(candidate.host, scope);
       if (!scopes.has(key)) scopes.set(key, { project: { ...candidate, scope }, upstream: true });
     }
@@ -370,7 +368,7 @@ const make = Effect.gen(function* () {
     const viewers = new Map<string, string>();
     const trackers = new Map<string, IssueTrackerSummary>();
     const entries: IssueListEntry[] = [];
-    const errors: IssueListProjectError[] = [];
+    const errors: IssueListProjectError[] = [...upstreamErrors];
     const nextCursors: Record<string, string> = {};
 
     const involvement = input.involvement ?? "all";

@@ -1047,6 +1047,24 @@ export const make = Effect.gen(function* () {
       }),
     );
 
+  const withRepository = (project: SupportedProject, repository: string): SupportedProject => {
+    const { host, api } = project;
+    const remote = sourceControlDefinitions.repositoryKeyFromRemote(
+      `https://${host}/${repository}`,
+    );
+    const repositoryKey = api.repositoryKey?.({ canonicalKey: remote }) ?? null;
+    return {
+      ...project,
+      cursorKey: listCursorKey(host, repositoryKey ?? repository),
+      repository,
+      remote: repositoryKey ?? remote,
+      repositoryKey:
+        repositoryKey === null
+          ? null
+          : sourceControlDefinitions.canonicalRepositoryKey(repositoryKey.toLowerCase()),
+    };
+  };
+
   // Azure derives organization from the checkout; require the matching repository.
   const requireProject = (ref: PullRequestRef): Effect.Effect<SupportedProject, PullRequestError> =>
     listWorkspaceProjects({ projectId: ref.projectId }).pipe(
@@ -1140,13 +1158,7 @@ export const make = Effect.gen(function* () {
               route.repositoryKey !== null ||
                 route.repository.toLowerCase() === repository.toLowerCase()
                 ? route
-                : {
-                    ...route,
-                    repository,
-                    remote: sourceControlDefinitions.repositoryKeyFromRemote(
-                      `https://${host}/${repository}`,
-                    ),
-                  },
+                : withRepository(route, repository),
             );
           }),
         );
@@ -1386,13 +1398,11 @@ export const make = Effect.gen(function* () {
     };
   };
 
-  const withRepository = (project: SupportedProject, repository: string): SupportedProject => ({
-    ...project,
-    cursorKey: listCursorKey(project.host, repository),
-    repository,
-    remote: sourceControlDefinitions.repositoryKeyFromRemote(
-      `https://${project.host}/${repository}`,
-    ),
+  const forkListingRepository = (project: SupportedProject) => ({
+    key: project.cursorKey,
+    kind: project.api.kind,
+    host: project.host,
+    repository: project.repository,
   });
 
   const listingRepositories = (
@@ -1400,30 +1410,17 @@ export const make = Effect.gen(function* () {
     policy: ForkUpstream.ForkUpstreamPolicy,
   ) =>
     forkUpstream
-      .findParents(
-        candidates,
-        policy,
-        (candidate) =>
-          candidate.repositoryKey !== null
-            ? undefined
-            : {
-                key: candidate.cursorKey,
-                kind: candidate.api.kind,
-                host: candidate.host,
-                repository: candidate.repository,
-              },
-        REPOSITORY_CONCURRENCY,
-      )
+      .findParents(candidates, policy, forkListingRepository, REPOSITORY_CONCURRENCY)
       .pipe(
-        Effect.map((upstreams) => {
+        Effect.map(({ parents, errors }) => {
           const repositories = new Map(supported.map((project) => [project.cursorKey, project]));
-          for (const { candidate, parent: repository } of upstreams) {
+          for (const { candidate, parent: repository } of parents) {
             const upstream = withRepository(candidate, repository);
             if (!repositories.has(upstream.cursorKey)) {
               repositories.set(upstream.cursorKey, upstream);
             }
           }
-          return [...repositories.values()];
+          return { repositories: [...repositories.values()], errors };
         }),
       );
 
@@ -1440,7 +1437,10 @@ export const make = Effect.gen(function* () {
     for (const { host } of own) {
       projectCounts.set(host, (projectCounts.get(host) ?? 0) + 1);
     }
-    const projects = yield* listingRepositories(workspace, policy);
+    const { repositories: projects, errors: upstreamErrors } = yield* listingRepositories(
+      workspace,
+      policy,
+    );
 
     const viewerResults = yield* resolveViewers(projects, viewerRoots);
     const viewers: Record<string, string> = {};
@@ -1492,7 +1492,7 @@ export const make = Effect.gen(function* () {
         viewers: viewers as PullRequestListResult["viewers"],
         providers,
         entries: [],
-        errors: unreadable,
+        errors: [...upstreamErrors, ...unreadable],
         truncated: false,
         nextCursors: {},
       };
@@ -1758,7 +1758,7 @@ export const make = Effect.gen(function* () {
       viewers: viewers as PullRequestListResult["viewers"],
       providers,
       entries,
-      errors: [...unreadable, ...batches.flatMap((batch) => batch.errors)],
+      errors: [...upstreamErrors, ...unreadable, ...batches.flatMap((batch) => batch.errors)],
       truncated: batches.some((batch) => batch.truncated),
       nextCursors,
     };
@@ -2787,12 +2787,7 @@ export const make = Effect.gen(function* () {
     const repositories =
       input.kind === "references"
         ? workspace.supported
-        : yield* listingRepositories(
-            workspace,
-            yield* forkUpstream.readPolicy(
-              Effect.succeed(workspace.candidates.map(({ project }) => project.id)),
-            ),
-          );
+        : (yield* listingRepositories(workspace, yield* forkUpstream.readPolicy)).repositories;
     const refOf = (project: SupportedProject) => ({
       cwd: project.project.workspaceRoot,
       repository: project.repository,
@@ -2938,20 +2933,17 @@ export const make = Effect.gen(function* () {
       if (
         own !== undefined &&
         own.api.listChangeRequestStats !== undefined &&
-        own.repositoryKey === null &&
         own.repository.toLowerCase() !== ref.repository.trim().toLowerCase()
       ) {
         needsParent.add(own);
       }
     }
-    const upstreams = yield* forkUpstream.findParents(
+    const { parents } = yield* forkUpstream.findParents(
       needsParent,
       policy,
       (candidate) => ({
+        ...forkListingRepository(candidate),
         key: candidate.project.id,
-        kind: candidate.api.kind,
-        host: candidate.host,
-        repository: candidate.repository,
       }),
       REPOSITORY_CONCURRENCY,
     );
@@ -2959,7 +2951,7 @@ export const make = Effect.gen(function* () {
     for (const project of candidates) {
       byRepository.set(`${project.project.id} ${project.repository.toLowerCase()}`, project);
     }
-    for (const { candidate, parent } of upstreams) {
+    for (const { candidate, parent } of parents) {
       byRepository.set(
         `${candidate.project.id} ${parent.toLowerCase()}`,
         withRepository(candidate, parent),
@@ -3390,14 +3382,8 @@ export const make = Effect.gen(function* () {
   ) {
     const policy =
       options?.includeUpstream === false
-        ? []
-        : yield* forkUpstream.readPolicy(
-            input.projectId !== undefined
-              ? Effect.succeed([input.projectId])
-              : input.projectIds !== undefined
-                ? Effect.succeed(input.projectIds)
-                : listProjectShells(input).pipe(Effect.map((shells) => shells.map(({ id }) => id))),
-          );
+        ? ForkUpstream.disabledPolicy
+        : yield* forkUpstream.readPolicy;
     const key = listingKey(input, policy);
     // A replacement reader can join a lookup still finishing its previous reader's cancellation.
     return yield* Cache.get(listCache, key).pipe(
@@ -3492,9 +3478,9 @@ export const make = Effect.gen(function* () {
                 observedAt: value.observedAt,
               });
             }
-            const policy = yield* forkUpstream.readPolicy(Effect.succeed([value.projectId]));
+            const policy = yield* forkUpstream.readPolicy;
             recordStats(
-              statsCacheKey(key, policy.includes(value.projectId)),
+              statsCacheKey(key, ForkUpstream.includesUpstream(policy, value.projectId)),
               {
                 projectId: value.projectId,
                 repository: value.repository,
@@ -3828,13 +3814,14 @@ export const make = Effect.gen(function* () {
   )(function* (input: PullRequestListStatsInput) {
     if (input.refs.length === 0) return { stats: [] };
     const now = yield* Clock.currentTimeMillis;
-    const policy = yield* forkUpstream.readPolicy(
-      Effect.succeed(input.refs.map(({ projectId }) => projectId)),
-    );
+    const policy = yield* forkUpstream.readPolicy;
     const held: PullRequestDiffStat[] = [];
     const missing = new Map<string, PullRequestRef>();
     for (const ref of input.refs) {
-      const key = statsCacheKey(refCacheKey(ref), policy.includes(ref.projectId));
+      const key = statsCacheKey(
+        refCacheKey(ref),
+        ForkUpstream.includesUpstream(policy, ref.projectId),
+      );
       const cached = recentStats.get(key);
       if (cached !== undefined && now - cached.at < Duration.toMillis(LIST_STATS_CACHE_TTL)) {
         held.push(cached.value);
@@ -4221,6 +4208,8 @@ export const make = Effect.gen(function* () {
         canonicalRef(ref).pipe(
           // The row belongs to the checkout that opted in, even if detail reads route elsewhere.
           Effect.map((resolved) => ({ ...resolved, projectId: ref.projectId })),
+          // A provider can confirm a fork parent even when normal detail routing needs a checkout.
+          Effect.catchTags({ PullRequestUnavailableError: () => Effect.succeed(ref) }),
           Effect.option,
         ),
       );
