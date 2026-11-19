@@ -213,8 +213,8 @@ export function PullRequestBranchRow(props: RowProps) {
   const gt = useGT();
   const m = useMessages();
   const methods = action.available("update-branch") ? allowedUpdateMethods(props.pr) : [];
-  const canResolve =
-    agent.canAsk && props.pr.state === "open" && props.pr.mergeability === "conflicting";
+  const resolveConflicts = agent.menuAction("conflicts");
+  const canResolve = !resolveConflicts.attributes.disabled;
   const summary = action.busy ? gt("Updating…") : pullRequestBranchSummary(props.pr, m);
   const clean = props.pr.mergeability === "mergeable";
   const conflicting = props.pr.mergeability === "conflicting";
@@ -252,7 +252,7 @@ export function PullRequestBranchRow(props: RowProps) {
     <Menu
       title={gt("Branch", { $context: "git branch" })}
       actions={[
-        ...(canResolve ? [agent.menuAction("conflicts")] : []),
+        ...(canResolve ? [resolveConflicts] : []),
         ...methods.map((id) => ({
           id,
           title: gt(

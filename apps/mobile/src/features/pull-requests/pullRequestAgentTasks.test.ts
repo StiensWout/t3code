@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
   appendPullRequestAgentPrompt,
+  pullRequestAgentActions,
   pullRequestAgentPrompt,
   pullRequestAgentThread,
   pullRequestAgentThreadActions,
 } from "./pullRequestAgentTasks";
-import { IsoDateTime, ProjectId, ThreadId } from "@t3tools/contracts";
+import { IsoDateTime, ProjectId, SourceControlProviderKind, ThreadId } from "@t3tools/contracts";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 
 const GITHUB = sourceControlClients.get("github").changeRequest;
@@ -53,6 +54,30 @@ describe("PR agent tasks", () => {
       attributes: { disabled: true },
     });
   });
+  it("offers branch-dependent actions on a browse-only PR only with a usable linked thread", () => {
+    const pr = {
+      provider: SourceControlProviderKind.make("github"),
+      state: "open",
+      mergeability: "conflicting",
+      checkoutAllowed: false,
+    } as const;
+    const thread = {
+      id: ThreadId.make("thread-one"),
+      projectId: ProjectId.make("project-one"),
+      title: "Existing work",
+      archivedAt: null,
+    };
+    const archived = { ...thread, archivedAt: IsoDateTime.make("2026-10-09T10:00:00.000Z") };
+    expect(
+      pullRequestAgentActions(pr, true, [archived])
+        .filter((action) => !action.disabled)
+        .map((action) => action.task),
+    ).toEqual(["ask", "explain", "watch"]);
+    expect(pullRequestAgentActions(pr, true, [thread]).filter((action) => action.disabled)).toEqual(
+      [],
+    );
+  });
+
   it("replaces the helper's own text when switching tasks, keeping user edits", () => {
     const first = appendPullRequestAgentPrompt("My question", "explain", GITHUB);
     const next = appendPullRequestAgentPrompt(

@@ -2,6 +2,7 @@ import { msg, useMessages } from "gt-react-native";
 import { Platform } from "react-native";
 import type { PullRequestDetail } from "@t3tools/contracts";
 import {
+  canStartPullRequestAgentThread,
   pullRequestAgentActions,
   pullRequestAgentThread,
   pullRequestAgentThreadActions,
@@ -19,7 +20,7 @@ export function usePullRequestAgentActions(
   const m = useMessages();
   const links = usePullRequestThreads(params, pr, filePath);
   const connected = usePullRequestConnected(params.environmentId);
-  const actions = pr ? pullRequestAgentActions(pr, links.canWatch, m) : [];
+  const actions = pr ? pullRequestAgentActions(pr, links.canWatch, links.threads, m) : [];
   const disabled = links.busy || !pr || (connected && links.isPending && !links.threads.length);
   const start = (task: PullRequestAgentTask, threadId?: string) => {
     if (disabled) return;
@@ -29,13 +30,23 @@ export function usePullRequestAgentActions(
       links.openThread(thread);
       return;
     }
-    if (!links.canAsk || actions.find((action) => action.task === task)?.disabled) return;
-    void links.ask(thread?.archivedAt ? undefined : thread, task);
+    if (
+      !links.canAsk ||
+      thread?.archivedAt ||
+      actions.find((action) => action.task === task)?.disabled
+    )
+      return;
+    void links.ask(thread, task);
   };
   const chooseThread =
     links.threads.length > 1 || links.threads.some((thread) => thread.settled || thread.archivedAt);
   const threadActions = (task: PullRequestAgentTask) =>
-    pullRequestAgentThreadActions(links.threads, task, links.canAsk, m);
+    pullRequestAgentThreadActions(
+      links.threads,
+      task,
+      links.canAsk && canStartPullRequestAgentThread(task, pr?.checkoutAllowed),
+      m,
+    );
   const menuAction = (task: PullRequestAgentTask) => {
     const action = actions.find((action) => action.task === task);
     const items = threadActions(task);

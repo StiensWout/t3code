@@ -77,11 +77,22 @@ export function pullRequestAgentPrompt(
   }
 }
 
+export function canStartPullRequestAgentThread(
+  task: PullRequestAgentTask,
+  checkoutAllowed: PullRequestDetail["checkoutAllowed"],
+): boolean {
+  return checkoutAllowed !== false || (task !== "feedback" && task !== "conflicts");
+}
+
 export function pullRequestAgentActions(
-  pr: PullRequestDetail,
+  pr: Pick<PullRequestDetail, "provider" | "state" | "mergeability" | "checkoutAllowed">,
   canWatch: boolean,
+  threads: PullRequestLinkedThreadsResult["threads"],
   resolve: MessageResolver = m,
 ) {
+  const canWork =
+    canStartPullRequestAgentThread("feedback", pr.checkoutAllowed) ||
+    threads.some((thread) => !thread.archivedAt);
   const term = changeRequestTermKind(sourceControlClients.get(pr.provider).changeRequest);
   return [
     {
@@ -102,13 +113,13 @@ export function pullRequestAgentActions(
       task: "feedback",
       title: resolve(msg("Address feedback")),
       icon: "wrench.and.screwdriver",
-      disabled: pr.state !== "open",
+      disabled: !canWork || pr.state !== "open",
     },
     {
       task: "conflicts",
       title: resolve(msg("Resolve conflicts")),
       icon: "arrow.triangle.branch",
-      disabled: pr.state !== "open" || pr.mergeability !== "conflicting",
+      disabled: !canWork || pr.state !== "open" || pr.mergeability !== "conflicting",
     },
     {
       task: "watch",
