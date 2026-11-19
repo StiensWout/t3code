@@ -110,6 +110,7 @@ function persistEntries(entries: ReadonlyArray<PromptStashEntry>): {
 function readStoredEntries(): ReadonlyArray<PromptStashEntry> | null {
   try {
     const raw = baseStashStorage.getItem(PROMPT_STASH_STORAGE_KEY);
+    if (raw === null) return [];
     if (typeof raw !== "string" || raw.length === 0) return null;
     const parsed: unknown = JSON.parse(raw);
     const state = (parsed as { state?: unknown } | null)?.state;
@@ -223,6 +224,18 @@ export const usePromptStashStore = create<PromptStashStoreState>()((set, get) =>
   if (persisted) {
     usePromptStashStore.setState({ entries: persisted });
   }
+}
+
+if (storageIsDurable && typeof window !== "undefined") {
+  window.addEventListener("storage", (event) => {
+    if (event.storageArea !== baseStashStorage) return;
+    if (event.key !== PROMPT_STASH_STORAGE_KEY && event.key !== null) return;
+    // A newer write may have landed before this event was delivered.
+    usePromptStashStore.setState((state) => {
+      const entries = latestEntries(state.entries);
+      return entries === state.entries ? state : { entries };
+    });
+  });
 }
 
 export function writePromptStashStorageForTest(raw: string): void {
