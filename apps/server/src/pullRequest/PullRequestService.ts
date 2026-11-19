@@ -76,7 +76,7 @@ import {
   SourceControlProviderKind,
   type ThreadPullRequestKey,
 } from "@t3tools/contracts";
-import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
+import { includesForkUpstream, resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
 
 import * as ProjectService from "../project/ProjectService.ts";
@@ -3494,7 +3494,7 @@ export const make = Effect.gen(function* () {
             }
             const policy = yield* forkUpstream.readPolicy;
             recordStats(
-              statsCacheKey(key, ForkUpstream.includesUpstream(policy, value.projectId)),
+              statsCacheKey(key, includesForkUpstream(policy, value.projectId)),
               {
                 projectId: value.projectId,
                 repository: value.repository,
@@ -3832,10 +3832,7 @@ export const make = Effect.gen(function* () {
     const held: PullRequestDiffStat[] = [];
     const missing = new Map<string, PullRequestRef>();
     for (const ref of input.refs) {
-      const key = statsCacheKey(
-        refCacheKey(ref),
-        ForkUpstream.includesUpstream(policy, ref.projectId),
-      );
+      const key = statsCacheKey(refCacheKey(ref), includesForkUpstream(policy, ref.projectId));
       const cached = recentStats.get(key);
       if (cached !== undefined && now - cached.at < Duration.toMillis(LIST_STATS_CACHE_TTL)) {
         held.push(cached.value);

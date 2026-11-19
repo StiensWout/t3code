@@ -3,7 +3,11 @@ import {
   type ProjectId,
   SourceControlProviderKind,
 } from "@t3tools/contracts";
-import { forkUpstreamPolicy, type ForkUpstreamPolicy } from "@t3tools/shared/projectSettings";
+import {
+  forkUpstreamPolicy,
+  type ForkUpstreamPolicy,
+  includesForkUpstream,
+} from "@t3tools/shared/projectSettings";
 import * as Cache from "effect/Cache";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
@@ -21,11 +25,6 @@ const KEY_SEPARATOR = "\0";
 export type { ForkUpstreamPolicy };
 
 export const disabledPolicy = forkUpstreamPolicy(null);
-
-export function includesUpstream(policy: ForkUpstreamPolicy, projectId: ProjectId): boolean {
-  const override = policy.overrides[projectId];
-  return typeof override === "boolean" ? override : policy.defaultEnabled;
-}
 
 interface ParentLookupInput {
   readonly project: OrchestrationProjectShell;
@@ -131,7 +130,7 @@ const make = Effect.gen(function* () {
   ) {
     const forks = new Map<string, { candidate: A; repository: ForkListingRepository }>();
     for (const candidate of candidates) {
-      if (!includesUpstream(policy, candidate.project.id)) continue;
+      if (!includesForkUpstream(policy, candidate.project.id)) continue;
       const repository = repositoryOf(candidate);
       if (repository !== undefined && !forks.has(repository.key)) {
         forks.set(repository.key, { candidate, repository });

@@ -52,18 +52,20 @@ export interface ForkUpstreamPolicy {
 }
 
 /** Equivalent fork listing settings serialize identically for cache and refresh keys. */
-export function forkUpstreamPolicy(
-  settings: Pick<ServerSettings, "includeForkUpstream" | "projectSettingsOverrides"> | null,
-): ForkUpstreamPolicy {
-  const defaultEnabled = settings?.includeForkUpstream ?? false;
-  const overrides = Object.entries(settings?.projectSettingsOverrides ?? {})
-    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-    .flatMap(([id, { includeForkUpstream }]) =>
-      includeForkUpstream === undefined || includeForkUpstream === defaultEnabled
-        ? []
-        : [[id, includeForkUpstream] as const],
-    );
+export function forkUpstreamPolicy(settings: ServerSettings | null): ForkUpstreamPolicy {
+  if (settings === null) return { defaultEnabled: false, overrides: {} };
+  const defaultEnabled = settings.includeForkUpstream;
+  const overrides = (Object.keys(settings.projectSettingsOverrides) as ProjectId[])
+    .sort((left, right) => (left < right ? -1 : left > right ? 1 : 0))
+    .flatMap((id) => {
+      const enabled = resolveProjectSettings(settings, id).settings.includeForkUpstream;
+      return enabled === defaultEnabled ? [] : [[id, enabled] as const];
+    });
   return { defaultEnabled, overrides: Object.fromEntries(overrides) };
+}
+
+export function includesForkUpstream(policy: ForkUpstreamPolicy, projectId: ProjectId): boolean {
+  return policy.overrides[projectId] ?? policy.defaultEnabled;
 }
 
 /** Legacy aggregate fields apply only until folded into overrides, so stale values cannot undo later resets. */
