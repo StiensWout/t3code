@@ -1,10 +1,10 @@
 import { LegendList, type LegendListRef } from "@legendapp/list/react-native";
-import { useAtomValue } from "@effect/atom-react";
+import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import { uuidv4 } from "../../lib/uuid";
 import { useNavigation } from "@react-navigation/native";
 import {
   nextShownOrder,
-  recordThreadSearchPick,
+  threadSearchPickAtom,
   threadSearchSubject,
   type EnvironmentThreadSearchMatch,
   type ShownOrder,
@@ -20,7 +20,7 @@ import {
 } from "@t3tools/shared/paletteSearch";
 import { searchMatchHintLabel } from "@t3tools/shared/paletteSearchCopy";
 import { T, useGT, useMessages } from "gt-react-native";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
   KeyboardAvoidingView,
   Modal,
@@ -54,8 +54,6 @@ import {
 import { useThreadSearch } from "../../state/queries";
 import { requestThreadMessageJump } from "../threads/threadMessageJump";
 import { useCanShareWithGuest } from "../threads/useCanShareWithGuest";
-import { threadEnvironment } from "../../state/threads";
-import { useAtomCommand } from "../../state/use-atom-command";
 import { serverEnvironment } from "../../state/server";
 import { useWorkspaceEnvironments } from "../../state/workspace";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
@@ -236,7 +234,7 @@ export function CommandPalette(props: {
   const delegatedUnderParent = useDelegatedUnderParent();
   const activeThreadRef = parseActiveThreadPath(props.pathname);
   const activeThread = useThreadShell(activeThreadRef);
-  const visitThread = useAtomCommand(threadEnvironment.visit, { reportFailure: false });
+  const registry = useContext(RegistryContext);
   const environments = useWorkspaceEnvironments();
   const { savedConnectionsById } = useSavedRemoteConnections();
   const [query, setQuery] = useState("");
@@ -556,7 +554,10 @@ export function CommandPalette(props: {
     const messageId = item.fromMessages ? contentMatchByKey.get(item.key)?.messageId : undefined;
     if (messageId) requestThreadMessageJump(item.key, messageId);
     if (thread && !item.secondary) {
-      void recordThreadSearchPick(thread, query, Date.now(), visitThread);
+      registry.set(
+        threadSearchPickAtom({ environmentId: thread.environmentId, threadId: thread.id }),
+        query,
+      );
     }
     item.run();
   };

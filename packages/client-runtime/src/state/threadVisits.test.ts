@@ -1,4 +1,4 @@
-import { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { CommandId, EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { recordThreadOpen, type ThreadOpenStats } from "@t3tools/shared/paletteSearch";
 import * as Cause from "effect/Cause";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
@@ -6,7 +6,7 @@ import { expect, it, vi } from "vite-plus/test";
 
 import type { VisitThreadInput } from "../operations/commands.ts";
 import type { AtomCommandResult } from "./runtime.ts";
-import { claimThreadOpen, recordThreadSearchPick } from "./threadSearch.ts";
+import { claimThreadOpen, threadSearchPickAtom } from "./threadSearch.ts";
 import { createThreadVisitTracker, VISIT_DISPATCH_THROTTLE_MS } from "./threadVisits.ts";
 
 const environmentId = EnvironmentId.make("env-visits");
@@ -37,11 +37,27 @@ function setup(threadName: string, initial: Omit<Shell, "environmentId" | "id"> 
   const visits: Array<VisitThreadInput> = [];
   const localVisits: Array<string> = [];
   let online = true;
+  let loseNextOpenAck = false;
+  let serverOpens: ThreadOpenStats | null = null;
+  let serverTime = start;
+  let commandCount = 0;
+  const received = new Set<CommandId>();
+  const liveSessionAtom = Atom.make<object | null>({});
   let pendingResult: Promise<AtomCommandResult<void, string>> | undefined;
   const attempts: Array<VisitThreadInput> = [];
-  const sessionGenerationAtom = Atom.make(1);
   const visit = async ({ input }: { readonly input: VisitThreadInput }) => {
-    attempts.push(input);
+    const { commandId, ...payload } = input;
+    attempts.push(payload);
+    if (loseNextOpenAck && input.opened) {
+      loseNextOpenAck = false;
+      acceptOpen();
+      return AsyncResult.failure(Cause.fail("acknowledgment lost"));
+    }
+    function acceptOpen() {
+      if (commandId !== undefined && received.has(commandId)) return;
+      if (commandId !== undefined) received.add(commandId);
+      serverOpens = recordThreadOpen(serverOpens, serverTime, input.searchQuery);
+    }
     const pending = pendingResult;
     pendingResult = undefined;
     const result = pending
@@ -49,12 +65,16 @@ function setup(threadName: string, initial: Omit<Shell, "environmentId" | "id"> 
       : online
         ? AsyncResult.success(undefined)
         : AsyncResult.failure(Cause.fail("disconnected"));
-    if (AsyncResult.isSuccess(result)) visits.push(input);
+    if (AsyncResult.isSuccess(result)) {
+      if (input.opened) acceptOpen();
+      visits.push(payload);
+    }
     return result;
   };
   const tracker = createThreadVisitTracker({
     threadShellAtom: () => shellAtom,
-    sessionGenerationAtom: () => sessionGenerationAtom,
+    liveSessionAtom: () => liveSessionAtom,
+    newCommandId: () => CommandId.make(`${threadName}:${++commandCount}`),
     visit: {
       label: "test-visit",
       run: (_registry, value) => visit(value),
@@ -75,13 +95,21 @@ function setup(threadName: string, initial: Omit<Shell, "environmentId" | "id"> 
           accepted ? AsyncResult.success(undefined) : AsyncResult.failure(Cause.fail("rejected")),
         );
     },
-    reconnect: () => registry.set(sessionGenerationAtom, registry.get(sessionGenerationAtom) + 1),
-    mount: () => registry.mount(tracker(ref)),
-    pick: () => {
-      const shell = registry.get(shellAtom);
-      if (shell === null) throw new Error("A search pick needs a thread shell");
-      return recordThreadSearchPick(shell, "needle", start, visit);
+    reconnect: (caughtUp = true) => {
+      registry.set(liveSessionAtom, caughtUp ? {} : null);
     },
+    synchronizeShell: () => {
+      registry.set(liveSessionAtom, {});
+    },
+    loseNextOpenAck: () => {
+      loseNextOpenAck = true;
+    },
+    serverOpens: () => serverOpens,
+    setServerTime: (value: number) => {
+      serverTime = value;
+    },
+    mount: () => registry.mount(tracker(ref)),
+    pick: () => registry.set(threadSearchPickAtom(ref), " Needle "),
     setOnline: (value: boolean) => {
       online = value;
     },
@@ -129,7 +157,7 @@ it("sends an unseen completion without waiting for the throttle", () => {
   expect(t.visits.slice(1)).toEqual([{ threadId: t.ref.threadId, visitedAt: at(20) }]);
 });
 
-it("does not resend the open a palette pick already sent", () => {
+it("still advances the watermark on a deduped reopen", () => {
   using t = setup("thread-palette", { updatedAt: at(10), lastVisitedAt: at(0), latestRun: null });
   claimThreadOpen(environmentId, t.ref.threadId, Date.UTC(2026, 0, 1));
   t.mount();
@@ -243,11 +271,10 @@ it.each(["unread", "already read"] as const)(
     expect(t.visits).toEqual([]);
 
     t.setOnline(true);
-    t.reconnect();
+    t.reconnect(false);
     await vi.advanceTimersByTimeAsync(0);
     expect(t.visits).toEqual([]);
-    // The new session's shell lands, so the retry need not wait for the throttle.
-    t.update({});
+    t.synchronizeShell();
     await vi.advanceTimersByTimeAsync(0);
     expect(t.visits).toEqual([{ threadId: t.ref.threadId, visitedAt: at(10), opened: true }]);
   },
@@ -299,69 +326,45 @@ it.each(["before", "after"] as const)(
     });
     t.setOnline(false);
     const fail = t.deferNextVisit();
-    const pick = t.pick();
+    t.pick();
     t.mount();
     expect(t.attempts).toEqual([
       { threadId: t.ref.threadId, visitedAt: at(10), opened: true, searchQuery: "needle" },
     ]);
     if (settlement === "before") {
       fail();
-      await pick;
+      await vi.advanceTimersByTimeAsync(0);
     }
 
     t.setOnline(true);
     t.reconnect();
     if (settlement === "after") {
       fail();
-      await pick;
+      await vi.advanceTimersByTimeAsync(0);
     }
     await vi.advanceTimersByTimeAsync(VISIT_DISPATCH_THROTTLE_MS);
 
-    expect(t.visits).toEqual([{ threadId: t.ref.threadId, visitedAt: at(10), opened: true }]);
+    expect(t.serverOpens()?.picks.map((pick) => pick.query)).toEqual(["needle"]);
   },
 );
 
-it("records a failed pick's open when a plain visit is accepted ahead of its shell update", async () => {
-  using t = setup("thread-pick-fails-before-visit-echo", {
-    updatedAt: at(10),
-    lastVisitedAt: at(0),
-    latestRun: null,
-  });
-  t.setOnline(false);
-  const fail = t.deferNextVisit();
-  const pick = t.pick();
-  t.setOnline(true);
-  t.reconnect();
-  t.mount();
-  await vi.advanceTimersByTimeAsync(0);
-
-  fail();
-  await pick;
-
-  expect(t.visits).toEqual([
-    { threadId: t.ref.threadId, visitedAt: at(10) },
-    { threadId: t.ref.threadId, visitedAt: at(10), opened: true },
-  ]);
-});
-
-it("records a failed palette pick's open without undoing mark-unread", async () => {
-  using t = setup("thread-pick-fails-after-rewind", {
+it("records a palette query on an already visible thread even within the dedupe window", async () => {
+  using t = setup("thread-pick-already-visible", {
     updatedAt: at(10),
     lastVisitedAt: at(10),
     latestRun: null,
   });
-  t.setOnline(false);
-  const fail = t.deferNextVisit();
-  const pick = t.pick();
   t.mount();
-  t.update({ lastVisitedAt: at(5) });
-  t.setOnline(true);
-  t.reconnect();
-  fail();
-  await pick;
-  await vi.advanceTimersByTimeAsync(VISIT_DISPATCH_THROTTLE_MS);
+  await vi.advanceTimersByTimeAsync(0);
 
-  expect(t.visits).toEqual([{ threadId: t.ref.threadId, visitedAt: at(5), opened: true }]);
+  t.pick();
+  await vi.advanceTimersByTimeAsync(0);
+
+  expect(t.serverOpens()).toEqual({
+    openedAt: Date.UTC(2026, 0, 1),
+    score: 1,
+    picks: [{ query: "needle", at: Date.UTC(2026, 0, 1) }],
+  });
 });
 
 it("retries an open after a newer visit is acknowledged ahead of its shell update", async () => {
@@ -383,7 +386,7 @@ it("retries an open after a newer visit is acknowledged ahead of its shell updat
   t.update({ lastVisitedAt: at(20) });
 
   expect(t.visits).toEqual([
-    { threadId: t.ref.threadId, visitedAt: at(20), opened: true },
+    { threadId: t.ref.threadId, visitedAt: at(10), opened: true },
     { threadId: t.ref.threadId, visitedAt: at(20) },
   ]);
 });
@@ -453,8 +456,9 @@ it("leaves a null watermark untouched when retrying an open after a rewind", asy
   await vi.advanceTimersByTimeAsync(0);
 
   t.setOnline(true);
-  t.reconnect();
+  t.reconnect(false);
   t.update({ lastVisitedAt: null });
+  t.synchronizeShell();
   await vi.advanceTimersByTimeAsync(VISIT_DISPATCH_THROTTLE_MS);
   expect(t.visits).toEqual([]);
 });
@@ -523,4 +527,48 @@ it("retries rejected opens only once per connection generation", async () => {
   t.update({ updatedAt: at(20), latestRun: { completedAt: at(20) } });
   await vi.advanceTimersByTimeAsync(3 * VISIT_DISPATCH_THROTTLE_MS);
   expect(t.attempts).toHaveLength(2);
+});
+
+it("waits for reconnect catch-up before retrying an open on a thread marked unread elsewhere", async () => {
+  using t = setup("thread-rewind-during-catch-up", {
+    updatedAt: at(10),
+    lastVisitedAt: at(10),
+    latestRun: { completedAt: at(9) },
+  });
+  t.setOnline(false);
+  t.mount();
+  await vi.advanceTimersByTimeAsync(2 * VISIT_DISPATCH_THROTTLE_MS);
+
+  t.setOnline(true);
+  t.reconnect(false);
+  expect(t.attempts).toHaveLength(1);
+  t.update({ lastVisitedAt: at(5) });
+  t.synchronizeShell();
+  await vi.advanceTimersByTimeAsync(0);
+
+  expect(t.visits).toEqual([{ threadId: t.ref.threadId, visitedAt: at(5), opened: true }]);
+});
+
+it("does not count a committed open again after its acknowledgment was lost", async () => {
+  using t = setup("thread-open-committed-without-ack", {
+    updatedAt: at(10),
+    lastVisitedAt: at(10),
+    latestRun: null,
+  });
+  t.loseNextOpenAck();
+  t.mount();
+  const elevenMinutes = 11 * 60_000;
+  await vi.advanceTimersByTimeAsync(elevenMinutes);
+  t.setServerTime(Date.UTC(2026, 0, 1) + elevenMinutes);
+
+  t.reconnect();
+  t.update({});
+  await vi.advanceTimersByTimeAsync(0);
+
+  expect(t.attempts).toHaveLength(2);
+  expect(t.serverOpens()).toEqual({
+    openedAt: Date.UTC(2026, 0, 1),
+    score: 1,
+    picks: [],
+  });
 });

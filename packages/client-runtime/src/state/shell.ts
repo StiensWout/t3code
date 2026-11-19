@@ -44,13 +44,15 @@ import {
   sameThreadPullRequests,
 } from "./shellReducer.ts";
 import { type EnvironmentCatalogState, enabledEnvironmentIds } from "./connections.ts";
-import { followStreamInEnvironment } from "./runtime.ts";
+import { environmentConnectionAtom, followStreamInEnvironment } from "./runtime.ts";
 
 export type EnvironmentShellStatus = "empty" | "cached" | "synchronizing" | "live";
 
 export interface EnvironmentShellState {
   readonly snapshot: Option.Option<OrchestrationV2ShellSnapshot>;
   readonly status: EnvironmentShellStatus;
+  /** The socket whose shell stream finished catching up. */
+  readonly liveSession?: RpcSession | undefined;
   readonly error: Option.Option<string>;
   /**
    * Changes with each authoritative snapshot (not enrichment refreshes); 0 until the first one.
@@ -269,6 +271,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
       SubscriptionRef.update(state, (current) => ({
         ...current,
         status: shellStatusForSnapshot(current.snapshot),
+        liveSession: undefined,
       })),
     ),
     Effect.andThen(flushLiveShellSnapshot.pipe(Effect.forkScoped)),
@@ -277,6 +280,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
   const setSynchronizing = SubscriptionRef.update(state, (current) => ({
     ...current,
     status: "synchronizing" as const,
+    liveSession: undefined,
     error: Option.none(),
   }));
   const setReady = SubscriptionRef.update(state, (current) =>
@@ -299,6 +303,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
         SubscriptionRef.update(state, (current) => ({
           ...current,
           status: shellStatusForSnapshot(current.snapshot),
+          liveSession: undefined,
           error: Option.some(SHELL_SYNCHRONIZATION_ERROR_MESSAGE),
         })),
       ),
@@ -310,14 +315,16 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
 
   const applyLocked = Effect.fnUntraced(function* (
     items: ReadonlyArray<OrchestrationV2ShellStreamItem>,
-    /** What an authoritative snapshot among the items descends from. */
-    identity: ShellOriginIdentity | null,
-    /** Set for an HTTP snapshot: the rows that still wait for their pull request links. */
-    pendingLinkIds?: ReadonlySet<ThreadId>,
+    source:
+      | ShellSubscription
+      | {
+          readonly identity: ShellOriginIdentity | null;
+          readonly pendingLinkIds: ReadonlySet<ThreadId>;
+        },
   ) {
     const initial = yield* SubscriptionRef.get(state);
     // No socket has confirmed an HTTP snapshot, so it never makes the shell live.
-    const fromHttp = pendingLinkIds !== undefined;
+    const fromHttp = "pendingLinkIds" in source;
     const disconnected = initial.status === "empty" || initial.status === "cached";
     let waiting = yield* Ref.get(awaitingCompletion);
     let next = initial;
@@ -371,6 +378,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
           next = {
             ...next,
             status: "live",
+            liveSession: fromHttp ? undefined : source.session,
             error: Option.none(),
             // A cache resume that caught up is as current as a snapshot for generation readers.
             generation: next.generation === 0 ? ++lastShellGeneration : next.generation,
@@ -391,6 +399,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
         snapshot: Option.some(nextSnapshot),
         status:
           fromHttp && disconnected ? "cached" : waiting || fromHttp ? "synchronizing" : "live",
+        liveSession: fromHttp ? undefined : next.liveSession,
         error: Option.none(),
         generation: authoritative ? ++lastShellGeneration : next.generation,
         removedAt: authoritative ? EMPTY_REMOVALS : next.removedAt,
@@ -407,13 +416,15 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
       yield* Queue.offer(reloadRequests, undefined);
     } else if (receivedAuthoritativeSnapshot) {
       nextOrigin =
-        identity === null ? undefined : { ...identity, snapshotAt: yield* Clock.currentTimeMillis };
+        source.identity === null
+          ? undefined
+          : { ...source.identity, snapshotAt: yield* Clock.currentTimeMillis };
       yield* Ref.set(origin, nextOrigin);
     }
     if (next === initial) return;
-    if (pendingLinkIds !== undefined && Option.isSome(next.snapshot)) {
+    if (fromHttp && Option.isSome(next.snapshot)) {
       pendingLinkRows = new Set(
-        next.snapshot.value.threads.filter((thread) => pendingLinkIds.has(thread.id)),
+        next.snapshot.value.threads.filter((thread) => source.pendingLinkIds.has(thread.id)),
       );
     }
     if (Option.isSome(next.snapshot)) {
@@ -434,9 +445,10 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
     // Read under the lock: items buffered across a session change must not land on the
     // rows the next session loaded.
     const subscription = yield* Ref.get(activeSubscription);
+    if (subscription === null) return;
     yield* applyLocked(
-      entries.flatMap(([session, item]) => (session === subscription?.session ? [item] : [])),
-      subscription?.identity ?? null,
+      entries.flatMap(([session, item]) => (session === subscription.session ? [item] : [])),
+      subscription,
     );
   }, snapshotWriteLock.withPermit);
 
@@ -522,7 +534,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
       deferred.loadPullRequests === undefined ? [] : deferred.threads.map((thread) => thread.id),
     );
     yield* snapshotWriteLock.withPermit(
-      applyLocked([{ kind: "snapshot", snapshot }], identity, pendingLinkIds),
+      applyLocked([{ kind: "snapshot", snapshot }], { identity, pendingLinkIds }),
     );
     const current = yield* SubscriptionRef.get(state);
     if (Option.isSome(current.snapshot)) {
@@ -892,12 +904,25 @@ export function createEnvironmentShellAtoms<R, E>(
   );
 
   const { statusAtom, hasSnapshotAtom } = createEnvironmentShellProgressAtoms(stateValueAtom);
+  const liveSessionAtom = Atom.family((environmentId: EnvironmentId) =>
+    Atom.make((get): object | null => {
+      const shell = get(stateValueAtom(environmentId));
+      const connection = AsyncResult.getOrElse(
+        get(environmentConnectionAtom(runtime, environmentId)),
+        () => null,
+      );
+      if (shell.status !== "live" || connection?.[0].phase !== "connected") return null;
+      const session = Option.getOrNull(connection[1]);
+      return session === shell.liveSession ? session : null;
+    }).pipe(Atom.withLabel(`environment-shell-live-session:${environmentId}`)),
+  );
 
   return {
     stateAtom,
     stateValueAtom,
     statusAtom,
     hasSnapshotAtom,
+    liveSessionAtom,
   };
 }
 

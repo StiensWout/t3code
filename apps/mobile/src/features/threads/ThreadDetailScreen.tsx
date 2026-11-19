@@ -138,7 +138,7 @@ import {
 } from "../../state/use-composer-drafts";
 import { assistantCitationDraftWithinLimit } from "../../lib/composerContext";
 import { serializeAssistantCitation } from "@t3tools/shared/assistantCitations";
-import type { AssistantCitation } from "@t3tools/contracts";
+import { CommandId, type AssistantCitation } from "@t3tools/contracts";
 import { RenderErrorBoundary, RenderFailureView } from "../../components/RenderErrorBoundary";
 import {
   ANDROID_READING_MAX_WIDTH,
@@ -146,7 +146,8 @@ import {
   type LayoutVariant,
 } from "../../lib/layout";
 import { editPendingThreadMessage } from "../../state/edit-pending-thread-message";
-import { environmentCatalog } from "../../connection/catalog";
+import { uuidv4 } from "../../lib/uuid";
+import { environmentShell } from "../../state/shell";
 import { deviceEnvironment } from "../../state/device";
 import { useEnvironmentQuery } from "../../state/query";
 import { threadDevicePreviews } from "../devices/threadDevicePreviews";
@@ -377,7 +378,8 @@ const wakeAwareVisitShell = Atom.family((key: string) => {
 
 const threadVisitTracker = createThreadVisitTracker({
   threadShellAtom: (ref) => wakeAwareVisitShell(threadKey(ref)),
-  sessionGenerationAtom: environmentCatalog.sessionGenerationAtom,
+  liveSessionAtom: environmentShell.liveSessionAtom,
+  newCommandId: () => CommandId.make(uuidv4()),
   visit: threadEnvironment.visit,
 });
 

@@ -1,15 +1,17 @@
 import { useAtomMount } from "@effect/atom-react";
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { createThreadVisitTracker } from "@t3tools/client-runtime/state/thread-visits";
-import { type ScopedThreadRef } from "@t3tools/contracts";
+import { CommandId, type ScopedThreadRef } from "@t3tools/contracts";
 
-import { environmentCatalog } from "../../connection/catalog";
+import { randomUUID } from "../../lib/utils";
+import { environmentShell } from "../../state/shell";
 import { useUiStateStore } from "../../uiStateStore";
 import { environmentThreadShells, threadEnvironment } from "../../state/threads";
 
 const threadVisitTracker = createThreadVisitTracker({
   threadShellAtom: environmentThreadShells.threadShellAtom,
-  sessionGenerationAtom: environmentCatalog.sessionGenerationAtom,
+  liveSessionAtom: environmentShell.liveSessionAtom,
+  newCommandId: () => CommandId.make(randomUUID()),
   visit: threadEnvironment.visit,
   markLocalVisit: (ref, visitedAt) =>
     useUiStateStore.getState().markThreadVisited(scopedThreadKey(ref), visitedAt),

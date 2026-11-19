@@ -12,6 +12,15 @@ const mocks = vi.hoisted(() => ({
 
 const shellKey = (ref: ScopedThreadRef) => `${ref.environmentId}:${ref.threadId}`;
 
+vi.mock(import("../../state/shell"), async (original) => {
+  const actual = await original();
+  const session = Atom.make<object | null>({});
+  return {
+    ...actual,
+    environmentShell: { ...actual.environmentShell, liveSessionAtom: () => session },
+  };
+});
+
 vi.mock(import("../../state/threads"), async (original) => {
   const actual = await original();
   return {
@@ -60,7 +69,7 @@ it("records the visit of the next thread at once after switching threads", async
   setShell(threadB, "2026-01-03T00:00:00.000Z");
   using _timers = fakeTimers();
   vi.setSystemTime(NOW);
-  // A palette pick already sent B's open with its query, so B's visit is a plain watermark advance.
+  // B was opened recently, so its visit is a plain watermark advance.
   claimThreadOpen(threadB.environmentId, threadB.threadId, NOW);
 
   await using screen = await render(

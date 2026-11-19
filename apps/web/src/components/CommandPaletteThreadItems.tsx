@@ -2,7 +2,7 @@ import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environ
 import { findForMessageMatch, openThreadFindOnQuery } from "./chat/threadFindStore";
 import {
   nextShownOrder,
-  recordThreadSearchPick,
+  threadSearchPickAtom,
   type EnvironmentThreadSearchMatch,
   type ShownOrder,
 } from "@t3tools/client-runtime/state/thread-search";
@@ -12,10 +12,10 @@ import {
   rankMessageMatches,
 } from "@t3tools/shared/paletteSearch";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import { useAtomValue } from "@effect/atom-react";
+import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import { useNavigate } from "@tanstack/react-router";
 import { MessageSquareIcon } from "lucide-react";
-import { useState } from "react";
+import { useContext, useState } from "react";
 import { useGT, useMessages } from "gt-react";
 
 import {
@@ -31,8 +31,6 @@ import {
 } from "../state/environments";
 import { useThreadSearch } from "../state/queries";
 import { primaryServerProvidersAtom } from "../state/server";
-import { threadEnvironment } from "../state/threads";
-import { useAtomCommand } from "../state/use-atom-command";
 import { buildThreadRouteParams } from "../threadRoutes";
 import { formatRelativeTimeLabel } from "../timestampFormat";
 import { buildThreadActionItems, ITEM_ICON_CLASS } from "./CommandPalette.logic";
@@ -107,7 +105,7 @@ export function useCommandPaletteThreadItems(input: {
   const providerEntryByEnvironmentAndInstanceId = useProviderEntryByEnvironmentAndInstanceId();
   const messageSearch = useConnectedThreadSearch(threadSearchQuery);
   const { projectByKey } = useProjectLookups();
-  const visitThread = useAtomCommand(threadEnvironment.visit, { reportFailure: false });
+  const registry = useContext(RegistryContext);
   // Ranking is relative to when the palette opened, so rows do not reorder as time passes.
   const [now] = useState(() => Date.now());
 
@@ -169,8 +167,10 @@ export function useCommandPaletteThreadItems(input: {
         const isOpen =
           activeThread?.environmentId === thread.environmentId && activeThread.id === thread.id;
         if (threadSearchQuery.trim().length > 0 && !threadSearchQuery.startsWith(">") && !isOpen) {
-          // oxlint-disable-next-line react/purity -- runs in an event handler (oxc#27309)
-          void recordThreadSearchPick(thread, threadSearchQuery, Date.now(), visitThread);
+          registry.set(
+            threadSearchPickAtom(scopeThreadRef(thread.environmentId, thread.id)),
+            threadSearchQuery,
+          );
         }
         await navigate({
           to: "/$environmentId/$threadId",

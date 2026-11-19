@@ -1,10 +1,11 @@
 // @effect-diagnostics globalTimers:off globalDate:off - The tracker runs in atom subscriptions, outside an Effect runtime.
-import type { EnvironmentId, ScopedThreadRef, ThreadId } from "@t3tools/contracts";
+import type { CommandId, EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
+import { pickedQuery } from "@t3tools/shared/paletteSearch";
 import { AsyncResult, Atom } from "effect/reactivity";
 
 import { parseThreadKey, threadKey } from "./entities.ts";
 import { type AtomCommand, runAtomCommand } from "./runtime.ts";
-import { claimThreadOpen, claimThreadOpenOnRelease, releaseThreadOpen } from "./threadSearch.ts";
+import { claimThreadOpen, releaseThreadOpen, threadSearchPickAtom } from "./threadSearch.ts";
 import type { VisitThreadInput } from "../operations/commands.ts";
 
 // During an active turn the thread's updatedAt advances several times per
@@ -17,8 +18,6 @@ const IDLE_TRACKER: Atom.Atom<void> = Atom.make(undefined).pipe(
 );
 
 interface VisitedShell {
-  readonly environmentId: EnvironmentId;
-  readonly id: ThreadId;
   readonly updatedAt: string;
   readonly lastVisitedAt?: string | null | undefined;
   readonly latestRun: { readonly completedAt: string | null } | null;
@@ -33,7 +32,9 @@ interface VisitedShell {
 
 export interface ThreadVisitTrackerOptions {
   readonly threadShellAtom: (ref: ScopedThreadRef) => Atom.Atom<VisitedShell | null>;
-  readonly sessionGenerationAtom: (environmentId: EnvironmentId) => Atom.Atom<number>;
+  /** The current session once its shell has caught up, or null while offline or synchronizing. */
+  readonly liveSessionAtom: (environmentId: EnvironmentId) => Atom.Atom<object | null>;
+  readonly newCommandId: () => CommandId;
   readonly visit: AtomCommand<
     { readonly environmentId: EnvironmentId; readonly input: VisitThreadInput },
     unknown,
@@ -46,90 +47,156 @@ export interface ThreadVisitTrackerOptions {
   readonly markLocalVisit?: (ref: ScopedThreadRef, visitedAt: string) => void;
 }
 
+interface VisitInputs {
+  readonly shell: VisitedShell | null;
+  readonly session: object | null;
+  readonly pick: string | null;
+}
+
+interface VisitAttempt {
+  readonly at: number;
+  readonly session: object;
+  readonly visitedAtMs: number;
+  failed: boolean;
+}
+
+interface OpenIntent {
+  readonly claim: number | null;
+  readonly commandId: CommandId;
+  readonly searchQuery: string | null;
+}
+
+type PendingOpen =
+  | { readonly status: "pending"; readonly claim: number }
+  | {
+      readonly status: "failed";
+      readonly intent: OpenIntent;
+      readonly session: object;
+      readonly visitedAt: string;
+    };
+
 /**
- * While mounted, a tracker counts as the user viewing the thread: mounting it
- * records one open (which also feeds search ranking), and every shell update
- * after that advances the visit watermark, throttled while a run streams.
+ * While mounted, records an open for search ranking and keeps the read
+ * watermark current, throttling ordinary visits while a run streams.
  */
 export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
   const family = Atom.family((key: string) => {
     const ref = parseThreadKey(key);
+    const pickAtom = threadSearchPickAtom(ref);
+    const inputsAtom = Atom.make((get): VisitInputs => ({
+      shell: get(options.threadShellAtom(ref)),
+      session: get(options.liveSessionAtom(ref.environmentId)),
+      pick: get(pickAtom),
+    }));
+    let inFlightOpen: Promise<void> | null = null;
+
     return Atom.make((get) => {
       const registry = get.registry;
-      // Showing the thread is the open, whether or not its shell has arrived;
-      // the shell only decides when the server hears about it.
-      // Record it locally even when the server cannot take opens.
       const openedAt = Date.now();
-      let pendingOpen: { failedAttempt?: { at: number; generation: number } } | null =
-        claimThreadOpen(ref.environmentId, ref.threadId, openedAt) ? {} : null;
-      const releaseOpen = () => releaseThreadOpen(ref.environmentId, ref.threadId, openedAt);
-      // Acknowledgments can dedupe visits before their shell echo, but only
-      // the shell can show that the watermark was rewound.
-      let lastAcceptedVisitedAtMs = Number.NEGATIVE_INFINITY;
-      let lastObservedVisitedAtMs = Number.NEGATIVE_INFINITY;
-      let retryPending = false;
-      // Until the shell changes after a new session, it may still be the pre-offline copy.
-      let shellAtSessionStart: VisitedShell | null = null;
-      const sessionGenerationAtom = options.sessionGenerationAtom(ref.environmentId);
-      let lastDispatch = {
-        at: 0,
-        generation: registry.get(sessionGenerationAtom),
-        visitedAtMs: Number.NEGATIVE_INFINITY,
+      const claimOpen = (at: number) =>
+        claimThreadOpen(ref.environmentId, ref.threadId, at) ? at : null;
+      const releaseOpen = (claim: number | null) => {
+        if (claim !== null) releaseThreadOpen(ref.environmentId, ref.threadId, claim);
       };
+      const claim = claimOpen(openedAt);
+      let open: PendingOpen | null = claim === null ? null : { status: "pending", claim };
+      let lastVisit: VisitAttempt | null = null;
+      let acceptedThrough = Number.NEGATIVE_INFINITY;
+      let observedThrough = Number.NEGATIVE_INFINITY;
       let active = true;
       let timer: ReturnType<typeof setTimeout> | undefined;
       const clearTimer = () => {
-        if (timer === undefined) return;
         clearTimeout(timer);
         timer = undefined;
       };
       get.addFinalizer(() => {
         active = false;
         clearTimer();
-        if (pendingOpen !== null) releaseOpen();
+        if (open?.status === "pending") releaseOpen(open.claim);
+        if (open?.status === "failed") releaseOpen(open.intent.claim);
       });
 
-      const dispatch = (shell: VisitedShell, visitedAt: string, opened: boolean) => {
-        clearTimer();
-        retryPending = false;
-        const visitedAtMs = Date.parse(visitedAt);
-        const attempt = {
+      const visit = (session: object, visitedAt: string, intent?: OpenIntent) => {
+        const attempt: VisitAttempt = {
           at: Date.now(),
-          generation: registry.get(sessionGenerationAtom),
-          visitedAtMs,
+          session,
+          visitedAtMs: Date.parse(visitedAt),
+          failed: false,
         };
-        lastDispatch = attempt;
-        void runAtomCommand(
+        if (
+          !intent ||
+          lastVisit === null ||
+          lastVisit.session !== session ||
+          attempt.visitedAtMs >= lastVisit.visitedAtMs
+        ) {
+          lastVisit = attempt;
+        }
+        return runAtomCommand(
           registry,
           options.visit,
           {
-            environmentId: shell.environmentId,
+            environmentId: ref.environmentId,
             input: {
-              threadId: shell.id,
+              threadId: ref.threadId,
               visitedAt,
-              ...(opened ? { opened: true } : {}),
+              ...(intent ? { opened: true, commandId: intent.commandId } : {}),
+              ...(intent?.searchQuery ? { searchQuery: intent.searchQuery } : {}),
             },
           },
           { reportFailure: false },
         ).then((result) => {
-          if (!active) {
-            if (opened && AsyncResult.isFailure(result)) releaseOpen();
-            return;
-          }
-          if (!AsyncResult.isFailure(result)) {
-            lastAcceptedVisitedAtMs = Math.max(lastAcceptedVisitedAtMs, visitedAtMs);
-            return;
-          }
-          // Keep acceptance across a subsequent mark-unread, even if the ack was lost.
-          if (lastDispatch === attempt && lastAcceptedVisitedAtMs < visitedAtMs) {
-            retryPending = true;
-          }
-          if (opened) pendingOpen = { failedAttempt: attempt };
-          if (opened || retryPending) onShell(registry.get(options.threadShellAtom(ref)));
+          attempt.failed = AsyncResult.isFailure(result);
+          if (!attempt.failed) acceptedThrough = Math.max(acceptedThrough, attempt.visitedAtMs);
+          return !attempt.failed;
         });
       };
 
-      const onShell = (shell: VisitedShell | null) => {
+      const sendOpen = (session: object, visitedAt: string, intent: OpenIntent) => {
+        open = null;
+        inFlightOpen = visit(session, visitedAt, intent).then((accepted) => {
+          inFlightOpen = null;
+          if (!active) {
+            if (!accepted) releaseOpen(intent.claim);
+            return;
+          }
+          if (!accepted) open = { status: "failed", intent, session, visitedAt };
+          update(registry.get(inputsAtom));
+        });
+      };
+
+      const updateOpen = (session: object, visitedAt: string | null, pick: string | null) => {
+        if (inFlightOpen !== null) return false;
+        if (open?.status === "failed") {
+          if (open.session === session) return false;
+          if (visitedAt !== null) {
+            // A receipt can only prove the original watermark. After a rewind, first
+            // execution must use the lower watermark to keep the thread unread.
+            const retryAt =
+              Date.parse(visitedAt) < Date.parse(open.visitedAt) ? visitedAt : open.visitedAt;
+            sendOpen(session, retryAt, open.intent);
+            return true;
+          }
+          releaseOpen(open.intent.claim);
+          open = null;
+        }
+        if (open === null && pick === null) return false;
+
+        const claim = open?.claim ?? claimOpen(Date.now());
+        if (visitedAt === null) {
+          releaseOpen(claim);
+          open = null;
+        } else {
+          sendOpen(session, visitedAt, {
+            claim,
+            commandId: options.newCommandId(),
+            searchQuery: pick === null ? null : pickedQuery(pick),
+          });
+        }
+        if (pick !== null) registry.set(pickAtom, null);
+        return visitedAt !== null;
+      };
+
+      const update = ({ shell, session, pick }: VisitInputs) => {
         clearTimer();
         if (shell === null) return;
 
@@ -141,85 +208,60 @@ export function createThreadVisitTracker(options: ThreadVisitTrackerOptions) {
         const updatedAtMs = wakeIsLatest ? wokeAtMs : shellUpdatedAtMs;
         if (shell.lastVisitedAt === undefined) {
           options.markLocalVisit?.(ref, visitedAt);
+          if (pick !== null) registry.set(pickAtom, null);
           return;
         }
-        const lastVisitedAtMs = shell.lastVisitedAt ? Date.parse(shell.lastVisitedAt) : NaN;
+
+        const lastVisitedAtMs =
+          shell.lastVisitedAt === null ? Number.NEGATIVE_INFINITY : Date.parse(shell.lastVisitedAt);
         if (!Number.isNaN(lastVisitedAtMs)) {
-          lastAcceptedVisitedAtMs = Math.max(lastAcceptedVisitedAtMs, lastVisitedAtMs);
-          lastObservedVisitedAtMs = Math.max(lastObservedVisitedAtMs, lastVisitedAtMs);
+          observedThrough = Math.max(observedThrough, lastVisitedAtMs);
+          acceptedThrough = Math.max(acceptedThrough, lastVisitedAtMs);
         }
-        if (retryPending && lastAcceptedVisitedAtMs >= lastDispatch.visitedAtMs) {
-          retryPending = false;
-        }
-        // A rejected visit waits for a new session, even if streaming changes the shell.
-        // It retries on that session's first shell update, or after the throttle if none comes.
-        const generation = registry.get(sessionGenerationAtom);
-        if (retryPending && generation === lastDispatch.generation) return;
-        const failedOpen = pendingOpen?.failedAttempt;
-        const canSendOpen = pendingOpen !== null && failedOpen?.generation !== generation;
-        const now = Date.now();
-        const retryAt =
-          Math.max(
-            retryPending ? lastDispatch.at : Number.NEGATIVE_INFINITY,
-            canSendOpen && failedOpen ? failedOpen.at : Number.NEGATIVE_INFINITY,
-          ) + VISIT_DISPATCH_THROTTLE_MS;
-        if (shell === shellAtSessionStart && now < retryAt) {
-          timer = setTimeout(
-            () => onShell(registry.get(options.threadShellAtom(ref))),
-            retryAt - now,
-          );
-          return;
-        }
-        const elapsed = now - lastDispatch.at;
-        if (canSendOpen) {
-          const rewound =
-            lastObservedVisitedAtMs >= updatedAtMs && !(lastVisitedAtMs >= updatedAtMs);
-          // The server can record the open at the rewound watermark without marking it read.
-          const openVisitedAt = rewound ? shell.lastVisitedAt : visitedAt;
-          pendingOpen = null;
-          if (openVisitedAt !== null) {
-            dispatch(shell, openVisitedAt, true);
-            return;
-          }
-          releaseOpen();
-        }
-        if (
-          lastAcceptedVisitedAtMs >= updatedAtMs ||
-          (!retryPending && lastDispatch.visitedAtMs >= updatedAtMs)
-        )
-          return;
+        if (session === null) return;
+
+        // Only a shell that once showed this activity as read can reveal a rewind.
+        const rewound = observedThrough >= updatedAtMs && lastVisitedAtMs < updatedAtMs;
+        if (updateOpen(session, rewound ? shell.lastVisitedAt : visitedAt, pick)) return;
+
+        if (acceptedThrough >= updatedAtMs) return;
+        const retryVisit = lastVisit?.failed && lastVisit.visitedAtMs > acceptedThrough;
+        if (retryVisit && lastVisit?.session === session) return;
+        if (!retryVisit && lastVisit && lastVisit.visitedAtMs >= updatedAtMs) return;
 
         const completedAtMs = shell.latestRun?.completedAt
           ? Date.parse(shell.latestRun.completedAt)
           : NaN;
-        const hasUnseenCompletion =
-          !Number.isNaN(completedAtMs) &&
-          (Number.isNaN(lastVisitedAtMs) || completedAtMs > lastVisitedAtMs);
-        if (hasUnseenCompletion || wakeIsLatest || elapsed >= VISIT_DISPATCH_THROTTLE_MS) {
-          dispatch(shell, visitedAt, false);
-          return;
+        const elapsed = lastVisit === null ? Infinity : Date.now() - lastVisit.at;
+        if (
+          retryVisit ||
+          completedAtMs > lastVisitedAtMs ||
+          wakeIsLatest ||
+          elapsed >= VISIT_DISPATCH_THROTTLE_MS
+        ) {
+          void visit(session, visitedAt).then((accepted) => {
+            if (!accepted && active) update(registry.get(inputsAtom));
+          });
+        } else {
+          timer = setTimeout(
+            () => update(registry.get(inputsAtom)),
+            VISIT_DISPATCH_THROTTLE_MS - elapsed,
+          );
         }
-        timer = setTimeout(
-          () => dispatch(shell, visitedAt, false),
-          VISIT_DISPATCH_THROTTLE_MS - elapsed,
-        );
       };
 
-      if (pendingOpen === null) {
-        get.addFinalizer(
-          claimThreadOpenOnRelease(ref.environmentId, ref.threadId, openedAt, () => {
-            pendingOpen = {};
-            onShell(registry.get(options.threadShellAtom(ref)));
-          }),
-        );
+      // A quick remount can share the outcome of an open that is still in flight.
+      if (inFlightOpen !== null) {
+        void inFlightOpen.then(() => {
+          if (!active) return;
+          if (open === null) {
+            const claim = claimOpen(openedAt);
+            if (claim !== null) open = { status: "pending", claim };
+          }
+          update(registry.get(inputsAtom));
+        });
       }
-      // `subscribe`, not `get`: a rebuild would reset the open and throttle
-      // state on every streaming tick.
-      get.subscribe(options.threadShellAtom(ref), onShell, { immediate: true });
-      get.subscribe(sessionGenerationAtom, () => {
-        shellAtSessionStart = registry.get(options.threadShellAtom(ref));
-        onShell(shellAtSessionStart);
-      });
+      get.subscribe(inputsAtom, update, { immediate: true });
     }).pipe(Atom.withLabel(`thread-visit-tracker:${key}`));
   });
   return (ref: ScopedThreadRef | null) => (ref === null ? IDLE_TRACKER : family(threadKey(ref)));

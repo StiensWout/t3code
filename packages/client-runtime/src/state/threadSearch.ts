@@ -6,6 +6,7 @@ import {
   type OrchestrationV2SearchThreadsInput,
   type OrchestrationV2SearchThreadsResult,
   type OrchestrationV2ThreadFamily,
+  type ScopedThreadRef,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -13,15 +14,12 @@ import { AsyncResult, Atom } from "effect/reactivity";
 import {
   foldSearchQuery,
   messageSearchTokens,
-  pickedQuery,
   THREAD_OPEN_DEDUPE_MS,
   type ThreadSearchSubject,
 } from "@t3tools/shared/paletteSearch";
 import { threadSearchPullRequests } from "@t3tools/shared/threadPullRequests";
 
 import type { EnvironmentThreadShell } from "./models.ts";
-import type { VisitThreadInput } from "../operations/commands.ts";
-import type { AtomCommandResult } from "./runtime.ts";
 import { getThreadSortTimestamp } from "./threadSort.ts";
 
 // When this client last sent an open per thread, by its own clock: a server
@@ -29,7 +27,6 @@ import { getThreadSortTimestamp } from "./threadSort.ts";
 // together than THREAD_OPEN_DEDUPE_MS anyway, so skipping them saves a command
 // and a broadcast while flipping between threads.
 const sentThreadOpens = new Map<string, number>();
-const threadOpenReleaseListeners = new Map<string, Set<() => void>>();
 // When this client last opened each thread, sent or not, so recent threads
 // follow quick switches the server merges.
 const localThreadOpens = new Map<string, number>();
@@ -39,7 +36,7 @@ let localThreadOpensVersion = 0;
  * to the server now.
  */
 export function claimThreadOpen(environmentId: EnvironmentId, threadId: string, now: number) {
-  const key = `${environmentId}:${threadId}`;
+  const key = threadSearchMatchKey({ environmentId, threadId });
   localThreadOpens.set(key, now);
   localThreadOpensVersion += 1;
   if (now - (sentThreadOpens.get(key) ?? Number.NEGATIVE_INFINITY) < THREAD_OPEN_DEDUPE_MS) {
@@ -50,63 +47,25 @@ export function claimThreadOpen(environmentId: EnvironmentId, threadId: string, 
 }
 
 /**
- * Gives back an unsent open so a tracker can take over or the next open can be sent.
+ * Gives back a claim when an open ends without an acknowledgment.
  */
 export function releaseThreadOpen(
   environmentId: EnvironmentId,
   threadId: string,
   claimedAt: number,
 ) {
-  const key = `${environmentId}:${threadId}`;
+  const key = threadSearchMatchKey({ environmentId, threadId });
   if (sentThreadOpens.get(key) !== claimedAt) return;
   sentThreadOpens.delete(key);
-  for (const listener of threadOpenReleaseListeners.get(key) ?? []) listener();
 }
 
-/** Lets a visible tracker take over if the claim that suppressed its open is released. */
-export function claimThreadOpenOnRelease(
-  environmentId: EnvironmentId,
-  threadId: string,
-  openedAt: number,
-  onClaim: () => void,
-) {
-  const key = `${environmentId}:${threadId}`;
-  const listeners = threadOpenReleaseListeners.get(key) ?? new Set<() => void>();
-  const unsubscribe = () => {
-    if (listeners.delete(claim) && listeners.size === 0) threadOpenReleaseListeners.delete(key);
-  };
-  const claim = () => {
-    if (sentThreadOpens.has(key)) return;
-    sentThreadOpens.set(key, openedAt);
-    unsubscribe();
-    onClaim();
-  };
-  listeners.add(claim);
-  threadOpenReleaseListeners.set(key, listeners);
-  return unsubscribe;
-}
+const searchPicks = Atom.family((_key: string) =>
+  Atom.make<string | null>(null).pipe(Atom.setIdleTTL(THREAD_OPEN_DEDUPE_MS)),
+);
 
-/** A search pick always sends its query, even if the server merges the open. */
-export async function recordThreadSearchPick(
-  thread: Pick<EnvironmentThreadShell, "environmentId" | "id" | "updatedAt" | "lastVisitedAt">,
-  query: string,
-  now: number,
-  visit: (value: {
-    readonly environmentId: EnvironmentId;
-    readonly input: VisitThreadInput;
-  }) => Promise<AtomCommandResult<unknown, unknown>>,
-) {
-  const { environmentId, id, updatedAt, lastVisitedAt } = thread;
-  const claimed = claimThreadOpen(environmentId, id, now);
-  if (lastVisitedAt === undefined) {
-    if (claimed) releaseThreadOpen(environmentId, id, now);
-    return;
-  }
-  const result = await visit({
-    environmentId,
-    input: { threadId: id, visitedAt: updatedAt, opened: true, searchQuery: pickedQuery(query) },
-  });
-  if (claimed && AsyncResult.isFailure(result)) releaseThreadOpen(environmentId, id, now);
+/** Holds a palette pick until navigation mounts the thread's visit tracker. */
+export function threadSearchPickAtom(ref: ScopedThreadRef) {
+  return searchPicks(threadSearchMatchKey(ref));
 }
 
 export interface EnvironmentThreadSearchMatch extends OrchestrationThreadSearchMatch {
@@ -167,9 +126,10 @@ function parseThreadSearchKey(key: string) {
   return decodeThreadSearchKey(key);
 }
 
-export function threadSearchMatchKey(
-  match: Pick<EnvironmentThreadSearchMatch, "environmentId" | "threadId">,
-): string {
+export function threadSearchMatchKey(match: {
+  readonly environmentId: EnvironmentId;
+  readonly threadId: string;
+}): string {
   return JSON.stringify([match.environmentId, match.threadId]);
 }
 
@@ -325,7 +285,8 @@ function buildThreadSearchSubject(
   environmentLabel: string | null | undefined,
 ): ThreadSearchSubject {
   const activityAt = getThreadSortTimestamp(thread, "updated_at");
-  const localOpenedAt = localThreadOpens.get(`${thread.environmentId}:${thread.id}`) ?? 0;
+  const key = threadSearchMatchKey({ environmentId: thread.environmentId, threadId: thread.id });
+  const localOpenedAt = localThreadOpens.get(key) ?? 0;
   return {
     id: thread.id,
     title: thread.title,

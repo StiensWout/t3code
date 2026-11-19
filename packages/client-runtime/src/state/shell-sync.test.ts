@@ -1281,6 +1281,7 @@ describe("environment shell cold start", () => {
     );
     return {
       shellState,
+      activeSession,
       subscriptions,
       saved,
       httpLoads,
@@ -1668,7 +1669,11 @@ describe("environment shell cold start", () => {
       expect(coldReload.input).not.toHaveProperty("httpSnapshotFallback");
       expect(yield* Ref.get(h.httpLoads)).toBe(1);
       yield* Queue.offer(coldReload.events, { kind: "synchronized" });
-      expect((yield* h.liveAt(HTTP_SEQUENCE)).generation).toBeGreaterThan(0);
+      const firstLive = yield* h.liveAt(HTTP_SEQUENCE);
+      expect(firstLive.generation).toBeGreaterThan(0);
+      expect(firstLive.liveSession).toBe(
+        Option.getOrThrow(yield* SubscriptionRef.get(h.activeSession)),
+      );
 
       // A warm reconnect resumes the in-memory shell and falls back the same way.
       yield* h.reconnect;
@@ -1682,8 +1687,12 @@ describe("environment shell cold start", () => {
       const warmReload = yield* Queue.take(h.subscriptions);
       expect(warmReload.input).toMatchObject({ afterSequence: HTTP_SEQUENCE + 1 });
       expect(yield* Ref.get(h.httpLoads)).toBe(2);
+      expect((yield* SubscriptionRef.get(h.shellState)).liveSession).toBeUndefined();
       yield* Queue.offer(warmReload.events, { kind: "synchronized" });
-      yield* h.liveAt(HTTP_SEQUENCE + 1);
+      const secondLive = yield* h.liveAt(HTTP_SEQUENCE + 1);
+      expect(secondLive.liveSession).toBe(
+        Option.getOrThrow(yield* SubscriptionRef.get(h.activeSession)),
+      );
     }),
   );
 });

@@ -15,7 +15,7 @@ import {
   nextShownOrder,
   createThreadSearchResultsAtomFamily,
   makeThreadSearchKey,
-  recordThreadSearchPick,
+  releaseThreadOpen,
   threadSearchMatchKey,
   threadSearchSubject,
   visibleThreadSearch,
@@ -257,35 +257,22 @@ it("sends one open per thread every ten minutes by this client's clock", () => {
   expect(claimThreadOpen(envA, "thread-open", 10 * minute)).toBe(true);
 });
 
-it.each(["accepted", "rejected", "untracked", "already claimed"] as const)(
-  "dedupes the next open after a %s search pick",
-  async (outcome) => {
-    const id = ThreadId.make(`thread-pick-${outcome}`);
-    const updatedAt = "2026-01-01T00:00:00.000Z";
-    const claimed = outcome === "already claimed";
-    if (claimed) claimThreadOpen(envA, id, 0);
-    await recordThreadSearchPick(
-      {
-        environmentId: envA,
-        id,
-        updatedAt,
-        ...(outcome === "untracked" ? {} : { lastVisitedAt: null }),
-      },
-      "  Needle  ",
-      1_000,
-      async (value) => {
-        expect(outcome).not.toBe("untracked");
-        expect(value).toEqual({
-          environmentId: envA,
-          input: { threadId: id, visitedAt: updatedAt, opened: true, searchQuery: "needle" },
-        });
-        return outcome === "accepted"
-          ? AsyncResult.success(undefined)
-          : AsyncResult.failure(Cause.fail("disconnected"));
-      },
-    );
-    expect(claimThreadOpen(envA, id, 11_000)).toBe(
-      outcome === "rejected" || outcome === "untracked",
-    );
-  },
-);
+it("scopes local opens and released claims to the exact environment and thread", () => {
+  const first = EnvironmentId.make("env:colon");
+  const second = EnvironmentId.make("env");
+  const thread = {
+    environmentId: second,
+    id: ThreadId.make("colon:thread"),
+    title: "Second thread",
+    branch: null,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    latestUserMessageAt: null,
+  };
+  expect(claimThreadOpen(first, "thread", 1_000)).toBe(true);
+  expect(threadSearchSubject(thread, null).opens).toBeNull();
+  expect(claimThreadOpen(second, thread.id, 1_000)).toBe(true);
+  releaseThreadOpen(first, "thread", 1_000);
+  expect(claimThreadOpen(second, thread.id, 2_000)).toBe(false);
+  expect(claimThreadOpen(first, "thread", 2_000)).toBe(true);
+});
