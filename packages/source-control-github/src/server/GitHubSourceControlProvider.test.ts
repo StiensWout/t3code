@@ -806,6 +806,54 @@ describe("GitHubSourceControlProvider.checkoutChangeRequest", () => {
     }).pipe(Effect.provide(layer));
   });
 
+  it.effect("checks an upstream pull request out from the upstream, not a fork origin", () => {
+    // Origin is a fork that has a branch of the same name; the URL names the upstream.
+    const { layer, git } = harness({
+      remotes: remotesOutput(["origin", "git@github.com:me/web.git"]),
+      originUrls: "git@github.com:me/web.git\n",
+      graphql: () => ({ pullRequest: node(8, "feature") }),
+      api: {
+        rest: (input) => {
+          const fullName = input.path.slice("repos/".length);
+          return Effect.succeed(
+            restResponse({
+              full_name: fullName,
+              html_url: `https://github.com/${fullName}`,
+              ssh_url: `git@github.com:${fullName}.git`,
+              default_branch: "main",
+            }),
+          );
+        },
+      },
+    });
+    return Effect.gen(function* () {
+      const gh = yield* GitHubSourceControlProvider.make;
+      yield* gh.checkoutChangeRequest({
+        cwd: "/repo",
+        reference: "https://github.com/acme/web/pull/8",
+      });
+      assert.deepStrictEqual(
+        git.filter(([name]) =>
+          ["ensureRemote", "fetchRemoteTrackingBranch", "createBranch"].includes(name),
+        ),
+        [
+          [
+            "ensureRemote",
+            { cwd: "/repo", preferredName: "upstream", url: "git@github.com:acme/web.git" },
+          ],
+          [
+            "fetchRemoteTrackingBranch",
+            { cwd: "/repo", remoteName: "upstream", remoteBranch: "feature" },
+          ],
+          [
+            "createBranch",
+            { cwd: "/repo", branch: "feature", startPoint: "refs/remotes/upstream/feature" },
+          ],
+        ],
+      );
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect("keeps git's own output out of what a failed checkout reports", () => {
     const { layer } = harness({
       remotes: remotesOutput(["origin", "git@github.com:acme/web.git"]),

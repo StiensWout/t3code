@@ -831,10 +831,41 @@ export const make = Effect.gen(function* () {
             normalizeGitRemoteUrl(remote.url).split("/").slice(1).join("/") ===
               nameWithOwner.toLowerCase(),
         )?.name ?? null;
-      const baseRemote = Effect.suspend(() => {
-        const known = remoteFor(baseNameWithOwner);
-        return known === null ? git.resolvePrimaryRemoteName(input.cwd) : Effect.succeed(known);
-      });
+      // Git fetches from a remote's first URL; `config --get` returns the last of several, and
+      // `git remote -v` applies `insteadOf` rewrites.
+      const originUrl = runGit(input.cwd, "readOriginUrl", [
+        "config",
+        "--get-all",
+        "remote.origin.url",
+      ]).pipe(
+        Effect.map((result) => result.stdout.split("\n", 1)[0]?.trim() || null),
+        Effect.orElseSucceed(() => null),
+      );
+      const remoteForRepository = Effect.fn("GitHubSourceControlProvider.remoteForRepository")(
+        function* (nameWithOwner: string, preferredName: string) {
+          const known = remoteFor(nameWithOwner);
+          if (known !== null) return known;
+          const [owner, name] = nameWithOwner.split("/");
+          const repository = yield* readRepository({ host: base.host, owner: owner!, name: name! });
+          const url = yield* originUrl;
+          return yield* git.ensureRemote({
+            cwd: input.cwd,
+            preferredName,
+            url: url !== null && isSshRemoteUrl(url) ? repository.ssh_url : repository.html_url,
+          });
+        },
+      );
+      // A URL can name a repository the checkout has no remote for, such as a fork's upstream.
+      const baseRemote = yield* Effect.cached(
+        reference.kind === "url"
+          ? remoteForRepository(baseNameWithOwner, "upstream")
+          : Effect.suspend(() => {
+              const known = remoteFor(baseNameWithOwner);
+              return known === null
+                ? git.resolvePrimaryRemoteName(input.cwd)
+                : Effect.succeed(known);
+            }),
+      );
       // Avoid resetting the default branch; prefix colliding forks and fail if it is unknown.
       const defaultBranch = isCrossRepository
         ? yield* readRepository(base).pipe(
@@ -851,25 +882,7 @@ export const make = Effect.gen(function* () {
       const headRemote = Effect.gen(function* () {
         if (!isCrossRepository) return yield* baseRemote;
         if (headNameWithOwner === null) return yield* failure("The fork is gone.");
-        const known = remoteFor(headNameWithOwner);
-        if (known !== null) return known;
-        const [owner, name] = headNameWithOwner.split("/");
-        const fork = yield* readRepository({ host: base.host, owner: owner!, name: name! });
-        // Git fetches from a remote's first URL; `config --get` returns the last of several, and
-        // `git remote -v` applies `insteadOf` rewrites.
-        const originUrl = yield* runGit(input.cwd, "readOriginUrl", [
-          "config",
-          "--get-all",
-          "remote.origin.url",
-        ]).pipe(
-          Effect.map((result) => result.stdout.split("\n", 1)[0]?.trim() || null),
-          Effect.orElseSucceed(() => null),
-        );
-        return yield* git.ensureRemote({
-          cwd: input.cwd,
-          preferredName: headOwner ?? "fork",
-          url: originUrl !== null && isSshRemoteUrl(originUrl) ? fork.ssh_url : fork.html_url,
-        });
+        return yield* remoteForRepository(headNameWithOwner, headOwner ?? "fork");
       });
 
       const exists = (yield* git
