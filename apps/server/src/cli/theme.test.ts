@@ -48,7 +48,10 @@ const NIGHTFALL_THEME_JSON = `${JSON.stringify({
   accent: "#7aa2f7",
 })}\n`;
 const JUNK_THEME_JSON = `${JSON.stringify({ name: "Junk" })}\n`;
-const UPDATED_NIGHTFALL_THEME_JSON = NIGHTFALL_THEME_JSON.replace('"Nightfall"', '"New Nightfall"');
+const PREVIOUS_NIGHTFALL_THEME_JSON = NIGHTFALL_THEME_JSON.replace(
+  '"Nightfall"',
+  '"Previous Nightfall"',
+);
 
 const readSettings = (baseDir: string): Record<string, unknown> => {
   const raw = NodeFS.readFileSync(settingsPathFor(baseDir), "utf8");
@@ -248,8 +251,14 @@ describe("t3 theme", () => {
         for (const entry of library) {
           NodeFS.writeFileSync(NodePath.join(themesDir, entry), NIGHTFALL_THEME_JSON);
         }
+        if (publishes) {
+          NodeFS.writeFileSync(
+            NodePath.join(themesDir, `${incoming}.json`),
+            PREVIOUS_NIGHTFALL_THEME_JSON,
+          );
+        }
         const themeFile = NodePath.join(baseDir, "incoming.json");
-        NodeFS.writeFileSync(themeFile, UPDATED_NIGHTFALL_THEME_JSON);
+        NodeFS.writeFileSync(themeFile, NIGHTFALL_THEME_JSON);
 
         const result = yield* runCli([
           "theme",
@@ -267,7 +276,7 @@ describe("t3 theme", () => {
         if (publishes) {
           assert.equal(
             NodeFS.readFileSync(NodePath.join(themesDir, `${incoming}.json`), "utf8"),
-            UPDATED_NIGHTFALL_THEME_JSON,
+            NIGHTFALL_THEME_JSON,
           );
         }
       }),
