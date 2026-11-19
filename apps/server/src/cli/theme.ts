@@ -454,16 +454,17 @@ const themeSetCommand = Command.make("set", {
       if (targetIsFile) {
         yield* readSettingsObject(paths.settingsPath);
         themeId = yield* publishThemeFile({ ...paths, filePath: target, explicitId: flags.id });
-      } else {
-        if (looksLikePath) return yield* new ThemeFileUnreadableError({ filePath: target });
-        if (!isEnvironmentThemeId(target))
-          return yield* new ThemeIdInvalidError({ themeId: target });
+      } else if (looksLikePath) {
+        return yield* new ThemeFileUnreadableError({ filePath: target });
+      } else if (isEnvironmentThemeId(target)) {
         const known = yield* resolvableThemeIds(paths.themesDir);
         if (!known.includes(target)) {
           return yield* new ThemeIdUnknownError({ themeId: target, known });
         }
         themeId = target;
         yield* writeDefaultTheme({ settingsPath: paths.settingsPath, themeId });
+      } else {
+        return yield* new ThemeIdInvalidError({ themeId: target });
       }
 
       yield* Console.log(
