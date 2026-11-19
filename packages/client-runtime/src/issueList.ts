@@ -112,7 +112,7 @@ export function groupIssues(
     {
       tracker: IssueTrackerSummary;
       rows: EnvironmentIssueEntry[];
-      errors: Array<{ projectTitle: string; message: string; environmentId: EnvironmentId }>;
+      errors: Array<IssueListProjectError & { environmentId: EnvironmentId }>;
       more: EnvironmentId[];
     }
   >();

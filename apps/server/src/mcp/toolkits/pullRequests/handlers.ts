@@ -973,16 +973,19 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const thread = yield* requireThread(PullRequestForgeError, undefined);
         const listed = yield* pullRequests
-          .list({
-            projectId: thread.projectId,
-            state: input.state ?? "open",
-            involvement: input.involvement ?? "all",
-            limit: input.limit ?? 30,
-            ...(input.query === undefined ? {} : { query: input.query }),
-            ...(input.cursor === undefined
-              ? {}
-              : { cursors: yield* listCursors.decode(input.cursor) }),
-          })
+          .list(
+            {
+              projectId: thread.projectId,
+              state: input.state ?? "open",
+              involvement: input.involvement ?? "all",
+              limit: input.limit ?? 30,
+              ...(input.query === undefined ? {} : { query: input.query }),
+              ...(input.cursor === undefined
+                ? {}
+                : { cursors: yield* listCursors.decode(input.cursor) }),
+            },
+            { includeUpstream: false },
+          )
           .pipe(Effect.mapError(forgeFailure));
         const failure = listed.errors[0];
         if (listed.entries.length === 0 && failure !== undefined) {

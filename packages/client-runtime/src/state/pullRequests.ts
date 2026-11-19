@@ -17,6 +17,7 @@ import {
   type PullRequestActor,
   type PullRequestActionInput,
   type PullRequestListInput,
+  type PullRequestDiffStat,
   type PullRequestListStatsInput,
   type PullRequestListStatsResult,
   type PullRequestUpdateInput,
@@ -34,7 +35,7 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { persistPullRequestStats } from "./pullRequestStatsPersistence.ts";
+import { persistPullRequestStats, pullRequestStatKey } from "./pullRequestStatsPersistence.ts";
 import { persistQuery, type QueryPersistence } from "./queryPersistence.ts";
 import * as Option from "effect/Option";
 import * as SubscriptionRef from "effect/SubscriptionRef";
@@ -54,6 +55,7 @@ import { createPullRequestRouter } from "./pullRequestRouting.ts";
 import * as PullRequestDiffLoader from "./pullRequestDiffHttp.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
+import { request } from "../rpc/client.ts";
 import { isStalePullRequestReply } from "../pullRequestReply.ts";
 import { parsePullRequestQuery } from "../pullRequestQuery.ts";
 import { reuseUnchanged } from "./serverConfigProjection.ts";
@@ -64,6 +66,30 @@ export {
   PullRequestDiffCredentialRejectedError,
 } from "./pullRequestDiffHttp.ts";
 export * as PullRequestDiffLoader from "./pullRequestDiffHttp.ts";
+
+export { pullRequestStatKey } from "./pullRequestStatsPersistence.ts";
+
+function resolvePullRequestStatHosts(
+  input: PullRequestListStatsInput,
+  result: PullRequestListStatsResult,
+): PullRequestListStatsResult {
+  const hostsByRow = new Map<string, Set<string | undefined>>();
+  for (const { host, ...ref } of input.refs) {
+    const key = pullRequestStatKey(ref);
+    const hosts = hostsByRow.get(key) ?? new Set();
+    hosts.add(host?.toLowerCase());
+    hostsByRow.set(key, hosts);
+  }
+  return {
+    stats: result.stats.flatMap((stat): PullRequestDiffStat[] => {
+      if (stat.host !== undefined) return [stat];
+      const hosts = hostsByRow.get(pullRequestStatKey(stat));
+      if (hosts?.size !== 1) return [];
+      const host = hosts.values().next().value;
+      return [host === undefined ? stat : { ...stat, host }];
+    }),
+  };
+}
 
 /** @public Required to name the error in consumers' inferred pull request results. */
 export class EnvironmentHttpConnectionNotReadyError extends Schema.TaggedError<EnvironmentHttpConnectionNotReadyError>()(
@@ -826,8 +852,11 @@ export function createPullRequestEnvironmentAtoms<R, E>(
     EnvironmentRegistry | PullRequestDiffLoader.PullRequestDiffLoader | R,
     E
   >,
-  onAnswer: PullRequestAnswerHandlers = {},
+  options: PullRequestAnswerHandlers & {
+    readonly forkUpstreamSettingsAtom?: (environmentId: EnvironmentId) => Atom.Atom<string>;
+  } = {},
 ) {
+  const { forkUpstreamSettingsAtom, ...onAnswer } = options;
   const refreshes = createPullRequestRefreshAtomFamily(runtime);
   const sessions = createEnvironmentSessionAtoms(runtime);
   const linkedThreadSignals = createEnvironmentRpcSubscriptionAtomFamily(runtime, {
@@ -1207,9 +1236,20 @@ export function createPullRequestEnvironmentAtoms<R, E>(
     );
   const listLabel = "environment-data:pull-requests:list";
   const listPersistence = persistQuery(PullRequestListResult);
+  const listRevision = Atom.family((environmentId: EnvironmentId) =>
+    Atom.make((get) => {
+      const revision = get(refreshes({ environmentId, input: {} }));
+      const settings = forkUpstreamSettingsAtom?.(environmentId);
+      return JSON.stringify([
+        AsyncResult.getOrElse(revision, () => null),
+        settings === undefined ? null : get(settings),
+      ]);
+    }),
+  );
 
   return {
     refreshes,
+    listRevision,
     linkedThreads: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:pull-requests:linked-threads",
       persistence: persistQuery(PullRequestLinkedThreadsResult),
@@ -1232,7 +1272,9 @@ export function createPullRequestEnvironmentAtoms<R, E>(
         tag: WS_METHODS.pullRequestsList,
         staleTimeMs: 30_000,
         refreshTrigger: ({ environmentId, input }) =>
-          input.cursors === undefined ? refreshes({ environmentId, input: {} }) : undefined,
+          input.cursors === undefined
+            ? listRevision(environmentId)
+            : forkUpstreamSettingsAtom?.(environmentId),
         ...(onAnswer.list === undefined ? {} : { onAnswer: onAnswer.list }),
       }),
       {
@@ -1264,6 +1306,10 @@ export function createPullRequestEnvironmentAtoms<R, E>(
       label: "environment-data:pull-requests:list-stats",
       persistence: persistPullRequestStats(),
       tag: WS_METHODS.pullRequestsListStats,
+      execute: (input) =>
+        request(WS_METHODS.pullRequestsListStats, input).pipe(
+          Effect.map((result) => resolvePullRequestStatHosts(input, result)),
+        ),
       staleTimeMs: 60_000,
       refreshTrigger: ({ environmentId }) => refreshes({ environmentId, input: {} }),
       ...(onAnswer.listStats === undefined ? {} : { onAnswer: onAnswer.listStats }),
@@ -1272,6 +1318,8 @@ export function createPullRequestEnvironmentAtoms<R, E>(
       label: "environment-data:pull-requests:filter-options",
       tag: WS_METHODS.pullRequestsFilterOptions,
       staleTimeMs: 5 * 60_000,
+      refreshTrigger: ({ environmentId, input }) =>
+        input.kind === "references" ? undefined : forkUpstreamSettingsAtom?.(environmentId),
     }),
     detail,
     detailReadVersion,

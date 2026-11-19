@@ -120,7 +120,7 @@ import {
   usePullRequestHostList,
   usePullRequestListStats,
   restoredPullRequestList,
-  usePullRequestTurnRefreshes,
+  usePullRequestListRevisions,
   useSharedPullRequestSummary,
   type EnvironmentQueryTarget,
 } from "~/state/pullRequests";
@@ -327,12 +327,10 @@ export function PullRequestsPage() {
     localFilters,
     hasLocalFilters,
   } = usePullRequestQueryFilters(search, typedQuery);
-  const turnRefreshes = usePullRequestTurnRefreshes([
+  const listRevisions = usePullRequestListRevisions([
     ...new Set(environmentQueries.map(({ environmentId }) => environmentId)),
   ]);
-  const turnRefreshToken = turnRefreshes
-    .map(([environmentId, revision]) => `${environmentId}:${revision}`)
-    .join("|");
+  const listingRevision = JSON.stringify(listRevisions);
   const scopeKey = `${environmentKey}:${assignmentKey}:${search.state}:${search.involvement}:${scopedProjectId ?? ""}:${search.host ?? ""}:${search.draft ?? ""}:${search.review ?? ""}:${search.checks ?? ""}:${search.author ?? ""}:${search.labels?.join("\u0000") ?? ""}`;
   const filterKey = `${scopeKey}:${sentQuery}`;
   const statsScope: PullRequestStatsScope = { key: filterKey, policy: statsPolicy };
@@ -346,9 +344,9 @@ export function PullRequestsPage() {
      * host forever.
      */
     regrown: ReadonlyArray<string>;
-    /** The turn refreshes a continuation was read under; a later turn makes its cursors stale. */
-    turn: string;
-  }>({ key: filterKey, size: PAGE_SIZE, cursors: null, regrown: [], turn: turnRefreshToken });
+    /** A refresh or change to the listed repositories makes these cursors stale. */
+    revision: string;
+  }>({ key: filterKey, size: PAGE_SIZE, cursors: null, regrown: [], revision: listingRevision });
   const pageSize = page.key === filterKey ? page.size : PAGE_SIZE;
   const sentCursors = page.key === filterKey ? page.cursors : null;
   const sentRegrown = page.key === filterKey ? page.regrown : [];
@@ -359,7 +357,7 @@ export function PullRequestsPage() {
       size: PAGE_SIZE,
       cursors: null,
       regrown: [],
-      turn: turnRefreshToken,
+      revision: listingRevision,
     });
   }
 
@@ -607,10 +605,12 @@ export function PullRequestsPage() {
   // A grown page is read by the list and nothing else: the baseline always asks for one page, so
   // a host with no cursor to continue from — where "more" means asking for a longer page — would
   // have its extra rows thrown away for the ninety-nine the baseline keeps answering with.
+  const currentListQuery =
+    sentQuery.length === 0 && sentCursors === null && pageSize === PAGE_SIZE
+      ? baselineQuery
+      : listQuery;
   const answered =
-    (sentQuery.length === 0 && sentCursors === null && pageSize === PAGE_SIZE
-      ? baselineQuery.data
-      : listQuery.data) ??
+    currentListQuery.data ??
     (loaded?.scope === scopeKey && loaded.query === sentQuery ? loaded.data : null);
   const carried =
     (sentQuery.length === 0 ? baselineQuery.data : undefined) ??
@@ -668,12 +668,31 @@ export function PullRequestsPage() {
   const canContinue = !showingCarried && Object.keys(nextCursors).length > 0;
   const loadMore = () => {
     if (canContinue) {
+      const size = regrown.length === 0 ? pageSize : Math.min(pageSize + PAGE_SIZE, MAX_PAGE_SIZE);
+      if (
+        sentCursors !== null &&
+        size === pageSize &&
+        regrown.length === sentRegrown.length &&
+        regrown.every((environmentId) => sentRegrown.includes(environmentId)) &&
+        Object.keys(nextCursors).length === Object.keys(sentCursors).length &&
+        Object.entries(nextCursors).every(([environmentId, cursors]) => {
+          const sent = sentCursors[environmentId];
+          return (
+            sent !== undefined &&
+            Object.keys(cursors).length === Object.keys(sent).length &&
+            Object.entries(cursors).every(([repository, cursor]) => sent[repository] === cursor)
+          );
+        })
+      ) {
+        listQuery.refresh();
+        return;
+      }
       setPage({
         key: filterKey,
-        size: regrown.length === 0 ? pageSize : Math.min(pageSize + PAGE_SIZE, MAX_PAGE_SIZE),
+        size,
         cursors: nextCursors,
         regrown,
-        turn: turnRefreshToken,
+        revision: listingRevision,
       });
       return;
     }
@@ -682,7 +701,7 @@ export function PullRequestsPage() {
       size: Math.min(pageSize + PAGE_SIZE, MAX_PAGE_SIZE),
       cursors: null,
       regrown: [],
-      turn: turnRefreshToken,
+      revision: listingRevision,
     });
   };
 
@@ -697,12 +716,11 @@ export function PullRequestsPage() {
         MAX_PAGE_SIZE,
       ),
       cursors: null,
-      turn: turnRefreshToken,
+      revision: listingRevision,
     };
   };
-  // Every list read refetches itself when a turn completes, but a continuation would refetch only
-  // its later page and strand the rows before it, so the whole loaded list is asked for again.
-  if (sentCursors !== null && page.turn !== turnRefreshToken) setPage(collapsedPage());
+  // When the listing refreshes, read from the head again so earlier pages refresh too.
+  if (sentCursors !== null && page.revision !== listingRevision) setPage(collapsedPage());
 
   const refreshList = (includeRelated = false, actedEnvironmentId?: EnvironmentId) => {
     const related = (
@@ -807,8 +825,11 @@ export function PullRequestsPage() {
     panelSummary?.additions !== undefined &&
     panelSummary.deletions !== undefined
   ) {
+    const link = sourceControlClients.parseChangeRequestUrl(panelSummary.url)?.link;
+    const host = renderedPullRequestSurface?.host ?? link?.authority ?? link?.host;
     const stat = {
       ...panelSummary,
+      ...(host === undefined ? {} : { host }),
       environmentId: panelEnvironmentId,
       additions: panelSummary.additions,
       deletions: panelSummary.deletions,
@@ -1177,13 +1198,15 @@ export function PullRequestsPage() {
   };
 
   const unavailableProjects = new Map(
-    listErrors.map(
-      (error) =>
-        [
-          pullRequestProjectKey({ id: error.projectId, environmentId: error.environmentId }),
-          error.message,
-        ] as const,
-    ),
+    listErrors
+      .filter((error) => !error.upstream)
+      .map(
+        (error) =>
+          [
+            pullRequestProjectKey({ id: error.projectId, environmentId: error.environmentId }),
+            error.message,
+          ] as const,
+      ),
   );
 
   const prefetchEntry = usePullRequestIntentPrefetch((entry) =>
@@ -1247,6 +1270,10 @@ export function PullRequestsPage() {
       {panelToggleControls}
     </div>
   );
+  const upstreamErrors = currentListQuery.data?.errors
+    .filter((error) => error.upstream)
+    .map(({ message }) => message);
+  const upstreamError = [...new Set(upstreamErrors)].join(" ");
   const listError = listQuery.error
     ? `${environmentLabels.get(listQuery.error.environmentId) || gt("Environment")}: ${listQuery.error.message}`
     : null;
@@ -1313,7 +1340,28 @@ export function PullRequestsPage() {
       {listError && shownCount > 0 ? (
         <div className="flex items-center justify-between gap-3 rounded-lg border border-warning/30 bg-warning-surface px-3 py-2 text-xs">
           <span>{gt("{error} Showing the last pull requests loaded.", { error: listError })}</span>
-          <Button size="xs" variant="outline" onClick={() => listQuery.refresh()}>
+          <Button
+            size="xs"
+            variant="outline"
+            disabled={listQuery.isPending}
+            onClick={() => listQuery.refresh()}
+          >
+            <T>Retry</T>
+          </Button>
+        </div>
+      ) : null}
+      {upstreamError ? (
+        <div
+          role="status"
+          className="flex items-center justify-between gap-3 rounded-lg border border-warning/30 bg-warning-surface px-3 py-2 text-xs"
+        >
+          <span>{upstreamError}</span>
+          <Button
+            size="xs"
+            variant="outline"
+            disabled={invalidating || currentListQuery.isPending}
+            onClick={() => void refreshFromHost()}
+          >
             <T>Retry</T>
           </Button>
         </div>

@@ -164,6 +164,7 @@ type IssueListRefreshMode = "manual" | "background";
  */
 export function createIssueEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, E>,
+  forkUpstreamSettingsAtom?: (environmentId: EnvironmentId) => Atom.Atom<string>,
 ) {
   const commandScheduler = createAtomCommandScheduler();
   const serialPerEnvironment = {
@@ -223,6 +224,8 @@ export function createIssueEnvironmentAtoms<R, E>(
         ),
       );
     }),
+    refreshTrigger: ({ environmentId }: { environmentId: EnvironmentId; input: IssueListInput }) =>
+      forkUpstreamSettingsAtom?.(environmentId),
   });
   return {
     /** The threads an issue is linked to, reread when the server signals a link changed. */

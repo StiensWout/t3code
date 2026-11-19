@@ -10,10 +10,19 @@ import * as Schema from "effect/Schema";
 import { persistQuery, type QueryPersistence } from "./queryPersistence.ts";
 
 const requestKey = Schema.fromJsonString(Schema.Tuple([Schema.String, PullRequestListStatsInput]));
-const statKey = (ref: PullRequestRef) =>
-  JSON.stringify(["pull-request-stat", ref.projectId, ref.host ?? "", ref.repository, ref.number]);
+export const pullRequestStatKey = (
+  ref: Pick<PullRequestRef, "host" | "repository" | "number"> & { readonly projectId: string },
+) =>
+  JSON.stringify([
+    ref.projectId,
+    ref.host?.toLowerCase(),
+    ref.repository.toLowerCase(),
+    ref.number,
+  ]);
 
 export function persistPullRequestStats(): QueryPersistence<PullRequestListStatsResult> {
+  // Older caches could store a hostless answer under several different hosts.
+  const statKey = (ref: PullRequestRef) => `pull-request-stat-v2:${pullRequestStatKey(ref)}`;
   const row = persistQuery(PullRequestDiffStat);
   return {
     load: Effect.fn("pullRequestStatsPersistence.load")(
@@ -32,15 +41,12 @@ export function persistPullRequestStats(): QueryPersistence<PullRequestListStats
     save: Effect.fn("pullRequestStatsPersistence.save")(
       function* (environmentId, key, result) {
         const [, input] = yield* Schema.decodeEffect(requestKey)(key);
-        yield* Effect.forEach(result.stats, (stat) => {
-          const ref = input.refs.find(
-            (ref) =>
-              ref.projectId === stat.projectId &&
-              ref.repository === stat.repository &&
-              ref.number === stat.number,
-          );
-          return ref ? row.save(environmentId, statKey(ref), stat) : Effect.void;
-        });
+        const keys = new Set(input.refs.map(statKey));
+        yield* Effect.forEach(
+          result.stats.filter((stat) => keys.has(statKey(stat))),
+          (stat) => row.save(environmentId, statKey(stat), stat),
+          { discard: true },
+        );
       },
       (effect, _environmentId, _key, _result) => effect.pipe(Effect.ignore),
     ),

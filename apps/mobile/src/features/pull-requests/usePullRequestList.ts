@@ -1,3 +1,4 @@
+import { pullRequestStatKey } from "@t3tools/client-runtime/state/pull-requests";
 import { errorDisplayMessage } from "@t3tools/client-runtime/errors";
 import {
   editHeldPullRequestListEntries,
@@ -13,6 +14,7 @@ import { AsyncResult, Atom, type AtomRegistry } from "effect/reactivity";
 import { msg, useMessages } from "gt-react-native";
 import { use, useMemo, useState } from "react";
 import { environmentCatalog } from "../../connection/catalog";
+import { serverEnvironment } from "../../state/server";
 import { m } from "../../i18n/messages";
 import {
   composerPullRequests,
@@ -27,7 +29,6 @@ import {
   patchPullRequestListEntry,
   pullRequestListHead,
   shownPullRequestListPages,
-  pullRequestStatKey as statKey,
   scopedPullRequestListKey,
   withShownPullRequestStats,
   type EnvironmentPullRequestListEntry,
@@ -75,11 +76,23 @@ const sourcesFamily = Atom.family((key: string) => {
   );
 });
 
+function continuationSource(read: Read, target: ListTarget) {
+  const policy = read(serverEnvironment.forkUpstreamSettingsAtom(target.environmentId));
+  const result = read(pullRequestHostAnswer(composerPullRequests.list(target)));
+  const recorded = read(pullRequestListPagesFamily(pullRequestListPagesKey(target)));
+  // A settings change clears the recorded pages. A background refresh keeps them usable.
+  if (!AsyncResult.isSuccess(result) || (result.waiting && recorded?.head !== result.value))
+    return null;
+  const head = result.value;
+  return { policy, head, pages: pullRequestListHead(recorded, head) };
+}
+
 function continuations(registry: AtomRegistry.AtomRegistry, targets: readonly ListTarget[]) {
+  const read = <A>(atom: Atom.Atom<A>) => registry.get(atom);
   return targets.flatMap((target) => {
-    const pages = currentPages((atom) => registry.get(atom), target);
-    const input = pages && nextPullRequestListInput(pages, target.input);
-    return pages && input ? [{ target, pages, input }] : [];
+    const source = continuationSource(read, target);
+    const input = source && nextPullRequestListInput(source.pages, target.input);
+    return source && input ? [{ target, source, input }] : [];
   });
 }
 
@@ -90,7 +103,8 @@ async function loadNextPages(
   signal: AbortSignal,
 ) {
   const responses = await Promise.allSettled(
-    continuations(registry, targets).map(async ({ target, pages, input }) => {
+    continuations(registry, targets).map(async ({ target, source, input }) => {
+      const read = <A>(atom: Atom.Atom<A>) => registry.get(atom);
       const response = await executeAtomQuery(
         registry,
         pullRequestHostAnswer(composerPullRequests.list({ ...target, input })),
@@ -101,23 +115,26 @@ async function loadNextPages(
         },
       );
       if (signal.aborted) return;
+      const current = continuationSource(read, target);
+      if (current === null || source.policy !== current.policy || source.head !== current.head)
+        return;
       if (response._tag === "Failure") throw squashAtomCommandFailure(response);
-      if (response.value.errors.length)
-        throw new Error(response.value.errors.map((error) => error.message).join("\n"));
-      const pagesAtom = pullRequestListPagesFamily(pullRequestListPagesKey(target));
-      const next = appendPullRequestListPage(
-        currentPages((atom) => registry.get(atom), target) ?? pages,
-        response.value,
-        input,
-      );
-      registry.set(pagesAtom, next);
-      if (
+      const errors = response.value.errors;
+      const errorMessage = errors.map((error) => error.message).join("\n");
+      const next = appendPullRequestListPage(current.pages, response.value, input);
+      const hasNextCursor = Object.keys(next.nextCursors).length > 0;
+      const stalled =
         input.cursors &&
-        Object.keys(next.nextCursors).length &&
         JSON.stringify(Object.entries(input.cursors).sort()) ===
-          JSON.stringify(Object.entries(next.nextCursors).sort())
-      )
-        throw new Error(m(msg("Couldn't advance the list. Try again.")));
+          JSON.stringify(Object.entries(next.nextCursors).sort());
+      const canAdvance = !errors.length || (hasNextCursor && !stalled);
+      if (canAdvance || response.value.entries.length)
+        registry.set(
+          pullRequestListPagesFamily(pullRequestListPagesKey(target)),
+          canAdvance ? next : { ...current.pages, entries: next.entries, continued: true },
+        );
+      if (errors.length) throw new Error(errorMessage);
+      if (stalled) throw new Error(m(msg("Couldn't advance the list. Try again.")));
     }),
   );
   return requestErrors(responses);
@@ -130,6 +147,9 @@ async function refreshHeads(
 ) {
   const responses = await Promise.allSettled(
     targets.map(async (target) => {
+      const pagesAtom = pullRequestListPagesFamily(pullRequestListPagesKey(target));
+      const settings = serverEnvironment.forkUpstreamSettingsAtom(target.environmentId);
+      const policy = registry.get(settings);
       await composerPullRequests.invalidate.run(registry, {
         environmentId: target.environmentId,
         input: {},
@@ -146,10 +166,9 @@ async function refreshHeads(
       );
       if (signal.aborted) return;
       if (response._tag === "Failure") throw squashAtomCommandFailure(response);
-      registry.set(
-        pullRequestListPagesFamily(pullRequestListPagesKey(target)),
-        pullRequestListHead(null, response.value),
-      );
+      if (registry.get(settings) === policy) {
+        registry.set(pagesAtom, pullRequestListHead(null, response.value));
+      }
     }),
   );
   return requestErrors(responses);
@@ -235,7 +254,7 @@ export function usePullRequestList(targets: readonly ListTarget[]) {
                   pages: {
                     ...pages,
                     entries: pages.entries.map((entry) => {
-                      const stat = stats.stats.get(statKey(entry));
+                      const stat = stats.stats.get(pullRequestStatKey(entry));
                       return stat
                         ? { ...entry, additions: stat.additions, deletions: stat.deletions }
                         : entry;
@@ -317,10 +336,9 @@ export function usePullRequestList(targets: readonly ListTarget[]) {
     const target = targets.find((target) => target.environmentId === entry.environmentId);
     if (!target) return;
     const pagesAtom = pullRequestListPagesFamily(pullRequestListPagesKey(target));
-    const read = <A>(atom: Atom.Atom<A>) => registry.get(atom);
     const patched = patchPullRequestListEntry(
-      read(pagesAtom),
-      currentHead(read, target),
+      registry.get(pagesAtom),
+      null,
       entry,
       patch,
       Date.now(),

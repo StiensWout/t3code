@@ -10,6 +10,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { connectionAtomRuntime } from "../connection/runtime";
+import { serverEnvironment } from "./server";
 import {
   EMPTY_PULL_REQUEST_STATS_CACHE,
   pullRequestListHead,
@@ -31,8 +32,20 @@ const pullRequestListPagesTargets = new WeakMap<
 >();
 /** The pages loaded past each listing's head, keyed by {@link pullRequestListPagesKey}. */
 export const pullRequestListPagesFamily = Atom.family((key: string) => {
-  const atom = Atom.make<PullRequestListPages | null>(null).pipe(Atom.setIdleTTL(5 * 60_000));
-  pullRequestListPagesTargets.set(atom, JSON.parse(key));
+  const target: readonly [EnvironmentId, PullRequestListInput] = JSON.parse(key);
+  const settings = serverEnvironment.forkUpstreamSettingsAtom(target[0]);
+  const atom = Atom.writable<PullRequestListPages | null, PullRequestListPages | null>(
+    (get) => {
+      get(settings);
+      return null;
+    },
+    (context, next) => context.setSelf(next),
+  ).pipe(
+    // Reset on policy changes even while the list is idle and the pages are retained.
+    Atom.setLazy(false),
+    Atom.setIdleTTL(5 * 60_000),
+  );
+  pullRequestListPagesTargets.set(atom, target);
   return atom;
 });
 
@@ -54,6 +67,7 @@ export const filesViewedReadsFamily = Atom.family((_key: string) =>
 );
 
 export const composerPullRequests = createPullRequestEnvironmentAtoms(connectionAtomRuntime, {
+  forkUpstreamSettingsAtom: serverEnvironment.forkUpstreamSettingsAtom,
   // Rows on pages past each listing's head; the head itself is patched where it is cached.
   actionReply: (target, reply, registry) =>
     Effect.sync(() => {

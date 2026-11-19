@@ -1202,6 +1202,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "include-fork-upstream",
+    title: msg("Include upstream pull requests and issues"),
+    to: "/settings/source-control",
+    scope: "project-defaults",
+    searchTerms: [msg("fork upstream parent repository pull requests issues list original")],
+  },
+  {
     id: "pull-request-merge-method",
     title: msg("Default merge method"),
     to: "/settings/source-control",

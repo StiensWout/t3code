@@ -540,7 +540,7 @@ export function IssuesPage() {
             ) : null}
             {group.errors.map((error) => (
               <p
-                key={`${error.environmentId}:${error.projectTitle}`}
+                key={`${error.environmentId}:${error.projectId}:${error.source ?? error.message}`}
                 className="px-3 text-xs text-destructive"
               >
                 {error.projectTitle}: {error.message}

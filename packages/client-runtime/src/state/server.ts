@@ -19,6 +19,7 @@ import {
   type UsageSummary,
   WS_METHODS,
 } from "@t3tools/contracts";
+import { forkUpstreamPolicy } from "@t3tools/shared/projectSettings";
 import * as Cause from "effect/Cause";
 import * as Duration from "effect/Duration";
 import * as Equal from "effect/Equal";
@@ -1318,6 +1319,11 @@ export function createServerEnvironmentAtoms<R, E>(
       Atom.withLabel(`environment-data:server:settings:${environmentId}`),
     ),
   );
+  const forkUpstreamSettingsAtom = Atom.family((environmentId: EnvironmentId) =>
+    Atom.make((get) =>
+      JSON.stringify(forkUpstreamPolicy(get(settingsValueAtom(environmentId)))),
+    ).pipe(Atom.withLabel(`environment-data:server:fork-upstream:${environmentId}`)),
+  );
   const hiddenThreadTagsAtom = Atom.family((environmentId: EnvironmentId) =>
     Atom.make((get) => {
       const settings = get(settingsValueAtom(environmentId));
@@ -1465,6 +1471,7 @@ export function createServerEnvironmentAtoms<R, E>(
     }),
     updateStateAtom,
     settingsValueAtom,
+    forkUpstreamSettingsAtom,
     hiddenThreadTagsAtom,
     usageModelFilterAtom,
     providersValueAtom,

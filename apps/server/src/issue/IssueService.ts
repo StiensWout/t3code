@@ -47,6 +47,7 @@ import { parseUrl } from "@t3tools/shared/url";
 import * as IssueTrackerBindings from "../persistence/IssueTrackerBindings.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
+import * as ForkUpstream from "../sourceControl/forkUpstream.ts";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
 import * as IssueTrackerRegistry from "./IssueTrackerRegistry.ts";
 
@@ -73,6 +74,7 @@ interface ProjectTrackerBinding {
   readonly tracker: IssueTrackerKind;
   readonly host: string;
   readonly scope: string;
+  readonly forkRepository?: { readonly kind: SourceControlProviderKind; readonly selector: string };
 }
 
 /** A project the registry has a tracker for, ready to serve reads and writes. */
@@ -90,10 +92,12 @@ function resolveGitHostBinding(project: OrchestrationProjectShell): ProjectTrack
   const scope = sourceControlDefinitions.issueScope(identity);
   const kind = identity?.provider;
   if (!identity || kind === undefined || kind === "unknown" || scope === null) return null;
+  const selector = sourceControlDefinitions.issueRepositorySelector(identity);
   return {
     tracker: IssueTrackerKind.make(kind),
     host: sourceControlDefinitions.changeRequestHost(identity, kind),
     scope,
+    ...(selector !== null ? { forkRepository: { kind, selector } } : {}),
   };
 }
 
@@ -149,7 +153,10 @@ const unsupported = (operation: string, what: string) =>
 export class IssueService extends Context.Service<
   IssueService,
   {
-    readonly list: (input: IssueListInput) => Effect.Effect<IssueListResult, IssueError>;
+    readonly list: (
+      input: IssueListInput,
+      options?: { readonly includeUpstream: false },
+    ) => Effect.Effect<IssueListResult, IssueError>;
     readonly detail: (input: IssueRef) => Effect.Effect<IssueDetail, IssueError>;
     readonly comments: (
       input: IssueCommentsPageInput,
@@ -189,6 +196,7 @@ const make = Effect.gen(function* () {
   const projects = yield* ProjectService.ProjectService;
   const repositoryIdentities = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
   const bindings = yield* IssueTrackerBindings.IssueTrackerBindingsRepository;
+  const forkUpstream = yield* ForkUpstream.ForkUpstream;
 
   const resolveStandaloneBinding = (binding: IssueTrackerProjectBinding | undefined) => {
     if (binding === undefined) return null;
@@ -319,7 +327,10 @@ const make = Effect.gen(function* () {
       ),
     );
 
-  const list: IssueService["Service"]["list"] = Effect.fn("IssueService.list")(function* (input) {
+  const list = Effect.fn("IssueService.list")(function* (
+    input: IssueListInput,
+    options?: { readonly includeUpstream: false },
+  ) {
     // Trackers name every host so a client narrowed to one can switch to another; only the
     // narrowed host's scopes are read.
     const { supported, unimplemented } = yield* listProjects({ projectId: input.projectId });
@@ -327,23 +338,51 @@ const make = Effect.gen(function* () {
     const limit = input.limit ?? DEFAULT_LIST_LIMIT;
     // Worktrees of one repository are separate projects, and every repository of an Azure
     // DevOps project shares its work items; read each scope once.
-    const scopes = new Map<string, SupportedProject>();
-    for (const project of supported) {
-      if (host !== undefined && project.host !== host) continue;
+    const policy =
+      options?.includeUpstream === false
+        ? ForkUpstream.disabledPolicy
+        : yield* forkUpstream.readPolicy;
+    const candidates = supported.filter((project) => host === undefined || project.host === host);
+    const scopes = new Map<string, { project: SupportedProject; upstream: boolean }>();
+    for (const project of candidates) {
       const key = listCursorKey(project.host, project.scope);
-      if (!scopes.has(key)) scopes.set(key, project);
+      if (!scopes.has(key)) scopes.set(key, { project, upstream: false });
+    }
+    // Served by the opted-in fork's checkout, which requireProject keeps read-only.
+    const { parents, errors: upstreamErrors } = yield* forkUpstream.findParents(
+      candidates,
+      policy,
+      (project) =>
+        project.forkRepository === undefined
+          ? undefined
+          : {
+              key: listCursorKey(project.host, project.scope),
+              kind: project.forkRepository.kind,
+              host: project.host,
+              repository: project.forkRepository.selector,
+            },
+      SCOPE_CONCURRENCY,
+    );
+    for (const { candidate, parent: scope } of parents) {
+      const key = listCursorKey(candidate.host, scope);
+      if (!scopes.has(key)) scopes.set(key, { project: { ...candidate, scope }, upstream: true });
     }
     const continuing = input.cursors;
+    const held = ForkUpstream.heldUpstreamCursors(
+      continuing,
+      new Set(scopes.keys()),
+      upstreamErrors,
+    );
     const viewers = new Map<string, string>();
     const trackers = new Map<string, IssueTrackerSummary>();
     const entries: IssueListEntry[] = [];
-    const errors: IssueListProjectError[] = [];
-    const nextCursors: Record<string, string> = {};
+    const errors: IssueListProjectError[] = [...held.errors];
+    const nextCursors: Record<string, string> = { ...held.nextCursors };
 
     const involvement = input.involvement ?? "all";
     // Only a narrowed listing compares against the signed-in account; `all` never reads it.
     const viewerRequests = new Map<string, Effect.Effect<string, IssueTrackerError>>();
-    for (const project of involvement === "all" ? [] : scopes.values()) {
+    for (const { project } of involvement === "all" ? [] : scopes.values()) {
       if (viewerRequests.has(project.host)) continue;
       const request = yield* Effect.cached(
         project.api
@@ -381,10 +420,9 @@ const make = Effect.gen(function* () {
     };
 
     yield* Effect.forEach(
-      scopes.values(),
-      (project) =>
+      scopes,
+      ([key, { project, upstream }]) =>
         Effect.gen(function* () {
-          const key = listCursorKey(project.host, project.scope);
           // A continuation names the scopes it wants; one not named has nothing to add.
           if (continuing !== undefined && continuing[key] === undefined) return;
           const cursor = continuing?.[key];
@@ -415,11 +453,13 @@ const make = Effect.gen(function* () {
           );
           if (page._tag === "Failure") {
             if (cursor !== undefined) nextCursors[key] = cursor;
-            recordFailure(project, page.failure);
+            if (!upstream) recordFailure(project, page.failure);
+            const detail = trackerDetail(page.failure);
             errors.push({
               projectId: project.project.id,
+              source: `issues:${key}`,
               projectTitle: project.project.title,
-              message: trackerDetail(page.failure),
+              message: upstream ? `${project.scope} could not be read. ${detail}` : detail,
             });
             return;
           }
@@ -455,7 +495,7 @@ const make = Effect.gen(function* () {
       entries,
       errors,
       nextCursors,
-      scopes: [...scopes.values()].map((project) => ({
+      scopes: [...scopes.values()].map(({ project }) => ({
         projectId: project.project.id,
         tracker: project.tracker,
         host: project.host,

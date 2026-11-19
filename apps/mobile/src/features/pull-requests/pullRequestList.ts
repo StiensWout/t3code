@@ -1,3 +1,4 @@
+import { pullRequestStatKey } from "@t3tools/client-runtime/state/pull-requests";
 import { pullRequestFilterProjects } from "@t3tools/client-runtime/pull-request-project-filter";
 import { parsePullRequestQuery } from "@t3tools/client-runtime/pull-request-query";
 import {
@@ -79,10 +80,6 @@ export type EnvironmentPullRequestListEntry = PullRequestListEntry & {
 export const scopedPullRequestListKey = (entry: EnvironmentPullRequestListEntry) =>
   `${entry.environmentId}:${pullRequestListKey(entry)}`;
 
-export const pullRequestStatKey = (
-  row: Pick<PullRequestDiffStat, "projectId" | "repository" | "number">,
-) => `${row.projectId}:${row.repository}:${row.number}`;
-
 /**
  * Diff stats an environment has answered, the stats query that answered each, and each row's
  * `updatedAt` as its list last answered it.
@@ -109,7 +106,7 @@ export function withListedPullRequests(
   cache: PullRequestStatsCache,
   entries: readonly Pick<
     PullRequestListEntry,
-    "projectId" | "repository" | "number" | "updatedAt"
+    "projectId" | "host" | "repository" | "number" | "updatedAt"
   >[],
 ): {
   readonly cache: PullRequestStatsCache;

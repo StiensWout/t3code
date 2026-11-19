@@ -3609,6 +3609,8 @@
   "13087312bc6a0b45": "Pull requests",
   "efb65f53a2382026": "Ta bort agentmedförfattare vid merge",
   "88631d9ea293eccd": "Ta bort igenkända agentmedförfattare från merge- och squash-meddelanden hos värdar som stöder det, och behåll mänskliga medförfattare. Gäller även automatisk merge. Gäller inte merge-köer, stack-merges och befintliga commits.",
+  "7ceb6a81498c07c8": "Ta med pull requests och ärenden från upstream",
+  "78fa47b73fdc0f13": "Visa även pull requests och ärenden från det överordnade GitHub-repot när projektets valda repo är en fork.",
   "15ed472fb3ba4a6d": "Standardgren",
   "abe5615aea30066d": "Pulla automatiskt",
   "17782375efd2c928": "Håll standardgrenen aktuell när det inte finns några lokala ändringar.",

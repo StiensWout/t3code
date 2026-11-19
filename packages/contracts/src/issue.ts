@@ -297,6 +297,7 @@ export type IssueTrackerSummary = typeof IssueTrackerSummary.Type;
 
 export const IssueListProjectError = Schema.Struct({
   projectId: ProjectId,
+  source: Schema.optionalKey(TrimmedNonEmptyString),
   projectTitle: TrimmedNonEmptyString,
   message: TrimmedNonEmptyString,
 });

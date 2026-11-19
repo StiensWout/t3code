@@ -110,6 +110,7 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
   const mixedWorkspace = useScopedSettingsMixed(["defaultThreadEnvMode"]);
   const mixedAutoPull = useScopedSettingsMixed(["defaultAutoPull"]);
   const mixedAgentCredits = useScopedSettingsMixed(["removeAgentCreditsOnMerge"]);
+  const mixedForkUpstream = useScopedSettingsMixed(["includeForkUpstream"]);
   const mixedMergeMethod = useScopedSettingsMixed(["pullRequestMergeMethod"]);
   const modelSource = useScopedSettingSource(["defaultModelSelection"]);
   const isProjectScope = scope.kind === "project" || scope.kind === "checkout";
@@ -499,6 +500,32 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
                 onCheckedChange={(enabled) =>
                   updateSettings({ removeAgentCreditsOnMerge: enabled })
                 }
+              />
+            }
+          />
+          <SettingsRow
+            serverScoped
+            settingKeys={["includeForkUpstream"]}
+            mixed={mixedForkUpstream}
+            {...searchableSetting("include-fork-upstream")}
+            description={gt(
+              "For GitHub forks, also show pull requests and issues from the parent of the project's selected repository.",
+            )}
+            resetAction={
+              settings.includeForkUpstream ? (
+                <SettingResetButton
+                  ariaLabel={gt("Reset upstream pull requests and issues to default")}
+                  tooltip={gt("Show the selected repository only")}
+                  onClick={() => updateSettings({ includeForkUpstream: false })}
+                />
+              ) : null
+            }
+            control={
+              <Switch
+                aria-label={gt("Include upstream pull requests and issues")}
+                mixed={mixedForkUpstream}
+                checked={mixedForkUpstream ? false : settings.includeForkUpstream}
+                onCheckedChange={(enabled) => updateSettings({ includeForkUpstream: enabled })}
               />
             }
           />

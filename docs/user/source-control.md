@@ -377,6 +377,14 @@ requests.
 To list a Linear team's issues beside a project's, connect Linear with an API key under
 Settings → Source control & issues, then choose the team for that project there.
 
+The tabs list the project's selected repository. T3 uses the GitHub CLI's marked default when it
+matches a local remote. Otherwise it prefers a remote named `upstream`, then `origin`.
+When the selected repository is a GitHub fork, turn on **Include upstream pull requests and
+issues** in Settings → Source control & issues to add its parent's rows. You can enable it per
+project or as the environment default. If the selected repository is already the original
+repository, its rows are already listed. Upstream rows are for reading from the fork's project:
+their pull requests are not checked out there, and their issues cannot be changed.
+
 Select an issue to open it beside the list: description, comments, state changes, linked pull
 requests, labels, assignees, and reactions. Linked pull requests open in the same panel. You can
 comment, edit the title and description, change labels and assignees, react, and close or

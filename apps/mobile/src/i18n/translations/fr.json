@@ -3603,6 +3603,8 @@
   "13087312bc6a0b45": "Pull requests",
   "efb65f53a2382026": "Retirer les crédits d’agent lors de la fusion",
   "88631d9ea293eccd": "Retire les crédits d’agent reconnus des messages de fusion et de squash sur les hébergeurs qui le permettent, en gardant les co-auteurs humains. Inclut la fusion automatique. Exclut les files de fusion, les fusions de pile et les commits existants.",
+  "7ceb6a81498c07c8": "Inclure les pull requests et issues de l’upstream",
+  "78fa47b73fdc0f13": "Pour les forks GitHub, afficher aussi les pull requests et les tickets du dépôt parent du dépôt sélectionné pour le projet.",
   "15ed472fb3ba4a6d": "Branche par défaut",
   "abe5615aea30066d": "Pull automatique",
   "17782375efd2c928": "Maintient la branche par défaut à jour quand il n’y a pas de modifications locales.",

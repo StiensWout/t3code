@@ -383,6 +383,8 @@ export const PullRequestListEntry = Schema.Struct({
   labels: Schema.Array(PullRequestLabel),
   reviewDecision: Schema.optional(PullRequestReviewDecision),
   checksState: Schema.optional(PullRequestChecksState),
+  /** Listed from the repository the project's fork was made from, which its checkout cannot check out. */
+  upstream: Schema.optionalKey(Schema.Literal(true)),
 });
 export type PullRequestListEntry = typeof PullRequestListEntry.Type;
 
@@ -426,6 +428,7 @@ export const PullRequestListProjectError = Schema.Struct({
   projectId: ProjectId,
   projectTitle: TrimmedNonEmptyString,
   message: TrimmedNonEmptyString,
+  upstream: Schema.optionalKey(Schema.Literal(true)),
 });
 export type PullRequestListProjectError = typeof PullRequestListProjectError.Type;
 
@@ -561,6 +564,7 @@ export type PullRequestStack = typeof PullRequestStack.Type;
 
 export const PullRequestDiffStat = Schema.Struct({
   projectId: ProjectId,
+  host: Schema.optional(TrimmedNonEmptyString),
   repository: TrimmedNonEmptyString,
   number: PositiveInt,
   additions: NonNegativeInt,

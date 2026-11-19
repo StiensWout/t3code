@@ -64,7 +64,7 @@ const PAGE_PROJECT_KEYS: Record<SettingsPage, readonly ProjectScopedServerSettin
     "sidebarAutoSettleOnMerge",
     "sidebarAutoSettleAfterDays",
   ],
-  "source-control": ["defaultAutoPull", "removeAgentCreditsOnMerge"],
+  "source-control": ["defaultAutoPull", "removeAgentCreditsOnMerge", "includeForkUpstream"],
   worktrees: [
     "newWorktreesStartFromOrigin",
     "worktreeSubmodules",
@@ -433,6 +433,19 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
                     value={uniform("removeAgentCreditsOnMerge")}
                     disabled={disabledFor("removeAgentCreditsOnMerge")}
                     onValueChange={(value) => write({ removeAgentCreditsOnMerge: value })}
+                  />
+                  <SettingsSwitchRow
+                    icon="arrow.triangle.branch"
+                    label={gt("Include upstream pull requests and issues")}
+                    subtitle={managedSubtitle(
+                      "includeForkUpstream",
+                      gt(
+                        "For GitHub forks, also show pull requests and issues from the parent of the project's selected repository.",
+                      ),
+                    )}
+                    value={uniform("includeForkUpstream")}
+                    disabled={disabledFor("includeForkUpstream")}
+                    onValueChange={(value) => write({ includeForkUpstream: value })}
                   />
                 </SettingsSection>
                 <SettingsSection title={gt("Default branch")}>

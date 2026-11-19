@@ -90,6 +90,11 @@ export function usePullRequestThreads(
   const canOperate = useEnvironmentScope(target.environmentId, AuthOrchestrationOperateScope);
   const canAsk = !connected || canOperate;
   const canCheckout = useEnvironmentScope(target.environmentId, AuthSourceControlWriteScope);
+  // A fork's checkout fetches from the fork, so an upstream row's new thread starts without one.
+  const checksOut =
+    params.initialSummary === undefined ||
+    !("upstream" in params.initialSummary) ||
+    params.initialSummary.upstream !== true;
   const navigation = useNavigation();
   const gt = useGT();
   const pending = useRef(false);
@@ -107,7 +112,7 @@ export function usePullRequestThreads(
     pending.current = true;
     setBusy(true);
     const result = await settlePromise(async () => {
-      if (connected && !thread && !canCheckout)
+      if (connected && !thread && checksOut && !canCheckout)
         throw new Error(
           gt(
             "Starting work from this {term, select, mr {MR} cr {change request} other {PR}} requires source control write access.",
@@ -123,7 +128,7 @@ export function usePullRequestThreads(
             environmentId: target.environmentId,
             projectId: target.input.projectId,
           });
-      if (!thread)
+      if (!thread && checksOut)
         updateComposerDraftSettings(draftKey, {
           workspaceSelection: {
             mode: "worktree",

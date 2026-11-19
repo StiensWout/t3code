@@ -7,7 +7,7 @@ import type {
   PullRequestListEntry,
   PullRequestListProjectError,
   PullRequestListResult,
-  ProjectId,
+  PullRequestListStatsInput,
   RepositoryIdentity,
   PullRequestAction,
   PullRequestActor,
@@ -22,6 +22,7 @@ import type {
 } from "@t3tools/contracts";
 
 import { isStalePullRequestReply } from "@t3tools/client-runtime/pull-request-reply";
+import { pullRequestStatKey } from "@t3tools/client-runtime/state/pull-requests";
 import { toSortableTimestamp } from "@t3tools/client-runtime/state/thread-sort";
 import type { PullRequestListSort } from "./pullRequestListPreferences";
 
@@ -305,13 +306,7 @@ export function pullRequestEntryKey(entry: ScopedEntry): string {
 
 export interface PullRequestStatsTarget {
   readonly environmentId: EnvironmentId;
-  readonly input: {
-    readonly refs: ReadonlyArray<{
-      readonly projectId: ProjectId;
-      readonly repository: string;
-      readonly number: number;
-    }>;
-  };
+  readonly input: PullRequestListStatsInput;
 }
 
 export interface PullRequestStatsBatch extends PullRequestStatsTarget {
@@ -367,6 +362,7 @@ export function pullRequestStatsBatches(
       key,
       ref: {
         projectId: entry.projectId,
+        host: entry.host,
         repository: entry.repository,
         number: entry.number,
       },
@@ -494,16 +490,20 @@ export type PullRequestDiffStats = ReadonlyMap<
   { readonly additions: number; readonly deletions: number }
 >;
 
+type PullRequestDiffStatRow = Pick<PullRequestDiffStat, "host" | "repository" | "number"> & {
+  readonly environmentId: string;
+  readonly projectId: string;
+};
+
+export const pullRequestDiffStatKey = (row: PullRequestDiffStatRow) =>
+  `${row.environmentId}:${pullRequestStatKey(row)}`;
+
 /** New stats queries must not blank existing counts. */
 export function mergePullRequestDiffStats(
   previous: PullRequestDiffStats,
-  stats: ReadonlyArray<{
-    readonly environmentId: string;
-    readonly projectId: string;
-    readonly number: number;
-    readonly additions: number;
-    readonly deletions: number;
-  }>,
+  stats: ReadonlyArray<
+    PullRequestDiffStatRow & Pick<PullRequestDiffStat, "additions" | "deletions">
+  >,
 ): PullRequestDiffStats {
   if (stats.length === 0) return previous;
   const next = new Map(previous);
@@ -515,12 +515,6 @@ export function mergePullRequestDiffStats(
   }
   return next;
 }
-
-export const pullRequestDiffStatKey = (row: {
-  readonly environmentId: string;
-  readonly projectId: string;
-  readonly number: number;
-}) => `${row.environmentId} ${row.projectId} ${row.number}`;
 
 export interface MergedPullRequestList {
   readonly viewers: PullRequestViewers;

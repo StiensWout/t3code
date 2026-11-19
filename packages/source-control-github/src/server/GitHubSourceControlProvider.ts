@@ -413,6 +413,8 @@ const RawRepositorySchema = Schema.Struct({
   html_url: TrimmedNonEmptyString,
   ssh_url: TrimmedNonEmptyString,
   default_branch: Schema.optional(Schema.NullOr(Schema.String)),
+  /** Only a fork has one. */
+  parent: Schema.optional(Schema.Struct({ full_name: TrimmedNonEmptyString })),
 });
 const decodeRawRepository = decodeJsonResult(RawRepositorySchema);
 
@@ -754,13 +756,14 @@ export const make = Effect.gen(function* () {
 
   const readRepository = Effect.fn("GitHubSourceControlProvider.readRepository")(function* (
     locator: GitHubRepositoryLocator,
+    allowReserve = true,
   ) {
     const response = yield* rest(
       {
         host: locator.host,
         operation: "getRepository",
         path: `repos/${encodeURIComponent(locator.owner)}/${encodeURIComponent(locator.name)}`,
-        allowReserve: true,
+        allowReserve,
       },
       REPOSITORY_NOT_FOUND,
     );
@@ -1161,6 +1164,23 @@ export const make = Effect.gen(function* () {
             providerError("getRepositoryCloneUrls", input.cwd, {
               repository: input.repository,
             }),
+          ),
+        ),
+    ),
+    getRepositoryParent: Effect.fn("GitHubSourceControlProvider.getRepositoryParent")(
+      function* (input) {
+        const locator = parseGitHubRepositorySelector(input.repository, input.host.toLowerCase());
+        if (locator === null) return yield* failure("Repositories are named owner/name.");
+        const repository = yield* readRepository(locator, false);
+        const parent = repository.parent?.full_name;
+        return parent !== undefined && parent.toLowerCase() !== repository.full_name.toLowerCase()
+          ? parent
+          : null;
+      },
+      (effect, input) =>
+        effect.pipe(
+          Effect.mapError(
+            providerError("getRepositoryParent", input.cwd, { repository: input.repository }),
           ),
         ),
     ),

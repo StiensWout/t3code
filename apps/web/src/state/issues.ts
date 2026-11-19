@@ -13,10 +13,14 @@ import { connectionAtomRuntime } from "../connection/runtime";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { useServerConfigs } from "./entities";
 import { formatEnvironmentQueryError, useEnvironmentQuery } from "./query";
+import { serverEnvironment } from "./server";
 
 export type { IssueListTarget };
 
-export const issueEnvironment = createIssueEnvironmentAtoms(connectionAtomRuntime);
+export const issueEnvironment = createIssueEnvironmentAtoms(
+  connectionAtomRuntime,
+  serverEnvironment.forkUpstreamSettingsAtom,
+);
 
 export function useLinkedIssueDetail(
   environmentId: EnvironmentId,

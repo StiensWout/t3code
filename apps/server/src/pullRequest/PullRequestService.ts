@@ -76,7 +76,7 @@ import {
   SourceControlProviderKind,
   type ThreadPullRequestKey,
 } from "@t3tools/contracts";
-import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
+import { type ForkUpstreamPolicy, resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
 
 import * as ProjectService from "../project/ProjectService.ts";
@@ -84,6 +84,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as PullRequestFilesViewed from "../persistence/PullRequestFilesViewed.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
+import * as ForkUpstream from "../sourceControl/forkUpstream.ts";
 import type { SourceControlProviderContext } from "@t3tools/source-control-core/server/SourceControlProvider";
 import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 import {
@@ -181,6 +182,7 @@ export class PullRequestService extends Context.Service<
   {
     readonly list: (
       input: PullRequestListInput,
+      options?: { readonly includeUpstream: false },
     ) => Effect.Effect<PullRequestListResult, PullRequestError>;
     readonly listStats: (
       input: PullRequestListStatsInput,
@@ -367,6 +369,7 @@ export interface SupportedProject {
 
 interface WorkspaceProjects {
   readonly supported: ReadonlyArray<SupportedProject>;
+  readonly candidates: ReadonlyArray<SupportedProject>;
   readonly unimplemented: ReadonlyMap<
     string,
     { readonly kind: SourceControlProviderKind; readonly projectCount: number }
@@ -772,6 +775,7 @@ export const make = Effect.gen(function* () {
   const projects = yield* ProjectService.ProjectService;
   const repositoryIdentities = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
   const sourceControlProviders = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
+  const forkUpstream = yield* ForkUpstream.ForkUpstream;
   const rateLimits = yield* SourceControlRateLimit.SourceControlRateLimit;
   const filesViewedStore = yield* PullRequestFilesViewed.PullRequestFilesViewedRepository;
   const readCache = yield* PullRequestReadCache.PullRequestReadCache;
@@ -967,6 +971,7 @@ export const make = Effect.gen(function* () {
       ),
       Effect.map(({ remoteHosts, projects }) => {
         const supported: SupportedProject[] = [];
+        const candidates: SupportedProject[] = [];
         const unimplemented = new Map<
           string,
           { kind: SourceControlProviderKind; projectCount: number }
@@ -1008,15 +1013,16 @@ export const make = Effect.gen(function* () {
           const repositoryKey =
             api?.repositoryKey?.({ canonicalKey: identity.canonicalKey }) ?? null;
           const key = listCursorKey(host, repositoryKey ?? repository);
-          if (seen.has(key)) continue;
+          const first = !seen.has(key);
           seen.add(key);
           if (api === null) {
+            if (!first) continue;
             const counted = unimplemented.get(host);
             if (counted === undefined) unimplemented.set(host, { kind, projectCount: 1 });
             else counted.projectCount += 1;
             continue;
           }
-          supported.push({
+          const candidate: SupportedProject = {
             cursorKey: key,
             project,
             api: withRateLimitBackoff(api, host, rateLimits),
@@ -1029,11 +1035,31 @@ export const make = Effect.gen(function* () {
               repositoryKey === null
                 ? null
                 : sourceControlDefinitions.canonicalRepositoryKey(repositoryKey.toLowerCase()),
-          });
+          };
+          candidates.push(candidate);
+          if (first) supported.push(candidate);
         }
-        return { supported, unimplemented, viewerRoots, refinedProjectIdsByHost };
+        return { supported, candidates, unimplemented, viewerRoots, refinedProjectIdsByHost };
       }),
     );
+
+  const withRepository = (project: SupportedProject, repository: string): SupportedProject => {
+    const { host, api } = project;
+    const remote = sourceControlDefinitions.repositoryKeyFromRemote(
+      `https://${host}/${repository}`,
+    );
+    const repositoryKey = api.repositoryKey?.({ canonicalKey: remote }) ?? null;
+    return {
+      ...project,
+      cursorKey: listCursorKey(host, repositoryKey ?? repository),
+      repository,
+      remote: repositoryKey ?? remote,
+      repositoryKey:
+        repositoryKey === null
+          ? null
+          : sourceControlDefinitions.canonicalRepositoryKey(repositoryKey.toLowerCase()),
+    };
+  };
 
   // Azure derives organization from the checkout; require the matching repository.
   const requireProject = (ref: PullRequestRef): Effect.Effect<SupportedProject, PullRequestError> =>
@@ -1128,13 +1154,7 @@ export const make = Effect.gen(function* () {
               route.repositoryKey !== null ||
                 route.repository.toLowerCase() === repository.toLowerCase()
                 ? route
-                : {
-                    ...route,
-                    repository,
-                    remote: sourceControlDefinitions.repositoryKeyFromRemote(
-                      `https://${host}/${repository}`,
-                    ),
-                  },
+                : withRepository(route, repository),
             );
           }),
         );
@@ -1374,22 +1394,64 @@ export const make = Effect.gen(function* () {
     };
   };
 
-  const listUncached: PullRequestService["Service"]["list"] = Effect.fn(
-    "PullRequestService.listUncached",
-  )(function* (input) {
+  const forkListingRepository = (project: SupportedProject) => ({
+    key: project.cursorKey,
+    kind: project.api.kind,
+    host: project.host,
+    repository: project.repository,
+  });
+
+  const listingRepositories = (
+    { supported, candidates }: WorkspaceProjects,
+    policy: ForkUpstreamPolicy,
+  ) =>
+    forkUpstream
+      .findParents(candidates, policy, forkListingRepository, REPOSITORY_CONCURRENCY)
+      .pipe(
+        Effect.map(({ parents, errors }) => {
+          const repositories = new Map(supported.map((project) => [project.cursorKey, project]));
+          for (const { candidate, parent: repository } of parents) {
+            const upstream = withRepository(candidate, repository);
+            if (!repositories.has(upstream.cursorKey)) {
+              repositories.set(upstream.cursorKey, upstream);
+            }
+          }
+          return { repositories: [...repositories.values()], errors };
+        }),
+      );
+
+  const listUncached = Effect.fn("PullRequestService.listUncached")(function* (
+    input: PullRequestListInput,
+    policy: ForkUpstreamPolicy,
+  ) {
     const involvement = input.involvement ?? "all";
     const epochAtStart = epochCounter;
     const continuation = yield* decodeCursors(input.cursors);
-    const {
-      supported: projects,
-      unimplemented,
-      viewerRoots,
-      refinedProjectIdsByHost,
-    } = yield* listWorkspaceProjects(input);
+    const workspace = yield* listWorkspaceProjects(input);
+    const { supported: own, unimplemented, viewerRoots, refinedProjectIdsByHost } = workspace;
     const projectCounts = new Map<string, number>();
-    for (const { host } of projects) {
+    for (const { host } of own) {
       projectCounts.set(host, (projectCounts.get(host) ?? 0) + 1);
     }
+    const { repositories: projects, errors: parentLookupErrors } = yield* listingRepositories(
+      workspace,
+      policy,
+    );
+    const held = ForkUpstream.heldUpstreamCursors(
+      input.cursors,
+      new Set(projects.map(({ cursorKey }) => cursorKey)),
+      parentLookupErrors,
+    );
+    const ownKeys = new Set(own.map(({ cursorKey }) => cursorKey));
+    const repositoryError = (
+      { project, cursorKey }: SupportedProject,
+      message: string,
+    ): PullRequestListProjectError => ({
+      projectId: project.id,
+      projectTitle: project.title,
+      message,
+      ...(!ownKeys.has(cursorKey) ? { upstream: true } : {}),
+    });
 
     const viewerResults = yield* resolveViewers(projects, viewerRoots);
     const viewers: Record<string, string> = {};
@@ -1429,28 +1491,38 @@ export const make = Effect.gen(function* () {
         ? projects
         : projects.filter(({ cursorKey }) => continuation.has(cursorKey));
     const readable = selected.filter(({ host }) => viewers[host] !== undefined);
-    const unreadable = selected
-      .filter(({ host }) => viewers[host] === undefined)
-      .map(({ project, repository }) => ({
-        projectId: project.id,
-        projectTitle: project.title,
-        message: `${repository} could not be read.`,
-      }));
+    const unreadable = selected.filter(({ host }) => viewers[host] === undefined);
+    const errors = [
+      ...held.errors.map(({ projectId, projectTitle, message }): PullRequestListProjectError => ({
+        projectId,
+        projectTitle,
+        message,
+        upstream: true,
+      })),
+      ...unreadable.map((project) =>
+        repositoryError(project, `${project.repository} could not be read.`),
+      ),
+    ];
+    const retryCursors = { ...held.nextCursors };
+    for (const { cursorKey } of unreadable) {
+      const cursor = input.cursors?.[cursorKey];
+      if (cursor !== undefined) retryCursors[cursorKey] = cursor;
+    }
     if (readable.length === 0) {
       const listResult: PullRequestListResult = {
         viewers: viewers as PullRequestListResult["viewers"],
         providers,
         entries: [],
-        errors: unreadable,
-        truncated: false,
-        nextCursors: {},
+        errors,
+        truncated: Object.keys(retryCursors).length > 0,
+        nextCursors: retryCursors,
       };
-      const errors = viewerResults.flatMap((result) =>
+      const viewerErrors = viewerResults.flatMap((result) =>
         result.error === null || !selected.some(({ host }) => host === result.host)
           ? []
           : [result.error],
       );
-      const blocking = errors.find(isProviderUnusable) ?? errors[0];
+      const blocking = viewerErrors.find(isProviderUnusable) ?? viewerErrors[0];
       if (blocking) {
         // Preserve failure/retry semantics while letting clients try another server for these hosts.
         const error = toPullRequestError("list")(blocking);
@@ -1532,14 +1604,12 @@ export const make = Effect.gen(function* () {
                 key,
                 entries: [],
                 errors: [
-                  {
-                    projectId: project.project.id,
-                    projectTitle: project.project.title,
-                    message:
-                      error.accessHint === undefined
-                        ? `${project.repository} could not be read.`
-                        : `${project.repository} could not be read. ${error.accessHint}`,
-                  },
+                  repositoryError(
+                    project,
+                    error.accessHint === undefined
+                      ? `${project.repository} could not be read.`
+                      : `${project.repository} could not be read. ${error.accessHint}`,
+                  ),
                 ],
                 truncated: false,
                 nextCursor: null,
@@ -1684,12 +1754,22 @@ export const make = Effect.gen(function* () {
     }
     const batches = (yield* Effect.all(reads, { concurrency: REPOSITORY_CONCURRENCY })).flat();
 
-    const nextCursors: Record<string, string> = {};
+    for (const batch of batches) {
+      const cursor = input.cursors?.[batch.key];
+      if (cursor !== undefined && batch.errors.length > 0) {
+        retryCursors[batch.key] = cursor;
+      }
+    }
+    const nextCursors = { ...retryCursors };
     for (const batch of batches) {
       if (batch.nextCursor !== null) nextCursors[batch.key] = batch.nextCursor;
     }
     const entries = batches
-      .flatMap((batch) => batch.entries)
+      .flatMap((batch) =>
+        ownKeys.has(batch.key)
+          ? batch.entries
+          : batch.entries.map((entry): PullRequestListEntry => ({ ...entry, upstream: true })),
+      )
       .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt));
     // Hover cards on listed rows read from here. A pinned account or a mid-read refresh is another
     // scope; half the cache stays free for previews read directly.
@@ -1707,8 +1787,8 @@ export const make = Effect.gen(function* () {
       viewers: viewers as PullRequestListResult["viewers"],
       providers,
       entries,
-      errors: [...unreadable, ...batches.flatMap((batch) => batch.errors)],
-      truncated: batches.some((batch) => batch.truncated),
+      errors: [...errors, ...batches.flatMap((batch) => batch.errors)],
+      truncated: Object.keys(retryCursors).length > 0 || batches.some((batch) => batch.truncated),
       nextCursors,
     };
   });
@@ -2731,11 +2811,12 @@ export const make = Effect.gen(function* () {
   const filterOptions: PullRequestService["Service"]["filterOptions"] = Effect.fn(
     "PullRequestService.filterOptions",
   )(function* (input) {
-    const { supported } = yield* listWorkspaceProjects(input);
-    // Worktrees of one checkout are separate projects over the same repository.
-    const repositories = [
-      ...new Map(supported.map((project) => [project.cursorKey, project])).values(),
-    ];
+    const workspace = yield* listWorkspaceProjects(input);
+    // A bare reference like #12 resolves in the checkout's own repository.
+    const repositories =
+      input.kind === "references"
+        ? workspace.supported
+        : (yield* listingRepositories(workspace, yield* forkUpstream.readPolicy)).repositories;
     const refOf = (project: SupportedProject) => ({
       cwd: project.project.workspaceRoot,
       repository: project.repository,
@@ -2866,26 +2947,59 @@ export const make = Effect.gen(function* () {
    * The line counts for rows already on the page, which the listing left out because on GitHub
    * they cost more than everything else on the row put together.
    */
-  const listStatsUncached: PullRequestService["Service"]["listStats"] = Effect.fn(
-    "PullRequestService.listStatsUncached",
-  )(function* (input) {
+  const listStatsUncached = Effect.fn("PullRequestService.listStatsUncached")(function* (
+    input: PullRequestListStatsInput,
+    policy: ForkUpstreamPolicy,
+  ) {
     if (input.refs.length === 0) return { stats: [] };
-    const { supported } = yield* listWorkspaceProjects({});
-    const byProject = new Map(supported.map((project) => [project.project.id, project]));
+    const { candidates } = yield* listWorkspaceProjects({
+      projectIds: [...new Set(input.refs.map(({ projectId }) => projectId))],
+    });
+    const byProject = new Map(candidates.map((project) => [project.project.id, project]));
+    const needsParent = new Set<SupportedProject>();
+    for (const ref of input.refs) {
+      const own = byProject.get(ref.projectId);
+      if (
+        own !== undefined &&
+        own.api.listChangeRequestStats !== undefined &&
+        own.repository.toLowerCase() !== ref.repository.trim().toLowerCase()
+      ) {
+        needsParent.add(own);
+      }
+    }
+    const { parents } = yield* forkUpstream.findParents(
+      needsParent,
+      policy,
+      (candidate) => ({
+        ...forkListingRepository(candidate),
+        key: candidate.project.id,
+      }),
+      REPOSITORY_CONCURRENCY,
+    );
+    const byRepository = new Map<string, SupportedProject>();
+    for (const project of candidates) {
+      byRepository.set(`${project.project.id} ${project.repository.toLowerCase()}`, project);
+    }
+    for (const { candidate, parent } of parents) {
+      byRepository.set(
+        `${candidate.project.id} ${parent.toLowerCase()}`,
+        withRepository(candidate, parent),
+      );
+    }
     const wanted = new Map<
       string,
       { readonly project: SupportedProject; readonly number: number }
     >();
     for (const ref of input.refs) {
-      const project = byProject.get(ref.projectId);
+      const key = `${ref.projectId} ${ref.repository.trim().toLowerCase()}`;
+      const project = byRepository.get(key);
       if (
-        project === undefined ||
-        project.api.listChangeRequestStats === undefined ||
-        project.repository.toLowerCase() !== ref.repository.trim().toLowerCase()
+        project?.api.listChangeRequestStats === undefined ||
+        (ref.host !== undefined && ref.host !== project.host)
       ) {
         continue;
       }
-      wanted.set(`${project.project.id} ${ref.number}`, { project, number: ref.number });
+      wanted.set(`${key} ${ref.number}`, { project, number: ref.number });
     }
     const byHost = new Map<string, Array<{ project: SupportedProject; number: number }>>();
     for (const entry of wanted.values()) {
@@ -2899,36 +3013,29 @@ export const make = Effect.gen(function* () {
         const first = entries[0]!;
         const readStats = first.project.api.listChangeRequestStats;
         if (readStats === undefined) return Effect.succeed<ReadonlyArray<PullRequestDiffStat>>([]);
-        const projectsByRepository = new Map(
-          entries.map((entry) => [
-            `${entry.project.repository.toLowerCase()} ${entry.number}`,
-            entry.project,
-          ]),
+        const requests = Map.groupBy(
+          entries,
+          ({ project, number }) => `${project.repository.toLowerCase()} ${number}`,
         );
         return readStats({
           cwd: first.project.project.workspaceRoot,
           host: first.project.host,
-          changeRequests: entries.map((entry) => ({
-            repository: entry.project.repository,
-            number: entry.number,
+          changeRequests: Array.from(requests.values(), ([entry]) => ({
+            repository: entry!.project.repository,
+            number: entry!.number,
           })),
         }).pipe(
           Effect.map((read) =>
             read.flatMap((stat): ReadonlyArray<PullRequestDiffStat> => {
-              const project = projectsByRepository.get(
-                `${stat.repository.toLowerCase()} ${stat.number}`,
-              );
-              return project === undefined
-                ? []
-                : [
-                    {
-                      projectId: project.project.id,
-                      repository: project.repository,
-                      number: stat.number,
-                      additions: stat.additions,
-                      deletions: stat.deletions,
-                    },
-                  ];
+              const targets = requests.get(`${stat.repository.toLowerCase()} ${stat.number}`) ?? [];
+              return targets.map(({ project }) => ({
+                projectId: project.project.id,
+                host: project.host,
+                repository: project.repository,
+                number: stat.number,
+                additions: stat.additions,
+                deletions: stat.deletions,
+              }));
             }),
           ),
           Effect.orElseSucceed((): ReadonlyArray<PullRequestDiffStat> => []),
@@ -3225,6 +3332,20 @@ export const make = Effect.gen(function* () {
           stackUncached(input, options),
         );
 
+  const decodeListingKey = (key: string) =>
+    JSON.parse(key) as [
+      epoch: number,
+      state: string,
+      involvement: string | null,
+      filters: ReadonlyArray<string | ReadonlyArray<string> | null> | null,
+      projectId: string | null,
+      projectIds: ReadonlyArray<string> | null,
+      host: string | null,
+      limit: number | null,
+      query: string | null,
+      cursors: ReadonlyArray<readonly [string, string]> | null,
+      policy: ForkUpstreamPolicy,
+    ];
   const listCache = yield* Cache.makeWith(
     (key: string) => {
       const [
@@ -3238,37 +3359,39 @@ export const make = Effect.gen(function* () {
         limit,
         query,
         cursorEntries,
-      ] = JSON.parse(key) as [
-        number,
-        string,
-        string | null,
-        ReadonlyArray<string | ReadonlyArray<string> | null> | null,
-        string | null,
-        ReadonlyArray<string> | null,
-        string | null,
-        number | null,
-        string | null,
-        ReadonlyArray<[string, string]> | null,
-      ];
-      return listUncached({
-        state,
-        ...(involvement === null ? {} : { involvement }),
-        ...(filters === null ? {} : { filters: filtersOfKey(filters) }),
-        ...(projectId === null ? {} : { projectId }),
-        ...(projectIds === null ? {} : { projectIds }),
-        ...(host === null ? {} : { host }),
-        ...(limit === null ? {} : { limit }),
-        ...(query === null ? {} : { query }),
-        ...(cursorEntries === null ? {} : { cursors: Object.fromEntries(cursorEntries) }),
-      } as PullRequestListInput);
+        policy,
+      ] = decodeListingKey(key);
+      return listUncached(
+        {
+          state,
+          ...(involvement === null ? {} : { involvement }),
+          ...(filters === null ? {} : { filters: filtersOfKey(filters) }),
+          ...(projectId === null ? {} : { projectId }),
+          ...(projectIds === null ? {} : { projectIds }),
+          ...(host === null ? {} : { host }),
+          ...(limit === null ? {} : { limit }),
+          ...(query === null ? {} : { query }),
+          ...(cursorEntries === null ? {} : { cursors: Object.fromEntries(cursorEntries) }),
+        } as PullRequestListInput,
+        policy,
+      );
     },
     {
       capacity: LIST_CACHE_CAPACITY,
-      timeToLive: (exit) => (Exit.isSuccess(exit) ? LIST_CACHE_TTL : Duration.zero),
+      timeToLive: (exit, key) => {
+        if (Exit.isFailure(exit)) return Duration.zero;
+        if (exit.value.errors.length === 0) return LIST_CACHE_TTL;
+        const [, , , , , , , , , cursors] = decodeListingKey(key);
+        // Partial pages are cacheable when the next retry has a different cursor set.
+        return cursors === null ||
+          cursors.some(([repository, cursor]) => exit.value.nextCursors[repository] !== cursor)
+          ? LIST_CACHE_TTL
+          : Duration.zero;
+      },
     },
   );
-  const list: PullRequestService["Service"]["list"] = (input) => {
-    const key = JSON.stringify([
+  const listingKey = (input: PullRequestListInput, policy: ForkUpstreamPolicy) =>
+    JSON.stringify([
       listingsEpoch,
       input.state,
       input.involvement ?? null,
@@ -3290,15 +3413,26 @@ export const make = Effect.gen(function* () {
       input.cursors === undefined
         ? null
         : Object.entries(input.cursors).toSorted(([left], [right]) => left.localeCompare(right)),
+      policy,
     ]);
+
+  const list = Effect.fn("PullRequestService.list")(function* (
+    input: PullRequestListInput,
+    options?: { readonly includeUpstream: false },
+  ) {
+    const policy =
+      options?.includeUpstream === false
+        ? ForkUpstream.disabledPolicy
+        : yield* forkUpstream.readPolicy;
+    const key = listingKey(input, policy);
     // A replacement reader can join a lookup still finishing its previous reader's cancellation.
-    return Cache.get(listCache, key).pipe(
+    return yield* Cache.get(listCache, key).pipe(
       Effect.catchCauseIf(
         (cause) => Cause.hasInterruptsOnly(cause),
         (_cause) => Cache.get(listCache, key),
       ),
     );
-  };
+  });
 
   const checksCache = yield* Cache.makeWith(
     (key: string) => {
@@ -3385,10 +3519,12 @@ export const make = Effect.gen(function* () {
                 observedAt: value.observedAt,
               });
             }
+            const { host } = refOfCacheKey(key);
             recordStats(
               statsKey,
               {
                 projectId: value.projectId,
+                ...(host === undefined ? {} : { host }),
                 repository: value.repository,
                 number: value.number,
                 additions: value.additions,
@@ -3697,10 +3833,12 @@ export const make = Effect.gen(function* () {
 
   const listStatsCache = yield* Cache.makeWith(
     (key: string) => {
-      const [, refs] = JSON.parse(key) as [number, ReadonlyArray<[string, string, number, number]>];
-      return listStatsUncached({
-        refs: refs.map(([projectId, repository, number]) => ({ projectId, repository, number })),
-      } as unknown as PullRequestListStatsInput).pipe(
+      const [, refs, policy] = JSON.parse(key) as [
+        number,
+        ReadonlyArray<string>,
+        ForkUpstreamPolicy,
+      ];
+      return listStatsUncached({ refs: refs.map(refOfCacheKey) }, policy).pipe(
         Effect.flatMap((result) =>
           Clock.currentTimeMillis.pipe(Effect.map((at) => ({ result, at }))),
         ),
@@ -3711,20 +3849,14 @@ export const make = Effect.gen(function* () {
       timeToLive: (exit) => (Exit.isSuccess(exit) ? LIST_STATS_CACHE_TTL : Duration.zero),
     },
   );
-  const statsBatchKey = (refs: Iterable<PullRequestRef>) =>
-    JSON.stringify([
-      listingsEpoch,
-      [...refs]
-        .map((ref) => [ref.projectId, ref.repository, ref.number, refEpoch(ref)] as const)
-        .toSorted((left, right) =>
-          `${left[0]} ${left[1]} ${left[2]}`.localeCompare(`${right[0]} ${right[1]} ${right[2]}`),
-        ),
-    ]);
+  const statsBatchKey = (refs: Iterable<PullRequestRef>, policy: ForkUpstreamPolicy) =>
+    JSON.stringify([listingsEpoch, Array.from(refs, refCacheKey).sort(), policy]);
   const listStats: PullRequestService["Service"]["listStats"] = Effect.fn(
     "PullRequestService.listStats",
   )(function* (input: PullRequestListStatsInput) {
     if (input.refs.length === 0) return { stats: [] };
     const now = yield* Clock.currentTimeMillis;
+    const policy = yield* forkUpstream.readPolicy;
     const held: PullRequestDiffStat[] = [];
     const missing = new Map<string, PullRequestRef>();
     for (const ref of input.refs) {
@@ -3737,7 +3869,7 @@ export const make = Effect.gen(function* () {
       }
     }
     if (missing.size === 0) return { stats: held };
-    const key = statsBatchKey(missing.values());
+    const key = statsBatchKey(missing.values(), policy);
     const { result, at } = yield* Cache.get(listStatsCache, key).pipe(
       Effect.catchCauseIf(
         (cause) => Cause.hasInterruptsOnly(cause),
@@ -3748,6 +3880,7 @@ export const make = Effect.gen(function* () {
       const stat = result.stats.find(
         (stat) =>
           stat.projectId === ref.projectId &&
+          (ref.host === undefined || stat.host === ref.host.toLowerCase()) &&
           stat.repository.toLowerCase() === ref.repository.toLowerCase() &&
           stat.number === ref.number,
       );
@@ -4112,7 +4245,13 @@ export const make = Effect.gen(function* () {
     // The local operation owns the span; this wrapper only canonicalizes refs.
     listStats: Effect.fnUntraced(function* (input) {
       const refs = yield* Effect.forEach(input.refs, (ref) =>
-        canonicalRef(ref).pipe(Effect.option),
+        canonicalRef(ref).pipe(
+          // The row belongs to the checkout that opted in, even if detail reads route elsewhere.
+          Effect.map((resolved) => ({ ...resolved, projectId: ref.projectId })),
+          // A provider can confirm a fork parent even when normal detail routing needs a checkout.
+          Effect.catchTags({ PullRequestUnavailableError: () => Effect.succeed(ref) }),
+          Effect.option,
+        ),
       );
       return yield* listStats({ ...input, refs: refs.flatMap(Option.toArray) });
     }),
