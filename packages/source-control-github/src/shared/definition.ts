@@ -158,7 +158,13 @@ export const definition = defineSourceControl({
         }
       : null,
   isChangeRequestInRepository: (identity, link) =>
-    isChangeRequestInProjectRepository(projectChangeRequestHost(identity, KIND), identity, link),
+    isChangeRequestInProjectRepository(
+      projectChangeRequestHost(identity, KIND),
+      identity.displayName !== undefined || (identity.owner && identity.name)
+        ? identity
+        : { ...identity, displayName: identity.canonicalKey.split("/").slice(1).join("/") },
+      link,
+    ),
   canReadChangeRequestOnHost: (identity, link) =>
     isChangeRequestOnProjectHost(projectChangeRequestHost(identity, KIND), identity, link),
   mediaUrl: gitHubMediaUrl,

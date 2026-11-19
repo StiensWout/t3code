@@ -1990,25 +1990,6 @@ export const make = Effect.gen(function* () {
       }),
     );
 
-  const checkoutAllowed = Effect.fn("PullRequestService.checkoutAllowed")(function* (
-    input: PullRequestRef,
-    project: SupportedProject,
-  ) {
-    if (project.api.kind !== "github") return true;
-    const { supported } = yield* listWorkspaceProjects({ projectId: input.projectId });
-    const own = supported[0];
-    return yield* pullRequestCheckoutAllowed(
-      forkUpstream.getParent,
-      own && {
-        cwd: own.project.workspaceRoot,
-        kind: own.api.kind,
-        host: own.host,
-        repository: own.repository,
-      },
-      project,
-    );
-  });
-
   const detailUncached: PullRequestService["Service"]["detail"] = (input) =>
     requireProject(input).pipe(
       Effect.flatMap((project) =>
@@ -2023,17 +2004,15 @@ export const make = Effect.gen(function* () {
               })
               .pipe(Effect.mapError(toPullRequestError("detail")), observeRead),
             viewerOf(project),
-            checkoutAllowed(input, project),
           ],
-          { concurrency: 3 },
+          { concurrency: 2 },
         ).pipe(
-          Effect.map(([{ value: changeRequest, observedAt }, viewer, allowed]) => ({
+          Effect.map(([{ value: changeRequest, observedAt }, viewer]) => ({
             provider: project.api.kind,
             capabilities: project.api.capabilities,
             projectId: project.project.id,
             projectTitle: project.project.title,
             workspaceRoot: project.project.workspaceRoot,
-            checkoutAllowed: allowed,
             repository: project.repository,
             number: changeRequest.number,
             title: changeRequest.title,
@@ -4158,6 +4137,49 @@ export const make = Effect.gen(function* () {
         );
       });
 
+  const readDetail = credentialCached(
+    Effect.fn("PullRequestService.detailWithCheckout")(function* (
+      ref: PullRequestRef,
+      requestedProjectId: ProjectId,
+    ) {
+      const value = yield* detail(ref);
+      if (value.provider !== "github") return { ...value, checkoutAllowed: true };
+      const host = ref.host ?? "";
+      const {
+        supported: [routed],
+      } = yield* listWorkspaceProjects({ projectId: value.projectId });
+      const target = { host, repository: value.repository };
+      const matches = (project: SupportedProject) =>
+        project.api.kind === value.provider &&
+        project.host === target.host.toLowerCase() &&
+        project.repository.toLowerCase() === target.repository.toLowerCase();
+      if (routed && matches(routed)) return { ...value, checkoutAllowed: true };
+
+      // A same-host read route can stand in for the remote repository without owning its checkout.
+      const requested =
+        value.projectId === requestedProjectId
+          ? routed
+          : (yield* listWorkspaceProjects({ projectId: requestedProjectId })).supported[0];
+      const canCheckoutFrom = (project: SupportedProject | undefined) =>
+        pullRequestCheckoutAllowed(
+          forkUpstream.getParent,
+          project && {
+            cwd: project.project.workspaceRoot,
+            kind: project.api.kind,
+            host: project.host,
+            repository: project.repository,
+          },
+          target,
+        );
+      const allowed =
+        (yield* canCheckoutFrom(requested)) &&
+        (requested === routed || (yield* canCheckoutFrom(routed)));
+      return { ...value, checkoutAllowed: allowed };
+    }),
+  );
+  const detailWithCheckout: PullRequestService["Service"]["detail"] = (input) =>
+    readDetail(input, input.projectId).pipe(withSharedProjectReads);
+
   // Cache small filename lists even when patches exceed limits, avoiding diff refetches on file expansion.
   const diffFiles = (() => {
     const held = new Map<
@@ -4296,7 +4318,7 @@ export const make = Effect.gen(function* () {
     ),
     notifyLinkedThreadsChanged,
     refreshAfterTurn,
-    detail: credentialCached(detail),
+    detail: detailWithCheckout,
     checks: credentialCached((input) => Cache.get(checksCache, refCacheKey(input))),
     watchFingerprint: credentialCached((input) =>
       Cache.get(watchFingerprintCache, refCacheKey(input)),

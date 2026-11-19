@@ -5873,10 +5873,17 @@ it.effect(
       let settings = DEFAULT_SERVER_SETTINGS;
       const service = yield* makeService({
         projects: [
+          project({
+            id: "other",
+            title: "other",
+            workspaceRoot: "/other",
+            repository: "other/lib",
+          }),
           project({ id: projectId, title: "fork", workspaceRoot: "/fork", repository: fork }),
         ],
         getSettings: Effect.sync(() => settings),
-        getRepositoryParent: () => Effect.succeed(parent),
+        getRepositoryParent: ({ repository }) =>
+          Effect.succeed(repository === fork ? parent : null),
         providers: [
           fakePullRequestProvider(SourceControlProviderKind.make("github"), {
             readsPublicHostWithoutCheckout: true,
@@ -5901,13 +5908,16 @@ it.effect(
         entries.map((row) => row.repository),
         [fork],
       );
-      const parentDetail = yield* service.detail({
+      const parentRef = {
         projectId,
         repository: parent,
         host: "github.com",
         number: 1,
-      });
+      };
+      const parentDetail = yield* service.detail(parentRef);
       assert.strictEqual(parentDetail.checkoutAllowed, false);
+      const fromOther = yield* service.detail({ ...parentRef, projectId: "other" as ProjectId });
+      assert.strictEqual(fromOther.checkoutAllowed, true);
       assert.strictEqual(parentDetail.body, parent);
 
       settings = { ...DEFAULT_SERVER_SETTINGS, includeForkUpstream: true };
@@ -5927,4 +5937,40 @@ it.effect(
         ],
       );
     }),
+);
+
+it.effect("allows checkout from the parent project that owns a routed pull request", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [
+        project({ id: "fork", title: "fork", workspaceRoot: "/fork", repository: "me/web" }),
+        project({
+          id: "parent",
+          title: "parent",
+          workspaceRoot: "/parent",
+          repository: "acme/web",
+        }),
+      ],
+      getRepositoryParent: () => Effect.succeed("acme/web"),
+      providers: [
+        fakePullRequestProvider(SourceControlProviderKind.make("github"), {
+          ...keyedByCanonicalKey,
+          getChangeRequest: ({ repository }) =>
+            Effect.succeed({
+              ...hostedChangeRequest(repository),
+              url: `https://github.com/${repository}/pull/1`,
+            }),
+        }),
+      ],
+    });
+    const detail = yield* service.detail({
+      projectId: "fork" as ProjectId,
+      repository: "acme/web",
+      host: "github.com",
+      number: 1,
+    });
+    assert.strictEqual(detail.projectId, "parent");
+    assert.strictEqual(detail.workspaceRoot, "/parent");
+    assert.strictEqual(detail.checkoutAllowed, true);
+  }),
 );

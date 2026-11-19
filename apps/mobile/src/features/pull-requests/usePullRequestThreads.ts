@@ -122,7 +122,7 @@ export function usePullRequestThreads(
         ? scopedThreadKey(target.environmentId, ThreadId.make(thread.id))
         : createNewTaskDraft({
             environmentId: target.environmentId,
-            projectId: target.input.projectId,
+            projectId: checksOut ? pr.projectId : target.input.projectId,
           });
       if (!thread && checksOut)
         updateComposerDraftSettings(draftKey, {

@@ -658,10 +658,15 @@ export function PullRequestDetailPanel({
       ? hostClient.authorProfileUrl(detail.author.login, repositoryUrl)
       : null;
   const checkoutAvailable = detail !== null && detail.checkoutAllowed !== false;
+  const canCopyCheckout =
+    checkoutAvailable &&
+    (detail.provider !== "github" ||
+      detail.projectId === reference.projectId ||
+      loadingCheckoutCommand !== null);
   const checkoutCommand =
     detail === null
       ? loadingCheckoutCommand
-      : checkoutAvailable
+      : canCopyCheckout
         ? pullRequestCheckoutCommand(
             detail.provider,
             detail.number,
@@ -830,10 +835,11 @@ export function PullRequestDetailPanel({
   const actionPending = pendingAction !== null;
   const newThread = useNewThreadHandler();
   const { environments } = useEnvironments();
+  const handoffProjectId = checkoutAvailable ? detail.projectId : reference.projectId;
   const pickableEnvironments =
     context === "page"
       ? resolvePickableEnvironments(
-          { environmentId, projectId: reference.projectId },
+          { environmentId, projectId: handoffProjectId },
           projects,
           environments.map((environment) => ({
             environmentId: environment.environmentId,
@@ -1004,7 +1010,7 @@ export function PullRequestDetailPanel({
       return;
     }
     setHandoff(kind);
-    const projectRef = scopeProjectRef(actingEnvironmentId, acting?.projectId ?? detail.projectId);
+    const projectRef = scopeProjectRef(actingEnvironmentId, acting?.projectId ?? handoffProjectId);
     const opened = await openThreadWithTask(projectRef, task);
     setHandoff(null);
     if (opened !== null && options?.keepGuide === true) {

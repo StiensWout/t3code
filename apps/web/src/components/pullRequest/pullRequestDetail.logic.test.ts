@@ -102,6 +102,23 @@ describe("pull request checkout commands", () => {
     expect(loadingPullRequestCheckoutCommand(reference("github.com"), enterprise)).toBeNull();
   });
 
+  it("requires the GitHub Enterprise checkout authority to match", () => {
+    const enterprise = {
+      ...identity("github", "github.example.test:8443/acme/web"),
+      locator: {
+        source: "git-remote" as const,
+        remoteName: "origin",
+        remoteUrl: "https://github.example.test:8443/acme/web.git",
+      },
+    };
+    expect(
+      loadingPullRequestCheckoutCommand(reference("github.example.test:8443"), enterprise),
+    ).toBe("gh pr checkout 42");
+    expect(
+      loadingPullRequestCheckoutCommand(reference("github.example.test:9443"), enterprise),
+    ).toBeNull();
+  });
+
   it("withholds the number-only checkout command for another repository on the same host", () => {
     expect(
       loadingPullRequestCheckoutCommand(
