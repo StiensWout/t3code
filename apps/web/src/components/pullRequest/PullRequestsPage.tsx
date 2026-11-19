@@ -487,6 +487,7 @@ export function PullRequestsPage() {
     key: string;
     source: MergedPullRequestList;
     entries: ReadonlyArray<EnvironmentPullRequestEntry>;
+    headErrors: MergedPullRequestList["errors"];
   } | null>(null);
   const [overrides, setOverrides] = useState<ReadonlyMap<string, PullRequestListOverride>>(
     () => new Map(),
@@ -631,6 +632,7 @@ export function PullRequestsPage() {
       setOrdered({
         key: filterKey,
         source: answered,
+        headErrors: answered.errors,
         entries: rankPullRequestMatches(answered.entries, sentParsed.text),
       });
     } else if (sentCursors !== null) {
@@ -640,11 +642,12 @@ export function PullRequestsPage() {
         arrived.toSorted(comparePullRequestsByRecency),
         sentParsed.text,
       );
-      setOrdered({ key: filterKey, source: answered, entries: [...ordered.entries, ...appended] });
+      setOrdered({ ...ordered, source: answered, entries: [...ordered.entries, ...appended] });
     } else {
       setOrdered({
         key: filterKey,
         source: answered,
+        headErrors: answered.errors,
         entries: reusePullRequestEntries(
           ordered.entries,
           rankPullRequestMatches(answered.entries, sentParsed.text),
@@ -1270,7 +1273,10 @@ export function PullRequestsPage() {
       {panelToggleControls}
     </div>
   );
-  const upstreamErrors = currentListQuery.data?.errors
+  const upstreamErrors = [
+    ...(ordered?.key === filterKey ? ordered.headErrors : []),
+    ...(currentListQuery.data?.errors ?? []),
+  ]
     .filter((error) => error.upstream)
     .map(({ message }) => message);
   const upstreamError = [...new Set(upstreamErrors)].join(" ");
