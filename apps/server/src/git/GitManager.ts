@@ -313,17 +313,15 @@ function isPullRequestWorktreeLocalBranchName(branch: string): boolean {
 }
 
 function resolvePullRequestWorktreeLocalBranchName(
-  pullRequest: ResolvedPullRequest & PullRequestHeadRemoteInfo,
+  pullRequest: ResolvedPullRequest,
   localBranches: ReadonlySet<string>,
+  unavailableBranches: ReadonlySet<string>,
 ): string {
-  if (!pullRequest.isCrossRepository) {
-    return pullRequest.headBranch;
-  }
-
   const sanitizedHeadBranch = sanitizeBranchFragment(pullRequest.headBranch).trim();
   const suffix = sanitizedHeadBranch.length > 0 ? sanitizedHeadBranch : "head";
   // Git cannot create a ref whose path is a parent or child of an existing one (`t3code` blocks `t3code/...`).
   const isCreatable = (name: string) =>
+    !unavailableBranches.has(name) &&
     !name
       .split("/")
       .slice(0, -1)
@@ -3164,7 +3162,12 @@ export const make = Effect.gen(function* () {
         );
 
   const ensurePullRequestCheckoutAllowed = Effect.fn("GitManager.ensurePullRequestCheckoutAllowed")(
-    function* (cwd: string, reference: string, identity: RepositoryIdentity | null) {
+    function* (
+      cwd: string,
+      reference: string,
+      identity: RepositoryIdentity | null,
+      headRepositoryNameWithOwner: string | null | undefined,
+    ) {
       const target = sourceControlDefinitions.parseChangeRequestUrl(reference);
       if (identity?.provider !== "github" || target?.definition.kind !== "github") return;
       const repository = sourceControlDefinitions.repositorySelector(identity);
@@ -3177,7 +3180,11 @@ export const make = Effect.gen(function* () {
           host: sourceControlDefinitions.changeRequestHost(identity, identity.provider),
           repository,
         },
-        { ...target.link, host: target.link.authority ?? target.link.host },
+        {
+          ...target.link,
+          host: new URL(target.link.repositoryUrl).host,
+          headRepositoryNameWithOwner,
+        },
       );
       if (!allowed) {
         return yield* new GitManagerError({
@@ -3221,20 +3228,26 @@ export const make = Effect.gen(function* () {
         provider.kind === "github"
           ? yield* repositoryIdentities.resolve(input.cwd, { refresh: true })
           : null;
-      yield* ensurePullRequestCheckoutAllowed(input.cwd, normalizedReference, identity);
       const pullRequestSummary = yield* provider.getChangeRequest({
         cwd: input.cwd,
         reference: normalizedReference,
       });
       const pullRequest = toResolvedPullRequest(pullRequestSummary);
-      if (pullRequest.url !== normalizedReference) {
-        yield* ensurePullRequestCheckoutAllowed(input.cwd, pullRequest.url, identity);
-      }
+      yield* ensurePullRequestCheckoutAllowed(
+        input.cwd,
+        pullRequest.url,
+        identity,
+        pullRequestSummary.headRepositoryNameWithOwner,
+      );
       const parsed = sourceControlDefinitions.parseChangeRequestUrl(pullRequest.url);
-      const baseRemoteName =
+      const githubBase =
+        identity?.provider === "github" && parsed?.definition.kind === "github" ? parsed : null;
+      const selectedRemoteName =
         identity &&
-        parsed?.definition.kind === "github" &&
-        parsed.definition.isChangeRequestInRepository(identity, parsed.link)
+        githubBase?.definition.isChangeRequestInRepository(identity, {
+          ...githubBase.link,
+          authority: new URL(githubBase.link.repositoryUrl).host,
+        })
           ? identity.locator.remoteName
           : undefined;
 
@@ -3242,19 +3255,21 @@ export const make = Effect.gen(function* () {
         yield* ensureNoTrackedChanges(input.cwd, pullRequest.number);
         yield* provider.checkoutChangeRequest({
           cwd: input.cwd,
-          reference: normalizedReference,
+          reference: githubBase ? pullRequest.url : normalizedReference,
         });
         const details = yield* gitCore.statusDetails(input.cwd);
         const branch = details.branch ?? pullRequest.headBranch;
-        yield* configurePullRequestHeadUpstream(
-          input.cwd,
-          {
-            ...pullRequest,
-            ...toPullRequestHeadRemoteInfo(pullRequestSummary),
-          },
-          branch,
-          baseRemoteName,
-        );
+        // The provider configured tracking against the resolved repository during checkout.
+        if (githubBase === null || selectedRemoteName !== undefined)
+          yield* configurePullRequestHeadUpstream(
+            input.cwd,
+            {
+              ...pullRequest,
+              ...toPullRequestHeadRemoteInfo(pullRequestSummary),
+            },
+            branch,
+            selectedRemoteName,
+          );
         return {
           pullRequest,
           branch,
@@ -3262,6 +3277,16 @@ export const make = Effect.gen(function* () {
           isOnPullRequestHead: yield* moveToPullRequestHead(input.cwd, pullRequestSummary.headSha),
         };
       }
+
+      const baseRemoteName =
+        selectedRemoteName ??
+        (githubBase === null
+          ? undefined
+          : yield* gitCore.ensureRemote({
+              cwd: input.cwd,
+              preferredName: githubBase.link.repository.split("/")[0] ?? "upstream",
+              url: githubBase.link.repositoryUrl,
+            }));
 
       const ensureExistingWorktreeUpstream = Effect.fn("ensureExistingWorktreeUpstream")(function* (
         worktreePath: string,
@@ -3282,22 +3307,29 @@ export const make = Effect.gen(function* () {
         ...pullRequest,
         ...toPullRequestHeadRemoteInfo(pullRequestSummary),
       } as const;
-      const localBranches = pullRequestWithRemoteInfo.isCrossRepository
-        ? new Set(
-            (yield* gitCore.execute({
-              operation: "GitManager.preparePullRequestThread.localBranches",
-              cwd: input.cwd,
-              args: ["for-each-ref", "--format=%(refname:lstrip=2)", "refs/heads"],
-              timeoutMs: 5_000,
-            })).stdout
-              .split("\n")
-              .filter((name) => name.length > 0),
-          )
-        : new Set<string>();
-      const localPullRequestBranch = resolvePullRequestWorktreeLocalBranchName(
-        pullRequestWithRemoteInfo,
-        localBranches,
-      );
+      const isClaimedByAnotherPullRequest = Effect.fn(
+        "GitManager.isBranchClaimedByAnotherPullRequest",
+      )(function* (branch: string) {
+        const url = yield* gitCore.readConfigValue(input.cwd, checkedOutPullRequestKey(branch));
+        return url !== null && url !== pullRequest.url;
+      });
+
+      let localPullRequestBranch = pullRequest.headBranch;
+      const unavailableBranches = new Set<string>();
+      if (
+        pullRequestWithRemoteInfo.isCrossRepository ||
+        (yield* isClaimedByAnotherPullRequest(localPullRequestBranch))
+      ) {
+        const localBranches = new Set(yield* gitCore.listLocalBranchNames(input.cwd));
+        do {
+          localPullRequestBranch = resolvePullRequestWorktreeLocalBranchName(
+            pullRequest,
+            localBranches,
+            unavailableBranches,
+          );
+          unavailableBranches.add(localPullRequestBranch);
+        } while (yield* isClaimedByAnotherPullRequest(localPullRequestBranch));
+      }
 
       // Git refuses to move checked-out branches; advance reused checkouts from inside their worktree.
       const reuseExistingWorktree = Effect.fn("reuseExistingWorktree")(function* (
@@ -3386,14 +3418,12 @@ export const make = Effect.gen(function* () {
         };
       });
 
-      const findLocalHeadBranch = Effect.fn("findLocalHeadBranch")(function* (cwd: string) {
-        for (const [index, name] of [
-          ...new Set([localPullRequestBranch, pullRequest.headBranch]),
-        ].entries()) {
+      const findLocalHeadBranch = Effect.fn("findLocalHeadBranch")(function* (preferred: string) {
+        for (const [index, name] of [...new Set([preferred, pullRequest.headBranch])].entries()) {
           let cursor: number | undefined;
           do {
             const result = yield* gitCore.listRefs({
-              cwd,
+              cwd: input.cwd,
               refKind: "local",
               query: name,
               cursor,
@@ -3403,10 +3433,10 @@ export const make = Effect.gen(function* () {
               if (branch.name !== name) {
                 continue;
               }
-              if (name === localPullRequestBranch) {
+              if (name === preferred) {
                 return branch;
               }
-              if (branch.worktreePath) {
+              if (branch.worktreePath && !(yield* isClaimedByAnotherPullRequest(name))) {
                 const worktreePath = yield* canonicalizeExistingPath(branch.worktreePath);
                 if (worktreePath !== rootWorktreePath) {
                   return branch;
@@ -3512,7 +3542,7 @@ export const make = Effect.gen(function* () {
         );
       });
 
-      const existingBranchBeforeFetch = yield* findLocalHeadBranch(input.cwd);
+      const existingBranchBeforeFetch = yield* findLocalHeadBranch(localPullRequestBranch);
       const existingBranchBeforeFetchPath = existingBranchBeforeFetch?.worktreePath
         ? yield* canonicalizeExistingPath(existingBranchBeforeFetch.worktreePath)
         : null;
@@ -3571,7 +3601,18 @@ export const make = Effect.gen(function* () {
         baseRemoteName,
       );
 
-      const existingBranchAfterFetch = yield* findLocalHeadBranch(input.cwd);
+      const existingBranchAfterFetch = yield* findLocalHeadBranch(localPullRequestBranch);
+      if (
+        existingBranchAfterFetch &&
+        (yield* isClaimedByAnotherPullRequest(existingBranchAfterFetch.name))
+      ) {
+        return yield* new GitManagerError({
+          operation: "preparePullRequestThread",
+          cwd: input.cwd,
+          detail:
+            "The branch was claimed by another pull request. Try preparing this pull request again.",
+        });
+      }
       const existingBranchAfterFetchPath = existingBranchAfterFetch?.worktreePath
         ? yield* canonicalizeExistingPath(existingBranchAfterFetch.worktreePath)
         : null;

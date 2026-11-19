@@ -831,10 +831,8 @@ export const make = Effect.gen(function* () {
             normalizeGitRemoteUrl(remote.url).split("/").slice(1).join("/") ===
               nameWithOwner.toLowerCase(),
         )?.name ?? null;
-      const baseRemote = Effect.suspend(() => {
-        const known = remoteFor(baseNameWithOwner);
-        return known === null ? git.resolvePrimaryRemoteName(input.cwd) : Effect.succeed(known);
-      });
+      const baseRemote =
+        remoteFor(baseNameWithOwner) ?? `https://${base.host}/${base.owner}/${base.name}.git`;
       // Avoid resetting the default branch; prefix colliding forks and fail if it is unknown.
       const defaultBranch = isCrossRepository
         ? yield* readRepository(base).pipe(
@@ -849,7 +847,12 @@ export const make = Effect.gen(function* () {
       });
 
       const headRemote = Effect.gen(function* () {
-        if (!isCrossRepository) return yield* baseRemote;
+        if (!isCrossRepository) {
+          const known = remoteFor(baseNameWithOwner);
+          if (known === null)
+            return yield* failure("The base repository is not configured as a git remote.");
+          return known;
+        }
         if (headNameWithOwner === null) return yield* failure("The fork is gone.");
         const known = remoteFor(headNameWithOwner);
         if (known !== null) return known;
@@ -895,7 +898,7 @@ export const make = Effect.gen(function* () {
               "--quiet",
               "--no-tags",
               "--",
-              yield* baseRemote,
+              baseRemote,
               `refs/pull/${pullRequest.number}/head`,
             ]);
             const { commitSha } = yield* git.resolveCommit({

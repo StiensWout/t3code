@@ -4148,7 +4148,11 @@ export const make = Effect.gen(function* () {
       const {
         supported: [routed],
       } = yield* listWorkspaceProjects({ projectId: value.projectId });
-      const target = { host, repository: value.repository };
+      const target = {
+        host,
+        repository: value.repository,
+        headRepositoryNameWithOwner: value.headRepositoryNameWithOwner,
+      };
       const matches = (project: SupportedProject) =>
         project.api.kind === value.provider &&
         project.host === target.host.toLowerCase() &&

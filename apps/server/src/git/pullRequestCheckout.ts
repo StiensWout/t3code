@@ -9,24 +9,27 @@ interface CheckoutRepository {
   readonly repository: string;
 }
 
-// Git resolves pull request head refs by number against the checkout's own remote.
+// When browsing a fork's parent, only its own contributions are actionable from the fork.
 export const pullRequestCheckoutAllowed = Effect.fn("GitManager.pullRequestCheckoutAllowed")(
   function* (
     getParent: ForkUpstream["Service"]["getParent"],
     checkout: CheckoutRepository | undefined,
-    target: Pick<CheckoutRepository, "host" | "repository">,
+    target: Pick<CheckoutRepository, "host" | "repository"> & {
+      readonly headRepositoryNameWithOwner?: string | null | undefined;
+    },
   ) {
     if (
       checkout?.kind !== "github" ||
       checkout.host.toLowerCase() !== target.host.toLowerCase() ||
-      checkout.repository.toLowerCase() === target.repository.toLowerCase()
+      checkout.repository.toLowerCase() === target.repository.toLowerCase() ||
+      checkout.repository.toLowerCase() === target.headRepositoryNameWithOwner?.toLowerCase()
     ) {
       return true;
     }
     return yield* getParent(checkout).pipe(
       Effect.map((parent) => parent?.toLowerCase() !== target.repository.toLowerCase()),
-      // A failed lookup cannot establish that the target is safe to fetch from this checkout.
-      Effect.orElseSucceed(() => false),
+      // Checkout fetches use the resolved PR's base or head repository even without parent metadata.
+      Effect.orElseSucceed(() => true),
     );
   },
 );

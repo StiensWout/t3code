@@ -111,8 +111,20 @@ const make = Effect.gen(function* () {
     },
   );
 
-  const getParent: ForkUpstream["Service"]["getParent"] = ({ cwd, kind, host, repository }) =>
-    Cache.get(parentCache, [kind, host, repository, cwd].join(KEY_SEPARATOR));
+  // Checkout affordances can reread frequently. Listings retry separately on the next page read.
+  const checkoutParentCache = yield* Cache.makeWith((key: string) => Cache.get(parentCache, key), {
+    capacity: 256,
+    timeToLive: (exit) => (Exit.isFailure(exit) ? Duration.seconds(15) : Duration.zero),
+  });
+  const parentKey = ({
+    cwd,
+    kind,
+    host,
+    repository,
+  }: Parameters<ForkUpstream["Service"]["getParent"]>[0]) =>
+    [kind, host, repository, cwd].join(KEY_SEPARATOR);
+  const getParent: ForkUpstream["Service"]["getParent"] = (input) =>
+    Cache.get(checkoutParentCache, parentKey(input));
 
   const findParents = Effect.fn("ForkUpstream.findParents")(function* <
     A extends { readonly project: OrchestrationProjectShell },
@@ -133,7 +145,10 @@ const make = Effect.gen(function* () {
     const lookups = yield* Effect.forEach(
       forks.values(),
       ({ candidate, repository }) =>
-        getParent({ ...repository, cwd: candidate.project.workspaceRoot }).pipe(
+        Cache.get(
+          parentCache,
+          parentKey({ ...repository, cwd: candidate.project.workspaceRoot }),
+        ).pipe(
           Effect.tapError((cause) =>
             Effect.logWarning("The fork's upstream repository could not be read.", { cause }),
           ),

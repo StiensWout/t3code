@@ -5440,26 +5440,76 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       }),
   );
 
-  it.effect("refuses a fork parent's PR URL before preparing a checkout", () =>
-    Effect.gen(function* () {
-      const repoDir = yield* makeTempDir("t3code-parent-checkout-");
-      yield* initRepo(repoDir);
-      yield* runGit(repoDir, ["remote", "add", "origin", "https://github.com/me/web.git"]);
-      const { manager } = yield* makeManager({
-        getParent: ({ host, repository }) =>
-          Effect.succeed(host === "github.com" && repository === "me/web" ? "acme/web" : null),
-      });
-      for (const mode of ["local", "worktree"] as const) {
-        const error = yield* manager
-          .preparePullRequestThread({
-            cwd: repoDir,
-            mode,
-            reference: "https://github.com/acme/web/pull/42",
-          })
-          .pipe(Effect.flip);
-        expect(error.message).toContain("cannot be checked out from this repository");
-      }
-    }),
+  it.effect.each(["browse-only", "fork head", "parent lookup unavailable"])(
+    "prepares a fork parent's PR only with a safe checkout route (%s)",
+    (scenario) =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTempDir("t3code-parent-checkout-");
+        yield* initRepo(cwd);
+        const fork = yield* createBareRemote();
+        const parent = yield* createBareRemote();
+        const forkUrl = "https://github.com/me/web";
+        const parentUrl = "https://github.com/acme/web";
+        yield* runGit(cwd, ["remote", "add", "origin", forkUrl]);
+        yield* runGit(cwd, ["checkout", "-b", "feature/pr"]);
+        yield* runGit(cwd, ["push", fork, "HEAD:refs/heads/feature/pr", "HEAD:refs/pull/42/head"]);
+        yield* runGit(cwd, ["commit", "--allow-empty", "-m", "Parent head"]);
+        yield* runGit(cwd, ["push", parent, "HEAD:refs/pull/42/head"]);
+        const revision = scenario === "fork head" ? "HEAD^" : "HEAD";
+        const headSha = (yield* runGit(cwd, ["rev-parse", revision])).stdout.trim();
+        yield* runGit(cwd, ["checkout", "main"]);
+        yield* runGit(cwd, ["branch", "-D", "feature/pr"]);
+        const reference = `${parentUrl}/pull/42`;
+        const { manager } = yield* makeManager({
+          gitFetchConfig: [
+            `url.${fork}.insteadOf=${forkUrl}`,
+            `url.${parent}.insteadOf=${parentUrl}`,
+          ],
+          getParent: ({ cwd, kind }) =>
+            scenario === "parent lookup unavailable"
+              ? Effect.fail(
+                  new SourceControlProviderFailure({
+                    provider: kind,
+                    operation: "getRepositoryParent",
+                    cwd,
+                    detail: "Repository metadata is unavailable.",
+                  }),
+                )
+              : Effect.succeed("acme/web"),
+          providerScenario: {
+            pullRequest: {
+              number: 42,
+              title: "Pull request",
+              url: reference,
+              baseRefName: "main",
+              headRefName: "feature/pr",
+              headSha,
+              ...(scenario === "fork head"
+                ? { isCrossRepository: true, headRepositoryNameWithOwner: "me/web" }
+                : {}),
+            },
+            repositoryCloneUrls: { "me/web": { url: forkUrl, sshUrl: forkUrl } },
+          },
+        });
+        if (scenario === "browse-only") {
+          for (const mode of ["local", "worktree"] as const) {
+            const error = yield* manager
+              .preparePullRequestThread({ cwd, mode, reference })
+              .pipe(Effect.flip);
+            expect(error.message).toContain("cannot be checked out from this repository");
+          }
+        } else {
+          const result = yield* manager.preparePullRequestThread({
+            cwd,
+            mode: "worktree",
+            reference,
+          });
+          expect(result.isOnPullRequestHead).toBe(true);
+          expect((yield* runGit(result.worktreePath!, ["rev-parse", "HEAD"])).stdout.trim()).toBe(
+            headSha,
+          );
+        }
+      }),
   );
 
   it.effect.each(["unmarked", "upstream", "origin"])(
@@ -5514,24 +5564,21 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
             },
           },
         });
-        if (mark === "origin") {
-          const error = yield* manager
-            .preparePullRequestThread({
-              cwd,
-              mode: "local",
-              reference: "https://github.com/acme/web/pull/42",
-            })
-            .pipe(Effect.flip);
-          expect(error.message).toContain("cannot be checked out from this repository");
-        }
         yield* runGit(cwd, ["branch", "-f", "feature/pr", headSha]);
         const local = yield* manager.preparePullRequestThread({ cwd, mode: "local", reference });
         expect(local).toMatchObject({ branch: "feature/pr", isOnPullRequestHead: true });
         yield* runGit(cwd, ["checkout", "main"]);
         yield* runGit(cwd, ["branch", "-D", "feature/pr"]);
-        if (mark !== "origin") {
-          // An existing fork checkout must never supply the same numbered ref for the parent.
-          yield* runGit(cwd, ["branch", "feature/pr", forkHead]);
+        const forkWorktree = mark === "origin" ? null : yield* makeTempDir("t3code-fork-pr-");
+        if (forkWorktree !== null) {
+          yield* runGit(cwd, ["worktree", "add", "-b", "feature/pr", forkWorktree, forkHead]);
+          yield* runGit(cwd, ["config", "branch.feature/pr.remote", "origin"]);
+          yield* runGit(cwd, ["config", "branch.feature/pr.merge", "refs/heads/feature/pr"]);
+          yield* runGit(cwd, [
+            "config",
+            "branch.feature/pr.t3-pull-request",
+            "https://github.com/me/web/pull/42",
+          ]);
         }
         const worktree = yield* manager.preparePullRequestThread({
           cwd,
@@ -5542,6 +5589,23 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
         expect((yield* runGit(worktree.worktreePath!, ["rev-parse", "HEAD"])).stdout.trim()).toBe(
           headSha,
         );
+        if (forkWorktree !== null) {
+          expect(worktree.worktreePath).not.toBe(forkWorktree);
+          expect((yield* runGit(forkWorktree, ["rev-parse", "HEAD"])).stdout.trim()).toBe(forkHead);
+          expect(
+            yield* manager.checkedOutPullRequest({
+              cwd,
+              branch: "feature/pr",
+              url: "https://github.com/me/web/pull/42",
+            }),
+          ).toBe(true);
+          const reused = yield* manager.preparePullRequestThread({
+            cwd,
+            mode: "worktree",
+            reference,
+          });
+          expect(reused.worktreePath).toBe(worktree.worktreePath);
+        }
       }),
   );
 

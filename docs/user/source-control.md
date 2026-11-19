@@ -383,8 +383,9 @@ When the selected repository is a GitHub fork, turn on **Include upstream pull r
 issues** in Settings → Source control & issues to add its parent's rows. You can enable it per
 project or as the environment default. If the selected repository is already the original
 repository, its rows are already listed. You can read upstream pull requests and issues in the
-fork's project, including when you open a pull request by link. To check out a pull request or
-edit an issue, open it in a project for the upstream repository.
+fork's project, including when you open a pull request by link. You can check out pull requests
+whose head branch belongs to your fork. For other upstream pull requests or to edit an upstream
+issue, open it in a project for the upstream repository.
 
 Select an issue to open it beside the list: description, comments, state changes, linked pull
 requests, labels, assignees, and reactions. Linked pull requests open in the same panel. You can

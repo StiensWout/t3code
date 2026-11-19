@@ -787,6 +787,31 @@ describe("GitHubSourceControlProvider.checkoutChangeRequest", () => {
     }).pipe(Effect.provide(layer));
   });
 
+  it.effect(
+    "fetches a linked PR ref from its own repository when only the fork is configured",
+    () => {
+      const { layer, git } = harness({
+        remotes: remotesOutput(["origin", "git@github.com:me/web.git"]),
+        graphql: () => ({ pullRequest: node(42, "feature") }),
+      });
+      return Effect.gen(function* () {
+        const gh = yield* GitHubSourceControlProvider.make;
+        yield* gh.checkoutChangeRequest({
+          cwd: "/repo",
+          reference: "https://github.com/acme/web/pull/42",
+        });
+        assert.deepStrictEqual(git.find(([name]) => name === "execute")?.[1], [
+          "fetch",
+          "--quiet",
+          "--no-tags",
+          "--",
+          "https://github.com/acme/web.git",
+          "refs/pull/42/head",
+        ]);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
   it.effect("keeps git's own output out of what a failed checkout reports", () => {
     const { layer } = harness({
       remotes: remotesOutput(["origin", "git@github.com:acme/web.git"]),

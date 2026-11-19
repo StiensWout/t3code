@@ -5939,6 +5939,61 @@ it.effect(
     }),
 );
 
+it.effect.each(["fork head", "parent lookup unavailable"])(
+  "keeps a same-host pull request checkout available (%s)",
+  (scenario) =>
+    Effect.gen(function* () {
+      const provider = SourceControlProviderKind.make("github");
+      const projectId = "fork" as ProjectId;
+      const repository = scenario === "fork head" ? "acme/web" : "other/web";
+      let parentReads = 0;
+      const service = yield* makeService({
+        projects: [
+          project({ id: projectId, title: "fork", workspaceRoot: "/fork", repository: "me/web" }),
+        ],
+        getRepositoryParent: ({ cwd }) => {
+          parentReads += 1;
+          return scenario === "fork head"
+            ? Effect.succeed("acme/web")
+            : Effect.fail(
+                new SourceControlProviderError({
+                  provider,
+                  operation: "getRepositoryParent",
+                  cwd,
+                  detail: "Repository metadata is unavailable.",
+                }),
+              );
+        },
+        providers: [
+          fakePullRequestProvider(provider, {
+            readsPublicHostWithoutCheckout: true,
+            getChangeRequest: () =>
+              Effect.succeed({
+                ...hostedChangeRequest("Body"),
+                url: `https://github.com/${repository}/pull/1`,
+                ...(scenario === "fork head" ? { headRepositoryNameWithOwner: "me/web" } : {}),
+              }),
+          }),
+        ],
+      });
+      const result = yield* service.detail({
+        projectId,
+        host: "github.com",
+        repository,
+        number: 1,
+      });
+      assert.strictEqual(result.checkoutAllowed, true);
+      const reread = yield* service.detail({
+        projectId,
+        host: "github.com",
+        repository,
+        number: 1,
+      });
+      assert.strictEqual(reread.checkoutAllowed, true);
+      assert.strictEqual(parentReads, scenario === "fork head" ? 0 : 1);
+    }),
+);
+
 it.effect("allows checkout from the parent project that owns a routed pull request", () =>
   Effect.gen(function* () {
     const service = yield* makeService({
