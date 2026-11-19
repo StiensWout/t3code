@@ -1,15 +1,21 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as TestClock from "effect/testing/TestClock";
 import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 import {
   IssueTrackerKind,
   type IssueTrackerProjectBinding,
+  SourceControlProviderError,
   SourceControlProviderKind,
   type OrchestrationProjectShell,
   type ProjectId,
+  type ServerSettings,
 } from "@t3tools/contracts";
+import { DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts/settings";
+import type { SourceControlProvider } from "@t3tools/source-control-core/server/SourceControlProvider";
 import {
   IssueTrackerError,
   type IssueTrackerApi,
@@ -23,6 +29,9 @@ import { normalizeGitRemoteUrl } from "@t3tools/shared/git";
 
 import * as ProjectService from "../project/ProjectService.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
+import * as ServerSettingsService from "../serverSettings.ts";
+import * as ForkUpstream from "../sourceControl/forkUpstream.ts";
+import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as IssueService from "./IssueService.ts";
 import * as IssueTrackerRegistry from "./IssueTrackerRegistry.ts";
 
@@ -157,10 +166,14 @@ function makeService(input: {
   readonly trackers: ReadonlyArray<IssueTrackerApi>;
   readonly bindings?: Record<string, IssueTrackerProjectBinding>;
   readonly readBindings?: IssueTrackerBindings.IssueTrackerBindingsRepository["Service"]["list"];
+  readonly settings?: ServerSettings;
+  readonly resolveRepositoryIdentity?: RepositoryIdentityResolver.RepositoryIdentityResolver["Service"]["resolve"];
+  readonly getRepositoryParent?: SourceControlProvider["Service"]["getRepositoryParent"];
 }) {
   return IssueService.IssueService.pipe(
     Effect.provide(
       IssueService.layer.pipe(
+        Layer.provide(ForkUpstream.layer),
         Layer.provide(
           Layer.mergeAll(
             Layer.mock(IssueTrackerBindings.IssueTrackerBindingsRepository)({
@@ -187,7 +200,17 @@ function makeService(input: {
                 ),
             }),
             Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
-              resolve: () => Effect.succeed(null),
+              resolve: input.resolveRepositoryIdentity ?? (() => Effect.succeed(null)),
+            }),
+            Layer.mock(ServerSettingsService.ServerSettingsService)({
+              getSettings: Effect.succeed(input.settings ?? DEFAULT_SERVER_SETTINGS),
+            }),
+            Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
+              resolveLink: () => undefined,
+              get: () =>
+                Effect.succeed({
+                  getRepositoryParent: input.getRepositoryParent,
+                } as SourceControlProvider["Service"]),
             }),
           ),
         ),
@@ -451,7 +474,12 @@ describe("IssueService", () => {
       ).toEqual(["Acme/Web", "Acme/Web"]);
       expect(result.nextCursors).toEqual({ "github.com acme/web": "next" });
       expect(result.errors).toEqual([
-        { projectId: "api", projectTitle: "api", message: "The issue tracker request failed." },
+        {
+          projectId: "api",
+          projectTitle: "api",
+          source: "issues:github.com acme/api",
+          message: "The issue tracker request failed.",
+        },
       ]);
       expect(result.viewers).toEqual({});
       expect(result.trackers).toEqual([
@@ -488,7 +516,12 @@ describe("IssueService", () => {
       expect(listed).toEqual(["Acme/Web"]);
       expect(failed.nextCursors).toEqual(result.nextCursors);
       expect(failed.errors).toEqual([
-        { projectId: "web", projectTitle: "web", message: "try again" },
+        {
+          projectId: "web",
+          projectTitle: "web",
+          source: "issues:github.com acme/web",
+          message: "try again",
+        },
       ]);
       const next = yield* service.list({ state: "open", cursors: failed.nextCursors });
       expect(next.entries.map((entry) => [entry.projectId, entry.key])).toEqual([["web", "4"]]);
@@ -505,6 +538,241 @@ describe("IssueService", () => {
       expect(listed).toEqual(["acme/web"]);
       expect(through.entries.map((entry) => entry.key)).toEqual(["4"]);
     }),
+  );
+  it.effect("lists a fork's upstream issues beside its own when its project asks", () =>
+    Effect.gen(function* () {
+      const listed: string[] = [];
+      const parentReads: string[] = [];
+      const input = {
+        projects: [
+          project({ id: "fork", repository: "me/web" }),
+          project({ id: "api", repository: "me/api" }),
+        ],
+        trackers: [
+          fakeTracker({
+            listIssues: (input) =>
+              Effect.sync(() => {
+                listed.push(input.scope);
+                return {
+                  items: [issue(input.scope === "acme/web" ? "2" : "1")],
+                  nextCursor: null,
+                };
+              }),
+          }),
+        ],
+        getRepositoryParent: ({ repository }: { readonly repository: string }) =>
+          Effect.sync(() => {
+            parentReads.push(repository);
+            return repository === "me/web" ? "acme/web" : null;
+          }),
+      };
+
+      yield* (yield* makeService(input)).list({ state: "open" });
+      expect(listed.toSorted()).toEqual(["me/api", "me/web"]);
+      expect(parentReads).toEqual([]);
+
+      listed.length = 0;
+      const service = yield* makeService({
+        ...input,
+        settings: {
+          ...DEFAULT_SERVER_SETTINGS,
+          projectSettingsOverrides: { ["fork" as ProjectId]: { includeForkUpstream: true } },
+        },
+      });
+      const result = yield* service.list({ state: "open" });
+      expect(listed.toSorted()).toEqual(["acme/web", "me/api", "me/web"]);
+      expect(parentReads).toEqual(["me/web"]);
+      expect(
+        result.entries
+          .filter((entry) => entry.scope === "acme/web")
+          .map((entry) => [entry.projectId, entry.key]),
+      ).toEqual([["fork", "2"]]);
+    }),
+  );
+
+  it.effect(
+    "identifies a failed upstream issue read without marking the checkout unavailable",
+    () =>
+      Effect.gen(function* () {
+        const service = yield* makeService({
+          projects: [project({ id: "fork", repository: "me/web" })],
+          settings: { ...DEFAULT_SERVER_SETTINGS, includeForkUpstream: true },
+          getRepositoryParent: () => Effect.succeed("acme/web"),
+          trackers: [
+            fakeTracker({
+              listIssues: ({ scope }) =>
+                scope === "acme/web"
+                  ? Effect.fail(
+                      new IssueTrackerError({
+                        tracker: GITHUB,
+                        operation: "listIssues",
+                        reason: "unauthenticated",
+                        detail: "Sign in to read upstream issues.",
+                      }),
+                    )
+                  : Effect.succeed({ items: [issue("1")], nextCursor: null }),
+            }),
+          ],
+        });
+        const listed = yield* service.list({ state: "open" });
+        expect(listed.entries.map(({ scope, key }) => [scope, key])).toEqual([["me/web", "1"]]);
+        expect(listed.trackers).toMatchObject([{ configured: true }]);
+        expect(listed.errors).toMatchObject([
+          {
+            projectId: "fork",
+            message: "acme/web could not be read. Sign in to read upstream issues.",
+          },
+        ]);
+      }),
+  );
+
+  it.effect("reports an upstream lookup failure beside the fork's issues", () =>
+    Effect.gen(function* () {
+      const service = yield* makeService({
+        projects: [project({ id: "fork", repository: "me/web" })],
+        settings: { ...DEFAULT_SERVER_SETTINGS, includeForkUpstream: true },
+        getRepositoryParent: ({ cwd }) =>
+          Effect.fail(
+            new SourceControlProviderError({
+              provider: SourceControlProviderKind.make("github"),
+              operation: "getRepositoryParent",
+              cwd,
+              detail: "Repository metadata is unavailable.",
+            }),
+          ),
+        trackers: [
+          fakeTracker({
+            listIssues: () => Effect.succeed({ items: [issue("1")], nextCursor: null }),
+          }),
+        ],
+      });
+      const listed = yield* service.list({ state: "open" });
+      expect(listed.entries.map(({ scope, key }) => [scope, key])).toEqual([["me/web", "1"]]);
+      expect(listed.trackers).toMatchObject([{ configured: true }]);
+      expect(listed.errors).toMatchObject([
+        {
+          projectId: "fork",
+          message: "The upstream of me/web could not be read. Repository metadata is unavailable.",
+        },
+      ]);
+    }),
+  );
+
+  it.effect("holds an upstream cursor while its parent lookup fails on a continuation", () =>
+    Effect.gen(function* () {
+      let parentFails = false;
+      const reads: Array<readonly [string, string | undefined]> = [];
+      const service = yield* makeService({
+        projects: [project({ id: "fork", repository: "me/web" })],
+        settings: { ...DEFAULT_SERVER_SETTINGS, includeForkUpstream: true },
+        getRepositoryParent: ({ cwd }) =>
+          parentFails
+            ? Effect.fail(
+                new SourceControlProviderError({
+                  provider: SourceControlProviderKind.make("github"),
+                  operation: "getRepositoryParent",
+                  cwd,
+                  detail: "Repository metadata is unavailable.",
+                }),
+              )
+            : Effect.succeed("acme/web"),
+        trackers: [
+          fakeTracker({
+            listIssues: ({ scope, cursor }) =>
+              Effect.sync(() => {
+                reads.push([scope, cursor]);
+                return {
+                  items: [issue(cursor === undefined ? "1" : "2")],
+                  nextCursor: `${scope}-next`,
+                };
+              }),
+          }),
+        ],
+      });
+      const head = yield* service.list({ state: "open" });
+      const upstreamKey = Object.keys(head.nextCursors).find((key) => key.endsWith("acme/web"))!;
+      const forkKey = Object.keys(head.nextCursors).find((key) => key.endsWith("me/web"))!;
+
+      // The parent lookup expired and now fails while the fork pages on.
+      yield* TestClock.adjust(Duration.hours(2));
+      parentFails = true;
+      reads.length = 0;
+      const continued = yield* service.list({ state: "open", cursors: head.nextCursors });
+      expect(reads).toEqual([["me/web", "me/web-next"]]);
+      expect(continued.errors.map(({ message }) => message)).toEqual([
+        "The upstream of me/web could not be read. Repository metadata is unavailable.",
+      ]);
+      expect(continued.nextCursors[upstreamKey]).toBe("acme/web-next");
+
+      // A page with no upstream cursor to hold does not repeat the failure.
+      const forkOnly = yield* service.list({
+        state: "open",
+        cursors: { [forkKey]: "me/web-next" },
+      });
+      expect(forkOnly.errors).toEqual([]);
+
+      parentFails = false;
+      reads.length = 0;
+      const retried = yield* service.list({
+        state: "open",
+        cursors: { [upstreamKey]: "acme/web-next" },
+      });
+      expect(reads).toEqual([["acme/web", "acme/web-next"]]);
+      expect(retried.errors).toEqual([]);
+    }),
+  );
+
+  it.effect(
+    "adds upstream issues through the opted-in checkout after resolving a cold project",
+    () =>
+      Effect.gen(function* () {
+        const projectId = "fork" as ProjectId;
+        const fork = "Me/Web";
+        const upstream = "Acme/Web";
+        const identity = project({ id: projectId, repository: fork }).repositoryIdentity;
+        const parentReads: Array<{ cwd: string; repository: string }> = [];
+        const service = yield* makeService({
+          projects: [project({ id: "off", repository: fork }), project({ id: projectId })],
+          resolveRepositoryIdentity: () => Effect.succeed(identity ?? null),
+          settings: {
+            ...DEFAULT_SERVER_SETTINGS,
+            projectSettingsOverrides: { [projectId]: { includeForkUpstream: true } },
+          },
+          getRepositoryParent: ({ cwd, repository }) =>
+            Effect.sync(() => {
+              parentReads.push({ cwd, repository });
+              return upstream;
+            }),
+          trackers: [
+            fakeTracker({
+              listIssues: ({ host, scope }) =>
+                Effect.succeed({
+                  items: [{ ...issue("12"), url: `https://${host}/${scope}/issues/12` }],
+                  nextCursor: null,
+                }),
+            }),
+          ],
+        });
+        const listed = yield* service.list({ state: "open" });
+        expect(
+          listed.entries.map(({ projectId, scope, key }) => [projectId, scope, key]).toSorted(),
+        ).toEqual([
+          [projectId, upstream, "12"],
+          ["off", fork, "12"],
+        ]);
+
+        const request = { state: "open", projectId } as const;
+        const projectOnly = yield* service.list(request, { includeUpstream: false });
+        expect(projectOnly.entries.map(({ scope, key }) => [scope, key])).toEqual([[fork, "12"]]);
+
+        const parentIssue = listed.entries.find((row) => row.scope === upstream);
+        expect(parentIssue).toBeDefined();
+        const refused = yield* service
+          .comment({ ...parentIssue!, body: "This belongs upstream." })
+          .pipe(Effect.result);
+        expect(refused).toMatchObject({ _tag: "Failure", failure: { reason: "read-only" } });
+        expect(parentReads).toEqual([{ cwd: "/w/fork", repository: fork }]);
+      }),
   );
 });
 

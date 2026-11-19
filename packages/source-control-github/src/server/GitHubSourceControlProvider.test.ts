@@ -265,6 +265,44 @@ const githubContext = (host: string) => ({
 });
 
 describe("GitHubSourceControlProvider repository resolution", () => {
+  it.effect("names the repository a fork was made from, and none for one that is no fork", () => {
+    const reads: string[] = [];
+    const parents: Record<string, string> = { "me/web": "acme/web", "Me/Self": "me/self" };
+    const { layer } = harness({
+      remotes: remotesOutput(["origin", "https://github.com/me/web.git"]),
+      api: {
+        rest: (input) =>
+          Effect.sync(() => {
+            reads.push(`${input.host} ${input.path} reserve:${input.allowReserve}`);
+            const nameWithOwner = input.path.slice("repos/".length);
+            const parent = parents[nameWithOwner];
+            return restResponse({
+              full_name: nameWithOwner,
+              html_url: `https://${input.host}/${nameWithOwner}`,
+              ssh_url: `git@${input.host}:${nameWithOwner}.git`,
+              ...(parent === undefined ? {} : { parent: { full_name: parent } }),
+            });
+          }),
+      },
+    });
+    return Effect.gen(function* () {
+      const gh = yield* GitHubSourceControlProvider.make;
+      const parentOf = gh.getRepositoryParent;
+      assert.ok(parentOf);
+      const fork = { cwd: "/repo", host: "github.com", repository: "me/web" };
+      assert.strictEqual(yield* parentOf(fork), "acme/web");
+      assert.strictEqual(yield* parentOf({ ...fork, repository: "acme/web" }), null);
+      // A repository GitHub names as its own parent is no fork.
+      assert.strictEqual(yield* parentOf({ ...fork, repository: "Me/Self" }), null);
+      // Listings read this in the background, so it leaves the reserved quota alone.
+      assert.deepStrictEqual(reads, [
+        "github.com repos/me/web reserve:false",
+        "github.com repos/acme/web reserve:false",
+        "github.com repos/Me/Self reserve:false",
+      ]);
+    }).pipe(Effect.provide(layer));
+  });
+
   // regression: #38251 an Enterprise Server's hostname need not say "github"; a gh login vouches for it
   it.effect.each([
     ["github", "github"],

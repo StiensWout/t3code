@@ -52,6 +52,7 @@ import {
   pullRequestPendingEditsAtom,
   pullRequestPendingEditsFor,
 } from "./pullRequests.ts";
+import { createIssueEnvironmentAtoms } from "./issues.ts";
 import * as PullRequestDiffLoader from "./pullRequestDiffHttp.ts";
 import { executeAtomQuery, queryPersistenceKey } from "./runtime.ts";
 import { EnvironmentQueryStore } from "./queryPersistence.ts";
@@ -595,11 +596,23 @@ const makeTestRuntime = Effect.fn("makeTestRuntime")(function* (
       Layer.succeed(EnvironmentQueryStore, queryStore),
     ),
   );
-  const atoms = createPullRequestEnvironmentAtoms(runtime, onAnswer);
+  const forkUpstreamSetting = Atom.make("disabled");
+  const atoms = createPullRequestEnvironmentAtoms(runtime, {
+    ...onAnswer,
+    forkUpstreamSettingsAtom: () => forkUpstreamSetting,
+  });
   const registry = yield* Effect.acquireRelease(Effect.sync(AtomRegistry.make), (registry) =>
     Effect.sync(() => registry.dispose()),
   );
-  return { runtime, atoms, registry, environmentRegistry, supervisor, localSupervisor };
+  return {
+    runtime,
+    atoms,
+    registry,
+    environmentRegistry,
+    supervisor,
+    localSupervisor,
+    forkUpstreamSetting,
+  };
 });
 
 it.effect.each([
@@ -1855,6 +1868,52 @@ it.effect.each([
     }),
 );
 
+it.effect(
+  "refreshes warm source-control listings and filter options when fork settings change",
+  () =>
+    Effect.gen(function* () {
+      let upstream = false;
+      const entries = () => [{ number: upstream ? 2 : 1 }];
+      const client = {
+        [WS_METHODS.pullRequestsSubscribeRefreshes]: () => Stream.never,
+        [WS_METHODS.pullRequestsList]: () => Effect.sync(() => listResult(entries())),
+        [WS_METHODS.issuesList]: () => Effect.sync(() => ({ entries: entries() })),
+        [WS_METHODS.pullRequestsFilterOptions]: () =>
+          Effect.sync(() => ({ labels: [{ name: upstream ? "upstream" : "fork" }] })),
+      } as unknown as WsRpcProtocolClient;
+      const { atoms, registry, runtime, forkUpstreamSetting } = yield* makeTestRuntime(client);
+      const issues = createIssueEnvironmentAtoms(runtime, () => forkUpstreamSetting);
+      const environmentId = TARGET.environmentId;
+      const pullRequestList = atoms.list({ environmentId, input: { state: "all" } });
+      const issueList = issues.list({ environmentId, input: { state: "all" } });
+      const labels = atoms.filterOptions({
+        environmentId,
+        input: { kind: "labels" },
+      });
+
+      expect((yield* AtomRegistry.getResult(registry, pullRequestList)).entries).toEqual([
+        { number: 1 },
+      ]);
+      expect((yield* AtomRegistry.getResult(registry, issueList)).entries).toEqual([{ number: 1 }]);
+      expect(yield* AtomRegistry.getResult(registry, labels)).toEqual({
+        labels: [{ name: "fork" }],
+      });
+
+      upstream = true;
+      registry.set(forkUpstreamSetting, "enabled");
+      const fresh = { suspendOnWaiting: true };
+      expect((yield* AtomRegistry.getResult(registry, pullRequestList, fresh)).entries).toEqual([
+        { number: 2 },
+      ]);
+      expect((yield* AtomRegistry.getResult(registry, issueList, fresh)).entries).toEqual([
+        { number: 2 },
+      ]);
+      expect(yield* AtomRegistry.getResult(registry, labels, fresh)).toEqual({
+        labels: [{ name: "upstream" }],
+      });
+    }),
+);
+
 it.effect("shares close, reopen, and merge with an untouched client's mounted PR readers", () =>
   Effect.gen(function* () {
     const revision = yield* SubscriptionRef.make(0);
@@ -1950,6 +2009,27 @@ it.effect("shares close, reopen, and merge with an untouched client's mounted PR
       );
       stops.forEach((stop) => stop());
     }
+  }),
+);
+
+it.effect("assigns older line counts only when the requested row has one host", () =>
+  Effect.gen(function* () {
+    const ref = { projectId: ProjectId.make("project-1"), repository: "acme/web", number: 1 };
+    const stat = { ...ref, additions: 42, deletions: 3 };
+    const client = {
+      [WS_METHODS.pullRequestsSubscribeRefreshes]: () => Stream.never,
+      [WS_METHODS.pullRequestsListStats]: () => Effect.succeed({ stats: [stat] }),
+    } as unknown as WsRpcProtocolClient;
+    const { atoms, registry } = yield* makeTestRuntime(client);
+    const primary = { ...ref, host: "github.com" };
+    const enterprise = { ...ref, host: "code.example.test" };
+    const stats = (refs: readonly (typeof primary)[]) =>
+      AtomRegistry.getResult(
+        registry,
+        atoms.listStats({ environmentId: TARGET.environmentId, input: { refs } }),
+      );
+    expect(yield* stats([primary])).toEqual({ stats: [{ ...stat, host: primary.host }] });
+    expect(yield* stats([primary, enterprise])).toEqual({ stats: [] });
   }),
 );
 

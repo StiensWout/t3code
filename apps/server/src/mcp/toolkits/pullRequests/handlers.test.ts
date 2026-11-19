@@ -17,6 +17,12 @@ import {
   type ThreadPullRequestLink,
   SourceControlProviderKind,
 } from "@t3tools/contracts";
+import { DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts/settings";
+import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
+import {
+  fakePullRequestProvider,
+  fakeSourceControlProvider,
+} from "@t3tools/source-control-testing/fakeSourceControlDriver";
 import { describe, expect, it } from "@effect/vitest";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
@@ -33,6 +39,13 @@ import {
   type PullRequestTestThread,
   v2PullRequestThread,
 } from "../../../orchestration-v2/testkit/pullRequestFixtures.ts";
+import * as PullRequestFilesViewed from "../../../persistence/PullRequestFilesViewed.ts";
+import * as RepositoryIdentityResolver from "../../../project/RepositoryIdentityResolver.ts";
+import * as PullRequestProviderRegistry from "../../../pullRequest/PullRequestProviderRegistry.ts";
+import * as PullRequestReadCache from "../../../pullRequest/PullRequestReadCache.ts";
+import * as ServerSettings from "../../../serverSettings.ts";
+import * as ForkUpstream from "../../../sourceControl/forkUpstream.ts";
+import * as SourceControlProviderRegistry from "../../../sourceControl/SourceControlProviderRegistry.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
 import * as PullRequestWatchService from "../../../pullRequest/PullRequestWatchService.ts";
 import * as PullRequestReviewGuideService from "../../../pullRequest/PullRequestReviewGuideService.ts";
@@ -154,6 +167,7 @@ interface HarnessOptions {
     PullRequestOperationError
   >;
   readonly pullRequests?: Partial<PullRequestService.PullRequestService["Service"]>;
+  readonly pullRequestLayer?: Layer.Layer<PullRequestService.PullRequestService>;
   readonly git?: Partial<GitManager.GitManager["Service"]>;
 }
 
@@ -207,7 +221,8 @@ const makeHarness = Effect.fn("makePullRequestsToolkitHarness")(function* (
         Effect.succeed(id === thread?.id ? v2PullRequestThread(thread) : null),
       dispatch,
     }),
-    Layer.mock(PullRequestService.PullRequestService)(options.pullRequests ?? {}),
+    options.pullRequestLayer ??
+      Layer.mock(PullRequestService.PullRequestService)(options.pullRequests ?? {}),
     Layer.mock(GitManager.GitManager)(options.git ?? {}),
     Layer.succeed(SecureRandom.SecureRandom, testCrypto),
     McpToolAccessTestkit.liveThreadsLayer,
@@ -871,6 +886,75 @@ describe("source control tools", () => {
         "open-thread",
       ]);
       expect(result.conversation?.hiddenResolvedThreads).toBe(1);
+    }),
+  );
+
+  it.effect("lists only checkout pull requests when an upstream has the same number", () =>
+    Effect.gen(function* () {
+      const checkout = makeProject();
+      const host = fakeSourceControlProvider("github", {
+        getRepositoryParent: () => Effect.succeed("upstream/t3code"),
+      });
+      const provider = fakePullRequestProvider("github", {
+        listChangeRequests: ({ repository }) =>
+          Effect.succeed({
+            items: [
+              {
+                number: 7,
+                title: repository,
+                url: `https://github.com/${repository}/pull/7`,
+                author: null,
+                headBranch: "feature",
+                baseBranch: "main",
+                state: "open",
+                isDraft: false,
+                mergeability: "mergeable",
+                additions: 1,
+                deletions: 0,
+                createdAt: "2026-08-01T00:00:00Z",
+                updatedAt: "2026-08-01T00:00:00Z",
+                reviewRequestLogins: [],
+                labels: [],
+              },
+            ],
+            truncated: false,
+            continues: false,
+          }),
+      });
+      const pullRequestLayer = PullRequestService.layer.pipe(
+        Layer.provide(ForkUpstream.layer),
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.mock(ProjectService.ProjectService)({
+              getShell: () => Effect.succeedSome(checkout),
+              listShells: () => Effect.succeed([checkout]),
+            }),
+            Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({}),
+            Layer.mock(ServerSettings.ServerSettingsService)({
+              getSettings: Effect.succeed({
+                ...DEFAULT_SERVER_SETTINGS,
+                includeForkUpstream: true,
+              }),
+            }),
+            Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
+              get: () => Effect.succeed(host),
+              resolveLink: () => undefined,
+            }),
+            Layer.succeed(
+              PullRequestProviderRegistry.PullRequestProviderRegistry,
+              PullRequestProviderRegistry.fromProviders([provider]),
+            ),
+            SourceControlRateLimit.layer,
+            Layer.mock(PullRequestFilesViewed.PullRequestFilesViewedRepository)({}),
+            Layer.mock(PullRequestReadCache.PullRequestReadCache)({}),
+          ),
+        ),
+      );
+      const harness = yield* makeHarness({ project: checkout, pullRequestLayer });
+      const result = yield* harness.call("pull_request_list", {});
+      expect(result.pullRequests).toMatchObject([
+        { number: 7, url: "https://github.com/T3Tools/T3Code/pull/7" },
+      ]);
     }),
   );
 

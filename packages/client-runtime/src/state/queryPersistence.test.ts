@@ -53,12 +53,21 @@ describe("query persistence", () => {
 it.effect("restores line counts when visible PR batches change", () =>
   Effect.gen(function* () {
     const cache = persistPullRequestStats();
-    const first = { projectId: ProjectId.make("project"), repository: "owner/repo", number: 1 };
+    const first = {
+      projectId: ProjectId.make("project"),
+      host: "github.com",
+      repository: "owner/repo",
+      number: 1,
+    };
     const second = { ...first, number: 2 };
     const stat = { ...first, additions: 42, deletions: 3 };
     yield* cache.save(env, JSON.stringify(["stats", { refs: [first, second] }]), { stats: [stat] });
     const key = JSON.stringify(["stats", { refs: [first] }]);
     expect(yield* cache.load(env, key)).toEqual(Option.some({ stats: [stat] }));
     expect(yield* cache.load(other, key)).toEqual(Option.none());
+    const sameNumberOnAnotherHost = { ...first, host: "code.example.test" };
+    expect(
+      yield* cache.load(env, JSON.stringify(["stats", { refs: [sameNumberOnAnotherHost] }])),
+    ).toEqual(Option.none());
   }).pipe(Effect.provideService(EnvironmentQueryStore, store())),
 );

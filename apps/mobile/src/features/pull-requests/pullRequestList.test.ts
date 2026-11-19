@@ -456,6 +456,7 @@ describe("shown PR diff stats", () => {
   const stat = (number: number, additions: number, deletions: number) => ({
     projectId: "project" as PullRequestListEntry["projectId"],
     repository: "org/repo",
+    host: "github.com",
     number,
     additions,
     deletions,
@@ -478,7 +479,10 @@ describe("shown PR diff stats", () => {
   it("fills only rows without stats, in their own environment", () => {
     const filled = withShownPullRequestStats(rows, [
       { environmentId: EnvironmentId.make("mbp"), stats: [stat(1, 7, 7)] },
-      { environmentId: cups, stats: [stat(1, 3, 2), stat(2, 9, 9)] },
+      {
+        environmentId: cups,
+        stats: [stat(1, 3, 2), { ...stat(1, 8, 8), host: "code.example.test" }, stat(2, 9, 9)],
+      },
     ]);
     expect(filled.map(({ additions, deletions }) => [additions, deletions])).toEqual([
       [3, 2],
@@ -492,6 +496,7 @@ describe("cached PR diff stats", () => {
   const stat = (number: number, additions: number) => ({
     projectId: "project" as PullRequestListEntry["projectId"],
     repository: "org/repo",
+    host: "github.com",
     number,
     additions,
     deletions: 0,
@@ -502,6 +507,7 @@ describe("cached PR diff stats", () => {
       refs: [1, 2].map((number) => ({
         projectId: stat(number, 0).projectId,
         repository: "org/repo",
+        host: "github.com",
         number,
       })),
     };

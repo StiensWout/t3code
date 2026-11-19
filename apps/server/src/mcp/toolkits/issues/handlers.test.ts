@@ -9,6 +9,8 @@ import {
   type ThreadIssueLink,
   SourceControlProviderKind,
 } from "@t3tools/contracts";
+import { DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts/settings";
+import { fakeSourceControlProvider } from "@t3tools/source-control-testing/fakeSourceControlDriver";
 import { describe, expect, it } from "@effect/vitest";
 import {
   IssueTrackerError,
@@ -29,6 +31,9 @@ import { v2PullRequestThread } from "../../../orchestration-v2/testkit/pullReque
 import * as IssueTrackerBindings from "../../../persistence/IssueTrackerBindings.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
 import * as RepositoryIdentityResolver from "../../../project/RepositoryIdentityResolver.ts";
+import * as ServerSettings from "../../../serverSettings.ts";
+import * as ForkUpstream from "../../../sourceControl/forkUpstream.ts";
+import * as SourceControlProviderRegistry from "../../../sourceControl/SourceControlProviderRegistry.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as McpToolAccessTestkit from "../../McpToolAccess.testkit.ts";
@@ -255,10 +260,15 @@ describe("issue toolkit handlers", () => {
           ),
       };
       const issueLayer = IssueService.layer.pipe(
+        Layer.provide(ForkUpstream.layer),
         Layer.provide(
           Layer.mergeAll(
             projectLayer,
             Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({}),
+            Layer.mock(ServerSettings.ServerSettingsService)({}),
+            Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
+              resolveLink: () => undefined,
+            }),
             Layer.mock(IssueTrackerBindings.IssueTrackerBindingsRepository)({
               list: Effect.succeed(new Map([[PROJECT_ID, { tracker, scope: "ENG" }]])),
             }),
@@ -335,6 +345,58 @@ describe("issue toolkit handlers", () => {
           title: detail.title,
           source: "agent",
         },
+      ]);
+    }),
+  );
+
+  it.effect("lists only checkout issues when an upstream has the same number", () =>
+    Effect.gen(function* () {
+      const host = fakeSourceControlProvider("github", {
+        getRepositoryParent: () => Effect.succeed("upstream/t3code"),
+      });
+      const issueLayer = IssueService.layer.pipe(
+        Layer.provide(ForkUpstream.layer),
+        Layer.provide(
+          Layer.mergeAll(
+            projectLayer,
+            Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({}),
+            Layer.mock(ServerSettings.ServerSettingsService)({
+              getSettings: Effect.succeed({
+                ...DEFAULT_SERVER_SETTINGS,
+                includeForkUpstream: true,
+              }),
+            }),
+            Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
+              get: () => Effect.succeed(host),
+              resolveLink: () => undefined,
+            }),
+            Layer.mock(IssueTrackerBindings.IssueTrackerBindingsRepository)({
+              list: Effect.succeed(new Map()),
+            }),
+            Layer.succeed(
+              IssueTrackerRegistry.IssueTrackerRegistry,
+              IssueTrackerRegistry.fromTrackers([
+                {
+                  kind: GITHUB,
+                  capabilities: detail.capabilities,
+                  getViewer: () => Effect.succeed("user"),
+                  listIssues: ({ scope }) =>
+                    Effect.succeed({
+                      items: [{ ...detail, url: `https://github.com/${scope}/issues/7` }],
+                      nextCursor: null,
+                    }),
+                  getComments: () => Effect.die("Unexpected issue comments read"),
+                  getIssue: () => Effect.die("Unexpected issue detail read"),
+                },
+              ]),
+            ),
+          ),
+        ),
+      );
+      const harness = yield* makeHarness([], issueLayer);
+      const result = yield* harness.call("list_issues", {});
+      expect(result.issues).toMatchObject([
+        { key: "7", url: "https://github.com/T3Tools/T3Code/issues/7" },
       ]);
     }),
   );

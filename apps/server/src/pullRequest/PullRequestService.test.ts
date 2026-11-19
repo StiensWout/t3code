@@ -1,10 +1,11 @@
-import { SourceControlProviderKind } from "@t3tools/contracts";
+import { SourceControlProviderError, SourceControlProviderKind } from "@t3tools/contracts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as KeyValueStore from "effect/persistence/KeyValueStore";
 import { assert, expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -27,6 +28,7 @@ import * as ProjectService from "../project/ProjectService.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as PullRequestFilesViewed from "../persistence/PullRequestFilesViewed.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
+import * as ForkUpstream from "../sourceControl/forkUpstream.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import type { SourceControlProvider } from "@t3tools/source-control-core/server/SourceControlProvider";
 import { isSshRemoteUrl } from "@t3tools/shared/sourceControl";
@@ -321,18 +323,22 @@ const sshAliasHost = {
 
 function makeService(input: {
   readonly settings?: ServerSettings;
+  readonly getSettings?: Effect.Effect<ServerSettings>;
   readonly projects: ReadonlyArray<OrchestrationProjectShell>;
   readonly providers: ReadonlyArray<PullRequestProviderApi>;
   readonly resolveHandle?: SourceControlProviderRegistry.SourceControlProviderRegistry["Service"]["resolveHandle"];
+  readonly getRepositoryParent?: SourceControlProvider["Service"]["getRepositoryParent"];
   readonly resolveRepositoryIdentity?: RepositoryIdentityResolver.RepositoryIdentityResolver["Service"]["resolve"];
   readonly onProjectRead?: () => void;
+  readonly listShells?: ProjectService.ProjectService["Service"]["listShells"];
 }) {
   // Build in the test scope; per-call Effect.provide would close the marks database on service acquisition.
   return Effect.flatMap(
     Layer.build(
       Layer.mergeAll(
         Layer.mock(ServerSettingsService.ServerSettingsService)({
-          getSettings: Effect.succeed(input.settings ?? DEFAULT_SERVER_SETTINGS),
+          getSettings:
+            input.getSettings ?? Effect.succeed(input.settings ?? DEFAULT_SERVER_SETTINGS),
         }),
         Layer.succeed(
           PullRequestProviderRegistry.PullRequestProviderRegistry,
@@ -344,17 +350,23 @@ function makeService(input: {
             input.resolveHandle ?? (() => Effect.die("Unexpected provider refinement")),
           get: (kind) =>
             Effect.succeed(
-              kind === "forgejo" ? sshAliasHost : ({} as SourceControlProvider["Service"]),
+              kind === "forgejo"
+                ? sshAliasHost
+                : ({
+                    getRepositoryParent: input.getRepositoryParent,
+                  } as SourceControlProvider["Service"]),
             ),
         }),
         Layer.mock(ProjectService.ProjectService)({
-          listShells: (options) =>
-            Effect.sync(() => {
-              input.onProjectRead?.();
-              return input.projects.filter(
-                (project) => options?.projectIds?.includes(project.id) ?? true,
-              );
-            }),
+          listShells:
+            input.listShells ??
+            ((options) =>
+              Effect.sync(() => {
+                input.onProjectRead?.();
+                return input.projects.filter(
+                  (project) => options?.projectIds?.includes(project.id) ?? true,
+                );
+              })),
           getShell: (projectId) =>
             Effect.sync(() => {
               input.onProjectRead?.();
@@ -372,9 +384,448 @@ function makeService(input: {
         ),
       ),
     ),
-    (context) => Effect.provideContext(PullRequestService.make, context),
+    (context) =>
+      PullRequestService.make.pipe(
+        Effect.provide(ForkUpstream.layer),
+        Effect.provideContext(context),
+      ),
   );
 }
+
+it.effect("lists a fork's upstream pull requests beside its own when its project asks", () =>
+  Effect.gen(function* () {
+    const listed: string[] = [];
+    const parentReads: string[] = [];
+    const input = {
+      projects: [
+        project({ id: "fork", title: "fork", workspaceRoot: "/fork", repository: "me/web" }),
+        project({ id: "api", title: "api", workspaceRoot: "/api", repository: "me/api" }),
+      ],
+      providers: [
+        fakePullRequestProvider(SourceControlProviderKind.make("github"), {
+          listChangeRequests: ({ repository }) =>
+            Effect.sync(() => {
+              listed.push(repository);
+              return {
+                items: [changeRequest(repository === "acme/web" ? 2 : 1, "2026-07-02T00:00:00Z")],
+                truncated: false,
+                continues: false,
+              };
+            }),
+        }),
+      ],
+      getRepositoryParent: ({ repository }: { readonly repository: string }) =>
+        Effect.sync(() => {
+          parentReads.push(repository);
+          return repository === "me/web" ? "acme/web" : null;
+        }),
+    };
+
+    yield* (yield* makeService(input)).list({ state: "open" });
+    assert.deepStrictEqual(listed.toSorted(), ["me/api", "me/web"]);
+    assert.deepStrictEqual(parentReads, []);
+
+    listed.length = 0;
+    const service = yield* makeService({
+      ...input,
+      settings: {
+        ...DEFAULT_SERVER_SETTINGS,
+        projectSettingsOverrides: { ["fork" as ProjectId]: { includeForkUpstream: true } },
+      },
+    });
+    const result = yield* service.list({ state: "open" });
+    assert.deepStrictEqual(listed.toSorted(), ["acme/web", "me/api", "me/web"]);
+    assert.deepStrictEqual(parentReads, ["me/web"]);
+    // Only the upstream's rows are marked, so clients keep checkout to the fork's own.
+    assert.deepStrictEqual(
+      result.entries.map((entry) => [entry.projectId, entry.repository, entry.upstream]).toSorted(),
+      [
+        ["api", "me/api", undefined],
+        ["fork", "acme/web", true],
+        ["fork", "me/web", undefined],
+      ],
+    );
+    assert.strictEqual(
+      result.providers.find((provider) => provider.host === "github.com")?.projectCount,
+      2,
+    );
+
+    // An upstream that is a project of its own is listed once, as that project's rows.
+    listed.length = 0;
+    const withUpstreamProject = yield* makeService({
+      ...input,
+      projects: [
+        ...input.projects,
+        project({ id: "home", title: "home", workspaceRoot: "/home", repository: "acme/web" }),
+      ],
+      settings: { ...DEFAULT_SERVER_SETTINGS, includeForkUpstream: true },
+    });
+    const both = yield* withUpstreamProject.list({ state: "open" });
+    assert.deepStrictEqual(listed.toSorted(), ["acme/web", "me/api", "me/web"]);
+    assert.deepStrictEqual(
+      both.entries
+        .filter((entry) => entry.repository === "acme/web")
+        .map((entry) => [entry.projectId, entry.upstream]),
+      [["home", undefined]],
+    );
+  }),
+);
+
+it.effect("updates cached upstream listings and serves their filter options and line counts", () =>
+  Effect.gen(function* () {
+    const projectId = "fork" as ProjectId;
+    const fork = "me/web";
+    const upstream = "acme/web";
+    const parentReads: Array<{ cwd: string; repository: string }> = [];
+    let settings = DEFAULT_SERVER_SETTINGS;
+    const service = yield* makeService({
+      projects: [
+        project({ id: "off", title: "off", workspaceRoot: "/off", repository: fork }),
+        project({ id: projectId, title: "fork", workspaceRoot: "/fork", repository: fork }),
+      ],
+      getSettings: Effect.sync(() => settings),
+      getRepositoryParent: ({ cwd, repository }) =>
+        Effect.sync(() => {
+          parentReads.push({ cwd, repository });
+          return upstream;
+        }),
+      providers: [
+        fakePullRequestProvider(SourceControlProviderKind.make("github"), {
+          ...keyedByCanonicalKey,
+          listChangeRequests: ({ repository }) =>
+            Effect.succeed({
+              items: [
+                {
+                  ...changeRequest(12, "2026-07-02T00:00:00Z"),
+                  url: `https://github.com/${repository}/pull/12`,
+                },
+              ],
+              truncated: false,
+              continues: false,
+            }),
+          listRepositoryLabels: ({ repository }) =>
+            Effect.succeed({
+              items: repository === upstream ? [{ name: "upstream-only", color: "d93f0b" }] : [],
+              truncated: false,
+            }),
+          searchRepositoryAuthors: ({ repository }) =>
+            Effect.succeed({
+              items:
+                repository === upstream
+                  ? [{ login: "maintainer", name: null, avatarUrl: null }]
+                  : [],
+              truncated: false,
+            }),
+          listChangeRequestStats: ({ changeRequests }) =>
+            Effect.succeed(
+              changeRequests.map((ref) => ({
+                ...ref,
+                additions: ref.repository === upstream ? 15 : 2,
+                deletions: 1,
+              })),
+            ),
+        }),
+      ],
+    });
+    const request = { state: "open" } as const;
+    const repositories = (input: { entries: ReadonlyArray<{ repository: string }> }) =>
+      input.entries.map((row) => row.repository).sort();
+    assert.deepStrictEqual(repositories(yield* service.list(request)), [fork]);
+
+    settings = {
+      ...settings,
+      projectSettingsOverrides: { [projectId]: { includeForkUpstream: true } },
+    };
+    const listed = yield* service.list(request);
+    assert.deepStrictEqual(repositories(listed), [upstream, fork]);
+    assert.deepStrictEqual(
+      listed.entries.find((row) => row.repository === upstream)?.projectId,
+      projectId,
+    );
+    const scoped = { ...request, projectId };
+    const scopedListing = yield* service.list(scoped);
+    assert.deepStrictEqual(repositories(scopedListing), [upstream, fork]);
+    assert.deepStrictEqual(repositories(yield* service.list(scoped, { includeUpstream: false })), [
+      fork,
+    ]);
+
+    const labels = yield* service.filterOptions({ kind: "labels" });
+    assert.deepStrictEqual(
+      labels.labels.map(({ name }) => name),
+      ["upstream-only"],
+    );
+    const authors = yield* service.filterOptions({ kind: "authors" });
+    assert.deepStrictEqual(
+      authors.authors.map(({ login }) => login),
+      ["maintainer"],
+    );
+    const stats = yield* service.listStats({
+      refs: scopedListing.entries,
+    });
+    assert.deepStrictEqual(
+      stats.stats.map(({ repository, additions }) => [repository, additions]).toSorted(),
+      [
+        [upstream, 15],
+        [fork, 2],
+      ],
+    );
+
+    settings = DEFAULT_SERVER_SETTINGS;
+    assert.deepStrictEqual(repositories(yield* service.list(request)), [fork]);
+    assert.deepStrictEqual(parentReads, [{ cwd: "/fork", repository: fork }]);
+  }),
+);
+
+it.effect("serves a cached upstream listing when the project catalog becomes unavailable", () =>
+  Effect.gen(function* () {
+    const fork = project({
+      id: "fork",
+      title: "fork",
+      workspaceRoot: "/fork",
+      repository: "me/web",
+    });
+    let catalogAvailable = true;
+    const service = yield* makeService({
+      settings: { ...DEFAULT_SERVER_SETTINGS, includeForkUpstream: true },
+      projects: [fork],
+      listShells: () =>
+        catalogAvailable
+          ? Effect.succeed([fork])
+          : Effect.fail(
+              new ProjectService.ProjectOperationError({ operation: "list-projects", cause: null }),
+            ),
+      getRepositoryParent: () => Effect.succeed("acme/web"),
+      providers: [
+        fakePullRequestProvider(SourceControlProviderKind.make("github"), {
+          listChangeRequests: () =>
+            Effect.succeed({
+              items: [changeRequest(1, "2026-07-02T00:00:00Z")],
+              truncated: false,
+              continues: false,
+            }),
+        }),
+      ],
+    });
+    const request = { state: "open" } as const;
+    const listed = yield* service.list(request);
+    assert.deepStrictEqual(listed.entries.map(({ repository }) => repository).sort(), [
+      "acme/web",
+      "me/web",
+    ]);
+    catalogAvailable = false;
+    assert.deepStrictEqual(yield* service.list(request), listed);
+  }),
+);
+
+it.effect("reports an upstream lookup failure on the head and still pages through the fork", () =>
+  Effect.gen(function* () {
+    const provider = SourceControlProviderKind.make("github");
+    const fork = project({
+      id: "fork",
+      title: "fork",
+      workspaceRoot: "/fork",
+      repository: "me/web",
+    });
+    let ownReads = 0;
+    let lookupFails = true;
+    const service = yield* makeService({
+      settings: { ...DEFAULT_SERVER_SETTINGS, includeForkUpstream: true },
+      projects: [fork],
+      getRepositoryParent: ({ cwd }) =>
+        lookupFails
+          ? Effect.fail(
+              new SourceControlProviderError({
+                provider,
+                operation: "getRepositoryParent",
+                cwd,
+                detail: "Repository metadata is unavailable.",
+              }),
+            )
+          : Effect.succeed("acme/web"),
+      providers: [
+        fakePullRequestProvider(provider, {
+          listChangeRequests: ({ cursor }) =>
+            Effect.sync(() => {
+              ownReads++;
+              return {
+                items: [changeRequest(cursor === undefined ? 1 : 2, "2026-07-02T00:00:00Z")],
+                truncated: cursor === undefined,
+                continues: true,
+              };
+            }),
+        }),
+      ],
+    });
+    const listed = yield* service.list({ state: "open" });
+    assert.deepStrictEqual(
+      listed.entries.map(({ repository }) => repository),
+      ["me/web"],
+    );
+    assert.deepStrictEqual(listed.errors, [
+      {
+        projectId: fork.id,
+        projectTitle: "fork",
+        message: "The upstream of me/web could not be read. Repository metadata is unavailable.",
+        upstream: true,
+      },
+    ]);
+    assert.deepStrictEqual(yield* service.list({ state: "open" }), listed);
+    assert.strictEqual(ownReads, 1);
+    assert.isNotEmpty(listed.nextCursors);
+    const continued = yield* service.list({ state: "open", cursors: listed.nextCursors });
+    assert.deepStrictEqual(
+      continued.entries.map(({ number }) => number),
+      [2],
+    );
+    assert.deepStrictEqual(continued.errors, []);
+
+    lookupFails = false;
+    yield* service.invalidate({});
+    const retried = yield* service.list({ state: "open" });
+    assert.deepStrictEqual(retried.errors, []);
+    assert.deepStrictEqual(retried.entries.map(({ repository }) => repository).toSorted(), [
+      "acme/web",
+      "me/web",
+    ]);
+  }),
+);
+
+const forkRepositories = ["acme/web", "me/web"];
+it.effect.each(
+  [["acme/web"], ["me/web"], forkRepositories].map((failedRepositories) => ({
+    failedRepositories,
+  })),
+)(
+  "retains failed continuation cursors for a fork and upstream ($failedRepositories)",
+  ({ failedRepositories }) =>
+    Effect.gen(function* () {
+      const provider = SourceControlProviderKind.make("github");
+      let readFails = true;
+      const service = yield* makeService({
+        settings: { ...DEFAULT_SERVER_SETTINGS, includeForkUpstream: true },
+        projects: [
+          project({ id: "fork", title: "fork", workspaceRoot: "/fork", repository: "me/web" }),
+        ],
+        getRepositoryParent: () => Effect.succeed("acme/web"),
+        providers: [
+          fakePullRequestProvider(provider, {
+            listChangeRequests: ({ repository, cursor }) =>
+              readFails && cursor !== undefined && failedRepositories.includes(repository)
+                ? Effect.fail(requestFailed)
+                : Effect.succeed({
+                    items: [changeRequest(cursor === undefined ? 1 : 2, "2026-07-02T00:00:00Z")],
+                    truncated: cursor === undefined,
+                    continues: true,
+                  }),
+          }),
+        ],
+      });
+      const head = yield* service.list({ state: "open" });
+      const continued = yield* service.list({ state: "open", cursors: head.nextCursors });
+      assert.deepStrictEqual(
+        continued.entries.map(({ repository, number }) => [repository, number]),
+        forkRepositories
+          .filter((repository) => !failedRepositories.includes(repository))
+          .map((repository) => [repository, 2]),
+      );
+      assert.deepStrictEqual(
+        continued.errors.map(({ message, upstream }) => [message, upstream]).toSorted(),
+        failedRepositories.map((repository) => [
+          `${repository} could not be read.`,
+          repository === "acme/web" ? true : undefined,
+        ]),
+      );
+      assert.isTrue(continued.truncated);
+      assert.deepStrictEqual(
+        continued.nextCursors,
+        Object.fromEntries(
+          failedRepositories.map((repository) => {
+            const key = `github.com ${repository}`;
+            return [key, head.nextCursors[key]];
+          }),
+        ),
+      );
+      const failed = yield* service.list({ state: "open", cursors: continued.nextCursors });
+      assert.deepStrictEqual(failed.nextCursors, continued.nextCursors);
+      assert.isNotEmpty(failed.errors);
+
+      readFails = false;
+      const retried = yield* service.list({ state: "open", cursors: failed.nextCursors });
+      assert.deepStrictEqual(
+        retried.entries.map(({ repository, number }) => [repository, number]).toSorted(),
+        failedRepositories.map((repository) => [repository, 2]),
+      );
+      assert.deepStrictEqual(retried.errors, []);
+      assert.deepStrictEqual(retried.nextCursors, {});
+    }),
+);
+
+it.effect("holds an upstream cursor while its parent lookup fails on a continuation", () =>
+  Effect.gen(function* () {
+    const provider = SourceControlProviderKind.make("github");
+    let parentFails = false;
+    const reads: Array<readonly [string, boolean]> = [];
+    const service = yield* makeService({
+      settings: { ...DEFAULT_SERVER_SETTINGS, includeForkUpstream: true },
+      projects: [
+        project({ id: "fork", title: "fork", workspaceRoot: "/fork", repository: "me/web" }),
+      ],
+      getRepositoryParent: ({ cwd }) =>
+        parentFails
+          ? Effect.fail(
+              new SourceControlProviderError({
+                provider,
+                operation: "getRepositoryParent",
+                cwd,
+                detail: "Repository metadata is unavailable.",
+              }),
+            )
+          : Effect.succeed("acme/web"),
+      providers: [
+        fakePullRequestProvider(provider, {
+          listChangeRequests: ({ repository, cursor }) =>
+            Effect.sync(() => {
+              reads.push([repository, cursor !== undefined]);
+              return {
+                items: [changeRequest(cursor === undefined ? 1 : 2, "2026-07-02T00:00:00Z")],
+                truncated: cursor === undefined,
+                continues: true,
+              };
+            }),
+        }),
+      ],
+    });
+    const upstreamKey = "github.com acme/web";
+    const head = yield* service.list({ state: "open" });
+    const upstreamCursor = head.nextCursors[upstreamKey];
+    assert.isDefined(upstreamCursor);
+
+    // The parent lookup expired and now fails while the fork pages on.
+    yield* TestClock.adjust(Duration.hours(2));
+    parentFails = true;
+    reads.length = 0;
+    const continued = yield* service.list({ state: "open", cursors: head.nextCursors });
+    assert.deepStrictEqual(
+      reads.map(([repository]) => repository),
+      ["me/web"],
+    );
+    assert.deepStrictEqual(
+      continued.errors.map(({ message }) => message),
+      ["The upstream of me/web could not be read. Repository metadata is unavailable."],
+    );
+    assert.strictEqual(continued.nextCursors[upstreamKey], upstreamCursor);
+    assert.isTrue(continued.truncated);
+
+    parentFails = false;
+    reads.length = 0;
+    const retried = yield* service.list({
+      state: "open",
+      cursors: { [upstreamKey]: upstreamCursor! },
+    });
+    assert.deepStrictEqual(reads, [["acme/web", true]]);
+    assert.deepStrictEqual(retried.errors, []);
+  }),
+);
 
 it.effect("lists GitHub Enterprise PRs for a stored unknown repository after host discovery", () =>
   Effect.gen(function* () {
@@ -3365,6 +3816,7 @@ it.effect("fills in the line counts for the rows it is given", () =>
     assert.deepStrictEqual(result.stats, [
       {
         projectId: "p1" as ProjectId,
+        host: "github.com",
         repository: "acme/web",
         number: 1,
         additions: 12,
