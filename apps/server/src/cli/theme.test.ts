@@ -386,6 +386,57 @@ describe("t3 theme", () => {
     }),
   );
 
+  it.live("refuses to select a provisional theme while a direct save fills the library", () =>
+    Effect.gen(function* () {
+      const baseDir = makeBaseDir();
+      writeSettings(baseDir, { defaultTheme: "ocean" });
+      const themesDir = NodePath.join(baseDir, "userdata", "themes");
+      NodeFS.mkdirSync(themesDir, { recursive: true });
+      for (let index = 1; index <= 31; index++) {
+        NodeFS.writeFileSync(NodePath.join(themesDir, `theme-${index}.json`), NIGHTFALL_THEME_JSON);
+      }
+      const themeFile = NodePath.join(baseDir, "a-first.json");
+      NodeFS.writeFileSync(themeFile, NIGHTFALL_THEME_JSON);
+
+      const saved = yield* Deferred.make<void>();
+      const resume = yield* Deferred.make<void>();
+      let inserted = false;
+      const publisher = yield* runCli(["theme", "set", themeFile, "--base-dir", baseDir], (fs) => ({
+        ...fs,
+        readDirectory: (path, options) =>
+          fs.readDirectory(path, options).pipe(
+            Effect.tap((entries) => {
+              if (path !== themesDir || inserted || !entries.includes("a-first.json")) {
+                return Effect.void;
+              }
+              inserted = true;
+              NodeFS.writeFileSync(NodePath.join(themesDir, "b-manual.json"), NIGHTFALL_THEME_JSON);
+              return Deferred.succeed(saved, undefined).pipe(
+                Effect.andThen(Deferred.await(resume)),
+              );
+            }),
+          ),
+      })).pipe(Effect.forkScoped);
+      yield* Deferred.await(saved);
+
+      const selection = yield* runCliProcess([
+        "theme",
+        "set",
+        "a-first",
+        "--base-dir",
+        baseDir,
+      ]).pipe(Effect.result, Effect.ensuring(Deferred.succeed(resume, undefined)));
+      const publication = yield* Fiber.join(publisher).pipe(Effect.flip);
+
+      assert.equal(selection._tag, "Failure");
+      assert.include(String(publication), "is full");
+      assert.equal(readSettings(baseDir).defaultTheme, "ocean");
+      assert.isFalse(NodeFS.existsSync(NodePath.join(themesDir, "a-first.json")));
+      assert.isTrue(NodeFS.existsSync(NodePath.join(themesDir, "b-manual.json")));
+      assert.isTrue(NodeFS.existsSync(NodePath.join(themesDir, "theme-9.json")));
+    }),
+  );
+
   it.live.skipIf(windowsHost)("keeps the previous theme when the staged file is unreadable", () =>
     Effect.gen(function* () {
       const baseDir = makeBaseDir();

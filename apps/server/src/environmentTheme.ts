@@ -30,7 +30,6 @@ import * as Equal from "effect/Equal";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -224,16 +223,26 @@ export const readPublishedThemes = Effect.fn(function* (themesDir: string) {
   return yield* scanPublishedThemes(themesDir, entries);
 });
 
+/** An unreadable entry still takes a slot. Null represents an absent entry. */
+interface ThemeLibraryEntry {
+  readonly contents: string | null;
+}
+
+export function readThemeLibraryEntry(filePath: string): ThemeLibraryEntry | null {
+  const contents = readThemeFileGuarded(filePath, MAX_THEME_FILE_BYTES);
+  return contents !== null || pathIsTaken(filePath) ? { contents } : null;
+}
+
 const scanPublishedThemes = Effect.fnUntraced(function* (
   themesDir: string,
   entries: ReadonlyArray<string>,
-  /** Contents read in place of one entry's file; `null` leaves the entry out. */
-  override?: { readonly entry: string; readonly contents: string | null },
+  warn = true,
+  override?: { readonly name: string; readonly file: ThemeLibraryEntry | null },
 ) {
   const themes: Array<EnvironmentTheme> = [];
   const entryNames = new Set(entries);
-  if (override?.contents === null) entryNames.delete(override.entry);
-  else if (override) entryNames.add(override.entry);
+  if (override?.file === null) entryNames.delete(override.name);
+  else if (override) entryNames.add(override.name);
   let examined = 0;
   let totalBytes = 0;
   for (const entry of [...entryNames].sort()) {
@@ -245,47 +254,52 @@ const scanPublishedThemes = Effect.fnUntraced(function* (
     // Cap examined files, not accepted themes, to bound work on malformed directories.
     examined += 1;
     if (examined > MAX_THEME_FILES) {
-      yield* Effect.logWarning("ignoring environment theme files past the limit", {
-        path: themesDir,
-        limit: MAX_THEME_FILES,
-      });
+      if (warn)
+        yield* Effect.logWarning("ignoring environment theme files past the limit", {
+          path: themesDir,
+          limit: MAX_THEME_FILES,
+        });
       break;
     }
 
     const filePath = `${themesDir}/${entry}`;
     const raw =
-      entry === override?.entry
-        ? override.contents
+      entry === override?.name
+        ? (override.file?.contents ?? null)
         : readThemeFileGuarded(filePath, MAX_THEME_FILE_BYTES);
     if (raw === null) {
-      yield* Effect.logWarning("ignoring unusable environment theme file", {
-        path: filePath,
-        limit: MAX_THEME_FILE_BYTES,
-      });
+      if (warn)
+        yield* Effect.logWarning("ignoring unusable environment theme file", {
+          path: filePath,
+          limit: MAX_THEME_FILE_BYTES,
+        });
       continue;
     }
     if (raw.trim().length === 0) continue;
 
     const decoded = decodeEnvironmentThemeFileJsonExit(raw);
     if (decoded._tag === "Failure") {
-      yield* Effect.logWarning("ignoring invalid environment theme", {
-        path: filePath,
-        detail: Cause.pretty(decoded.cause),
-      });
+      if (warn)
+        yield* Effect.logWarning("ignoring invalid environment theme", {
+          path: filePath,
+          detail: Cause.pretty(decoded.cause),
+        });
       continue;
     }
     const file = decoded.value;
     if (!environmentThemeFileHasColors(file)) {
-      yield* Effect.logWarning("ignoring environment theme without colors", { path: filePath });
+      if (warn)
+        yield* Effect.logWarning("ignoring environment theme without colors", { path: filePath });
       continue;
     }
 
     totalBytes += Buffer.byteLength(raw);
     if (totalBytes > MAX_THEME_TOTAL_BYTES) {
-      yield* Effect.logWarning("ignoring environment themes past the total size limit", {
-        path: themesDir,
-        limit: MAX_THEME_TOTAL_BYTES,
-      });
+      if (warn)
+        yield* Effect.logWarning("ignoring environment themes past the total size limit", {
+          path: themesDir,
+          limit: MAX_THEME_TOTAL_BYTES,
+        });
       break;
     }
 
@@ -380,64 +394,77 @@ const acquirePublishLease = Effect.fn("EnvironmentTheme.acquirePublishLease")(fu
   );
 });
 
-/**
- * Fails unless `themeId` and every theme served with `before` in its place stay served with
- * `after`. Undefined contents read the file on disk; `null` means no file.
- */
-const checkLibraryServes = Effect.fnUntraced(function* (
+const withLibraryLease = Effect.fn("EnvironmentTheme.withLibraryLease")(function* <A, E, R>(
   themesDir: string,
-  themeId: string,
-  before: string | null | undefined,
-  after: string | undefined,
-) {
-  const fs = yield* FileSystem.FileSystem;
-  const entry = `${themeId}${THEME_FILE_SUFFIX}`;
-  const entries = yield* fs.readDirectory(themesDir).pipe(Effect.mapError(publishUnavailable));
-  const scan = (contents: string | null | undefined) =>
-    scanPublishedThemes(
-      themesDir,
-      entries,
-      contents === undefined ? undefined : { entry, contents },
-    );
-  const previous = yield* scan(before);
-  const served = new Set((yield* scan(after)).map(({ id }) => id));
-  if (!served.has(themeId) || previous.some(({ id }) => !served.has(id))) {
-    return yield* new ThemeLibraryPublishError({ reason: "full" });
-  }
-});
-
-/**
- * Stage and check the candidate before exposing it. Keep the lease through selection and rollback.
- * After renaming `staging` into place, `publish` calls `checkServed` with the contents it replaced,
- * because a direct save into the directory can take the last slot after the first check.
- */
-export const withThemePublish = Effect.fn("EnvironmentTheme.withThemePublish")(function* <A, E, R>(
-  themesDir: string,
-  themeId: string,
-  contents: string,
-  publish: (staged: {
-    readonly staging: string;
-    readonly checkLease: Effect.Effect<void, ThemeLibraryPublishError>;
-    readonly checkServed: (
-      previous: string | null,
-    ) => Effect.Effect<void, ThemeLibraryPublishError>;
-    /** True while `path` is the staged file, so a rollback leaves another writer's file alone. */
-    readonly isStaged: (path: string) => boolean;
-  }) => Effect.Effect<A, E, R>,
+  use: (checkLease: Effect.Effect<void, ThemeLibraryPublishError>) => Effect.Effect<A, E, R>,
 ) {
   const fs = yield* FileSystem.FileSystem;
   yield* fs.makeDirectory(themesDir, { recursive: true }).pipe(Effect.mapError(publishUnavailable));
-
   return yield* Effect.scoped(
     Effect.gen(function* () {
       const checkLease = yield* acquirePublishLease(themesDir);
       yield* checkLease;
+      return yield* use(checkLease);
+    }),
+  );
+});
 
+export const selectPublishedTheme = Effect.fn("EnvironmentTheme.selectPublishedTheme")(function* <
+  E,
+  R,
+  E2,
+  R2,
+>(themesDir: string, resolve: Effect.Effect<void, E, R>, select: Effect.Effect<void, E2, R2>) {
+  yield* withLibraryLease(themesDir, (checkLease) =>
+    resolve.pipe(Effect.andThen(checkLease.pipe(Effect.andThen(select), Effect.uninterruptible))),
+  );
+});
+
+function preservesServedThemes(
+  themeId: string,
+  previous: ReadonlyArray<EnvironmentTheme>,
+  next: ReadonlyArray<EnvironmentTheme>,
+) {
+  const served = new Set<string>(next.map(({ id }) => id));
+  return served.has(themeId) && previous.every(({ id }) => served.has(id));
+}
+
+interface ThemePublishBackup {
+  readonly previous: ThemeLibraryEntry | null;
+  readonly rollback: (destination: "staged" | "missing" | "replaced") => Effect.Effect<void>;
+  readonly discard?: Effect.Effect<void>;
+}
+
+/** Hold the lease from staging through selection and any rollback. */
+export const withThemePublish = Effect.fn("EnvironmentTheme.withThemePublish")(function* <
+  E,
+  R,
+  E2,
+  R2,
+>(
+  themesDir: string,
+  themeId: string,
+  contents: string,
+  backup: (paths: {
+    readonly staging: string;
+    readonly destination: string;
+  }) => Effect.Effect<ThemePublishBackup, E, R>,
+  select: (themes: ReadonlyArray<EnvironmentTheme>) => Effect.Effect<void, E2, R2>,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const name = `${themeId}${THEME_FILE_SUFFIX}`;
+  const destination = NodePath.join(themesDir, name);
+  const readEntries = fs.readDirectory(themesDir).pipe(Effect.mapError(publishUnavailable));
+  const directoryStat = Effect.try({
+    try: () => NodeFS.statSync(themesDir, { bigint: true }),
+    catch: publishUnavailable,
+  });
+  const full = new ThemeLibraryPublishError({ reason: "full" });
+
+  return yield* withLibraryLease(themesDir, (checkLease) =>
+    Effect.gen(function* () {
       // The reader skips the staging suffix, and exclusive create never follows a symlink.
-      const staging = NodePath.join(
-        themesDir,
-        `${themeId}${THEME_FILE_SUFFIX}.staging-${process.pid}`,
-      );
+      const staging = NodePath.join(themesDir, `${name}.staging-${process.pid}`);
       const removeStaging = fs.remove(staging, { force: true });
       return yield* Effect.gen(function* () {
         yield* removeStaging.pipe(
@@ -452,24 +479,56 @@ export const withThemePublish = Effect.fn("EnvironmentTheme.withThemePublish")(f
         if (staged !== contents) {
           return yield* publishUnavailable(new Error("Could not read the staged theme."));
         }
-        const isStaged = (path: string) => {
-          try {
-            const current = NodeFS.lstatSync(path, { throwIfNoEntry: false });
-            return current?.dev === stagedStat.dev && current.ino === stagedStat.ino;
-          } catch {
-            return false;
-          }
-        };
-        const checkServed = (previous: string | null) =>
-          checkLibraryServes(themesDir, themeId, previous, undefined).pipe(
-            Effect.provideService(FileSystem.FileSystem, fs),
-          );
 
-        yield* checkLibraryServes(themesDir, themeId, undefined, staged);
+        const entries = yield* readEntries;
+        const before = yield* scanPublishedThemes(themesDir, entries, false);
+        const candidate = yield* scanPublishedThemes(themesDir, entries, false, {
+          name,
+          file: { contents: staged },
+        });
+        if (!preservesServedThemes(themeId, before, candidate)) return yield* full;
         yield* checkLease;
-        return yield* publish({ staging, checkLease, checkServed, isStaged }).pipe(
-          Effect.uninterruptible,
-        );
+
+        return yield* Effect.gen(function* () {
+          const saved = yield* backup({ staging, destination });
+          const destinationState = () => {
+            try {
+              const current = NodeFS.lstatSync(destination, { throwIfNoEntry: false });
+              if (!current) return "missing";
+              if (current.dev === stagedStat.dev && current.ino === stagedStat.ino) return "staged";
+            } catch {}
+            return "replaced";
+          };
+          yield* Effect.gen(function* () {
+            yield* fs.rename(staging, destination).pipe(Effect.mapError(publishUnavailable));
+            // A direct save can change the listing after readdir. Validate a stable snapshot.
+            for (let attempt = 0; attempt < 3; attempt += 1) {
+              const start = yield* directoryStat;
+              const currentEntries = yield* readEntries;
+              const previous = yield* scanPublishedThemes(themesDir, currentEntries, false, {
+                name,
+                file: saved.previous,
+              });
+              const next = yield* scanPublishedThemes(themesDir, currentEntries, false);
+              const end = yield* directoryStat;
+              if (
+                start.dev !== end.dev ||
+                start.ino !== end.ino ||
+                start.mtimeNs !== end.mtimeNs ||
+                start.ctimeNs !== end.ctimeNs
+              )
+                continue;
+              if (destinationState() !== "staged") {
+                return yield* publishUnavailable(new Error("The staged theme was replaced."));
+              }
+              if (!preservesServedThemes(themeId, previous, next)) return yield* full;
+              yield* checkLease;
+              return yield* select(next);
+            }
+            return yield* publishUnavailable(new Error("The themes directory kept changing."));
+          }).pipe(Effect.onError(() => saved.rollback(destinationState())));
+          if (saved.discard) yield* saved.discard;
+        }).pipe(Effect.uninterruptible);
       }).pipe(Effect.ensuring(removeStaging.pipe(Effect.ignore)));
     }),
   );
@@ -487,23 +546,24 @@ const make = Effect.gen(function* () {
   const watcherScope = yield* Scope.make("sequential");
   yield* Effect.addFinalizer(() => Scope.close(watcherScope, Exit.void));
 
+  const expose = Effect.fnUntraced(function* (themes: ReadonlyArray<EnvironmentTheme>) {
+    // Compare the whole value so new fields cannot silently miss republishes.
+    const [changed, next] = yield* Ref.modify(
+      published,
+      (previous): readonly [readonly [boolean, PublishedThemes], PublishedThemes] => {
+        if (Equal.equals(previous.themes, themes)) return [[false, previous], previous];
+        const updated: PublishedThemes = { seq: previous.seq + 1, themes };
+        return [[true, updated], updated];
+      },
+    );
+    if (changed) yield* PubSub.publish(changes, next).pipe(Effect.asVoid);
+    return next;
+  });
   const refresh = refreshSemaphore.withPermits(1)(
-    Effect.gen(function* () {
-      const themes = yield* readPublishedThemes(environmentThemesDir).pipe(
-        Effect.provideService(FileSystem.FileSystem, fs),
-      );
-      // Compare the whole value so new fields cannot silently miss republishes.
-      const [changed, next] = yield* Ref.modify(
-        published,
-        (previous): readonly [readonly [boolean, PublishedThemes], PublishedThemes] => {
-          if (Equal.equals(previous.themes, themes)) return [[false, previous], previous];
-          const updated: PublishedThemes = { seq: previous.seq + 1, themes };
-          return [[true, updated], updated];
-        },
-      );
-      if (changed) yield* PubSub.publish(changes, next).pipe(Effect.asVoid);
-      return next;
-    }),
+    readPublishedThemes(environmentThemesDir).pipe(
+      Effect.provideService(FileSystem.FileSystem, fs),
+      Effect.flatMap(expose),
+    ),
   );
 
   yield* fs
@@ -556,53 +616,39 @@ const make = Effect.gen(function* () {
       });
     }
 
-    const destination = `${environmentThemesDir}/${themeId}${THEME_FILE_SUFFIX}`;
-
-    yield* withThemePublish(environmentThemesDir, themeId, contents, (staged) =>
-      Effect.gen(function* () {
-        const { staging, checkLease, checkServed, isStaged } = staged;
-        const previous = Option.fromNullOr(readThemeFileGuarded(destination, MAX_THEME_FILE_BYTES));
-        if (Option.isNone(previous) && pathIsTaken(destination)) {
-          return yield* new EnvironmentThemeRefusedError({
-            themeId,
-            problem: "would replace a file that could not be backed up. Use another theme id.",
-          });
-        }
-        const restore = Option.match(previous, {
-          onNone: () => fs.remove(destination, { force: true }),
-          onSome: (contents) =>
-            fs
-              .writeFileString(staging, contents, { flag: "wx" })
-              .pipe(Effect.andThen(fs.rename(staging, destination))),
-        });
-        const revert = Effect.suspend(() => (isStaged(destination) ? restore : Effect.void)).pipe(
-          Effect.ignore,
-          Effect.andThen(refresh),
-          Effect.asVoid,
-        );
-
-        yield* fs
-          .rename(staging, destination)
-          .pipe(
-            Effect.mapError(
-              (cause) =>
-                new EnvironmentThemeRefusedError({ themeId, problem: NOT_PUBLISHED, cause }),
-            ),
-          );
-        // Check what is served before refresh broadcasts it.
-        yield* checkServed(Option.getOrNull(previous)).pipe(
-          Effect.andThen(checkLease),
-          Effect.andThen(refresh),
-          Effect.andThen(select),
-          Effect.onError(() => revert),
-        );
-      }),
-    ).pipe(
-      Effect.provideService(FileSystem.FileSystem, fs),
-      Effect.catchTags({
-        ThemeLibraryPublishError: (cause) =>
-          new EnvironmentThemeRefusedError({ themeId, problem: NOT_PUBLISHED, cause }),
-      }),
+    yield* refreshSemaphore.withPermits(1)(
+      withThemePublish(
+        environmentThemesDir,
+        themeId,
+        contents,
+        ({ staging, destination }) =>
+          Effect.gen(function* () {
+            const previous = readThemeLibraryEntry(destination);
+            if (previous !== null && previous.contents === null) {
+              return yield* new EnvironmentThemeRefusedError({
+                themeId,
+                problem: "would replace a file that could not be backed up. Use another theme id.",
+              });
+            }
+            const restore =
+              previous?.contents == null
+                ? fs.remove(destination, { force: true })
+                : fs
+                    .writeFileString(staging, previous.contents, { flag: "wx" })
+                    .pipe(Effect.andThen(fs.rename(staging, destination)));
+            return {
+              previous,
+              rollback: (state) => (state === "staged" ? restore.pipe(Effect.ignore) : Effect.void),
+            } satisfies ThemePublishBackup;
+          }),
+        (themes) => select.pipe(Effect.andThen(expose(themes)), Effect.asVoid),
+      ).pipe(
+        Effect.provideService(FileSystem.FileSystem, fs),
+        Effect.catchTags({
+          ThemeLibraryPublishError: (cause) =>
+            new EnvironmentThemeRefusedError({ themeId, problem: NOT_PUBLISHED, cause }),
+        }),
+      ),
     );
   });
 
@@ -636,15 +682,28 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         if (themeId === undefined) return yield* select;
         if (theme === undefined) {
-          const known = [...MOBILE_THEME_IDS, ...(yield* refresh).themes.map(({ id }) => id)];
-          if (!known.includes(themeId)) {
-            return yield* new EnvironmentThemeRefusedError({
-              themeId,
-              problem: "is not a built-in or published theme.",
-              known,
-            });
-          }
-          return yield* select;
+          if (MOBILE_THEME_IDS.some((id) => id === themeId)) return yield* select;
+          const resolve = Effect.gen(function* () {
+            const known = [...MOBILE_THEME_IDS, ...(yield* refresh).themes.map(({ id }) => id)];
+            if (!known.includes(themeId)) {
+              return yield* new EnvironmentThemeRefusedError({
+                themeId,
+                problem: "is not a built-in or published theme.",
+                known,
+              });
+            }
+          });
+          return yield* selectPublishedTheme(environmentThemesDir, resolve, select).pipe(
+            Effect.provideService(FileSystem.FileSystem, fs),
+            Effect.catchTags({
+              ThemeLibraryPublishError: (cause) =>
+                new EnvironmentThemeRefusedError({
+                  themeId,
+                  problem: "could not be selected. Try again.",
+                  cause,
+                }),
+            }),
+          );
         }
         yield* publish(themeId, theme, select);
       }),

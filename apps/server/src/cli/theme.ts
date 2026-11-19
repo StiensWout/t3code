@@ -26,7 +26,9 @@ import * as ServerConfig from "../config.ts";
 import {
   MAX_THEME_FILE_BYTES,
   readPublishedThemes,
+  readThemeLibraryEntry,
   readThemeFileGuarded,
+  selectPublishedTheme,
   withThemePublish,
 } from "../environmentTheme.ts";
 import { expandHomePath, resolveBaseDir } from "../os-jank.ts";
@@ -119,6 +121,15 @@ export class ThemePublishError extends Schema.TaggedError<ThemePublishError>()(
 ) {
   override get message(): string {
     return `Could not publish the theme into ${this.themesDir}.`;
+  }
+}
+
+class ThemeSelectionUnavailableError extends Schema.TaggedError<ThemeSelectionUnavailableError>()(
+  "ThemeSelectionUnavailableError",
+  { themeId: Schema.String, cause: Schema.Defect() },
+) {
+  override get message(): string {
+    return `Could not select theme "${this.themeId}". Try again.`;
   }
 }
 
@@ -340,67 +351,61 @@ const publishThemeFile = Effect.fn(function* (input: {
     return yield* new ThemeDestinationDirectoryError({ themeId, destinationPath });
   }
 
-  yield* withThemePublish(input.themesDir, themeId, raw, (staged) =>
-    Effect.gen(function* () {
-      const { staging, checkLease, checkServed, isStaged } = staged;
-      const backupPath = yield* Effect.try({
-        try: () => {
-          // A fresh path leaves any backup from a crashed publish intact.
-          const rollbackPath = `${destinationPath}.rollback-${NodeCrypto.randomUUID()}`;
-          // A rename onto a regular file rejects a directory even if it appeared after lstat.
-          const fd = NodeFS.openSync(rollbackPath, "wx", 0o600);
-          let saved = false;
-          try {
-            NodeFS.closeSync(fd);
-            NodeFS.renameSync(destinationPath, rollbackPath);
-            saved = true;
-            return rollbackPath;
-          } catch (error) {
-            if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-            if (NodeFS.lstatSync(destinationPath, { throwIfNoEntry: false })?.isDirectory()) {
-              throw new ThemeDestinationDirectoryError({ themeId, destinationPath });
+  yield* withThemePublish(
+    input.themesDir,
+    themeId,
+    raw,
+    ({ destination }) =>
+      Effect.gen(function* () {
+        const backupPath = yield* Effect.try({
+          try: () => {
+            // A fresh path leaves any backup from a crashed publish intact.
+            const rollbackPath = `${destination}.rollback-${NodeCrypto.randomUUID()}`;
+            // A rename onto a regular file rejects a directory even if it appeared after lstat.
+            const fd = NodeFS.openSync(rollbackPath, "wx", 0o600);
+            let saved = false;
+            try {
+              NodeFS.closeSync(fd);
+              NodeFS.renameSync(destination, rollbackPath);
+              saved = true;
+              return rollbackPath;
+            } catch (error) {
+              if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+              if (NodeFS.lstatSync(destination, { throwIfNoEntry: false })?.isDirectory()) {
+                throw new ThemeDestinationDirectoryError({ themeId, destinationPath: destination });
+              }
+              throw error;
+            } finally {
+              if (!saved) {
+                try {
+                  NodeFS.unlinkSync(rollbackPath);
+                } catch {}
+              }
             }
-            throw error;
-          } finally {
-            if (!saved) {
+          },
+          catch: (cause) =>
+            isThemeDestinationDirectoryError(cause) ? cause : publishFailure(cause),
+        });
+        return {
+          previous: backupPath === null ? null : readThemeLibraryEntry(backupPath),
+          rollback: (state: "staged" | "missing" | "replaced") =>
+            Effect.sync(() => {
               try {
-                NodeFS.unlinkSync(rollbackPath);
+                if (backupPath !== null) {
+                  if (state === "replaced") NodeFS.unlinkSync(backupPath);
+                  else NodeFS.renameSync(backupPath, destination);
+                } else if (state === "staged") {
+                  NodeFS.unlinkSync(destination);
+                }
               } catch {}
-            }
-          }
-        },
-        catch: (cause) => (isThemeDestinationDirectoryError(cause) ? cause : publishFailure(cause)),
-      });
-      const revert = Effect.sync(() => {
-        try {
-          // Leave a manual replacement alone if it landed during the settings write.
-          const ours = isStaged(destinationPath);
-          if (backupPath !== null) {
-            if (ours || !NodeFS.lstatSync(destinationPath, { throwIfNoEntry: false })) {
-              NodeFS.renameSync(backupPath, destinationPath);
-            } else {
-              NodeFS.unlinkSync(backupPath);
-            }
-          } else if (ours) {
-            NodeFS.unlinkSync(destinationPath);
-          }
-        } catch {}
-      });
-      // An unreadable backup took a slot without being served, as an empty file does.
-      const previous =
-        backupPath === null ? null : (readThemeFileGuarded(backupPath, MAX_THEME_FILE_BYTES) ?? "");
-
-      yield* Effect.try({
-        try: () => NodeFS.renameSync(staging, destinationPath),
-        catch: publishFailure,
-      }).pipe(
-        Effect.andThen(checkServed(previous)),
-        Effect.andThen(checkLease),
-        Effect.andThen(writeDefaultTheme({ settingsPath: input.settingsPath, themeId })),
-        Effect.onError(() => revert),
-      );
-      if (backupPath !== null) yield* fs.remove(backupPath, { force: true }).pipe(Effect.ignore);
-    }),
+            }),
+          discard:
+            backupPath === null
+              ? Effect.void
+              : fs.remove(backupPath, { force: true }).pipe(Effect.ignore),
+        };
+      }),
+    () => writeDefaultTheme({ settingsPath: input.settingsPath, themeId }),
   ).pipe(
     Effect.catchTags({
       ThemeLibraryPublishError: (error) =>
@@ -457,12 +462,24 @@ const themeSetCommand = Command.make("set", {
       } else if (looksLikePath) {
         return yield* new ThemeFileUnreadableError({ filePath: target });
       } else if (isEnvironmentThemeId(target)) {
-        const known = yield* resolvableThemeIds(paths.themesDir);
-        if (!known.includes(target)) {
-          return yield* new ThemeIdUnknownError({ themeId: target, known });
-        }
         themeId = target;
-        yield* writeDefaultTheme({ settingsPath: paths.settingsPath, themeId });
+        const select = writeDefaultTheme({ settingsPath: paths.settingsPath, themeId });
+        if (BUILT_IN_THEME_IDS.some((id) => id === target)) {
+          yield* select;
+        } else {
+          const resolve = Effect.gen(function* () {
+            const known = yield* resolvableThemeIds(paths.themesDir);
+            if (!known.includes(target)) {
+              return yield* new ThemeIdUnknownError({ themeId: target, known });
+            }
+          });
+          yield* selectPublishedTheme(paths.themesDir, resolve, select).pipe(
+            Effect.catchTags({
+              ThemeLibraryPublishError: (cause) =>
+                new ThemeSelectionUnavailableError({ themeId, cause }),
+            }),
+          );
+        }
       } else {
         return yield* new ThemeIdInvalidError({ themeId: target });
       }
