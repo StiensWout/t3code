@@ -790,6 +790,8 @@ export function createLinkedPullRequestSummaryAtomFamily<R, E>(
 /** Lets a client record what each answer says where it lands, rather than watching the data. */
 export interface PullRequestAnswerHandlers {
   readonly list?: QueryAnswerHandler<PullRequestListInput, PullRequestListResult>;
+  /** Only a host read can confirm the cursors under the current listing policy. */
+  readonly listHostAnswer?: QueryAnswerHandler<PullRequestListInput, PullRequestListResult>;
   readonly listStats?: QueryAnswerHandler<PullRequestListStatsInput, PullRequestListStatsResult>;
   readonly detail?: QueryAnswerHandler<PullRequestRef, PullRequestDetail>;
   readonly filesViewed?: QueryAnswerHandler<PullRequestRef, PullRequestFilesViewedResult>;
@@ -1236,6 +1238,14 @@ export function createPullRequestEnvironmentAtoms<R, E>(
     );
   const listLabel = "environment-data:pull-requests:list";
   const listPersistence = persistQuery(PullRequestListResult);
+  const recordListHostAnswer = onAnswer.listHostAnswer;
+  const listReadAnswer: PullRequestAnswerHandlers["list"] =
+    recordListHostAnswer === undefined
+      ? onAnswer.list
+      : (target, value, registry) =>
+          recordListHostAnswer(target, value, registry).pipe(
+            Effect.andThen(() => onAnswer.list?.(target, value, registry) ?? Effect.void),
+          );
   const listRevision = Atom.family((environmentId: EnvironmentId) =>
     Atom.make((get) => {
       const revision = get(refreshes({ environmentId, input: {} }));
@@ -1275,7 +1285,7 @@ export function createPullRequestEnvironmentAtoms<R, E>(
           input.cursors === undefined
             ? listRevision(environmentId)
             : forkUpstreamSettingsAtom?.(environmentId),
-        ...(onAnswer.list === undefined ? {} : { onAnswer: onAnswer.list }),
+        ...(listReadAnswer === undefined ? {} : { onAnswer: listReadAnswer }),
       }),
       {
         label: listLabel,

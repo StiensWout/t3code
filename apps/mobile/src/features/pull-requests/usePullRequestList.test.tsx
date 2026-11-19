@@ -105,6 +105,7 @@ vi.mock("@t3tools/client-runtime/state/pull-requests", async (importOriginal) =>
                   ]
                 : [],
             };
+            yield* options?.listHostAnswer?.(target, response, get.registry) ?? Effect.void;
             yield* options?.list?.(target, response, get.registry) ?? Effect.void;
             return mocks.copyHeadResult && cursors === undefined ? { ...response } : response;
           });

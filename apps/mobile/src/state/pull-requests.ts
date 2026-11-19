@@ -25,6 +25,13 @@ export const pullRequestListPagesKey = (target: {
   readonly input: PullRequestListInput;
 }) => JSON.stringify([target.environmentId, target.input]);
 
+export const pullRequestListHeadCursorsFamily = Atom.family((_key: string) =>
+  Atom.make<{
+    readonly policy: string;
+    readonly cursors: PullRequestListPages["nextCursors"];
+  } | null>(null).pipe(Atom.setIdleTTL(5 * 60_000)),
+);
+
 // Which listing each pages atom holds, so an action's reply can reach the pages past its head.
 const pullRequestListPagesTargets = new WeakMap<
   object,
@@ -118,6 +125,14 @@ export const composerPullRequests = createPullRequestEnvironmentAtoms(connection
     Effect.sync(() =>
       registry.update(filesViewedReadsFamily(filesViewedReadsKey(target)), (reads) => reads + 1),
     ),
+  listHostAnswer: (target, value, registry) =>
+    Effect.sync(() => {
+      if (target.input.cursors !== undefined) return;
+      registry.set(pullRequestListHeadCursorsFamily(pullRequestListPagesKey(target)), {
+        policy: registry.get(serverEnvironment.forkUpstreamSettingsAtom(target.environmentId)),
+        cursors: value.nextCursors,
+      });
+    }),
   list: (target, value, registry) =>
     Effect.sync(() => {
       const statsAtom = pullRequestListStatsFamily(target.environmentId);
