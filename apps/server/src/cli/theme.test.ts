@@ -37,7 +37,10 @@ const runCliProcess = (args: ReadonlyArray<string>, nodeArgs: ReadonlyArray<stri
         [...nodeArgs, NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)), ...args],
         { signal },
       ),
-    catch: (error) => String(error),
+    catch: (error) =>
+      error instanceof Error && "stdout" in error
+        ? `${error.message}\n${String(error.stdout)}`
+        : String(error),
   });
 
 const runCli = (
