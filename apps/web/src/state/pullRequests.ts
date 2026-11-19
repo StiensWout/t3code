@@ -37,6 +37,7 @@ import * as Schema from "effect/Schema";
 import { AsyncResult, Atom, type AtomRegistry } from "effect/reactivity";
 
 import { connectionAtomRuntime } from "../connection/runtime";
+import { serverEnvironment } from "./server";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import {
   mergePullRequestLists,
@@ -425,6 +426,7 @@ export function subscribePullRequestFilesViewedAnswers(
 
 // Answers are stamped on arrival: older servers leave no other ordering for same-dated reads.
 export const pullRequestEnvironment = createPullRequestEnvironmentAtoms(connectionAtomRuntime, {
+  forkUpstreamSettingsAtom: serverEnvironment.forkUpstreamSettingsAtom,
   acceptedEdit: ({ environmentId, input }, edit, registry) =>
     Effect.map(Clock.currentTimeMillis, (observedAt) => {
       const saved = registry.get(
@@ -728,16 +730,20 @@ const usePullRequestFilterOptionsQuery = createMergedEnvironmentQuery(
   pullRequestEnvironment.filterOptions,
 );
 
-const usePullRequestTurnRefreshQuery = createMergedEnvironmentQuery(
-  "web-pull-requests:turn-refreshes",
-  ({ environmentId }: EnvironmentQueryTarget<Readonly<Record<string, never>>>) =>
-    pullRequestEnvironment.refreshes({ environmentId, input: {} }),
+const pullRequestListRevisionAtom = Atom.family((environmentId: EnvironmentId) =>
+  Atom.make((get) => AsyncResult.success(get(pullRequestEnvironment.listRevision(environmentId)))),
 );
 
-export function usePullRequestTurnRefreshes(
+const usePullRequestListRevisionQuery = createMergedEnvironmentQuery(
+  "web-pull-requests:list-revision",
+  ({ environmentId }: EnvironmentQueryTarget<Readonly<Record<string, never>>>) =>
+    pullRequestListRevisionAtom(environmentId),
+);
+
+export function usePullRequestListRevisions(
   environmentIds: ReadonlyArray<EnvironmentId>,
-): ReadonlyArray<readonly [EnvironmentId, number]> {
-  return usePullRequestTurnRefreshQuery(
+): ReadonlyArray<readonly [EnvironmentId, string]> {
+  return usePullRequestListRevisionQuery(
     environmentIds.map((environmentId) => ({ environmentId, input: {} })),
   ).values;
 }

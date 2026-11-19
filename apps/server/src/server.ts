@@ -145,6 +145,7 @@ import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
 import * as ProjectCloneTracker from "./project/ProjectCloneTracker.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as ReviewService from "./review/ReviewService.ts";
+import * as ForkUpstream from "./sourceControl/forkUpstream.ts";
 import * as SourceControlProviderRegistry from "./sourceControl/SourceControlProviderRegistry.ts";
 import * as PullRequestReadCache from "./pullRequest/PullRequestReadCache.ts";
 import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
@@ -436,7 +437,13 @@ const layerRepositoryIdentityResolver = Layer.effect(
   }),
 ).pipe(Layer.provide(layerSourceControlProviderRegistry), Layer.provide(ProcessRunner.layer));
 
+const layerForkUpstream = ForkUpstream.layer.pipe(
+  Layer.provide(layerSourceControlProviderRegistry),
+  Layer.provide(layerServerSettings),
+);
+
 const layerPullRequestService = PullRequestService.layer.pipe(
+  Layer.provide(layerForkUpstream),
   Layer.provide(PullRequestProviderRegistry.layer),
   Layer.provide(PullRequestFilesViewed.layer),
   Layer.provide(PullRequestReadCache.layer),
@@ -447,6 +454,7 @@ const layerPullRequestService = PullRequestService.layer.pipe(
 // Both read the one registry, so a standalone tracker connected in Settings is the same
 // instance the listing reads through.
 const layerIssueService = Layer.merge(IssueService.layer, IssueTrackerConnections.layer).pipe(
+  Layer.provide(layerForkUpstream),
   Layer.provide(Layer.merge(IssueTrackerRegistry.layer, IssueTrackerBindings.layer)),
 );
 

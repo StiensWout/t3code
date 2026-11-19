@@ -1318,6 +1318,17 @@ export function createServerEnvironmentAtoms<R, E>(
       Atom.withLabel(`environment-data:server:settings:${environmentId}`),
     ),
   );
+  const forkUpstreamSettingsAtom = Atom.family((environmentId: EnvironmentId) =>
+    Atom.make((get) => {
+      const settings = get(settingsValueAtom(environmentId));
+      const overrides = Object.entries(settings?.projectSettingsOverrides ?? {})
+        .flatMap(([id, { includeForkUpstream }]) =>
+          includeForkUpstream === undefined ? [] : [[id, includeForkUpstream] as const],
+        )
+        .sort(([left], [right]) => left.localeCompare(right));
+      return JSON.stringify([settings?.includeForkUpstream ?? false, overrides]);
+    }).pipe(Atom.withLabel(`environment-data:server:fork-upstream:${environmentId}`)),
+  );
   const hiddenThreadTagsAtom = Atom.family((environmentId: EnvironmentId) =>
     Atom.make((get) => {
       const settings = get(settingsValueAtom(environmentId));
@@ -1465,6 +1476,7 @@ export function createServerEnvironmentAtoms<R, E>(
     }),
     updateStateAtom,
     settingsValueAtom,
+    forkUpstreamSettingsAtom,
     hiddenThreadTagsAtom,
     usageModelFilterAtom,
     providersValueAtom,

@@ -27,6 +27,7 @@ import { normalizeGitRemoteUrl } from "@t3tools/shared/git";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as ServerSettingsService from "../serverSettings.ts";
+import * as ForkUpstream from "../sourceControl/forkUpstream.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as IssueService from "./IssueService.ts";
 import * as IssueTrackerRegistry from "./IssueTrackerRegistry.ts";
@@ -169,6 +170,7 @@ function makeService(input: {
   return IssueService.IssueService.pipe(
     Effect.provide(
       IssueService.layer.pipe(
+        Layer.provide(ForkUpstream.layer),
         Layer.provide(
           Layer.mergeAll(
             Layer.mock(IssueTrackerBindings.IssueTrackerBindingsRepository)({

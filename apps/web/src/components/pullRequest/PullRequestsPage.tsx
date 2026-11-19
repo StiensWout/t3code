@@ -120,7 +120,7 @@ import {
   usePullRequestHostList,
   usePullRequestListStats,
   restoredPullRequestList,
-  usePullRequestTurnRefreshes,
+  usePullRequestListRevisions,
   useSharedPullRequestSummary,
   type EnvironmentQueryTarget,
 } from "~/state/pullRequests";
@@ -327,12 +327,10 @@ export function PullRequestsPage() {
     localFilters,
     hasLocalFilters,
   } = usePullRequestQueryFilters(search, typedQuery);
-  const turnRefreshes = usePullRequestTurnRefreshes([
+  const listRevisions = usePullRequestListRevisions([
     ...new Set(environmentQueries.map(({ environmentId }) => environmentId)),
   ]);
-  const turnRefreshToken = turnRefreshes
-    .map(([environmentId, revision]) => `${environmentId}:${revision}`)
-    .join("|");
+  const listingRevision = JSON.stringify(listRevisions);
   const scopeKey = `${environmentKey}:${assignmentKey}:${search.state}:${search.involvement}:${scopedProjectId ?? ""}:${search.host ?? ""}:${search.draft ?? ""}:${search.review ?? ""}:${search.checks ?? ""}:${search.author ?? ""}:${search.labels?.join("\u0000") ?? ""}`;
   const filterKey = `${scopeKey}:${sentQuery}`;
   const statsScope: PullRequestStatsScope = { key: filterKey, policy: statsPolicy };
@@ -346,9 +344,9 @@ export function PullRequestsPage() {
      * host forever.
      */
     regrown: ReadonlyArray<string>;
-    /** The turn refreshes a continuation was read under; a later turn makes its cursors stale. */
-    turn: string;
-  }>({ key: filterKey, size: PAGE_SIZE, cursors: null, regrown: [], turn: turnRefreshToken });
+    /** A refresh or change to the listed repositories makes these cursors stale. */
+    revision: string;
+  }>({ key: filterKey, size: PAGE_SIZE, cursors: null, regrown: [], revision: listingRevision });
   const pageSize = page.key === filterKey ? page.size : PAGE_SIZE;
   const sentCursors = page.key === filterKey ? page.cursors : null;
   const sentRegrown = page.key === filterKey ? page.regrown : [];
@@ -359,7 +357,7 @@ export function PullRequestsPage() {
       size: PAGE_SIZE,
       cursors: null,
       regrown: [],
-      turn: turnRefreshToken,
+      revision: listingRevision,
     });
   }
 
@@ -673,7 +671,7 @@ export function PullRequestsPage() {
         size: regrown.length === 0 ? pageSize : Math.min(pageSize + PAGE_SIZE, MAX_PAGE_SIZE),
         cursors: nextCursors,
         regrown,
-        turn: turnRefreshToken,
+        revision: listingRevision,
       });
       return;
     }
@@ -682,7 +680,7 @@ export function PullRequestsPage() {
       size: Math.min(pageSize + PAGE_SIZE, MAX_PAGE_SIZE),
       cursors: null,
       regrown: [],
-      turn: turnRefreshToken,
+      revision: listingRevision,
     });
   };
 
@@ -697,12 +695,11 @@ export function PullRequestsPage() {
         MAX_PAGE_SIZE,
       ),
       cursors: null,
-      turn: turnRefreshToken,
+      revision: listingRevision,
     };
   };
-  // Every list read refetches itself when a turn completes, but a continuation would refetch only
-  // its later page and strand the rows before it, so the whole loaded list is asked for again.
-  if (sentCursors !== null && page.turn !== turnRefreshToken) setPage(collapsedPage());
+  // When the listing refreshes, read from the head again so earlier pages refresh too.
+  if (sentCursors !== null && page.revision !== listingRevision) setPage(collapsedPage());
 
   const refreshList = (includeRelated = false, actedEnvironmentId?: EnvironmentId) => {
     const related = (

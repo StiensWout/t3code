@@ -164,6 +164,7 @@ type IssueListRefreshMode = "manual" | "background";
  */
 export function createIssueEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, E>,
+  forkUpstreamSettingsAtom?: (environmentId: EnvironmentId) => Atom.Atom<string>,
 ) {
   const commandScheduler = createAtomCommandScheduler();
   const serialPerEnvironment = {
@@ -198,6 +199,7 @@ export function createIssueEnvironmentAtoms<R, E>(
   const list = createEnvironmentQueryAtomFamily(runtime, {
     label: "environment-data:issues:list",
     staleTimeMs: 30_000,
+    refreshTrigger: ({ environmentId }) => forkUpstreamSettingsAtom?.(environmentId),
     execute: Effect.fnUntraced(function* (
       input: IssueListInput,
     ): Effect.fn.Return<

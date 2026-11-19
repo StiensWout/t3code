@@ -7,7 +7,7 @@ import type {
   PullRequestListEntry,
   PullRequestListProjectError,
   PullRequestListResult,
-  ProjectId,
+  PullRequestListStatsInput,
   RepositoryIdentity,
   PullRequestAction,
   PullRequestActor,
@@ -305,13 +305,7 @@ export function pullRequestEntryKey(entry: ScopedEntry): string {
 
 export interface PullRequestStatsTarget {
   readonly environmentId: EnvironmentId;
-  readonly input: {
-    readonly refs: ReadonlyArray<{
-      readonly projectId: ProjectId;
-      readonly repository: string;
-      readonly number: number;
-    }>;
-  };
+  readonly input: PullRequestListStatsInput;
 }
 
 export interface PullRequestStatsBatch extends PullRequestStatsTarget {
@@ -367,6 +361,7 @@ export function pullRequestStatsBatches(
       key,
       ref: {
         projectId: entry.projectId,
+        host: entry.host,
         repository: entry.repository,
         number: entry.number,
       },

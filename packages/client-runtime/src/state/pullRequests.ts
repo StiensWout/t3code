@@ -826,8 +826,11 @@ export function createPullRequestEnvironmentAtoms<R, E>(
     EnvironmentRegistry | PullRequestDiffLoader.PullRequestDiffLoader | R,
     E
   >,
-  onAnswer: PullRequestAnswerHandlers = {},
+  options: PullRequestAnswerHandlers & {
+    readonly forkUpstreamSettingsAtom?: (environmentId: EnvironmentId) => Atom.Atom<string>;
+  } = {},
 ) {
+  const { forkUpstreamSettingsAtom, ...onAnswer } = options;
   const refreshes = createPullRequestRefreshAtomFamily(runtime);
   const sessions = createEnvironmentSessionAtoms(runtime);
   const linkedThreadSignals = createEnvironmentRpcSubscriptionAtomFamily(runtime, {
@@ -1207,9 +1210,20 @@ export function createPullRequestEnvironmentAtoms<R, E>(
     );
   const listLabel = "environment-data:pull-requests:list";
   const listPersistence = persistQuery(PullRequestListResult);
+  const listRevision = Atom.family((environmentId: EnvironmentId) =>
+    Atom.make((get) => {
+      const revision = get(refreshes({ environmentId, input: {} }));
+      const settings = forkUpstreamSettingsAtom?.(environmentId);
+      return JSON.stringify([
+        AsyncResult.getOrElse(revision, () => null),
+        settings === undefined ? null : get(settings),
+      ]);
+    }),
+  );
 
   return {
     refreshes,
+    listRevision,
     linkedThreads: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:pull-requests:linked-threads",
       persistence: persistQuery(PullRequestLinkedThreadsResult),
@@ -1232,7 +1246,9 @@ export function createPullRequestEnvironmentAtoms<R, E>(
         tag: WS_METHODS.pullRequestsList,
         staleTimeMs: 30_000,
         refreshTrigger: ({ environmentId, input }) =>
-          input.cursors === undefined ? refreshes({ environmentId, input: {} }) : undefined,
+          input.cursors === undefined
+            ? listRevision(environmentId)
+            : forkUpstreamSettingsAtom?.(environmentId),
         ...(onAnswer.list === undefined ? {} : { onAnswer: onAnswer.list }),
       }),
       {
@@ -1272,6 +1288,8 @@ export function createPullRequestEnvironmentAtoms<R, E>(
       label: "environment-data:pull-requests:filter-options",
       tag: WS_METHODS.pullRequestsFilterOptions,
       staleTimeMs: 5 * 60_000,
+      refreshTrigger: ({ environmentId, input }) =>
+        input.kind === "references" ? undefined : forkUpstreamSettingsAtom?.(environmentId),
     }),
     detail,
     detailReadVersion,

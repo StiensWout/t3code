@@ -10,6 +10,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { connectionAtomRuntime } from "../connection/runtime";
+import { serverEnvironment } from "./server";
 import {
   EMPTY_PULL_REQUEST_STATS_CACHE,
   pullRequestListHead,
@@ -19,10 +20,15 @@ import {
   type PullRequestStatsCache,
 } from "../features/pull-requests/pullRequestList";
 
-export const pullRequestListPagesKey = (target: {
-  readonly environmentId: EnvironmentId;
-  readonly input: PullRequestListInput;
-}) => JSON.stringify([target.environmentId, target.input]);
+export const pullRequestListPagesKey = (
+  target: { readonly environmentId: EnvironmentId; readonly input: PullRequestListInput },
+  read: <A>(atom: Atom.Atom<A>) => A,
+) =>
+  JSON.stringify([
+    target.environmentId,
+    target.input,
+    read(serverEnvironment.forkUpstreamSettingsAtom(target.environmentId)),
+  ]);
 
 // Which listing each pages atom holds, so an action's reply can reach the pages past its head.
 const pullRequestListPagesTargets = new WeakMap<
@@ -54,6 +60,7 @@ export const filesViewedReadsFamily = Atom.family((_key: string) =>
 );
 
 export const composerPullRequests = createPullRequestEnvironmentAtoms(connectionAtomRuntime, {
+  forkUpstreamSettingsAtom: serverEnvironment.forkUpstreamSettingsAtom,
   // Rows on pages past each listing's head; the head itself is patched where it is cached.
   actionReply: (target, reply, registry) =>
     Effect.sync(() => {
@@ -114,8 +121,9 @@ export const composerPullRequests = createPullRequestEnvironmentAtoms(connection
           composerPullRequests.listStats({ environmentId: target.environmentId, input }),
         );
       if (target.input.cursors === undefined)
-        registry.update(pullRequestListPagesFamily(pullRequestListPagesKey(target)), (previous) =>
-          pullRequestListHead(previous, value),
+        registry.update(
+          pullRequestListPagesFamily(pullRequestListPagesKey(target, (atom) => registry.get(atom))),
+          (previous) => pullRequestListHead(previous, value),
         );
     }),
   listStats: (target, value, registry) =>

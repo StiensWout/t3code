@@ -78,7 +78,7 @@ describe("visible pull request line-count targets", () => {
   it("does not request a row again after its received batch is pruned", () => {
     const entries = [
       entry({ additions: 0, deletions: 0, number: 1 }),
-      entry({ additions: 0, deletions: 0, number: 2 }),
+      entry({ additions: 0, deletions: 0, number: 2, repository: "upstream/web" }),
     ];
     const entriesByKey = new Map(entries.map((item) => [pullRequestEntryKey(item), item]));
     const firstKey = pullRequestEntryKey(entries[0]!);
@@ -101,7 +101,7 @@ describe("visible pull request line-count targets", () => {
     );
     expect([...keys]).toEqual([secondKey]);
     expect(pullRequestStatsBatches(entriesByKey, keys)[0]?.input.refs).toEqual([
-      { projectId: "project-1", repository: "pingdotgg/t3code", number: 2 },
+      { projectId: "project-1", host: "github.com", repository: "upstream/web", number: 2 },
     ]);
   });
 

@@ -30,6 +30,7 @@ import * as IssueTrackerBindings from "../../../persistence/IssueTrackerBindings
 import * as ProjectService from "../../../project/ProjectService.ts";
 import * as RepositoryIdentityResolver from "../../../project/RepositoryIdentityResolver.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
+import * as ForkUpstream from "../../../sourceControl/forkUpstream.ts";
 import * as SourceControlProviderRegistry from "../../../sourceControl/SourceControlProviderRegistry.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
@@ -257,6 +258,7 @@ describe("issue toolkit handlers", () => {
           ),
       };
       const issueLayer = IssueService.layer.pipe(
+        Layer.provide(ForkUpstream.layer),
         Layer.provide(
           Layer.mergeAll(
             projectLayer,

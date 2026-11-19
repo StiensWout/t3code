@@ -11,8 +11,12 @@ import type { EnvironmentId } from "@t3tools/contracts";
 import { connectionAtomRuntime } from "../connection/runtime";
 import { appAtomRegistry } from "./atom-registry";
 import { formatEnvironmentQueryError } from "./query";
+import { serverEnvironment } from "./server";
 
-export const issueEnvironment = createIssueEnvironmentAtoms(connectionAtomRuntime);
+export const issueEnvironment = createIssueEnvironmentAtoms(
+  connectionAtomRuntime,
+  serverEnvironment.forkUpstreamSettingsAtom,
+);
 
 const mergedIssueLists = createMergedIssueListAtoms(issueEnvironment, formatEnvironmentQueryError);
 

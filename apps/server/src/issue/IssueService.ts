@@ -46,7 +46,7 @@ import { parseUrl } from "@t3tools/shared/url";
 import * as IssueTrackerBindings from "../persistence/IssueTrackerBindings.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
-import { includesForkUpstream, makeForkUpstreamLookup } from "../sourceControl/forkUpstream.ts";
+import * as ForkUpstream from "../sourceControl/forkUpstream.ts";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
 import * as IssueTrackerRegistry from "./IssueTrackerRegistry.ts";
 
@@ -92,13 +92,12 @@ function resolveGitHostBinding(
   const scope = sourceControlDefinitions.issueScope(identity);
   const kind = identity?.provider;
   if (!identity || kind === undefined || kind === "unknown" || scope === null) return null;
-  const selector = sourceControlDefinitions.repositorySelector(identity);
+  const selector = sourceControlDefinitions.issueRepositorySelector(identity);
   return {
     tracker: IssueTrackerKind.make(kind),
     host: sourceControlDefinitions.changeRequestHost(identity, kind),
     scope,
-    // Only a repository's own issue scope has an equivalent scope on the fork parent.
-    ...(selector === scope ? { forkRepository: { kind, selector } } : {}),
+    ...(selector !== null ? { forkRepository: { kind, selector } } : {}),
   };
 }
 
@@ -197,7 +196,7 @@ const make = Effect.gen(function* () {
   const projects = yield* ProjectService.ProjectService;
   const repositoryIdentities = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
   const bindings = yield* IssueTrackerBindings.IssueTrackerBindingsRepository;
-  const forkUpstream = yield* makeForkUpstreamLookup;
+  const forkUpstream = yield* ForkUpstream.ForkUpstream;
 
   // Read per resolution so a binding saved in Settings applies without a restart.
   const resolveStandaloneBinding = (
@@ -336,7 +335,12 @@ const make = Effect.gen(function* () {
     const limit = input.limit ?? DEFAULT_LIST_LIMIT;
     // Worktrees of one repository are separate projects, and every repository of an Azure
     // DevOps project shares its work items; read each scope once.
-    const policy = options?.includeUpstream === false ? null : yield* forkUpstream.readPolicy;
+    const policy =
+      options?.includeUpstream === false
+        ? []
+        : yield* forkUpstream.readPolicy(
+            Effect.succeed(supported.map(({ project }) => project.id)),
+          );
     const scopes = new Map<string, SupportedProject>();
     const forks = new Map<
       string,
@@ -348,7 +352,7 @@ const make = Effect.gen(function* () {
       if (!scopes.has(key)) scopes.set(key, project);
       if (
         project.forkRepository !== undefined &&
-        includesForkUpstream(policy, project.project.id) &&
+        policy.includes(project.project.id) &&
         !forks.has(key)
       ) {
         forks.set(key, { ...project, forkRepository: project.forkRepository });
