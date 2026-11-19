@@ -25,9 +25,9 @@ import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
 import * as ServerConfig from "../config.ts";
 import {
   MAX_THEME_FILE_BYTES,
-  publishKeepsThemesServed,
   readPublishedThemes,
   readThemeFileGuarded,
+  withThemePublish,
 } from "../environmentTheme.ts";
 import { expandHomePath, resolveBaseDir } from "../os-jank.ts";
 import { isProcessAlive, readPersistedServerRuntimeState } from "../serverRuntimeState.ts";
@@ -282,6 +282,7 @@ const writeDefaultTheme = Effect.fn(function* (input: {
 
 const publishThemeFile = Effect.fn(function* (input: {
   readonly themesDir: string;
+  readonly settingsPath: string;
   readonly filePath: string;
   readonly explicitId: Option.Option<string>;
 }) {
@@ -329,13 +330,8 @@ const publishThemeFile = Effect.fn(function* (input: {
 
   const destinationPath = path.join(input.themesDir, `${themeId}.json`);
   const stagingPath = `${destinationPath}.staging-${process.pid}`;
-  yield* fs
-    .makeDirectory(input.themesDir, { recursive: true })
-    .pipe(Effect.mapError((cause) => new ThemePublishError({ themesDir: input.themesDir, cause })));
-
   const publishFailure = (cause: unknown) =>
     new ThemePublishError({ themesDir: input.themesDir, cause });
-  const servedBefore = yield* readPublishedThemes(input.themesDir);
 
   const destinationIsDirectory = yield* Effect.try({
     try: () => NodeFS.lstatSync(destinationPath, { throwIfNoEntry: false })?.isDirectory() ?? false,
@@ -345,107 +341,90 @@ const publishThemeFile = Effect.fn(function* (input: {
     return yield* new ThemeDestinationDirectoryError({ themeId, destinationPath });
   }
 
-  // O_EXCL prevents following a symlink at the predictable staging path.
-  // Preserve bytes exactly: even an added newline could exceed the watcher's size limit.
-  const stagedIno = yield* Effect.try({
-    try: () => {
-      try {
-        NodeFS.unlinkSync(stagingPath);
-      } catch {}
-      const fd = NodeFS.openSync(
-        stagingPath,
-        NodeFS.constants.O_WRONLY | NodeFS.constants.O_CREAT | NodeFS.constants.O_EXCL,
-        0o644,
-      );
-      try {
-        NodeFS.writeFileSync(fd, raw);
-        return NodeFS.fstatSync(fd).ino;
-      } finally {
-        NodeFS.closeSync(fd);
-      }
-    },
-    catch: publishFailure,
-  });
-
-  const backupPath = yield* Effect.try({
-    try: () => {
-      // A fresh path leaves any backup from a crashed publish intact.
-      const rollbackPath = `${destinationPath}.rollback-${NodeCrypto.randomUUID()}`;
-      // A rename onto a regular file rejects a directory even if it appeared after lstat.
-      const fd = NodeFS.openSync(rollbackPath, "wx", 0o600);
-      let saved = false;
-      try {
-        NodeFS.closeSync(fd);
-        NodeFS.renameSync(destinationPath, rollbackPath);
-        saved = true;
-        return rollbackPath;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-        if (NodeFS.lstatSync(destinationPath, { throwIfNoEntry: false })?.isDirectory()) {
-          throw new ThemeDestinationDirectoryError({ themeId, destinationPath });
-        }
-        throw error;
-      } finally {
-        if (!saved) {
+  yield* withThemePublish(
+    input.themesDir,
+    themeId,
+    raw,
+    Effect.gen(function* () {
+      // Preserve the validated contents exactly, and never write through a staging symlink.
+      const stagedIno = yield* Effect.try({
+        try: () => {
           try {
-            NodeFS.unlinkSync(rollbackPath);
+            NodeFS.unlinkSync(stagingPath);
           } catch {}
-        }
-      }
-    },
-    catch: (cause) => (isThemeDestinationDirectoryError(cause) ? cause : publishFailure(cause)),
-  }).pipe(
-    Effect.onError(() =>
-      Effect.sync(() => {
+          const fd = NodeFS.openSync(stagingPath, "wx", 0o644);
+          try {
+            NodeFS.writeFileSync(fd, raw);
+            return NodeFS.fstatSync(fd).ino;
+          } finally {
+            NodeFS.closeSync(fd);
+          }
+        },
+        catch: publishFailure,
+      });
+
+      const backupPath = yield* Effect.try({
+        try: () => {
+          // A fresh path leaves any backup from a crashed publish intact.
+          const rollbackPath = `${destinationPath}.rollback-${NodeCrypto.randomUUID()}`;
+          // A rename onto a regular file rejects a directory even if it appeared after lstat.
+          const fd = NodeFS.openSync(rollbackPath, "wx", 0o600);
+          let saved = false;
+          try {
+            NodeFS.closeSync(fd);
+            NodeFS.renameSync(destinationPath, rollbackPath);
+            saved = true;
+            return rollbackPath;
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+            if (NodeFS.lstatSync(destinationPath, { throwIfNoEntry: false })?.isDirectory()) {
+              throw new ThemeDestinationDirectoryError({ themeId, destinationPath });
+            }
+            throw error;
+          } finally {
+            if (!saved) {
+              try {
+                NodeFS.unlinkSync(rollbackPath);
+              } catch {}
+            }
+          }
+        },
+        catch: (cause) => (isThemeDestinationDirectoryError(cause) ? cause : publishFailure(cause)),
+      });
+      const revert = Effect.sync(() => {
         try {
-          NodeFS.unlinkSync(stagingPath);
+          // Leave a manual replacement alone if it landed during the settings write.
+          const destinationIno = NodeFS.lstatSync(destinationPath, { throwIfNoEntry: false })?.ino;
+          if (backupPath !== null) {
+            if (destinationIno === undefined || destinationIno === stagedIno) {
+              NodeFS.renameSync(backupPath, destinationPath);
+            } else {
+              NodeFS.unlinkSync(backupPath);
+            }
+          } else if (destinationIno === stagedIno) {
+            NodeFS.unlinkSync(destinationPath);
+          }
         } catch {}
-      }),
-    ),
+      });
+
+      yield* Effect.try({
+        try: () => NodeFS.renameSync(stagingPath, destinationPath),
+        catch: publishFailure,
+      }).pipe(
+        Effect.andThen(writeDefaultTheme({ settingsPath: input.settingsPath, themeId })),
+        Effect.onError(() => revert),
+      );
+      if (backupPath !== null) yield* fs.remove(backupPath, { force: true }).pipe(Effect.ignore);
+    }).pipe(Effect.ensuring(fs.remove(stagingPath, { force: true }).pipe(Effect.ignore))),
+  ).pipe(
+    Effect.catchTags({
+      ThemeLibraryPublishError: (error) =>
+        error.reason === "full"
+          ? Effect.fail(new ThemeLibraryFullError({ themeId, themesDir: input.themesDir }))
+          : Effect.fail(publishFailure(error.cause)),
+    }),
   );
-
-  const revert = Effect.sync(() => {
-    try {
-      NodeFS.unlinkSync(stagingPath);
-    } catch {}
-    try {
-      // Only replace this process's inode or an empty destination; concurrent publishers win.
-      const destinationIno = (() => {
-        try {
-          return NodeFS.lstatSync(destinationPath).ino;
-        } catch {
-          return null;
-        }
-      })();
-      if (backupPath !== null) {
-        if (destinationIno === null || destinationIno === stagedIno) {
-          NodeFS.renameSync(backupPath, destinationPath);
-        } else {
-          NodeFS.unlinkSync(backupPath);
-        }
-      } else if (destinationIno === stagedIno) {
-        NodeFS.unlinkSync(destinationPath);
-      }
-    } catch {}
-  });
-  const cleanup = Effect.sync(() => {
-    try {
-      if (backupPath !== null) NodeFS.unlinkSync(backupPath);
-    } catch {}
-  });
-
-  yield* Effect.try({
-    try: () => NodeFS.renameSync(stagingPath, destinationPath),
-    catch: publishFailure,
-  }).pipe(Effect.onError(() => revert));
-
-  const servedAfter = yield* readPublishedThemes(input.themesDir);
-  if (!publishKeepsThemesServed(themeId, servedBefore, servedAfter)) {
-    yield* revert;
-    return yield* new ThemeLibraryFullError({ themeId, themesDir: input.themesDir });
-  }
-
-  return { themeId, revert, cleanup };
+  return themeId;
 });
 
 /** Web and desktop cannot resolve the mobile default, and mobile does not follow this setting. */
@@ -487,34 +466,21 @@ const themeSetCommand = Command.make("set", {
       const targetIsFile =
         looksLikePath && (yield* fs.exists(target).pipe(Effect.orElseSucceed(() => false)));
       let themeId: string;
-      let revertPublish: Effect.Effect<void> = Effect.void;
-      let cleanupPublish: Effect.Effect<void> = Effect.void;
       if (targetIsFile) {
         yield* readSettingsObject(paths.settingsPath);
-        const published = yield* publishThemeFile({
-          themesDir: paths.themesDir,
-          filePath: target,
-          explicitId: flags.id,
-        });
-        themeId = published.themeId;
-        revertPublish = published.revert;
-        cleanupPublish = published.cleanup;
-      } else if (looksLikePath) {
-        return yield* new ThemeFileUnreadableError({ filePath: target });
-      } else if (isEnvironmentThemeId(target)) {
+        themeId = yield* publishThemeFile({ ...paths, filePath: target, explicitId: flags.id });
+      } else {
+        if (looksLikePath) return yield* new ThemeFileUnreadableError({ filePath: target });
+        if (!isEnvironmentThemeId(target))
+          return yield* new ThemeIdInvalidError({ themeId: target });
         const known = yield* resolvableThemeIds(paths.themesDir);
         if (!known.includes(target)) {
           return yield* new ThemeIdUnknownError({ themeId: target, known });
         }
         themeId = target;
-      } else {
-        return yield* new ThemeIdInvalidError({ themeId: target });
+        yield* writeDefaultTheme({ settingsPath: paths.settingsPath, themeId });
       }
 
-      yield* writeDefaultTheme({ settingsPath: paths.settingsPath, themeId }).pipe(
-        Effect.onError(() => revertPublish),
-      );
-      yield* cleanupPublish;
       yield* Console.log(
         targetIsFile
           ? `Published ${target} as "${themeId}" and set it as the environment theme.\n`

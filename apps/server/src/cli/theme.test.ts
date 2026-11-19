@@ -8,7 +8,10 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NetService from "@t3tools/shared/Net";
 import { assert, describe, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as TestConsole from "effect/testing/TestConsole";
 import { Command } from "effect/cli";
@@ -23,8 +26,12 @@ vi.mock("node:fs", { spy: true });
 // Windows chmod cannot force these directory or file permission failures.
 const windowsHost = HostProcess.Platform.defaultValue() === "win32";
 
-const runCli = (args: ReadonlyArray<string>) =>
+const runCli = (
+  args: ReadonlyArray<string>,
+  mapFileSystem: (fs: FileSystem.FileSystem) => FileSystem.FileSystem = (fs) => fs,
+) =>
   Command.runWith(cli, { version: "0.0.0" })(args).pipe(
+    Effect.updateService(FileSystem.FileSystem, mapFileSystem),
     Effect.provide(
       Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, NetService.layer, TestConsole.layer),
     ),
@@ -41,6 +48,7 @@ const NIGHTFALL_THEME_JSON = `${JSON.stringify({
   accent: "#7aa2f7",
 })}\n`;
 const JUNK_THEME_JSON = `${JSON.stringify({ name: "Junk" })}\n`;
+const UPDATED_NIGHTFALL_THEME_JSON = NIGHTFALL_THEME_JSON.replace('"Nightfall"', '"New Nightfall"');
 
 const readSettings = (baseDir: string): Record<string, unknown> => {
   const raw = NodeFS.readFileSync(settingsPathFor(baseDir), "utf8");
@@ -241,7 +249,7 @@ describe("t3 theme", () => {
           NodeFS.writeFileSync(NodePath.join(themesDir, entry), NIGHTFALL_THEME_JSON);
         }
         const themeFile = NodePath.join(baseDir, "incoming.json");
-        NodeFS.writeFileSync(themeFile, NIGHTFALL_THEME_JSON);
+        NodeFS.writeFileSync(themeFile, UPDATED_NIGHTFALL_THEME_JSON);
 
         const result = yield* runCli([
           "theme",
@@ -256,7 +264,57 @@ describe("t3 theme", () => {
         assert.equal(result._tag === "Success", publishes);
         assert.deepEqual(NodeFS.readdirSync(themesDir).toSorted(), library);
         assert.equal(readSettings(baseDir).defaultTheme, publishes ? incoming : undefined);
+        if (publishes) {
+          assert.equal(
+            NodeFS.readFileSync(NodePath.join(themesDir, `${incoming}.json`), "utf8"),
+            UPDATED_NIGHTFALL_THEME_JSON,
+          );
+        }
       }),
+  );
+
+  it.effect("allows only one concurrent publish to take the last slot", () =>
+    Effect.gen(function* () {
+      const baseDir = makeBaseDir();
+      const themesDir = NodePath.join(baseDir, "userdata", "themes");
+      NodeFS.mkdirSync(themesDir, { recursive: true });
+      for (let index = 1; index <= 31; index++) {
+        NodeFS.writeFileSync(NodePath.join(themesDir, `theme-${index}.json`), NIGHTFALL_THEME_JSON);
+      }
+      const themeFile = NodePath.join(baseDir, "incoming.json");
+      NodeFS.writeFileSync(themeFile, NIGHTFALL_THEME_JSON);
+
+      const listed = yield* Deferred.make<void>();
+      const resume = yield* Deferred.make<void>();
+      const args = (id: string) =>
+        ["theme", "set", themeFile, "--id", id, "--base-dir", baseDir] as const;
+      const first = yield* runCli(args("a-first"), (fs) => ({
+        ...fs,
+        readDirectory: (path, options) =>
+          fs
+            .readDirectory(path, options)
+            .pipe(
+              Effect.tap(() =>
+                path === themesDir
+                  ? Deferred.succeed(listed, undefined).pipe(Effect.andThen(Deferred.await(resume)))
+                  : Effect.void,
+              ),
+            ),
+      })).pipe(Effect.forkScoped);
+      yield* Deferred.await(listed);
+
+      const last = yield* runCli(args("z-last")).pipe(
+        Effect.result,
+        Effect.ensuring(Deferred.succeed(resume, undefined)),
+      );
+      yield* Fiber.join(first);
+      assert.equal(last._tag, "Failure");
+      assert.equal(readSettings(baseDir).defaultTheme, "a-first");
+      assert.deepEqual(
+        NodeFS.readdirSync(themesDir).filter((entry) => !entry.startsWith("theme-")),
+        ["a-first.json"],
+      );
+    }),
   );
 
   it.effect.skipIf(!symlinksSupported)("never writes through a symlink at the staging path", () =>

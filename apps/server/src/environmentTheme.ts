@@ -2,6 +2,7 @@
 // flags (O_NOFOLLOW, O_NONBLOCK) the FileSystem service does not expose.
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
+import { lock } from "proper-lockfile";
 
 import {
   type DefaultAppearancePreference,
@@ -219,12 +220,24 @@ export const readPublishedThemes = Effect.fn(function* (themesDir: string) {
   const entries = yield* fs
     .readDirectory(themesDir)
     .pipe(Effect.orElseSucceed((): Array<string> => []));
+  return yield* scanPublishedThemes(themesDir, entries);
+});
 
+const scanPublishedThemes = Effect.fnUntraced(function* (
+  themesDir: string,
+  entries: ReadonlyArray<string>,
+  candidate?: { readonly entry: string; readonly contents: string },
+) {
   const themes: Array<EnvironmentTheme> = [];
   const entryNames = new Set(entries);
+  if (candidate) entryNames.add(candidate.entry);
+  const candidateRaw =
+    candidate && Buffer.byteLength(candidate.contents) <= MAX_THEME_FILE_BYTES
+      ? candidate.contents
+      : null;
   let examined = 0;
   let totalBytes = 0;
-  for (const entry of entries.toSorted()) {
+  for (const entry of [...entryNames].sort()) {
     if (!entry.endsWith(THEME_FILE_SUFFIX)) continue;
     const id = entry.slice(0, -THEME_FILE_SUFFIX.length);
     // Reserved ids shadow built-ins or capture clients that never chose them.
@@ -241,7 +254,10 @@ export const readPublishedThemes = Effect.fn(function* (themesDir: string) {
     }
 
     const filePath = `${themesDir}/${entry}`;
-    const raw = readThemeFileGuarded(filePath, MAX_THEME_FILE_BYTES);
+    const raw =
+      entry === candidate?.entry
+        ? candidateRaw
+        : readThemeFileGuarded(filePath, MAX_THEME_FILE_BYTES);
     if (raw === null) {
       yield* Effect.logWarning("ignoring unusable environment theme file", {
         path: filePath,
@@ -280,18 +296,56 @@ export const readPublishedThemes = Effect.fn(function* (themesDir: string) {
   return themes;
 });
 
-/**
- * A publish counts only when the reader serves the new theme and every theme it served before:
- * its count and size limits can leave the new file unserved, or push another theme out.
- */
-export const publishKeepsThemesServed = (
+class ThemeLibraryPublishError extends Schema.TaggedError<ThemeLibraryPublishError>()(
+  "ThemeLibraryPublishError",
+  {
+    reason: Schema.Literals(["full", "unavailable"]),
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
+
+/** Check the candidate without exposing it, then hold the directory lease through selection and rollback. */
+export const withThemePublish = Effect.fn("EnvironmentTheme.withThemePublish")(function* <A, E, R>(
+  themesDir: string,
   themeId: string,
-  before: ReadonlyArray<EnvironmentTheme>,
-  after: ReadonlyArray<EnvironmentTheme>,
-): boolean => {
-  const served = new Set(after.map((theme) => theme.id));
-  return served.has(themeId) && before.every((theme) => served.has(theme.id));
-};
+  contents: string,
+  publish: Effect.Effect<A, E, R>,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const unavailable = (cause: unknown) =>
+    new ThemeLibraryPublishError({ reason: "unavailable", cause });
+  yield* fs.makeDirectory(themesDir, { recursive: true }).pipe(Effect.mapError(unavailable));
+
+  return yield* Effect.scoped(
+    Effect.gen(function* () {
+      yield* Effect.acquireRelease(
+        Effect.tryPromise({
+          try: () =>
+            lock(themesDir, {
+              lockfilePath: NodePath.join(themesDir, ".publish.lock"),
+              stale: 120_000,
+              update: 10_000,
+              retries: { retries: 20, factor: 1, minTimeout: 50, maxTimeout: 50 },
+            }),
+          catch: unavailable,
+        }),
+        (release) => Effect.tryPromise(() => release()).pipe(Effect.ignore({ log: true })),
+      );
+
+      const entries = yield* fs.readDirectory(themesDir).pipe(Effect.mapError(unavailable));
+      const before = yield* scanPublishedThemes(themesDir, entries);
+      const after = yield* scanPublishedThemes(themesDir, entries, {
+        entry: `${themeId}${THEME_FILE_SUFFIX}`,
+        contents,
+      });
+      const served = new Set(after.map(({ id }) => id));
+      if (!served.has(themeId) || before.some(({ id }) => !served.has(id))) {
+        return yield* new ThemeLibraryPublishError({ reason: "full" });
+      }
+      return yield* publish.pipe(Effect.uninterruptible);
+    }),
+  );
+});
 
 const make = Effect.gen(function* () {
   const { environmentThemesDir } = yield* ServerConfig.ServerConfig;
@@ -338,12 +392,14 @@ const make = Effect.gen(function* () {
     Effect.asVoid,
   );
 
-  // One publish at a time: they share a staging path, and each one checks what is served after it.
+  // Serialize selection with publishes within this server.
   const publishSemaphore = yield* Semaphore.make(1);
 
-  /** Callers hold `publishSemaphore`. Succeeds with the effect that undoes this publish. */
-
-  const publish = Effect.fnUntraced(function* (themeId: string, file: EnvironmentThemeFile) {
+  const publish = Effect.fnUntraced(function* (
+    themeId: string,
+    file: EnvironmentThemeFile,
+    select: Effect.Effect<void, EnvironmentThemeNotSelectedError>,
+  ) {
     if (UNPUBLISHABLE_THEME_IDS.has(themeId)) {
       return yield* new EnvironmentThemeRefusedError({ themeId, problem: INVALID_ID });
     }
@@ -383,31 +439,39 @@ const make = Effect.gen(function* () {
         Effect.tapError(() => fs.remove(staging, { force: true }).pipe(Effect.ignore)),
       );
 
-    // The guarded reader does not block on a FIFO and does not follow a symlink.
-    const previous = Option.fromNullOr(readThemeFileGuarded(destination, MAX_THEME_FILE_BYTES));
-    // A file it cannot read back, such as one over the size limit, could not be restored.
-    if (Option.isNone(previous) && pathIsTaken(destination)) {
-      return yield* new EnvironmentThemeRefusedError({
-        themeId,
-        problem: "would replace a file that could not be backed up. Use another theme id.",
-      });
-    }
-    const servedBefore = (yield* refresh).themes;
-    // Puts back what was there, so a failed apply does not take a working theme away.
-    const revert = Option.match(previous, {
-      onNone: () => fs.remove(destination, { force: true }),
-      onSome: replace,
-    }).pipe(Effect.ignore, Effect.andThen(refresh), Effect.asVoid);
+    yield* withThemePublish(
+      environmentThemesDir,
+      themeId,
+      contents,
+      Effect.gen(function* () {
+        const previous = Option.fromNullOr(readThemeFileGuarded(destination, MAX_THEME_FILE_BYTES));
+        if (Option.isNone(previous) && pathIsTaken(destination)) {
+          return yield* new EnvironmentThemeRefusedError({
+            themeId,
+            problem: "would replace a file that could not be backed up. Use another theme id.",
+          });
+        }
+        const revert = Option.match(previous, {
+          onNone: () => fs.remove(destination, { force: true }),
+          onSome: replace,
+        }).pipe(Effect.ignore, Effect.andThen(refresh), Effect.asVoid);
 
-    yield* fs.makeDirectory(environmentThemesDir, { recursive: true }).pipe(
-      Effect.andThen(replace(contents)),
-      Effect.mapError(
-        (cause) => new EnvironmentThemeRefusedError({ themeId, problem: NOT_PUBLISHED, cause }),
-      ),
+        yield* replace(contents).pipe(
+          Effect.mapError(
+            (cause) => new EnvironmentThemeRefusedError({ themeId, problem: NOT_PUBLISHED, cause }),
+          ),
+        );
+        yield* refresh.pipe(
+          Effect.andThen(select),
+          Effect.onError(() => revert),
+        );
+      }),
+    ).pipe(
+      Effect.catchTags({
+        ThemeLibraryPublishError: (cause) =>
+          new EnvironmentThemeRefusedError({ themeId, problem: NOT_PUBLISHED, cause }),
+      }),
     );
-    if (publishKeepsThemesServed(themeId, servedBefore, (yield* refresh).themes)) return revert;
-    yield* revert;
-    return yield* new EnvironmentThemeRefusedError({ themeId, problem: NOT_PUBLISHED });
   });
 
   const apply: EnvironmentThemeService["Service"]["apply"] = Effect.fn(
@@ -450,8 +514,7 @@ const make = Effect.gen(function* () {
           }
           return yield* select;
         }
-        const revert = yield* publish(themeId, theme);
-        yield* select.pipe(Effect.tapError(() => revert));
+        yield* publish(themeId, theme, select);
       }),
     );
   });
