@@ -1037,28 +1037,19 @@ export const make = Effect.gen(function* () {
     );
 
   // A change request's head ref is published by the repository it targets. In a fork's checkout
-  // that is not the primary remote, where the same number is another change request or none:
-  // the clone URL to fetch it from, or null when the primary remote serves it.
-  const changeRequestRepositoryUrl = Effect.fn("GitManager.changeRequestRepositoryUrl")(function* (
-    cwd: string,
-    changeRequestUrl: string,
-  ) {
-    const link = sourceControlDefinitions.parseChangeRequestUrl(changeRequestUrl)?.link;
-    const primaryUrl = yield* readPrimaryRemoteUrl(cwd);
-    if (
-      link === undefined ||
-      primaryUrl === null ||
-      remoteServesRepository(primaryUrl, link.repositoryUrl) !== false
-    ) {
-      return null;
-    }
-    const cloneUrls = yield* (yield* sourceControlProvider(cwd)).getRepositoryCloneUrls({
-      cwd,
-      repository: link.repository,
-      ...pullRequestHostOptions(changeRequestUrl),
-    });
-    return shouldPreferSshRemote(primaryUrl) ? cloneUrls.sshUrl : cloneUrls.url;
-  });
+  // that is not the primary remote, where the same number is another change request or none.
+  // Null when the primary remote serves that repository.
+  const foreignChangeRequestRepository = Effect.fn("GitManager.foreignChangeRequestRepository")(
+    function* (cwd: string, changeRequestUrl: string) {
+      const link = sourceControlDefinitions.parseChangeRequestUrl(changeRequestUrl)?.link;
+      const primaryUrl = yield* readPrimaryRemoteUrl(cwd);
+      return link === undefined ||
+        primaryUrl === null ||
+        remoteServesRepository(primaryUrl, link.repositoryUrl) !== false
+        ? null
+        : { repository: link.repository, preferSsh: shouldPreferSshRemote(primaryUrl) };
+    },
+  );
 
   const configurePullRequestHeadUpstreamBase = Effect.fn("configurePullRequestHeadUpstream")(
     function* (
@@ -3237,15 +3228,13 @@ export const make = Effect.gen(function* () {
         reference: normalizedReference,
       });
       const pullRequest = toResolvedPullRequest(pullRequestSummary);
-      const repositoryUrl = yield* changeRequestRepositoryUrl(input.cwd, pullRequest.url);
-      const repository: ChangeRequestRepository =
-        repositoryUrl === null ? {} : { remote: repositoryUrl };
+      const foreignRepository = yield* foreignChangeRequestRepository(input.cwd, pullRequest.url);
       const pullRequestWithRemoteInfo = {
         ...pullRequest,
         ...toPullRequestHeadRemoteInfo(pullRequestSummary),
         // From this checkout, a head in another repository is a fork's, whichever repository the
         // pull request targets: it gets its own branch name and never tracks the primary remote.
-        ...(repositoryUrl === null ? {} : { isCrossRepository: true }),
+        ...(foreignRepository === null ? {} : { isCrossRepository: true }),
       } as const;
 
       if (input.mode === "local") {
@@ -3279,6 +3268,19 @@ export const make = Effect.gen(function* () {
         );
       });
 
+      // Fetched by clone URL: reading a head ref needs no remote of its own.
+      const repository: ChangeRequestRepository =
+        foreignRepository === null
+          ? {}
+          : {
+              remote: yield* (yield* sourceControlProvider(input.cwd))
+                .getRepositoryCloneUrls({
+                  cwd: input.cwd,
+                  repository: foreignRepository.repository,
+                  ...pullRequestHostOptions(pullRequest.url),
+                })
+                .pipe(Effect.map((urls) => (foreignRepository.preferSsh ? urls.sshUrl : urls.url))),
+            };
       const localBranches = pullRequestWithRemoteInfo.isCrossRepository
         ? new Set(
             (yield* gitCore.execute({

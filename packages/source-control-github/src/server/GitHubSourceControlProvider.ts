@@ -958,10 +958,10 @@ export const make = Effect.gen(function* () {
         }
         // Set tracking after sync succeeds so a failed checkout preserves the existing upstream.
         // A branch that already tracks a remote keeps it: its pushes may go elsewhere on purpose.
-        const tracked = exists
-          ? yield* git.readConfigValue(input.cwd, `branch.${localBranch}.remote`)
-          : null;
-        if (target.upstream !== null && tracked === null) {
+        if (
+          target.upstream !== null &&
+          !(exists && (yield* git.readConfigValue(input.cwd, `branch.${localBranch}.remote`)))
+        ) {
           yield* git.setBranchUpstream({ cwd: input.cwd, branch: localBranch, ...target.upstream });
         }
       }).pipe(Effect.mapError(gitFailure));
