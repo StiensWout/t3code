@@ -353,6 +353,35 @@ describe("GitHubSourceControlProvider repository resolution", () => {
     }).pipe(Effect.provide(layer));
   });
 
+  it.effect("names the repository a fork was made from, and none for one that is no fork", () => {
+    const paths: string[] = [];
+    const { layer } = harness({
+      remotes: remotesOutput(["origin", "https://github.com/me/web.git"]),
+      api: {
+        rest: (input) =>
+          Effect.sync(() => {
+            paths.push(`${input.host} ${input.path}`);
+            const nameWithOwner = input.path.slice("repos/".length);
+            return restResponse({
+              full_name: nameWithOwner,
+              html_url: `https://${input.host}/${nameWithOwner}`,
+              ssh_url: `git@${input.host}:${nameWithOwner}.git`,
+              ...(nameWithOwner === "me/web" ? { parent: { full_name: "acme/web" } } : {}),
+            });
+          }),
+      },
+    });
+    return Effect.gen(function* () {
+      const gh = yield* GitHubSourceControlProvider.make;
+      const parentOf = gh.getRepositoryParent;
+      assert.ok(parentOf);
+      const fork = { cwd: "/repo", host: "github.com", repository: "me/web" };
+      assert.strictEqual(yield* parentOf(fork), "acme/web");
+      assert.strictEqual(yield* parentOf({ ...fork, repository: "acme/web" }), null);
+      assert.deepStrictEqual(paths, ["github.com repos/me/web", "github.com repos/acme/web"]);
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect.each([
     ["github", "git@github:acme/web.git"],
     ["github.com-scale", "git@github.com-scale:acme/web.git"],

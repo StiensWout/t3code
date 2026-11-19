@@ -324,6 +324,7 @@ function makeService(input: {
   readonly projects: ReadonlyArray<OrchestrationProjectShell>;
   readonly providers: ReadonlyArray<PullRequestProviderApi>;
   readonly resolveHandle?: SourceControlProviderRegistry.SourceControlProviderRegistry["Service"]["resolveHandle"];
+  readonly getRepositoryParent?: SourceControlProvider["Service"]["getRepositoryParent"];
   readonly resolveRepositoryIdentity?: RepositoryIdentityResolver.RepositoryIdentityResolver["Service"]["resolve"];
   readonly onProjectRead?: () => void;
 }) {
@@ -344,7 +345,11 @@ function makeService(input: {
             input.resolveHandle ?? (() => Effect.die("Unexpected provider refinement")),
           get: (kind) =>
             Effect.succeed(
-              kind === "forgejo" ? sshAliasHost : ({} as SourceControlProvider["Service"]),
+              kind === "forgejo"
+                ? sshAliasHost
+                : ({
+                    getRepositoryParent: input.getRepositoryParent,
+                  } as SourceControlProvider["Service"]),
             ),
         }),
         Layer.mock(ProjectService.ProjectService)({
@@ -375,6 +380,63 @@ function makeService(input: {
     (context) => Effect.provideContext(PullRequestService.make, context),
   );
 }
+
+it.effect("lists a fork's upstream pull requests beside its own when its project asks", () =>
+  Effect.gen(function* () {
+    const listed: string[] = [];
+    const parentReads: string[] = [];
+    const input = {
+      projects: [
+        project({ id: "fork", title: "fork", workspaceRoot: "/fork", repository: "me/web" }),
+        project({ id: "api", title: "api", workspaceRoot: "/api", repository: "me/api" }),
+      ],
+      providers: [
+        fakePullRequestProvider(SourceControlProviderKind.make("github"), {
+          listChangeRequests: ({ repository }) =>
+            Effect.sync(() => {
+              listed.push(repository);
+              return {
+                items: [changeRequest(repository === "acme/web" ? 2 : 1, "2026-07-02T00:00:00Z")],
+                truncated: false,
+                continues: false,
+              };
+            }),
+        }),
+      ],
+      getRepositoryParent: ({ repository }: { readonly repository: string }) =>
+        Effect.sync(() => {
+          parentReads.push(repository);
+          return repository === "me/web" ? "acme/web" : null;
+        }),
+    };
+
+    yield* (yield* makeService(input)).list({ state: "open" });
+    assert.deepStrictEqual(listed.toSorted(), ["me/api", "me/web"]);
+    assert.deepStrictEqual(parentReads, []);
+
+    listed.length = 0;
+    const service = yield* makeService({
+      ...input,
+      settings: {
+        ...DEFAULT_SERVER_SETTINGS,
+        projectSettingsOverrides: { ["fork" as ProjectId]: { includeForkUpstream: true } },
+      },
+    });
+    const result = yield* service.list({ state: "open" });
+    assert.deepStrictEqual(listed.toSorted(), ["acme/web", "me/api", "me/web"]);
+    assert.deepStrictEqual(parentReads, ["me/web"]);
+    assert.deepStrictEqual(
+      result.entries
+        .filter((entry) => entry.repository === "acme/web")
+        .map((entry) => [entry.projectId, entry.number]),
+      [["fork", 2]],
+    );
+    assert.strictEqual(
+      result.providers.find((provider) => provider.host === "github.com")?.projectCount,
+      2,
+    );
+  }),
+);
 
 it.effect("lists GitHub Enterprise PRs for a stored unknown repository after host discovery", () =>
   Effect.gen(function* () {

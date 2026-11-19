@@ -9,7 +9,10 @@ import {
   SourceControlProviderKind,
   type OrchestrationProjectShell,
   type ProjectId,
+  type ServerSettings,
 } from "@t3tools/contracts";
+import { DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts/settings";
+import type { SourceControlProvider } from "@t3tools/source-control-core/server/SourceControlProvider";
 import {
   IssueTrackerError,
   type IssueTrackerApi,
@@ -23,6 +26,8 @@ import { normalizeGitRemoteUrl } from "@t3tools/shared/git";
 
 import * as ProjectService from "../project/ProjectService.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
+import * as ServerSettingsService from "../serverSettings.ts";
+import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as IssueService from "./IssueService.ts";
 import * as IssueTrackerRegistry from "./IssueTrackerRegistry.ts";
 
@@ -157,6 +162,8 @@ function makeService(input: {
   readonly trackers: ReadonlyArray<IssueTrackerApi>;
   readonly bindings?: Record<string, IssueTrackerProjectBinding>;
   readonly bindingsFailure?: PersistenceSqlError;
+  readonly settings?: ServerSettings;
+  readonly getRepositoryParent?: SourceControlProvider["Service"]["getRepositoryParent"];
 }) {
   return IssueService.IssueService.pipe(
     Effect.provide(
@@ -189,6 +196,15 @@ function makeService(input: {
             }),
             Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
               resolve: () => Effect.succeed(null),
+            }),
+            Layer.mock(ServerSettingsService.ServerSettingsService)({
+              getSettings: Effect.succeed(input.settings ?? DEFAULT_SERVER_SETTINGS),
+            }),
+            Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
+              get: () =>
+                Effect.succeed({
+                  getRepositoryParent: input.getRepositoryParent,
+                } as SourceControlProvider["Service"]),
             }),
           ),
         ),
@@ -505,6 +521,56 @@ describe("IssueService", () => {
       });
       expect(listed).toEqual(["acme/web"]);
       expect(through.entries.map((entry) => entry.key)).toEqual(["4"]);
+    }),
+  );
+  it.effect("lists a fork's upstream issues beside its own when its project asks", () =>
+    Effect.gen(function* () {
+      const listed: string[] = [];
+      const parentReads: string[] = [];
+      const input = {
+        projects: [
+          project({ id: "fork", repository: "me/web" }),
+          project({ id: "api", repository: "me/api" }),
+        ],
+        trackers: [
+          fakeTracker({
+            listIssues: (input) =>
+              Effect.sync(() => {
+                listed.push(input.scope);
+                return {
+                  items: [issue(input.scope === "acme/web" ? "2" : "1")],
+                  nextCursor: null,
+                };
+              }),
+          }),
+        ],
+        getRepositoryParent: ({ repository }: { readonly repository: string }) =>
+          Effect.sync(() => {
+            parentReads.push(repository);
+            return repository === "me/web" ? "acme/web" : null;
+          }),
+      };
+
+      yield* (yield* makeService(input)).list({ state: "open" });
+      expect(listed.toSorted()).toEqual(["me/api", "me/web"]);
+      expect(parentReads).toEqual([]);
+
+      listed.length = 0;
+      const service = yield* makeService({
+        ...input,
+        settings: {
+          ...DEFAULT_SERVER_SETTINGS,
+          projectSettingsOverrides: { ["fork" as ProjectId]: { includeForkUpstream: true } },
+        },
+      });
+      const result = yield* service.list({ state: "open" });
+      expect(listed.toSorted()).toEqual(["acme/web", "me/api", "me/web"]);
+      expect(parentReads).toEqual(["me/web"]);
+      expect(
+        result.entries
+          .filter((entry) => entry.scope === "acme/web")
+          .map((entry) => [entry.projectId, entry.key]),
+      ).toEqual([["fork", "2"]]);
     }),
   );
 });
