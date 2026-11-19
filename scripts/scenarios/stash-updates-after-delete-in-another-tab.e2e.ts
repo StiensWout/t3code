@@ -40,6 +40,7 @@ test(
       } finally {
         otherTab.remove();
       }
+      return null;
     });
 
     await app.screenshot("stash-after-delete-in-another-tab");
