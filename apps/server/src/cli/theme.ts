@@ -129,7 +129,7 @@ class ThemeSelectionUnavailableError extends Schema.TaggedError<ThemeSelectionUn
   { themeId: Schema.String, cause: Schema.Defect() },
 ) {
   override get message(): string {
-    return `Could not select theme "${this.themeId}". Try again.`;
+    return `Could not select theme "${this.themeId}" while the theme library is unavailable.`;
   }
 }
 

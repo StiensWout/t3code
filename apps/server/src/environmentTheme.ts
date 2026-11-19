@@ -233,11 +233,30 @@ export function readThemeLibraryEntry(filePath: string): ThemeLibraryEntry | nul
   return contents !== null || pathIsTaken(filePath) ? { contents } : null;
 }
 
+function sameFileVersion(before: NodeFS.BigIntStats, after: NodeFS.BigIntStats): boolean {
+  return (
+    before.dev === after.dev &&
+    before.ino === after.ino &&
+    before.size === after.size &&
+    before.mtimeNs === after.mtimeNs &&
+    before.ctimeNs === after.ctimeNs
+  );
+}
+
+function readFileVersion(path: string): NodeFS.BigIntStats | undefined | null {
+  try {
+    return NodeFS.lstatSync(path, { bigint: true, throwIfNoEntry: false });
+  } catch {
+    return null;
+  }
+}
+
 const scanPublishedThemes = Effect.fnUntraced(function* (
   themesDir: string,
   entries: ReadonlyArray<string>,
   warn = true,
   override?: { readonly name: string; readonly file: ThemeLibraryEntry | null },
+  readFile = readThemeFileGuarded,
 ) {
   const themes: Array<EnvironmentTheme> = [];
   const entryNames = new Set(entries);
@@ -266,7 +285,7 @@ const scanPublishedThemes = Effect.fnUntraced(function* (
     const raw =
       entry === override?.name
         ? (override.file?.contents ?? null)
-        : readThemeFileGuarded(filePath, MAX_THEME_FILE_BYTES);
+        : readFile(filePath, MAX_THEME_FILE_BYTES);
     if (raw === null) {
       if (warn)
         yield* Effect.logWarning("ignoring unusable environment theme file", {
@@ -318,13 +337,14 @@ class ThemeLibraryPublishError extends Schema.TaggedError<ThemeLibraryPublishErr
 ) {}
 
 const PUBLISH_LEASE_STALE_MS = 120_000;
+const PUBLISH_LEASE_NAME = ".publish.lock";
 const publishUnavailable = (cause: unknown) =>
   new ThemeLibraryPublishError({ reason: "unavailable", cause });
 
 const acquirePublishLease = Effect.fn("EnvironmentTheme.acquirePublishLease")(function* (
   themesDir: string,
 ) {
-  const lockPath = NodePath.join(themesDir, ".publish.lock");
+  const lockPath = NodePath.join(themesDir, PUBLISH_LEASE_NAME);
   const statLease = () => NodeFS.lstatSync(lockPath, { bigint: true, throwIfNoEntry: false });
   let original: NodeFS.BigIntStats | null | undefined;
   let compromised: Error | undefined;
@@ -409,14 +429,50 @@ const withLibraryLease = Effect.fn("EnvironmentTheme.withLibraryLease")(function
   );
 });
 
+function unlockedLibraryVersion(themesDir: string): NodeFS.BigIntStats | undefined {
+  try {
+    const version = NodeFS.statSync(themesDir, { bigint: true });
+    const lock = NodeFS.lstatSync(NodePath.join(themesDir, PUBLISH_LEASE_NAME), {
+      throwIfNoEntry: false,
+    });
+    return lock === undefined ? version : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export const selectPublishedTheme = Effect.fn("EnvironmentTheme.selectPublishedTheme")(function* <
   E,
   R,
   E2,
   R2,
 >(themesDir: string, resolve: Effect.Effect<void, E, R>, select: Effect.Effect<void, E2, R2>) {
-  yield* withLibraryLease(themesDir, (checkLease) =>
-    resolve.pipe(Effect.andThen(checkLease.pipe(Effect.andThen(select), Effect.uninterruptible))),
+  yield* Effect.scoped(
+    Effect.gen(function* () {
+      const lease = yield* Effect.result(acquirePublishLease(themesDir));
+      if (lease._tag === "Success") {
+        yield* lease.success;
+        yield* resolve;
+        return yield* lease.success.pipe(Effect.andThen(select), Effect.uninterruptible);
+      }
+
+      const cause = lease.failure.cause;
+      const readOnly =
+        typeof cause === "object" &&
+        cause !== null &&
+        "syscall" in cause &&
+        cause.syscall === "mkdir" &&
+        "code" in cause &&
+        (cause.code === "EACCES" || cause.code === "EROFS");
+      // A writable alias can still publish, so only select from a stable library with no lease.
+      const before = readOnly ? unlockedLibraryVersion(themesDir) : undefined;
+      yield* resolve;
+      const after = before ? unlockedLibraryVersion(themesDir) : undefined;
+      if (before && after && sameFileVersion(before, after)) {
+        return yield* select.pipe(Effect.uninterruptible);
+      }
+      return yield* lease.failure;
+    }),
   );
 });
 
@@ -501,23 +557,36 @@ export const withThemePublish = Effect.fn("EnvironmentTheme.withThemePublish")(f
           };
           yield* Effect.gen(function* () {
             yield* fs.rename(staging, destination).pipe(Effect.mapError(publishUnavailable));
-            // A direct save can change the listing after readdir. Validate a stable snapshot.
+            // A direct save can change the listing or a file during either scan.
             for (let attempt = 0; attempt < 3; attempt += 1) {
               const start = yield* directoryStat;
               const currentEntries = yield* readEntries;
-              const previous = yield* scanPublishedThemes(themesDir, currentEntries, false, {
-                name,
-                file: saved.previous,
+              const versions = new Map<string, ReturnType<typeof readFileVersion>>();
+              const readFile = (path: string, maxBytes: number) => {
+                if (!versions.has(path)) versions.set(path, readFileVersion(path));
+                return readThemeFileGuarded(path, maxBytes);
+              };
+              const previous = yield* scanPublishedThemes(
+                themesDir,
+                currentEntries,
+                false,
+                { name, file: saved.previous },
+                readFile,
+              );
+              const next = yield* scanPublishedThemes(
+                themesDir,
+                currentEntries,
+                false,
+                undefined,
+                readFile,
+              );
+              const filesUnchanged = [...versions].every(([path, before]) => {
+                const after = readFileVersion(path);
+                if (before === undefined) return after === undefined;
+                return before !== null && after != null && sameFileVersion(before, after);
               });
-              const next = yield* scanPublishedThemes(themesDir, currentEntries, false);
               const end = yield* directoryStat;
-              if (
-                start.dev !== end.dev ||
-                start.ino !== end.ino ||
-                start.mtimeNs !== end.mtimeNs ||
-                start.ctimeNs !== end.ctimeNs
-              )
-                continue;
+              if (!filesUnchanged || !sameFileVersion(start, end)) continue;
               if (destinationState() !== "staged") {
                 return yield* publishUnavailable(new Error("The staged theme was replaced."));
               }
@@ -525,7 +594,7 @@ export const withThemePublish = Effect.fn("EnvironmentTheme.withThemePublish")(f
               yield* checkLease;
               return yield* select(next);
             }
-            return yield* publishUnavailable(new Error("The themes directory kept changing."));
+            return yield* publishUnavailable(new Error("The theme library kept changing."));
           }).pipe(Effect.onError(() => saved.rollback(destinationState())));
           if (saved.discard) yield* saved.discard;
         }).pipe(Effect.uninterruptible);
@@ -694,12 +763,11 @@ const make = Effect.gen(function* () {
             }
           });
           return yield* selectPublishedTheme(environmentThemesDir, resolve, select).pipe(
-            Effect.provideService(FileSystem.FileSystem, fs),
             Effect.catchTags({
               ThemeLibraryPublishError: (cause) =>
                 new EnvironmentThemeRefusedError({
                   themeId,
-                  problem: "could not be selected. Try again.",
+                  problem: "could not be selected while the theme library is unavailable.",
                   cause,
                 }),
             }),

@@ -81,6 +81,29 @@ const writeSettings = (baseDir: string, settings: Record<string, unknown>) => {
 };
 
 describe("t3 theme", () => {
+  it.effect.skipIf(windowsHost)("selects a theme from a read-only library", () =>
+    Effect.gen(function* () {
+      const baseDir = makeBaseDir();
+      writeSettings(baseDir, {});
+      const themesDir = NodePath.join(baseDir, "userdata", "themes");
+      NodeFS.mkdirSync(themesDir);
+      NodeFS.writeFileSync(NodePath.join(themesDir, "nightfall.json"), NIGHTFALL_THEME_JSON);
+
+      NodeFS.chmodSync(themesDir, 0o555);
+      try {
+        yield* runCli(["theme", "set", "nightfall", "--base-dir", baseDir]);
+        assert.equal(readSettings(baseDir).defaultTheme, "nightfall");
+
+        const failure = yield* runCli(["theme", "set", "missing", "--base-dir", baseDir]).pipe(
+          Effect.flip,
+        );
+        assert.include(String(failure), 'No theme named "missing"');
+      } finally {
+        NodeFS.chmodSync(themesDir, 0o755);
+      }
+    }),
+  );
+
   it.effect("preserves settings it does not recognise", () =>
     Effect.gen(function* () {
       const baseDir = makeBaseDir();
@@ -386,6 +409,48 @@ describe("t3 theme", () => {
     }),
   );
 
+  it.effect("refuses a publish when an in-place edit fills the library during the final scan", () =>
+    Effect.gen(function* () {
+      const baseDir = makeBaseDir();
+      writeSettings(baseDir, { defaultTheme: "ocean" });
+      const themesDir = NodePath.join(baseDir, "userdata", "themes");
+      NodeFS.mkdirSync(themesDir);
+      for (const id of ["b-edited", "c-existing", "d-existing", "z-existing"]) {
+        NodeFS.writeFileSync(
+          NodePath.join(themesDir, `${id}.json`),
+          NIGHTFALL_THEME_JSON.padEnd(475_000),
+        );
+      }
+      const edited = NodePath.join(themesDir, "b-edited.json");
+      const source = NodePath.join(baseDir, "a-first.json");
+      const destination = NodePath.join(themesDir, "a-first.json");
+      NodeFS.writeFileSync(source, NIGHTFALL_THEME_JSON.padEnd(150_000));
+
+      const editedInode = NodeFS.statSync(edited, { bigint: true }).ino;
+      const { closeSync } = yield* Effect.promise(() => vi.importActual<typeof NodeFS>("node:fs"));
+      let readsSinceInstall = 0;
+      using _editDuringRead = vi.spyOn(NodeFS, "closeSync").mockImplementation((fd) => {
+        const isEdited =
+          NodeFS.existsSync(destination) &&
+          NodeFS.fstatSync(fd, { bigint: true }).ino === editedInode;
+        closeSync(fd);
+        if (isEdited && ++readsSinceInstall === 2) {
+          NodeFS.appendFileSync(edited, " ".repeat(100_000));
+        }
+      });
+
+      const result = yield* runCli(["theme", "set", source, "--base-dir", baseDir]).pipe(
+        Effect.result,
+      );
+      assert.equal(result._tag, "Failure");
+      assert.include(String(result.failure), "is full");
+      assert.equal(readSettings(baseDir).defaultTheme, "ocean");
+      assert.isFalse(NodeFS.existsSync(destination));
+      assert.equal(NodeFS.statSync(edited).size, 575_000);
+      yield* runCli(["theme", "set", "z-existing", "--base-dir", baseDir]);
+    }),
+  );
+
   it.live("refuses to select a provisional theme while a direct save fills the library", () =>
     Effect.gen(function* () {
       const baseDir = makeBaseDir();
@@ -419,16 +484,16 @@ describe("t3 theme", () => {
       })).pipe(Effect.forkScoped);
       yield* Deferred.await(saved);
 
-      const selection = yield* runCliProcess([
-        "theme",
-        "set",
-        "a-first",
-        "--base-dir",
-        baseDir,
-      ]).pipe(Effect.result, Effect.ensuring(Deferred.succeed(resume, undefined)));
+      const select = (id: string) =>
+        runCliProcess(["theme", "set", id, "--base-dir", baseDir]).pipe(Effect.result);
+      const [selection, unknown] = yield* Effect.all([select("a-first"), select("missing")], {
+        concurrency: "unbounded",
+      }).pipe(Effect.ensuring(Deferred.succeed(resume, undefined)));
       const publication = yield* Fiber.join(publisher).pipe(Effect.flip);
 
       assert.equal(selection._tag, "Failure");
+      assert.equal(unknown._tag, "Failure");
+      assert.include(unknown.failure, 'No theme named "missing"');
       assert.include(String(publication), "is full");
       assert.equal(readSettings(baseDir).defaultTheme, "ocean");
       assert.isFalse(NodeFS.existsSync(NodePath.join(themesDir, "a-first.json")));
