@@ -204,34 +204,36 @@ const make = Effect.gen(function* () {
       provider?.models[0]?.slug ??
       "default";
     const commandId = CommandId.make(yield* random.uuidV4());
-    const launched = yield* startup
-      .enqueueCommand(
-        threadLaunch.launch({
-          commandId,
-          projectId: input.projectId,
-          title: input.title ?? "Imported ACP session",
-          modelSelection: { instanceId: input.instanceId, model },
-          runtimeMode: "approval-required",
-          interactionMode: "default",
-          workspaceStrategy: { type: "root" },
-          importedNativeThread: {
-            ref: {
-              driver: instance.driverKind,
-              nativeId: input.sessionId,
-              strength: "strong",
+    // Readiness can be interrupted. Once launch starts, hold the permit until its commit settles.
+    const launched = yield* startup.awaitCommandReady.pipe(
+      Effect.andThen(
+        threadLaunch
+          .launch({
+            commandId,
+            projectId: input.projectId,
+            title: input.title ?? "Imported ACP session",
+            modelSelection: { instanceId: input.instanceId, model },
+            runtimeMode: "approval-required",
+            interactionMode: "default",
+            workspaceStrategy: { type: "root" },
+            importedNativeThread: {
+              ref: {
+                driver: instance.driverKind,
+                nativeId: input.sessionId,
+                strength: "strong",
+              },
+              metadata: {
+                ...(input.title === undefined ? {} : { title: input.title }),
+                ...(input.updatedAt === undefined ? {} : { updatedAt: input.updatedAt }),
+              },
             },
-            metadata: {
-              itemIdentityVersion: 2,
-              ...(input.title === undefined ? {} : { title: input.title }),
-              ...(input.updatedAt === undefined ? {} : { updatedAt: input.updatedAt }),
-            },
-          },
-          createdBy: "user",
-          creationSource: "web",
-        }),
-      )
-      // A queued launch can still commit after the caller disconnects. Hold the mutation permit until it settles.
-      .pipe(Effect.uninterruptible, Effect.result);
+            createdBy: "user",
+            creationSource: "web",
+          })
+          .pipe(Effect.uninterruptible),
+      ),
+      Effect.result,
+    );
     if (Result.isFailure(launched)) {
       const owner = yield* findOwner(identity);
       if (owner !== null) return { threadId: owner, imported: false } as const;
