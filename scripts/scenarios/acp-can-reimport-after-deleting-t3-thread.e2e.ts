@@ -3,6 +3,7 @@ import * as NodePath from "node:path";
 
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { CommandId, ProviderDriverKind, ProviderInstanceId } from "@t3tools/contracts";
+import type { ProjectId, ThreadId } from "@t3tools/contracts";
 import { expect } from "e2e";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
@@ -39,7 +40,7 @@ for await (const line of createInterface({ input: process.stdin })) {
     method === "initialize" ? {
       protocolVersion: 1,
       agentInfo: { name: "reimport-scenario", version: "1.0.0" },
-      agentCapabilities: { loadSession: true, sessionCapabilities: { list: {}, fork: {} } },
+      agentCapabilities: { loadSession: true, sessionCapabilities: { list: {} } },
       authMethods: [],
     } :
     method === "session/new" ? { sessionId: "health-probe" } :
@@ -53,6 +54,7 @@ for await (const line of createInterface({ input: process.stdin })) {
         title: ${JSON.stringify(SESSION_TITLE)},
       }],
     } : undefined;
+  if (method === "initialize") result.agentCapabilities.sessionCapabilities.fork = {};
   process.stdout.write(JSON.stringify({
     jsonrpc: "2.0", id,
     ...(result === undefined ? { error: { code: -32601, message: "Method not found" } } : { result }),
@@ -63,7 +65,7 @@ for await (const line of createInterface({ input: process.stdin })) {
 test(
   "A native ACP session can be imported again after deleting its T3 thread",
   WEB,
-  async ({ t3, app, browser, screen }) => {
+  async ({ t3, app, screen }) => {
     const instanceId = ProviderInstanceId.make("scenario-reimport-agent");
     const workspaceRoot = await t3.project("demo", { "reimport-agent.mjs": ACP });
     await runPromise(
@@ -98,7 +100,17 @@ test(
     await importButton.tap();
     await imported.waitFor({ timeout: 60_000 });
 
-    const { project, threadId } = await runPromise(
+    const sendPrompt = async (prompt: string) => {
+      const composer = screen.getByRole("textbox");
+      await composer.pressSequentially(prompt);
+      await composer.press("Enter");
+      await screen.getByText(`Agent reply: ${prompt}`, { exact: true }).waitFor();
+    };
+
+    const original: {
+      session?: { projectId: ProjectId; threadId: ThreadId; forkThreadId: ThreadId };
+    } = {};
+    await runPromise(
       Effect.gen(function* () {
         const client = yield* rpcClient(T3_HOME, app.baseUrl ?? "");
         const { projects } = yield* client["orchestration.getArchivedShellSnapshot"]({});
@@ -112,31 +124,24 @@ test(
           (session) => session.sessionId === SESSION_ID,
         )?.importedThreadId;
         if (threadId == null) throw new Error("The first import did not create a thread");
-        return { project, threadId };
-      }).pipe(Effect.scoped),
-    );
+        yield* Effect.promise(async () => {
+          await t3.open({ threadId });
+          await sendPrompt("Original prompt");
+          await screen.getByRole("button", "Fork from this response").first().tap();
+          await screen.getByRole("button", `Thread actions for ${SESSION_TITLE} fork`).waitFor();
+        });
+        const family = yield* client["orchestration.getThreadFamily"]({ threadId });
+        const fork = family.threads.find((candidate) => candidate.id !== threadId);
+        if (fork === undefined) throw new Error("The original reply did not produce a fork");
 
-    const sendPrompt = async (prompt: string) => {
-      const composer = screen.getByRole("textbox");
-      await composer.pressSequentially(prompt);
-      await composer.press("Enter");
-      await screen.getByText(`Agent reply: ${prompt}`, { exact: true }).waitFor();
-    };
-    await t3.open({ threadId });
-    await sendPrompt("Original prompt");
-    await screen.getByRole("button", "Fork from this response").first().tap();
-    await screen.getByRole("button", `Thread actions for ${SESSION_TITLE} fork`).waitFor();
-    const forkUrl = new URL(await browser.url());
-
-    await runPromise(
-      Effect.gen(function* () {
-        const client = yield* rpcClient(T3_HOME, app.baseUrl ?? "");
         const random = yield* SecureRandom.SecureRandom;
         yield* client["orchestration.dispatchCommand"]({
           type: "thread.delete",
           commandId: CommandId.make(yield* random.uuidV4()),
           threadId,
         });
+
+        original.session = { projectId: project.id, threadId, forkThreadId: fork.id };
       }).pipe(Effect.scoped, Effect.provide(NodeCrypto.layer)),
     );
 
@@ -151,12 +156,14 @@ test(
     await app.screenshot("native-session-after-reimport");
     expect(await imported.isVisible(), "The native session can be imported again").toBe(true);
 
+    const source = original.session;
+    if (source === undefined) throw new Error("The scenario did not import the original session");
     const replacementId = await runPromise(
       Effect.gen(function* () {
         const client = yield* rpcClient(T3_HOME, app.baseUrl ?? "");
         const listed = yield* client["server.listAcpRegistrySessions"]({
           instanceId,
-          projectId: project.id,
+          projectId: source.projectId,
         });
         const replacement = listed.sessions.find(
           (session) => session.sessionId === SESSION_ID,
@@ -165,10 +172,10 @@ test(
         return replacement;
       }).pipe(Effect.scoped),
     );
-    expect(replacementId).not.toBe(threadId);
+    expect(replacementId).not.toBe(source.threadId);
     await t3.open({ threadId: replacementId });
     await sendPrompt("Replacement prompt");
-    await t3.open(forkUrl.pathname + forkUrl.search);
+    await t3.open({ threadId: source.forkThreadId });
     await expect(screen.getByText("Agent reply: Original prompt", { exact: true })).toBeVisible();
   },
 );
