@@ -159,18 +159,13 @@ const make = Effect.gen(function* () {
         message: "The ACP agent cannot load or resume native sessions.",
       });
     }
-    const threadId = importedThreadId({
+    const identity = {
       driver: instance.driverKind,
       instanceId: input.instanceId,
       sessionId: input.sessionId,
-    });
-    const owner = yield* findOwner({
-      driver: instance.driverKind,
-      instanceId: input.instanceId,
-      sessionId: input.sessionId,
-    });
-    if (owner !== null && owner !== threadId) return { threadId: owner, imported: false } as const;
-    const existing = yield* threadManagement.getThreadShell(threadId).pipe(
+    };
+    const existingThreadId = (yield* findOwner(identity)) ?? importedThreadId(identity);
+    const existing = yield* threadManagement.getThreadShell(existingThreadId).pipe(
       Effect.mapError(
         (cause) =>
           new AcpRegistryOperationError({
@@ -181,21 +176,24 @@ const make = Effect.gen(function* () {
       ),
     );
     if (existing !== null) {
-      const repairing = AgentSessionImporter.isNativeHistoryPending({
+      const pending = AgentSessionImporter.isNativeHistoryPending({
         historyOrigin: existing.historyOrigin,
         hasRun: existing.latestRunId !== null,
       });
-      yield* agentSessionImporter.importNativeHistory({ threadId, workspaceRoot }).pipe(
-        Effect.mapError(
-          (cause) =>
-            new AcpRegistryOperationError({
-              reason: "session_import_failed",
-              message: "Could not import the ACP session history.",
-              cause,
-            }),
-        ),
-      );
-      return { threadId, imported: repairing } as const;
+      if (!pending) return { threadId: existingThreadId, imported: false } as const;
+      yield* agentSessionImporter
+        .importNativeHistory({ threadId: existingThreadId, workspaceRoot })
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new AcpRegistryOperationError({
+                reason: "session_import_failed",
+                message: "Could not import the ACP session history.",
+                cause,
+              }),
+          ),
+        );
+      return { threadId: existingThreadId, imported: true } as const;
     }
 
     const provider = (yield* providerRegistry.getProviders).find(
@@ -206,11 +204,10 @@ const make = Effect.gen(function* () {
       provider?.models[0]?.slug ??
       "default";
     const commandId = CommandId.make(yield* random.uuidV4());
-    const launched = yield* Effect.result(
-      startup.enqueueCommand(
+    const launched = yield* startup
+      .enqueueCommand(
         threadLaunch.launch({
           commandId,
-          threadId,
           projectId: input.projectId,
           title: input.title ?? "Imported ACP session",
           modelSelection: { instanceId: input.instanceId, model },
@@ -232,26 +229,19 @@ const make = Effect.gen(function* () {
           createdBy: "user",
           creationSource: "web",
         }),
-      ),
-    );
+      )
+      // A queued launch can still commit after the caller disconnects. Hold the mutation permit until it settles.
+      .pipe(Effect.uninterruptible, Effect.result);
     if (Result.isFailure(launched)) {
-      const racedImport = yield* threadManagement.getThreadShell(threadId).pipe(
-        Effect.mapError(
-          (cause) =>
-            new AcpRegistryOperationError({
-              reason: "session_import_failed",
-              message: "Could not inspect the imported ACP session after launch failed.",
-              cause,
-            }),
-        ),
-      );
-      if (racedImport !== null) return { threadId, imported: false } as const;
+      const owner = yield* findOwner(identity);
+      if (owner !== null) return { threadId: owner, imported: false } as const;
       return yield* new AcpRegistryOperationError({
         reason: "session_import_failed",
         message: "Could not create a T3 thread for the ACP session.",
         cause: launched.failure,
       });
     }
+    const { threadId } = launched.success;
     // The thread is usable without its history, so a failed read only logs.
     yield* agentSessionImporter.importNativeHistory({ threadId, workspaceRoot }).pipe(
       Effect.catch((cause) =>
