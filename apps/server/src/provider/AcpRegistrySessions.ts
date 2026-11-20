@@ -176,11 +176,11 @@ const make = Effect.gen(function* () {
       ),
     );
     if (existing !== null) {
-      const pending = AgentSessionImporter.isNativeHistoryPending({
+      const repairing = AgentSessionImporter.isNativeHistoryPending({
         historyOrigin: existing.historyOrigin,
         hasRun: existing.latestRunId !== null,
       });
-      if (!pending) return { threadId: existingThreadId, imported: false } as const;
+      if (!repairing) return { threadId: existingThreadId, imported: false } as const;
       yield* agentSessionImporter
         .importNativeHistory({ threadId: existingThreadId, workspaceRoot })
         .pipe(
