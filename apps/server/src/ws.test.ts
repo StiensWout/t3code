@@ -2372,11 +2372,16 @@ const acpStores = Layer.mergeAll(EventStore.layer, ProjectionStore.layer).pipe(
 
 const seedAcpThread = Effect.fn(function* (
   sessionId: string,
-  state: { readonly imported: boolean; readonly ran: boolean; readonly nativeId?: string },
+  state: {
+    readonly imported: boolean;
+    readonly ran: boolean;
+    readonly nativeId?: string;
+    readonly deleted?: boolean;
+  },
+  threadId = acpThreadId(sessionId),
 ) {
   const sink = yield* EventSink.EventSinkV2;
   const now = DateTime.makeUnsafe("2026-10-23T00:00:00.000Z");
-  const threadId = acpThreadId(sessionId);
   const thread: OrchestrationV2AppThread = {
     createdBy: "user",
     creationSource: "web",
@@ -2461,6 +2466,15 @@ const seedAcpThread = Effect.fn(function* (
       },
     });
   }
+  if (state.deleted) {
+    events.push({
+      id: EventId.make(`${threadId}:deleted`),
+      type: "thread.deleted",
+      threadId,
+      occurredAt: now,
+      payload: { ...thread, deletedAt: now },
+    });
+  }
   yield* sink.write({ events });
   return threadId;
 });
@@ -2481,6 +2495,12 @@ it.effect("ACP session RPCs list a thread missing its history and repair it on i
       imported: false,
       ran: false,
       nativeId: "replacement-session",
+    });
+    const deletedThread = yield* seedAcpThread("deleted-session", {
+      imported: true,
+      ran: false,
+      nativeId: "deleted-session",
+      deleted: true,
     });
     const repaired: Array<ThreadId> = [];
     const deleted: Array<string> = [];
@@ -2507,6 +2527,7 @@ it.effect("ACP session RPCs list a thread missing its history and repair it on i
               "ran",
               "owned-session",
               "replacement-session",
+              "deleted-session",
             ].map(session),
             nextCursor: null,
             canLoad: true,
@@ -2523,7 +2544,7 @@ it.effect("ACP session RPCs list a thread missing its history and repair it on i
       layerUnusedConfigRpcServices,
       Layer.fresh(layerConfigSources),
       Layer.mock(ExternalLauncher.ExternalLauncher)({}),
-      Layer.mock(ProviderRegistry.ProviderRegistry)({}),
+      Layer.mock(ProviderRegistry.ProviderRegistry)({ getProviders: Effect.succeed([]) }),
       Layer.mock(UsageLimitSources.UsageLimitSources)({}),
       Layer.mock(RemoteOpenTargets.RemoteOpenTargets)({}),
       Layer.mock(DirectEndpoints.DirectEndpoints)({}),
@@ -2560,8 +2581,21 @@ it.effect("ACP session RPCs list a thread missing its history and repair it on i
               ),
             ),
       }),
-      // Repairing an existing thread must not launch another one.
-      Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
+      Layer.mock(ServerRuntimeStartup.ServerRuntimeStartup)({
+        awaitCommandReady: Effect.void,
+      }),
+      Layer.mock(ThreadLaunchService.ThreadLaunchService)({
+        launch: Effect.fn(function* (input) {
+          assert.equal(input.importedNativeThread?.ref.nativeId, "deleted-session");
+          const threadId = yield* seedAcpThread(
+            "reimported-session",
+            { imported: false, ran: false, nativeId: "deleted-session" },
+            input.threadId,
+          );
+          const projection = yield* projections.getThreadProjection(threadId).pipe(Effect.orDie);
+          return { threadId, projection, resumed: false };
+        }),
+      }),
       Layer.mock(AgentSessionImporter.AgentSessionImporter)({
         importNativeHistory: ({ threadId }) =>
           Effect.sync(() => repaired.push(threadId)).pipe(Effect.as(1)),
@@ -2608,6 +2642,7 @@ it.effect("ACP session RPCs list a thread missing its history and repair it on i
         ["ran", ran, undefined],
         ["owned-session", owned, undefined],
         ["replacement-session", ownedPending, true],
+        ["deleted-session", null, undefined],
       ],
     );
 
@@ -2640,12 +2675,22 @@ it.effect("ACP session RPCs list a thread missing its history and repair it on i
     });
     assert.deepEqual(repairedReplacement, { threadId: ownedPending, imported: true });
     assert.deepEqual(repaired, [pending, ownedPending]);
+
+    const reimported = yield* client[WS_METHODS.serverImportAcpRegistrySession]({
+      instanceId: acpInstanceId,
+      projectId: acpProjectId,
+      sessionId: "deleted-session",
+    });
+    assert.isTrue(reimported.imported);
+    assert.notEqual(reimported.threadId, deletedThread);
+    assert.deepEqual(repaired, [pending, ownedPending, reimported.threadId]);
   }).pipe(
     Effect.provide(
       Layer.mergeAll(
         EventSink.layer.pipe(Layer.provideMerge(acpStores)),
         Layer.mock(PreviewAutomationBroker.PreviewAutomationBroker)({}),
         Layer.mock(ServerBrowser.ServerBrowser)({}),
+        NodeCrypto.layer,
       ),
     ),
   ),
