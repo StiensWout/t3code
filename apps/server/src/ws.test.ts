@@ -2586,16 +2586,20 @@ it.effect("ACP session RPCs list a thread missing its history and repair it on i
         awaitCommandReady: Effect.void,
       }),
       Layer.mock(ThreadLaunchService.ThreadLaunchService)({
-        launch: Effect.fn(function* (input) {
-          assert.equal(input.importedNativeThread?.ref.nativeId, "deleted-session");
-          const threadId = yield* seedAcpThread(
-            "reimported-session",
-            { imported: false, ran: false, nativeId: "deleted-session" },
-            input.threadId,
-          ).pipe(Effect.provideService(EventSink.EventSinkV2, sink), Effect.orDie);
-          const projection = yield* projections.getThreadProjection(threadId).pipe(Effect.orDie);
-          return { threadId, projection, resumed: false };
-        }),
+        launch: Effect.fn(
+          function* (input) {
+            assert.equal(input.importedNativeThread?.ref.nativeId, "deleted-session");
+            const threadId = yield* seedAcpThread(
+              "reimported-session",
+              { imported: false, ran: false, nativeId: "deleted-session" },
+              input.threadId,
+            );
+            const projection = yield* projections.getThreadProjection(threadId);
+            return { threadId, projection, resumed: false };
+          },
+          Effect.provideService(EventSink.EventSinkV2, sink),
+          Effect.orDie,
+        ),
       }),
       Layer.mock(AgentSessionImporter.AgentSessionImporter)({
         importNativeHistory: ({ threadId }) =>
