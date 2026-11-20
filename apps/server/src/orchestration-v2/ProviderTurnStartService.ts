@@ -947,11 +947,10 @@ export const layer: Layer.Layer<
           ...(providerThread.nativeThreadRef?.nativeId == null || brokenNativeThread
             ? {}
             : { initialNativeThreadId: providerThread.nativeThreadRef.nativeId }),
-          ...(providerThread.nativeMetadata?.itemIdentityVersion === undefined
+          ...(providerThread.nativeMetadata == null
             ? {}
             : {
-                initialProviderItemIdentityVersion:
-                  providerThread.nativeMetadata.itemIdentityVersion,
+                initialProviderItemIdentity: providerThread.nativeMetadata,
               }),
         }),
       );

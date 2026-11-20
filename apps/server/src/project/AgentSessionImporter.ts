@@ -569,10 +569,10 @@ const make = Effect.gen(function* () {
           cwd: thread.worktreePath ?? input.workspaceRoot,
         },
         initialNativeThreadId: nativeThreadId,
-        ...(providerThread.nativeMetadata?.itemIdentityVersion === undefined
+        ...(providerThread.nativeMetadata == null
           ? {}
           : {
-              initialProviderItemIdentityVersion: providerThread.nativeMetadata.itemIdentityVersion,
+              initialProviderItemIdentity: providerThread.nativeMetadata,
             }),
       })
       .pipe(

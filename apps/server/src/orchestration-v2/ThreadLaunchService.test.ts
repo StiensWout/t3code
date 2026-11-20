@@ -24,6 +24,7 @@ import {
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
+  OrchestrationV2ProviderThreadJson,
   OrchestrationV2ThreadProjectionJson,
   ScheduledTaskId,
   type ServerProvider,
@@ -66,6 +67,7 @@ import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
+import { acpImportedItemIdentity } from "@t3tools/provider-acp/server/adapter";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ThreadLaunch from "./ThreadLaunchService.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
@@ -78,6 +80,18 @@ import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAda
 const projectId = ProjectId.make("project:launch-test");
 const otherProjectId = ProjectId.make("project:launch-other");
 const encodeThreadProjection = Schema.encodeEffect(OrchestrationV2ThreadProjectionJson);
+const decodeProtocol2ProviderThread = Schema.decodeUnknownEffect(
+  OrchestrationV2ProviderThreadJson.mapFields((fields) => ({
+    ...fields,
+    nativeMetadata: Schema.optional(
+      Schema.NullOr(
+        Schema.Struct({
+          itemIdentityVersion: Schema.optional(Schema.Literal(2)),
+        }),
+      ),
+    ),
+  })),
+);
 const dispatchIntakeCommand = (
   command: Parameters<typeof ThreadMessageIntake.dispatchCommand>[0],
 ) => ThreadMessageIntake.dispatchCommand(command, { managesProviders: true });
@@ -2612,6 +2626,7 @@ it.effect("reimporting a native ACP session preserves the deleted thread's bindi
           nativeId: "native-session-to-reimport",
           strength: "strong" as const,
         },
+        metadata: acpImportedItemIdentity,
       },
     };
     const original = yield* launches.launch(input);
@@ -2627,9 +2642,11 @@ it.effect("reimporting a native ACP session preserves the deleted thread's bindi
     });
     const [originalBinding] = original.projection.providerThreads;
     const [replacementBinding] = replacement.projection.providerThreads;
-    assert.isDefined(originalBinding);
-    assert.isDefined(replacementBinding);
-    assert.notEqual(replacementBinding?.id, originalBinding?.id);
+    assert(originalBinding);
+    assert(replacementBinding);
+    assert.notEqual(replacementBinding.id, originalBinding.id);
+    const encoded = yield* encodeThreadProjection(replacement.projection);
+    yield* decodeProtocol2ProviderThread(encoded.providerThreads[0]);
     const deleted = yield* threads.getThreadRecords(original.threadId, ["providerThreads"]);
     assert.deepEqual(deleted.providerThreads, [originalBinding]);
   }).pipe(Effect.provide(harness.layer));

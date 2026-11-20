@@ -1063,6 +1063,17 @@ function nativeThreadId(
   return Effect.succeed(id);
 }
 
+type AcpItemIdentity = Pick<
+  OrchestrationV2ProviderThreadNativeMetadata,
+  "itemIdentityVersion" | "itemIdentityScope"
+>;
+
+const acpInstanceItemIdentity = { itemIdentityVersion: 2 } as const;
+export const acpImportedItemIdentity = {
+  ...acpInstanceItemIdentity,
+  itemIdentityScope: "app-thread",
+} as const satisfies AcpItemIdentity;
+
 function makeProviderThread(input: {
   readonly driver: ProviderDriverKind;
   readonly providerInstanceId: ProviderInstanceId;
@@ -1072,7 +1083,7 @@ function makeProviderThread(input: {
   readonly nativeThreadId: string;
   readonly ownerNodeId?: OrchestrationV2ProviderThread["ownerNodeId"];
   readonly forkedFrom?: OrchestrationV2ProviderThread["forkedFrom"];
-  readonly itemIdentityVersion?: OrchestrationV2ProviderThreadNativeMetadata["itemIdentityVersion"];
+  readonly itemIdentity: AcpItemIdentity;
   readonly now: DateTime.Utc;
 }): OrchestrationV2ProviderThread {
   return {
@@ -1080,7 +1091,7 @@ function makeProviderThread(input: {
       driver: input.driver,
       providerInstanceId: input.providerInstanceId,
       nativeThreadId: input.nativeThreadId,
-      ...(input.itemIdentityVersion === 3 && input.appThreadId !== null
+      ...(input.itemIdentity.itemIdentityScope === "app-thread" && input.appThreadId !== null
         ? { appThreadId: input.appThreadId }
         : {}),
     }),
@@ -1102,9 +1113,10 @@ function makeProviderThread(input: {
     forkedFrom: input.forkedFrom ?? null,
     contextUsage: null,
     nativeMetadata:
-      input.itemIdentityVersion === undefined
+      input.itemIdentity.itemIdentityVersion === undefined &&
+      input.itemIdentity.itemIdentityScope === undefined
         ? null
-        : { itemIdentityVersion: input.itemIdentityVersion },
+        : input.itemIdentity,
     createdAt: input.now,
     updatedAt: input.now,
   };
@@ -2006,16 +2018,24 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
     openSession: Effect.fn("AcpAdapterV2.openSession")(
       function* (input: ProviderAdapter.ProviderAdapterV2OpenSessionInput) {
         const sessionScope = yield* Effect.scope;
-        let itemIdentityVersion =
-          input.initialProviderItemIdentityVersion ??
-          (input.initialNativeThreadId === undefined ? 2 : undefined);
+        let itemIdentity: AcpItemIdentity = {
+          itemIdentityVersion:
+            input.initialProviderItemIdentity?.itemIdentityVersion ??
+            (input.initialNativeThreadId === undefined ? 2 : undefined),
+          itemIdentityScope: input.initialProviderItemIdentity?.itemIdentityScope,
+        };
         let identityThreadId = input.threadId;
         const providerNativeId = (nativeId: string) => {
-          if (itemIdentityVersion === undefined) return nativeId;
+          if (
+            itemIdentity.itemIdentityVersion === undefined &&
+            itemIdentity.itemIdentityScope === undefined
+          )
+            return nativeId;
           const instanceScopedId = acpScopedNativeId(options.instanceId, nativeId);
-          return itemIdentityVersion === 3
-            ? `app-thread:${encodeURIComponent(identityThreadId)}:${instanceScopedId}`
-            : instanceScopedId;
+          if (itemIdentity.itemIdentityScope === "app-thread") {
+            return `app-thread:${encodeURIComponent(identityThreadId)}:${instanceScopedId}`;
+          }
+          return instanceScopedId;
         };
         const providerNodeId = (nativeItemId: string) =>
           idAllocator.derive.nodeFromProviderItem({
@@ -2038,7 +2058,10 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             nativeTurnId: providerNativeId(nativeTurnId),
           });
         const useProviderThreadIdentity = (thread: OrchestrationV2ProviderThread): void => {
-          itemIdentityVersion = thread.nativeMetadata?.itemIdentityVersion;
+          itemIdentity = {
+            itemIdentityVersion: thread.nativeMetadata?.itemIdentityVersion,
+            itemIdentityScope: thread.nativeMetadata?.itemIdentityScope,
+          };
           identityThreadId = thread.appThreadId ?? input.threadId;
         };
         const terminalEnvironmentBySessionId = new Map<string, NodeJS.ProcessEnv>();
@@ -2975,11 +2998,11 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           });
           const now = yield* DateTime.now;
           const nodeId =
-            itemIdentityVersion === 3
+            itemIdentity.itemIdentityScope === "app-thread"
               ? providerNodeId(nativeItemId)
               : idAllocator.derive.nodeFromProviderItem({ driver, nativeItemId });
           const turnItemId =
-            itemIdentityVersion === 3
+            itemIdentity.itemIdentityScope === "app-thread"
               ? providerTurnItemId(nativeItemId)
               : idAllocator.derive.turnItemFromProviderItem({ driver, nativeItemId });
           const ordinal = yield* resolveItemOrdinal(context, nativeItemId);
@@ -3734,7 +3757,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               appThreadId: childThreadId,
               providerSessionId: input.providerSessionId,
               nativeThreadId: childSessionId,
-              ...(itemIdentityVersion === undefined ? {} : { itemIdentityVersion }),
+              itemIdentity,
               forkedFrom: {
                 providerThreadId: context.input.providerThread.id,
                 providerTurnId: context.providerTurnId,
@@ -7930,7 +7953,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 sessionId: input.initialNativeThreadId,
                 error: initialStart.failure,
               });
-              itemIdentityVersion = 2;
+              itemIdentity = acpInstanceItemIdentity;
               yield* Ref.set(runtimeRestartRequired, false);
               prepareClaimableTerminalEnvironment(yield* readMcpContext(input.threadId));
               return yield* startAcpRuntime(input.threadId);
@@ -8546,7 +8569,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               driver,
               turnItem: {
                 id:
-                  itemIdentityVersion === 3
+                  itemIdentity.itemIdentityScope === "app-thread"
                     ? providerTurnItemId(nativeItemId)
                     : idAllocator.derive.turnItemFromProviderItem({ driver, nativeItemId }),
                 threadId: context.input.threadId,
@@ -9779,15 +9802,15 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                           "Cannot replace ACP session while a turn or background work is active",
                       });
                     yield* awaitRuntimeTeardown();
-                    const previousItemIdentityVersion = itemIdentityVersion;
-                    itemIdentityVersion = 2;
+                    const previousItemIdentity = itemIdentity;
+                    itemIdentity = acpInstanceItemIdentity;
                     prepareTerminalEnvironment(yield* readMcpContext(threadInput.threadId));
                     yield* startReplacementAcpRuntime(threadInput.threadId, (candidate) =>
                       commitReplacementSession(threadInput.threadId, candidate),
                     ).pipe(
                       Effect.tapError(() =>
                         Effect.sync(() => {
-                          itemIdentityVersion = previousItemIdentityVersion;
+                          itemIdentity = previousItemIdentity;
                         }),
                       ),
                     );
@@ -9807,7 +9830,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                     appThreadId: threadInput.threadId,
                     providerSessionId: input.providerSessionId,
                     nativeThreadId: sessionId,
-                    ...(itemIdentityVersion === undefined ? {} : { itemIdentityVersion }),
+                    itemIdentity,
                     now,
                   });
                   const providerThread =
@@ -9850,11 +9873,11 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 Effect.gen(function* () {
                   yield* awaitRuntimeTeardown();
                   const sessionId = yield* nativeThreadId(driver, threadInput.providerThread);
-                  const previousItemIdentityVersion = itemIdentityVersion;
+                  const previousItemIdentity = itemIdentity;
                   const previousIdentityThreadId = identityThreadId;
                   useProviderThreadIdentity(threadInput.providerThread);
                   const restorePreviousItemIdentity = Effect.sync(() => {
-                    itemIdentityVersion = previousItemIdentityVersion;
+                    itemIdentity = previousItemIdentity;
                     identityThreadId = previousIdentityThreadId;
                   });
                   const restartAfterInterrupt = yield* restartRuntimeAfterTeardownIfRequired(
@@ -10469,7 +10492,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                     });
                   }
                   yield* awaitRuntimeTeardown();
-                  itemIdentityVersion = 2;
+                  itemIdentity = acpInstanceItemIdentity;
                   prepareTerminalEnvironment(
                     yield* readMcpContext(rollbackInput.providerThread.appThreadId),
                   );
@@ -10490,7 +10513,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                       nativeConversationHeadRef: null,
                       nativeMetadata: {
                         ...rollbackInput.providerThread.nativeMetadata,
-                        itemIdentityVersion: 2 as const,
+                        ...acpInstanceItemIdentity,
+                        itemIdentityScope: undefined,
                       },
                       status: "idle" as const,
                       updatedAt: now,
@@ -10558,7 +10582,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                   yield* setActiveSessionSetup(forked);
                   yield* Ref.set(activeSelection, null);
                   yield* Ref.set(activeInteractionMode, null);
-                  itemIdentityVersion = 2;
+                  itemIdentity = acpInstanceItemIdentity;
                   const now = yield* DateTime.now;
                   const providerThread = makeProviderThread({
                     driver,
@@ -10567,7 +10591,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                     appThreadId: forkInput.targetThreadId,
                     providerSessionId: input.providerSessionId,
                     nativeThreadId: forked.sessionId,
-                    itemIdentityVersion: 2,
+                    itemIdentity,
                     ...(forkInput.ownerNodeId === undefined
                       ? {}
                       : { ownerNodeId: forkInput.ownerNodeId }),

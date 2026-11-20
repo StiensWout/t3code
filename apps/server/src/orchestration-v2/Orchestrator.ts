@@ -4041,7 +4041,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     });
     if (command.importedNativeThread !== undefined) {
       // A deleted T3 thread's binding still anchors its runs and any inherited fork history.
-      const isAcpImport = command.importedNativeThread.ref.driver === "acpRegistry";
+      const nativeMetadata = command.importedNativeThread.metadata ?? null;
       yield* emitEvent({
         type: "provider-thread.updated",
         threadId: command.threadId,
@@ -4053,7 +4053,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             driver: command.importedNativeThread.ref.driver,
             providerInstanceId: command.modelSelection.instanceId,
             nativeThreadId: command.importedNativeThread.ref.nativeId,
-            ...(isAcpImport ? { appThreadId: command.threadId } : {}),
+            ...(nativeMetadata?.itemIdentityScope === "app-thread"
+              ? { appThreadId: command.threadId }
+              : {}),
           }),
           driver: command.importedNativeThread.ref.driver,
           providerInstanceId: command.modelSelection.instanceId,
@@ -4068,9 +4070,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           handoffIds: [],
           forkedFrom: null,
           contextUsage: null,
-          nativeMetadata: isAcpImport
-            ? { ...command.importedNativeThread.metadata, itemIdentityVersion: 3 }
-            : (command.importedNativeThread.metadata ?? null),
+          nativeMetadata,
           createdAt: now,
           updatedAt: now,
         },

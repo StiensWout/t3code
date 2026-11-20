@@ -9,6 +9,7 @@ import {
   type ProviderDriverKind,
   type ProviderInstanceId,
 } from "@t3tools/contracts";
+import { acpImportedItemIdentity } from "@t3tools/provider-acp/server/adapter";
 import * as AcpRegistryRuntimeCoordinator from "@t3tools/provider-acp-registry/server/AcpRegistryRuntimeCoordinator";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
@@ -181,8 +182,13 @@ const make = Effect.gen(function* () {
         hasRun: existing.latestRunId !== null,
       });
       if (!repairing) return { threadId: existingThreadId, imported: false } as const;
+      const ownerWorkspaceRoot =
+        existing.worktreePath ??
+        (existing.projectId === input.projectId
+          ? workspaceRoot
+          : (yield* project(existing.projectId)).workspaceRoot);
       yield* agentSessionImporter
-        .importNativeHistory({ threadId: existingThreadId, workspaceRoot })
+        .importNativeHistory({ threadId: existingThreadId, workspaceRoot: ownerWorkspaceRoot })
         .pipe(
           Effect.mapError(
             (cause) =>
@@ -223,6 +229,7 @@ const make = Effect.gen(function* () {
                 strength: "strong",
               },
               metadata: {
+                ...acpImportedItemIdentity,
                 ...(input.title === undefined ? {} : { title: input.title }),
                 ...(input.updatedAt === undefined ? {} : { updatedAt: input.updatedAt }),
               },

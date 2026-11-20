@@ -2345,6 +2345,7 @@ it.effect.each([
 const acpDriver = ProviderDriverKind.make("acpRegistry");
 const acpInstanceId = ProviderInstanceId.make("acpRegistry_test");
 const acpProjectId = ProjectId.make("project:acp");
+const acpOwnerProjectId = ProjectId.make("project:acp-owner");
 const acpThreadId = (sessionId: string) =>
   IdAllocator.deriveThreadFromProviderThread({
     driver: acpDriver,
@@ -2377,6 +2378,7 @@ const seedAcpThread = Effect.fn(function* (
     readonly ran: boolean;
     readonly nativeId?: string;
     readonly deleted?: boolean;
+    readonly projectId?: ProjectId;
   },
   threadId = acpThreadId(sessionId),
 ) {
@@ -2386,7 +2388,7 @@ const seedAcpThread = Effect.fn(function* (
     createdBy: "user",
     creationSource: "web",
     id: threadId,
-    projectId: acpProjectId,
+    projectId: state.projectId ?? acpProjectId,
     title: sessionId,
     providerInstanceId: acpInstanceId,
     modelSelection: { instanceId: acpInstanceId, model: "default" },
@@ -2496,6 +2498,7 @@ it.effect("ACP session RPCs list a thread missing its history and repair it on i
       imported: false,
       ran: false,
       nativeId: "replacement-session",
+      projectId: acpOwnerProjectId,
     });
     const deletedThread = yield* seedAcpThread("deleted-session", {
       imported: true,
@@ -2504,6 +2507,7 @@ it.effect("ACP session RPCs list a thread missing its history and repair it on i
       deleted: true,
     });
     const repaired: Array<ThreadId> = [];
+    const historyWorkspaceRoots = new Map<ThreadId, string>();
     const deleted: Array<string> = [];
     const session = (sessionId: string) => ({
       sessionId,
@@ -2554,11 +2558,11 @@ it.effect("ACP session RPCs list a thread missing its history and repair it on i
       Layer.mock(ServerEnvironment.ServerEnvironment)({}),
       Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
       Layer.mock(ProjectService.ProjectService)({
-        getById: () =>
+        getById: (id) =>
           Effect.succeedSome({
-            id: acpProjectId,
+            id,
             title: "ACP",
-            workspaceRoot: "/workspace/acp",
+            workspaceRoot: id === acpOwnerProjectId ? "/workspace/acp-owner" : "/workspace/acp",
             defaultModelSelection: null,
             scripts: [],
             createdAt: "2026-10-23T00:00:00.000Z",
@@ -2602,8 +2606,12 @@ it.effect("ACP session RPCs list a thread missing its history and repair it on i
         ),
       }),
       Layer.mock(AgentSessionImporter.AgentSessionImporter)({
-        importNativeHistory: ({ threadId }) =>
-          Effect.sync(() => repaired.push(threadId)).pipe(Effect.as(1)),
+        importNativeHistory: ({ threadId, workspaceRoot }) =>
+          Effect.sync(() => {
+            repaired.push(threadId);
+            historyWorkspaceRoots.set(threadId, workspaceRoot);
+            return 1;
+          }),
       }),
       Layer.succeed(SqlClient.SqlClient, sql),
     );
@@ -2680,6 +2688,7 @@ it.effect("ACP session RPCs list a thread missing its history and repair it on i
     });
     assert.deepEqual(repairedReplacement, { threadId: ownedPending, imported: true });
     assert.deepEqual(repaired, [pending, ownedPending]);
+    assert.equal(historyWorkspaceRoots.get(ownedPending), "/workspace/acp-owner");
 
     const reimported = yield* client[WS_METHODS.serverImportAcpRegistrySession]({
       instanceId: acpInstanceId,

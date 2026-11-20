@@ -529,7 +529,10 @@ export interface ProviderAdapterV2OpenSessionInput {
   readonly promptSuggestions?: Effect.Effect<boolean>;
   readonly resumeFromSession?: OrchestrationV2ProviderSession;
   readonly initialNativeThreadId?: string;
-  readonly initialProviderItemIdentityVersion?: OrchestrationV2ProviderThreadNativeMetadata["itemIdentityVersion"];
+  readonly initialProviderItemIdentity?: Pick<
+    OrchestrationV2ProviderThreadNativeMetadata,
+    "itemIdentityVersion" | "itemIdentityScope"
+  >;
 }
 
 export interface ProviderAdapterV2EnsureThreadInput {
