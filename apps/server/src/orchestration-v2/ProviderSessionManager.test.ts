@@ -478,7 +478,7 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
     >;
     readonly beforeOpen?: (input: {
       readonly providerSessionId: ProviderSessionId;
-      readonly initialProviderItemIdentityVersion?: 2;
+      readonly initialProviderItemIdentityVersion?: ProviderAdapter.ProviderAdapterV2OpenSessionInput["initialProviderItemIdentityVersion"];
     }) => Effect.Effect<void>;
     readonly hasPendingBackgroundWork?: Effect.Effect<boolean>;
     readonly hasPendingBackgroundWorkForThread?: Effect.Effect<boolean>;
@@ -657,7 +657,7 @@ function layerTest(input: {
   >;
   readonly beforeOpen?: (input: {
     readonly providerSessionId: ProviderSessionId;
-    readonly initialProviderItemIdentityVersion?: 2;
+    readonly initialProviderItemIdentityVersion?: ProviderAdapter.ProviderAdapterV2OpenSessionInput["initialProviderItemIdentityVersion"];
   }) => Effect.Effect<void>;
   readonly failReleaseEventWrites?: boolean;
   readonly flakyReleaseWrites?: FlakyReleaseWrites;

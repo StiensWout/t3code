@@ -229,7 +229,7 @@ export interface ProviderSessionManagerV2Shape {
     readonly runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
     readonly resumeFromSession?: OrchestrationV2ProviderSession;
     readonly initialNativeThreadId?: string;
-    readonly initialProviderItemIdentityVersion?: 2;
+    readonly initialProviderItemIdentityVersion?: ProviderAdapter.ProviderAdapterV2OpenSessionInput["initialProviderItemIdentityVersion"];
   }) => Effect.Effect<
     ProviderAdapter.ProviderAdapterV2SessionRuntime,
     ProviderSessionManagerV2Error

@@ -2596,6 +2596,45 @@ it.effect("creates a strong provider-thread mapping for an imported native sessi
   }).pipe(Effect.provide(harness.layer));
 });
 
+it.effect("reimporting a native ACP session preserves the deleted thread's binding", () => {
+  const harness = makeHarness();
+  return Effect.gen(function* () {
+    const launches = yield* ThreadLaunch.ThreadLaunchService;
+    const threads = yield* ThreadManagement.ThreadManagementService;
+    const input = {
+      ...launchInput({
+        command: "command:launch:original-acp-import",
+        thread: "thread:launch:original-acp-import",
+      }),
+      importedNativeThread: {
+        ref: {
+          driver: ProviderDriverKind.make("acpRegistry"),
+          nativeId: "native-session-to-reimport",
+          strength: "strong" as const,
+        },
+      },
+    };
+    const original = yield* launches.launch(input);
+    yield* threads.dispatch({
+      type: "thread.delete",
+      commandId: CommandId.make("command:delete:original-acp-import"),
+      threadId: original.threadId,
+    });
+    const replacement = yield* launches.launch({
+      ...input,
+      commandId: CommandId.make("command:launch:replacement-acp-import"),
+      threadId: ThreadId.make("thread:launch:replacement-acp-import"),
+    });
+    const [originalBinding] = original.projection.providerThreads;
+    const [replacementBinding] = replacement.projection.providerThreads;
+    assert.isDefined(originalBinding);
+    assert.isDefined(replacementBinding);
+    assert.notEqual(replacementBinding?.id, originalBinding?.id);
+    const deleted = yield* threads.getThreadRecords(original.threadId, ["providerThreads"]);
+    assert.deepEqual(deleted.providerThreads, [originalBinding]);
+  }).pipe(Effect.provide(harness.layer));
+});
+
 it.effect("shared intake preserves durable attachment bytes after a lost launch result", () => {
   const harness = makeHarness();
   const layerFiles = ServerConfig.layerTest(process.cwd(), { prefix: "t3-message-intake-" }).pipe(

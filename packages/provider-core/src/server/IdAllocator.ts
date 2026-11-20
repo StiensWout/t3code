@@ -166,6 +166,7 @@ export interface IdAllocatorV2Derive {
   readonly providerThread: (input: {
     readonly driver: ProviderDriverKind;
     readonly nativeThreadId: string;
+    readonly appThreadId?: ThreadId;
     readonly providerInstanceId?: ProviderInstanceId;
   }) => ProviderThreadId;
   readonly providerTurn: (input: {
@@ -236,6 +237,7 @@ export function deriveProviderThread(input: {
   readonly driver: ProviderDriverKind;
   readonly providerInstanceId?: ProviderInstanceId;
   readonly nativeThreadId: string;
+  readonly appThreadId?: ThreadId;
 }): ProviderThreadId {
   return ProviderThreadId.make(
     joinId(
@@ -245,6 +247,7 @@ export function deriveProviderThread(input: {
       ...(input.providerInstanceId === undefined
         ? []
         : ["provider-instance", input.providerInstanceId]),
+      ...(input.appThreadId === undefined ? [] : ["app-thread", input.appThreadId]),
       "native-thread",
       input.nativeThreadId,
     ),

@@ -14,6 +14,7 @@ import {
   OrchestrationV2ProviderFailure,
   OrchestrationV2ProviderRetry,
   OrchestrationV2ProviderThread,
+  type OrchestrationV2ProviderThreadNativeMetadata,
   OrchestrationV2ProviderTurn,
   OrchestrationV2RuntimeRequest,
   OrchestrationV2Subagent,
@@ -528,7 +529,7 @@ export interface ProviderAdapterV2OpenSessionInput {
   readonly promptSuggestions?: Effect.Effect<boolean>;
   readonly resumeFromSession?: OrchestrationV2ProviderSession;
   readonly initialNativeThreadId?: string;
-  readonly initialProviderItemIdentityVersion?: 2;
+  readonly initialProviderItemIdentityVersion?: OrchestrationV2ProviderThreadNativeMetadata["itemIdentityVersion"];
 }
 
 export interface ProviderAdapterV2EnsureThreadInput {
