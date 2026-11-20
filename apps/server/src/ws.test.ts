@@ -2477,6 +2477,11 @@ it.effect("ACP session RPCs list a thread missing its history and repair it on i
       ran: true,
       nativeId: "owned-session",
     });
+    const ownedPending = yield* seedAcpThread("replacement-t3-thread", {
+      imported: false,
+      ran: false,
+      nativeId: "replacement-session",
+    });
     const repaired: Array<ThreadId> = [];
     const deleted: Array<string> = [];
     const session = (sessionId: string) => ({
@@ -2495,7 +2500,14 @@ it.effect("ACP session RPCs list a thread missing its history and repair it on i
       acpSessionManagement: {
         listSessions: () =>
           Effect.succeed({
-            sessions: ["new", "pending", "complete", "ran", "owned-session"].map(session),
+            sessions: [
+              "new",
+              "pending",
+              "complete",
+              "ran",
+              "owned-session",
+              "replacement-session",
+            ].map(session),
             nextCursor: null,
             canLoad: true,
             canResume: true,
@@ -2595,6 +2607,7 @@ it.effect("ACP session RPCs list a thread missing its history and repair it on i
         ["complete", complete, undefined],
         ["ran", ran, undefined],
         ["owned-session", owned, undefined],
+        ["replacement-session", ownedPending, true],
       ],
     );
 
@@ -2619,6 +2632,14 @@ it.effect("ACP session RPCs list a thread missing its history and repair it on i
     }).pipe(Effect.exit);
     assert.isTrue(Exit.isFailure(deletion));
     assert.deepEqual(deleted, []);
+
+    const repairedReplacement = yield* client[WS_METHODS.serverImportAcpRegistrySession]({
+      instanceId: acpInstanceId,
+      projectId: acpProjectId,
+      sessionId: "replacement-session",
+    });
+    assert.deepEqual(repairedReplacement, { threadId: ownedPending, imported: true });
+    assert.deepEqual(repaired, [pending, ownedPending]);
   }).pipe(
     Effect.provide(
       Layer.mergeAll(
