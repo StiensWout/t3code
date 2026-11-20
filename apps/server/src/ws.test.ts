@@ -2482,6 +2482,7 @@ const seedAcpThread = Effect.fn(function* (
 it.effect("ACP session RPCs list a thread missing its history and repair it on import", () =>
   Effect.gen(function* () {
     const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const sink = yield* EventSink.EventSinkV2;
     const sql = yield* SqlClient.SqlClient;
     const pending = yield* seedAcpThread("pending", { imported: false, ran: false });
     const complete = yield* seedAcpThread("complete", { imported: true, ran: false });
@@ -2591,7 +2592,7 @@ it.effect("ACP session RPCs list a thread missing its history and repair it on i
             "reimported-session",
             { imported: false, ran: false, nativeId: "deleted-session" },
             input.threadId,
-          );
+          ).pipe(Effect.provideService(EventSink.EventSinkV2, sink), Effect.orDie);
           const projection = yield* projections.getThreadProjection(threadId).pipe(Effect.orDie);
           return { threadId, projection, resumed: false };
         }),
