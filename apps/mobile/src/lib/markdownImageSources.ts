@@ -4,8 +4,12 @@ import {
   type MarkdownNode,
 } from "./markdownDocument";
 
+export function mayHaveMarkdownImages(markdown: string): boolean {
+  return markdown.includes("![") || /<img[\s>]/i.test(markdown);
+}
+
 export function markdownImageSources(markdown: string): string[] {
-  if (!markdown.includes("![") && !/<img[\s>]/i.test(markdown)) return [];
+  if (!mayHaveMarkdownImages(markdown)) return [];
   const root = parseMarkdownDocument(markdown);
   const imageUrl = markdownImageUrlResolver(root);
   const sources = new Set<string>();

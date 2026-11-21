@@ -1,11 +1,35 @@
 import type { ChatAttachment, EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { imageMimeType } from "@t3tools/shared/image";
 import type { FilePreviewItem } from "../../components/ui/FilePreviewModal.types";
-import { markdownImageSources } from "../../lib/markdownImageSources";
+import { prepareAssistantMarkdown } from "../../lib/assistantMarkdown";
+import { markdownImageSources, mayHaveMarkdownImages } from "../../lib/markdownImageSources";
 import { resolveMarkdownMediaPreview } from "../../lib/markdownMedia";
+import type { ThreadFeedMessage } from "../../lib/threadActivity";
+
+function assistantMarkdownImageSources(markdown: string): Set<string> {
+  const sources = new Set<string>();
+  const collect = (fragment: string, inheritedDefinitions?: ReadonlyArray<string>) => {
+    if (!mayHaveMarkdownImages(fragment)) return;
+    const { blocks, definitions } = prepareAssistantMarkdown(fragment, inheritedDefinitions);
+    for (const block of blocks) {
+      if (block.kind === "details") {
+        collect(block.body, definitions);
+      } else {
+        for (const segment of block.segments) {
+          if (segment.kind !== "markdown") continue;
+          for (const href of markdownImageSources(segment.markdown)) sources.add(href);
+        }
+      }
+    }
+  };
+  collect(markdown);
+  return sources;
+}
 
 export function messageImageGallery(
-  message: { readonly text: string; readonly attachments?: readonly ChatAttachment[] },
+  message: Pick<ThreadFeedMessage, "text" | "role"> & {
+    readonly attachments?: readonly ChatAttachment[];
+  },
   context: {
     environmentId: EnvironmentId;
     threadId: ThreadId;
@@ -27,7 +51,11 @@ export function messageImageGallery(
       },
     });
   }
-  for (const href of markdownImageSources(message.text)) {
+  const sources =
+    message.role === "assistant"
+      ? assistantMarkdownImageSources(message.text)
+      : markdownImageSources(message.text);
+  for (const href of sources) {
     const preview = resolveMarkdownMediaPreview(href, { ...context, imageEmbed: true });
     if (preview?.kind === "image") images.push(preview.source);
   }

@@ -114,10 +114,6 @@ import {
   contextCompactionTokenCounts,
   resolveViewedImageAsset,
 } from "@t3tools/client-runtime/work-log/presentation";
-import {
-  renderCodexInlineDirectivesAsMarkdown,
-  splitCodexArtifactTemplateMarkdown,
-} from "@t3tools/shared/codexMarkdownDirectives";
 import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
 import { imageMimeType } from "@t3tools/shared/image";
 import { videoMimeType } from "@t3tools/shared/video";
@@ -188,8 +184,7 @@ import { FONT_FAMILIES } from "../../lib/fontFamilies";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { downloadAndShareAttachment } from "../../lib/attachmentDownload";
-import { splitMarkdownDetails } from "../../lib/markdownDetails";
-import { markdownReferenceDefinitions, withReferenceDefinitions } from "../../lib/markdownDocument";
+import { prepareAssistantMarkdown } from "../../lib/assistantMarkdown";
 import { hasWideMarkdownBlock } from "../../lib/wideMarkdownBlocks";
 import {
   SelectableMarkdownText,
@@ -1431,7 +1426,6 @@ const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
   );
 });
 
-// Folds split first, so an artifact card inside a fold stays inside it.
 function AssistantMarkdownBlocks(props: {
   readonly markdown: string;
   readonly citationPath?: string;
@@ -1446,20 +1440,10 @@ function AssistantMarkdownBlocks(props: {
   readonly models: ReturnType<typeof useModelMentions>;
 }) {
   const m = useMessages();
-  const { blocks, definitions } = useMemo(() => {
-    const blocks = splitMarkdownDetails(props.markdown, m).map((block) =>
-      block.kind === "details"
-        ? block
-        : { ...block, segments: splitCodexArtifactTemplateMarkdown(block.markdown) },
-    );
-    const [first] = blocks;
-    // A reply rendered as one document resolves its own references; skip the extra parse.
-    const whole = blocks.length === 1 && first?.kind === "markdown" && first.segments.length === 1;
-    return {
-      blocks,
-      definitions: props.definitions ?? (whole ? [] : markdownReferenceDefinitions(props.markdown)),
-    };
-  }, [m, props.markdown, props.definitions]);
+  const { blocks, definitions } = useMemo(
+    () => prepareAssistantMarkdown(props.markdown, props.definitions, m),
+    [m, props.markdown, props.definitions],
+  );
   return blocks.map((block, blockIndex) => {
     if (block.kind === "details") {
       return (
@@ -1492,9 +1476,7 @@ function AssistantMarkdownBlocks(props: {
       return (
         <SelectableMarkdownText
           key={`markdown:${offset}`}
-          markdown={renderCodexInlineDirectivesAsMarkdown(
-            withReferenceDefinitions(segment.markdown, definitions),
-          )}
+          markdown={segment.markdown}
           skills={props.skills}
           models={props.models}
           textStyle={props.markdownStyles.nativeTextStyle}

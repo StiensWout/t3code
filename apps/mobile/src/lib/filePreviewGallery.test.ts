@@ -9,6 +9,32 @@ import { filePreviewGallery, filePreviewKey } from "./filePreviewGallery";
 vi.mock("./uuid", () => ({}));
 
 describe("image preview groups", () => {
+  it("uses the fold's image definition ahead of the reply's definition", () => {
+    const markdown = [
+      "![First](https://example.com/first.png)",
+      "[shot]: https://example.com/outside.png",
+      "[first]: https://example.com/first.png",
+      "<details open>\n<summary>Screenshots</summary>",
+      "![Shot][shot]",
+      "![First again][first]",
+      "[shot]: https://example.com/inside.png",
+      "</details>",
+    ].join("\n\n");
+    const images = messageImageGallery(
+      { text: markdown, role: "assistant" },
+      {
+        environmentId: EnvironmentId.make("test"),
+        threadId: ThreadId.make("thread"),
+        workspaceRoot: null,
+      },
+    );
+
+    expect(images).toMatchObject([
+      { uri: "https://example.com/first.png" },
+      { uri: "https://example.com/inside.png" },
+    ]);
+  });
+
   it.each([false, true])(
     "keeps one entry per image through upload and delivery (file: %s)",
     (fileBacked) => {
@@ -26,6 +52,7 @@ describe("image preview groups", () => {
       const delivered = (id: string) =>
         messageImageGallery(
           {
+            role: "user",
             text: "",
             attachments: [
               {
