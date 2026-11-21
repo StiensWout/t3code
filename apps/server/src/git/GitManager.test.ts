@@ -4336,6 +4336,12 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       const initialRemoteRefs = (yield* runGit(remoteDir, ["--git-dir=.", "show-ref", "--heads"]))
         .stdout;
       const { manager } = yield* makeManager();
+      const git = yield* GitVcsDriver.GitVcsDriver;
+      const switchCheckout = runGit(repoDir, gitArgs).pipe(
+        Effect.provideService(GitVcsDriver.GitVcsDriver, git),
+        Effect.orDie,
+        Effect.asVoid,
+      );
 
       const result = yield* runStackedAction(
         manager,
@@ -4344,7 +4350,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
           progressReporter: {
             publish: (event) =>
               event.kind === "phase_started" && event.phase === "push"
-                ? runGit(repoDir, gitArgs).pipe(Effect.orDie, Effect.asVoid)
+                ? switchCheckout
                 : Effect.void,
           },
         },
