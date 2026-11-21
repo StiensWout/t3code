@@ -4319,6 +4319,97 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
     }),
   );
 
+  it.effect.each([
+    { change: "switching branches", gitArgs: ["checkout", "feature/check"] },
+    { change: "detaching HEAD", gitArgs: ["checkout", "--detach"] },
+  ])("requires a new push confirmation after $change during the push phase", ({ gitArgs }) =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      yield* runGit(repoDir, ["push", "-u", "origin", "main"]);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/check"]);
+      yield* runGit(repoDir, ["commit", "--allow-empty", "-m", "Feature commit"]);
+      yield* runGit(repoDir, ["checkout", "main"]);
+      yield* runGit(repoDir, ["commit", "--allow-empty", "-m", "Main commit"]);
+      const initialRemoteRefs = (yield* runGit(remoteDir, ["--git-dir=.", "show-ref", "--heads"]))
+        .stdout;
+      const { manager } = yield* makeManager();
+
+      const result = yield* runStackedAction(
+        manager,
+        { cwd: repoDir, action: "push", expectedBranch: "main" },
+        {
+          progressReporter: {
+            publish: (event) =>
+              event.kind === "phase_started" && event.phase === "push"
+                ? runGit(repoDir, gitArgs).pipe(Effect.orDie, Effect.asVoid)
+                : Effect.void,
+          },
+        },
+      ).pipe(Effect.result);
+
+      expect(result).toMatchObject({
+        _tag: "Failure",
+        failure: { detail: expect.stringContaining("Confirm the action again") },
+      });
+      expect((yield* runGit(remoteDir, ["--git-dir=.", "show-ref", "--heads"])).stdout).toBe(
+        initialRemoteRefs,
+      );
+    }),
+  );
+
+  it.effect("pushes the confirmed branch if the checkout switches after push validation", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      yield* runGit(repoDir, ["push", "-u", "origin", "main"]);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/check"]);
+      yield* runGit(repoDir, ["push", "-u", "origin", "feature/check"]);
+      yield* runGit(repoDir, ["commit", "--allow-empty", "-m", "Feature commit"]);
+      yield* runGit(repoDir, ["checkout", "main"]);
+      yield* runGit(repoDir, ["commit", "--allow-empty", "-m", "Main commit"]);
+      const mainCommit = (yield* runGit(repoDir, ["rev-parse", "refs/heads/main"])).stdout.trim();
+      const initialRemoteRefs = (yield* runGit(remoteDir, ["--git-dir=.", "show-ref", "--heads"]))
+        .stdout;
+
+      let pushing = false;
+      const gate = {
+        matches: (args: ReadonlyArray<string>) =>
+          pushing && args.join(" ") === "config --get branch.main.remote",
+        reached: yield* Deferred.make<void>(),
+        release: yield* Deferred.make<void>(),
+      };
+      const { manager } = yield* makeManager({ gitSpawnGate: gate });
+      const action = yield* Effect.forkChild(
+        runStackedAction(
+          manager,
+          { cwd: repoDir, action: "push", expectedBranch: "main" },
+          {
+            progressReporter: {
+              publish: (event) =>
+                Effect.sync(() => {
+                  if (event.kind === "phase_started" && event.phase === "push") pushing = true;
+                }),
+            },
+          },
+        ),
+      );
+      yield* Deferred.await(gate.reached);
+      yield* runGit(repoDir, ["checkout", "feature/check"]);
+      yield* Deferred.succeed(gate.release, undefined);
+      const result = yield* Fiber.join(action);
+
+      expect(result.push).toMatchObject({ status: "pushed", branch: "main" });
+      expect((yield* runGit(remoteDir, ["--git-dir=.", "show-ref", "--heads"])).stdout).toBe(
+        initialRemoteRefs.replace(/^\S+( refs\/heads\/main)$/m, `${mainCommit}$1`),
+      );
+    }),
+  );
+
   it.effect("hands the branch base to the host when a failed first push is retried", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");

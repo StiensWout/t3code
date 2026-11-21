@@ -879,8 +879,13 @@ export const make = Effect.gen(function* () {
   const pushCurrentBranch = Effect.fn("GitManager.pushCurrentBranch")(function* (
     cwd: string,
     branch: string | null,
+    expectedBranch?: string,
   ) {
-    const result = yield* gitCore.pushCurrentBranch(cwd, branch);
+    const result = yield* gitCore.pushCurrentBranch(
+      cwd,
+      branch,
+      expectedBranch === undefined ? undefined : { expectedBranch },
+    );
     if (result.status === "pushed" && result.branch) {
       yield* shareBranchBase(cwd, result.branch);
     }
@@ -4204,7 +4209,9 @@ export const make = Effect.gen(function* () {
               })
               .pipe(
                 Effect.tap(() => Ref.set(currentPhase, Option.some("push"))),
-                Effect.flatMap(() => pushCurrentBranch(input.cwd, currentBranch)),
+                Effect.flatMap(() =>
+                  pushCurrentBranch(input.cwd, currentBranch, input.expectedBranch),
+                ),
               )
           : { status: "skipped_not_requested" as const };
 
