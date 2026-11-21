@@ -1,4 +1,4 @@
-import type { Root, RootContent } from "mdast";
+import type { Image, ImageReference, Root, RootContent } from "mdast";
 import { unified, type Processor } from "unified";
 import remarkParse from "remark-parse";
 import remarkGfm from "remark-gfm";
@@ -511,15 +511,7 @@ export function markdownForNativeRendering(markdown: string, fileLink: RegExp): 
   return transformNativeMarkdown(markdownForNativeParsing(markdown), fileLink, true);
 }
 
-/** Native media slots only cover standalone images; nested file embeds must become links. */
-export function markdownWithFileEmbeds(
-  markdown: string,
-  label: (href: string, standalone: boolean) => string | null,
-): { markdown: string; fileHrefs: ReadonlySet<string> } {
-  const fileHrefs = new Set<string>();
-  if (!markdown.includes("![")) return { markdown, fileHrefs };
-  const root = parser.parse(markdown);
-  const topLevelBlocks = new Set<MarkdownNode>(root.children);
+function markdownDefinitionUrls(root: Root) {
   const definitions = new Map<string, string>();
   const collect = (node: MarkdownNode) => {
     if (node.type === "definition") {
@@ -529,11 +521,31 @@ export function markdownWithFileEmbeds(
     if ("children" in node) node.children.forEach(collect);
   };
   collect(root);
+  return definitions;
+}
+
+export function markdownImageUrlResolver(root: Root) {
+  let definitions: Map<string, string> | undefined;
+  return (node: Image | ImageReference) =>
+    node.type === "image"
+      ? node.url
+      : (definitions ??= markdownDefinitionUrls(root)).get(node.identifier.toUpperCase());
+}
+
+/** Native media slots only cover standalone images; nested file embeds must become links. */
+export function markdownWithFileEmbeds(
+  markdown: string,
+  label: (href: string, standalone: boolean) => string | null,
+): { markdown: string; fileHrefs: ReadonlySet<string> } {
+  const fileHrefs = new Set<string>();
+  if (!markdown.includes("![")) return { markdown, fileHrefs };
+  const root = parser.parse(markdown);
+  const topLevelBlocks = new Set<MarkdownNode>(root.children);
+  const imageUrl = markdownImageUrlResolver(root);
   const edits: Array<{ start: number; end: number; content: string }> = [];
   const visit = (node: MarkdownNode, standalone = false, insideLink = false) => {
     if (node.type === "image" || node.type === "imageReference") {
-      const href =
-        node.type === "image" ? node.url : definitions.get(node.identifier.toUpperCase());
+      const href = imageUrl(node);
       const name = href === undefined ? null : label(href, standalone);
       const start = node.position?.start.offset;
       const end = node.position?.end.offset;
