@@ -28,6 +28,7 @@ import type {
   ChangeRequest,
   GitActionProgressEvent,
   GitPreparePullRequestThreadInput,
+  GitRunStackedActionInput,
   ModelSelection,
 } from "@t3tools/contracts";
 
@@ -616,14 +617,7 @@ const readFakeChangeRequestTemplate = Effect.fnUntraced(function* (input: {
 });
 function runStackedAction(
   manager: GitManager.GitManager["Service"],
-  input: {
-    cwd: string;
-    action: "commit" | "push" | "create_pr" | "commit_push" | "commit_push_pr";
-    actionId?: string;
-    commitMessage?: string;
-    featureBranch?: boolean;
-    filePaths?: readonly string[];
-  },
+  input: Omit<GitRunStackedActionInput, "actionId"> & { readonly actionId?: string },
   options?: Parameters<GitManager.GitManager["Service"]["runStackedAction"]>[1],
 ) {
   return manager.runStackedAction(
