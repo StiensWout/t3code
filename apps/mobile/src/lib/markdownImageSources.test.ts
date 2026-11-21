@@ -36,3 +36,16 @@ it("collects a streaming image once its definition arrives", () => {
   expect(markdownImageSources(image)).toEqual([]);
   expect(markdownImageSources(`${image}\n\n[red]: ./red.png`)).toEqual(["./red.png"]);
 });
+
+it("retains the inline gallery when a pull-request body only defines an image across segments", () => {
+  const markdown = [
+    "![Inline](https://example.com/inline.png)",
+    "![Shot][shot]",
+    "https://example.com/demo.mp4",
+    "<details>\n<summary>Details</summary>\n[shot]: https://example.com/hidden.png\n</details>",
+  ].join("\n\n");
+
+  expect(markdownImageSources(markdown, { inlineOnly: true })).toEqual([
+    "https://example.com/inline.png",
+  ]);
+});

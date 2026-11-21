@@ -11,7 +11,10 @@ import {
 import { isWindowsAbsolutePath } from "@t3tools/shared/path";
 import { hasRightToLeftLetter, textDirection } from "@t3tools/shared/textDirection";
 
+import { remarkNativeMarkdownMath } from "./nativeMarkdownMath";
+
 const parser = unified().use(remarkParse).use(remarkGfm).use(remarkKeepWindowsProsePaths);
+const mathParser = parser().use(remarkNativeMarkdownMath);
 export type MarkdownNode = Root | RootContent;
 
 interface MarkdownEdit {
@@ -503,8 +506,11 @@ export function markdownForNativeParsing(markdown: string): string {
   return markdownWithWindowsPathDestinations(markdownWithHtml(markdown));
 }
 
-export function parseMarkdownDocument(markdown: string): Root {
-  return parser.parse(markdownForNativeParsing(markdown));
+export function parseMarkdownDocument(markdown: string, mathRenderingEnabled = false): Root {
+  const normalized = markdownForNativeParsing(markdown);
+  return (mathRenderingEnabled && /\$|\\[([]/.test(normalized) ? mathParser : parser).parse(
+    normalized,
+  );
 }
 
 export function markdownForNativeRendering(markdown: string, fileLink: RegExp): string {

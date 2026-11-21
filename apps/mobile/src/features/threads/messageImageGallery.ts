@@ -6,7 +6,10 @@ import { markdownImageSources, mayHaveMarkdownImages } from "../../lib/markdownI
 import { resolveMarkdownMediaPreview } from "../../lib/markdownMedia";
 import type { ThreadFeedMessage } from "../../lib/threadActivity";
 
-function assistantMarkdownImageSources(markdown: string): Set<string> {
+function assistantMarkdownImageSources(
+  markdown: string,
+  mathRenderingEnabled: boolean,
+): Set<string> {
   const sources = new Set<string>();
   const collect = (fragment: string, inheritedDefinitions?: ReadonlyArray<string>) => {
     if (!mayHaveMarkdownImages(fragment)) return;
@@ -17,7 +20,9 @@ function assistantMarkdownImageSources(markdown: string): Set<string> {
       } else {
         for (const segment of block.segments) {
           if (segment.kind !== "markdown") continue;
-          for (const href of markdownImageSources(segment.markdown)) sources.add(href);
+          for (const href of markdownImageSources(segment.markdown, { mathRenderingEnabled })) {
+            sources.add(href);
+          }
         }
       }
     }
@@ -34,6 +39,7 @@ export function messageImageGallery(
     environmentId: EnvironmentId;
     threadId: ThreadId;
     workspaceRoot: string | null | undefined;
+    mathRenderingEnabled?: boolean;
   },
 ): FilePreviewItem[] {
   const images: FilePreviewItem[] = [];
@@ -53,8 +59,8 @@ export function messageImageGallery(
   }
   const sources =
     message.role === "assistant"
-      ? assistantMarkdownImageSources(message.text)
-      : markdownImageSources(message.text);
+      ? assistantMarkdownImageSources(message.text, context.mathRenderingEnabled ?? false)
+      : markdownImageSources(message.text, { inlineOnly: true });
   for (const href of sources) {
     const preview = resolveMarkdownMediaPreview(href, { ...context, imageEmbed: true });
     if (preview?.kind === "image") images.push(preview.source);

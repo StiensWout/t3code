@@ -36,6 +36,38 @@ describe("image preview groups", () => {
   });
 
   it.each([false, true])(
+    "uses the chat math preference (%s) when collecting images",
+    (mathRenderingEnabled) => {
+      const markdown = [
+        "![First](https://example.com/first.png)",
+        "$$\n![Display][display]\n$$",
+        "Formula $![Inline][inline]$.",
+        "\\[![Bracketed][bracketed]\\]",
+        "$$\n![Unclosed][unclosed]",
+        [
+          "[display]: https://example.com/display.png",
+          "[inline]: https://example.com/inline.png",
+          "[bracketed]: https://example.com/bracketed.png",
+          "[unclosed]: https://example.com/unclosed.png",
+        ].join("\n"),
+      ].join("\n\n");
+      const context = {
+        environmentId: EnvironmentId.make("test"),
+        threadId: ThreadId.make("thread"),
+        workspaceRoot: null,
+        mathRenderingEnabled,
+      };
+      const images = messageImageGallery({ text: markdown, role: "assistant" }, context);
+      const names = mathRenderingEnabled
+        ? ["first", "unclosed"]
+        : ["first", "display", "inline", "bracketed", "unclosed"];
+      expect(images).toMatchObject(
+        names.map((name) => ({ uri: `https://example.com/${name}.png` })),
+      );
+    },
+  );
+
+  it.each([false, true])(
     "keeps one entry per image through upload and delivery (file: %s)",
     (fileBacked) => {
       const environmentId = EnvironmentId.make("test");

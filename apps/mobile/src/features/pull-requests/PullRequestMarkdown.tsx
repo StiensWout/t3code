@@ -128,6 +128,7 @@ export function PullRequestMarkdown(props: {
   const [undoneTicks, setUndoneTicks] = useState(0);
   const gallery: FilePreviewItem[] = markdownImageSources(
     props.imageGroupMarkdown ?? props.markdown,
+    { inlineOnly: true },
   )
     .map((href) => (changeRequestUrl ? resolveChangeRequestMediaUrl(href, changeRequestUrl) : href))
     .filter(

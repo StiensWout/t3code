@@ -4546,12 +4546,34 @@ function MessageImageGalleryScope(props: {
   children: ReactNode;
 }) {
   const { entry, environmentId, threadId, workspaceRoot } = props;
-  const images =
-    entry.type === "message"
-      ? [
-          ...messageImageGallery(entry.message, { environmentId, threadId, workspaceRoot }),
-          ...composerImageGallery(entry.pendingMessage?.attachments ?? [], environmentId),
-        ]
-      : [];
+  const { mathRenderingEnabled } = useAppearancePreferences();
+  const message = entry.type === "message" ? entry.message : undefined;
+  const pendingAttachments =
+    entry.type === "message" ? entry.pendingMessage?.attachments : undefined;
+  const text = message?.text;
+  const role = message?.role;
+  const attachments = message?.attachments;
+  const images = useMemo(
+    () =>
+      text === undefined || role === undefined
+        ? []
+        : [
+            ...messageImageGallery(
+              { text, role, ...(attachments ? { attachments } : {}) },
+              { environmentId, threadId, workspaceRoot, mathRenderingEnabled },
+            ),
+            ...composerImageGallery(pendingAttachments ?? [], environmentId),
+          ],
+    [
+      text,
+      role,
+      attachments,
+      environmentId,
+      threadId,
+      workspaceRoot,
+      mathRenderingEnabled,
+      pendingAttachments,
+    ],
+  );
   return <FilePreviewGallery value={images}>{props.children}</FilePreviewGallery>;
 }

@@ -8,13 +8,16 @@ export function mayHaveMarkdownImages(markdown: string): boolean {
   return markdown.includes("![") || /<img[\s>]/i.test(markdown);
 }
 
-export function markdownImageSources(markdown: string): string[] {
+export function markdownImageSources(
+  markdown: string,
+  options?: { readonly inlineOnly?: boolean; readonly mathRenderingEnabled?: boolean },
+): string[] {
   if (!mayHaveMarkdownImages(markdown)) return [];
-  const root = parseMarkdownDocument(markdown);
+  const root = parseMarkdownDocument(markdown, options?.mathRenderingEnabled);
   const imageUrl = markdownImageUrlResolver(root);
   const sources = new Set<string>();
   const visit = (node: MarkdownNode) => {
-    if (node.type === "image" || node.type === "imageReference") {
+    if (node.type === "image" || (node.type === "imageReference" && !options?.inlineOnly)) {
       const href = imageUrl(node);
       if (href !== undefined) sources.add(href);
     }
