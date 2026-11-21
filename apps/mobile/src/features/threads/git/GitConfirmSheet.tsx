@@ -154,7 +154,7 @@ export function GitConfirmSheet(props: GitConfirmSheetProps) {
         <SheetActionButton
           icon="arrow.right.circle"
           label={copy?.continueLabel ?? gt("Continue")}
-          disabled={!canWriteSourceControl || !confirmAction || !branchName}
+          disabled={!canWriteSourceControl || !branchName}
           onPress={() => void continuePendingAction()}
         />
         <SheetActionButton
