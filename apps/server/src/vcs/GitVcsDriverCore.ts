@@ -150,6 +150,7 @@ const NON_REPOSITORY_STATUS_DETAILS = Object.freeze<GitVcsDriver.GitStatusDetail
   hasOriginRemote: false,
   isDefaultBranch: false,
   branch: null,
+  headOid: null,
   upstreamRef: null,
   hasWorkingTreeChanges: false,
   workingTree: { files: [], insertions: 0, deletions: 0 },
@@ -1785,6 +1786,20 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       Effect.map((result) => (result.exitCode === 0 ? branchNameFromHeadRef(result.stdout) : null)),
     );
 
+  const assertCurrentBranch = Effect.fn("GitVcsDriver.assertCurrentBranch")(function* (
+    cwd: string,
+    expectedBranch: string,
+  ) {
+    const operation = "GitVcsDriver.assertCurrentBranch";
+    const branch = yield* readCurrentBranch(operation, cwd);
+    if (branch !== expectedBranch) {
+      return yield* new GitCommandError({
+        ...gitCommandContext({ operation, cwd, args: ["symbolic-ref", "--quiet", "HEAD"] }),
+        detail: GitVcsDriver.GIT_CHECKOUT_CHANGED_DETAIL,
+      });
+    }
+  });
+
   const resolveRepositoryPathsUncached = Effect.fn("resolveRepositoryPathsUncached")(function* (
     cwd: string,
   ) {
@@ -2630,7 +2645,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     cwd: string,
     refreshUpstream: boolean,
     includeAheadOfDefault = true,
-    confirmedBranch?: string,
+    confirmation?: { readonly branch: string; readonly sourceRef: string },
   ) {
     const branchResult = yield* executeGitWithStableDiagnostics(
       "GitVcsDriver.statusDetailsRemote.branch",
@@ -2695,7 +2710,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     }
     // `%(upstream:remotename)` is empty exactly when `@{upstream}` does not resolve.
     const currentUpstreamRef =
-      upstreamRemoteName === "" ? null : yield* readUpstreamRef(cwd, confirmedBranch);
+      upstreamRemoteName === "" ? null : yield* readUpstreamRef(cwd, confirmation?.branch);
     let upstreamRef = currentUpstreamRef;
     // Trimming a remote that starts with Unicode whitespace can leave a leading slash.
     if (currentUpstreamRef?.startsWith("/")) {
@@ -2703,7 +2718,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     }
     let aheadCount = 0;
     let behindCount = 0;
-    const sourceRef = confirmedBranch === undefined ? "HEAD" : `refs/heads/${confirmedBranch}`;
+    const sourceRef = confirmation?.sourceRef ?? "HEAD";
 
     if (upstreamRef) {
       const divergence = yield* executeGit(
@@ -2713,7 +2728,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           "rev-list",
           "--left-right",
           "--count",
-          `${sourceRef}...${confirmedBranch ?? ""}@{upstream}`,
+          `${sourceRef}...${confirmation?.branch ?? ""}@{upstream}`,
         ],
         { allowNonZeroExit: true },
       );
@@ -3078,6 +3093,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       hasOriginRemote: hasPrimaryRemote,
       isDefaultBranch,
       branch: refName,
+      headOid,
       upstreamRef,
       hasWorkingTreeChanges,
       workingTree: {
@@ -3528,6 +3544,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         });
       }
     }
+    if (options?.expectedBranch !== undefined) {
+      yield* assertCurrentBranch(cwd, options.expectedBranch);
+    }
     const partialCommitPaths =
       options?.stage !== undefined
         ? yield* stageCommitChanges(cwd, options.stage.filePaths)
@@ -3603,6 +3622,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
             onStderrLine: (line: string) =>
               options.progress?.onOutputLine?.({ stream: "stderr", text: line }) ?? Effect.void,
           };
+    if (options?.expectedBranch !== undefined) {
+      yield* assertCurrentBranch(cwd, options.expectedBranch);
+    }
     yield* executeGit("GitVcsDriver.commit.commit", cwd, args, {
       maxOutputBytes: REVIEW_METADATA_MAX_OUTPUT_BYTES,
       ...onlyPathspecStdin,
@@ -3766,17 +3788,29 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     // Refresh first so the branch, upstream and divergence reads below stay close together.
     yield* refreshStatusUpstream(cwd);
     const expectedBranch = options?.expectedBranch;
-    const details = yield* readStatusDetailsRemote(cwd, false, false, expectedBranch);
-    if (expectedBranch !== undefined && details.branch !== expectedBranch) {
-      return yield* new GitCommandError({
+    const checkoutChanged = () =>
+      new GitCommandError({
         ...gitCommandContext({
           operation: "GitVcsDriver.pushCurrentBranch",
           cwd,
           args: ["push"],
         }),
-        detail: "The checkout changed since you opened the confirmation. Confirm the action again.",
+        detail: GitVcsDriver.GIT_CHECKOUT_CHANGED_DETAIL,
       });
+    let confirmation: { branch: string; sourceRef: string } | undefined;
+    if (expectedBranch !== undefined) {
+      // Git's revision lookup can fall back to a tag even for a missing full branch ref.
+      const ref = yield* executeGit(
+        "GitVcsDriver.pushCurrentBranch.pinBranch",
+        cwd,
+        ["show-ref", "--verify", "--hash", "--", `refs/heads/${expectedBranch}`],
+        { allowNonZeroExit: true },
+      );
+      if (ref.exitCode !== 0) return yield* checkoutChanged();
+      confirmation = { branch: expectedBranch, sourceRef: `${ref.stdout.trim()}^{commit}` };
     }
+    const details = yield* readStatusDetailsRemote(cwd, false, false, confirmation);
+    if (confirmation && details.branch !== confirmation.branch) return yield* checkoutChanged();
     const branch = details.branch ?? fallbackBranch;
     if (!branch) {
       return yield* new GitCommandError({
@@ -3789,8 +3823,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       });
     }
 
-    // HEAD can move after validation, so a confirmed push must use the checked branch's ref.
-    const sourceRef = expectedBranch === undefined ? "HEAD" : `refs/heads/${branch}`;
+    const sourceRef = confirmation?.sourceRef ?? "HEAD";
     const requestedRemoteName = options?.remoteName?.trim() || null;
     if (requestedRemoteName) {
       const publishBranch = resolvePublishBranchName(branch, requestedRemoteName);
@@ -4138,9 +4171,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
 
   const readRangeContext: GitVcsDriver.GitVcsDriver["Service"]["readRangeContext"] = Effect.fn(
     "readRangeContext",
-  )(function* (cwd, baseRef) {
-    const commitRange = `${baseRef}..HEAD`;
-    const diffRange = `${baseRef}...HEAD`;
+  )(function* (cwd, baseRef, headRef = "HEAD") {
+    const commitRange = `${baseRef}..${headRef}`;
+    const diffRange = `${baseRef}...${headRef}`;
     const [commitSummary, diffSummary, diffPatch] = yield* Effect.all(
       [
         runGitStdoutWithOptions(
@@ -7062,6 +7095,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     readLocalStatusRefSnapshot,
     readRefSnapshot,
     prepareCommitContext,
+    assertCurrentBranch,
     commit: Effect.fnUntraced(function* (cwd, subject, body, options) {
       return yield* withListRefsInvalidation(cwd, commit(cwd, subject, body, options));
     }),

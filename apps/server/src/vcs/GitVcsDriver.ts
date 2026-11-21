@@ -97,6 +97,7 @@ export interface GitStatusDetails {
   hasOriginRemote: boolean;
   isDefaultBranch: boolean;
   branch: string | null;
+  headOid: string | null;
   upstreamRef: string | null;
   hasWorkingTreeChanges: boolean;
   workingTree: VcsStatusResult["workingTree"];
@@ -185,7 +186,11 @@ export interface GitCommitProgress {
   }) => Effect.Effect<void, never>;
 }
 
+export const GIT_CHECKOUT_CHANGED_DETAIL =
+  "The checkout changed since you opened the confirmation. Confirm the action again.";
+
 export interface GitCommitOptions {
+  readonly expectedBranch?: string;
   readonly timeoutMs?: number;
   readonly progress?: GitCommitProgress;
   readonly stage?: {
@@ -379,6 +384,10 @@ export class GitVcsDriver extends Context.Service<
       filePaths?: readonly string[],
       options?: { readonly includePatch?: boolean },
     ) => Effect.Effect<GitPreparedCommitContext | null, GitCommandError>;
+    readonly assertCurrentBranch: (
+      cwd: string,
+      expectedBranch: string,
+    ) => Effect.Effect<void, GitCommandError>;
     readonly commit: (
       cwd: string,
       subject: string,
@@ -401,6 +410,7 @@ export class GitVcsDriver extends Context.Service<
     readonly readRangeContext: (
       cwd: string,
       baseRef: string,
+      headRef?: string,
     ) => Effect.Effect<GitRangeContext, GitCommandError>;
     readonly getReviewBranchCommits: (
       input: ReviewBranchCommitsInput,

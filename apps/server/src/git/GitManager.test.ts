@@ -4028,6 +4028,31 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
     }),
   );
 
+  it.effect("rejects a branch confirmation combined with feature branch creation", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      const refsBefore = (yield* runGit(repoDir, ["show-ref", "--heads"])).stdout;
+      NodeFS.writeFileSync(NodePath.join(repoDir, "change.txt"), "change\n");
+      const { manager } = yield* makeManager();
+
+      const result = yield* runStackedAction(manager, {
+        cwd: repoDir,
+        action: "commit",
+        expectedBranch: "main",
+        featureBranch: true,
+      }).pipe(Effect.result);
+
+      expect(result).toMatchObject({
+        _tag: "Failure",
+        failure: { detail: expect.stringContaining("cannot be combined") },
+      });
+      expect((yield* runGit(repoDir, ["branch", "--show-current"])).stdout.trim()).toBe("main");
+      expect((yield* runGit(repoDir, ["show-ref", "--heads"])).stdout).toBe(refsBefore);
+      expect((yield* runGit(repoDir, ["status", "--porcelain"])).stdout).toBe("?? change.txt\n");
+    }),
+  );
+
   it.effect("creates feature branch, commits, and pushes with featureBranch option", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");
@@ -4366,7 +4391,10 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
     }),
   );
 
-  it.effect("pushes the confirmed branch if the checkout switches after push validation", () =>
+  it.effect.each([
+    { change: "switching branches", deleteBranch: false },
+    { change: "deleting the branch with a colliding tag", deleteBranch: true },
+  ])("pushes the pinned commit after $change", ({ deleteBranch }) =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");
       yield* initRepo(repoDir);
@@ -4406,6 +4434,10 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       );
       yield* Deferred.await(gate.reached);
       yield* runGit(repoDir, ["checkout", "feature/check"]);
+      if (deleteBranch) {
+        yield* runGit(repoDir, ["branch", "-D", "main"]);
+        yield* runGit(repoDir, ["tag", "refs/heads/main"]);
+      }
       yield* Deferred.succeed(gate.release, undefined);
       const result = yield* Fiber.join(action);
 
@@ -4413,6 +4445,39 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       expect((yield* runGit(remoteDir, ["--git-dir=.", "show-ref", "--heads"])).stdout).toBe(
         initialRemoteRefs.replace(/^\S+( refs\/heads\/main)$/m, `${mainCommit}$1`),
       );
+    }),
+  );
+
+  it.effect("requires a new confirmation before staging on a switched checkout", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["branch", "feature/check"]);
+      const refsBefore = (yield* runGit(repoDir, ["show-ref", "--heads"])).stdout;
+      NodeFS.writeFileSync(NodePath.join(repoDir, "change.txt"), "change\n");
+      const { manager } = yield* makeManager();
+
+      const result = yield* runStackedAction(
+        manager,
+        { cwd: repoDir, action: "commit_push", expectedBranch: "main" },
+        {
+          progressReporter: {
+            publish: (event) =>
+              Effect.sync(() => {
+                if (event.kind === "phase_started" && event.label === "Committing...") {
+                  runGitSyncForFakeCheckout(repoDir, ["checkout", "feature/check"]);
+                }
+              }),
+          },
+        },
+      ).pipe(Effect.result);
+
+      expect(result).toMatchObject({
+        _tag: "Failure",
+        failure: { detail: expect.stringContaining("Confirm the action again") },
+      });
+      expect((yield* runGit(repoDir, ["show-ref", "--heads"])).stdout).toBe(refsBefore);
+      expect((yield* runGit(repoDir, ["status", "--porcelain"])).stdout).toBe("?? change.txt\n");
     }),
   );
 
@@ -4622,6 +4687,67 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
             (call) => call.baseRefName === "develop" && call.headSelector === "t3code/feature",
           ),
         ).toBe(true);
+      }),
+  );
+
+  it.effect.each([
+    { phase: "Preparing PR...", generatesContent: false },
+    { phase: "Generating PR content...", generatesContent: true },
+  ])(
+    "requires a new confirmation when the checkout changes at $phase",
+    ({ phase, generatesContent }) =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("t3code-git-manager-");
+        yield* initRepo(repoDir);
+        const remoteDir = yield* createBareRemote();
+        yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+        yield* runGit(repoDir, ["branch", "develop"]);
+        yield* runGit(repoDir, ["push", "origin", "develop"]);
+        yield* runGit(repoDir, ["checkout", "-b", "feature/check"]);
+        yield* runGit(repoDir, ["commit", "--allow-empty", "-m", "Replacement commit"]);
+        yield* runGit(repoDir, ["push", "-u", "origin", "feature/check"]);
+        yield* runGit(repoDir, ["checkout", "main"]);
+        yield* runGit(repoDir, ["commit", "--allow-empty", "-m", "Confirmed commit"]);
+        yield* runGit(repoDir, ["push", "-u", "origin", "main"]);
+
+        let generatedSummary: string | undefined;
+        const { manager, providerCalls } = yield* makeManager({
+          providerScenario: { defaultBranch: "develop" },
+          textGeneration: {
+            generatePrContent: ({ commitSummary }) =>
+              Effect.sync(() => {
+                generatedSummary = commitSummary;
+                return { title: "New PR", body: "PR body" };
+              }),
+          },
+        });
+        const result = yield* runStackedAction(
+          manager,
+          { cwd: repoDir, action: "create_pr", expectedBranch: "main" },
+          {
+            progressReporter: {
+              publish: (event) =>
+                Effect.sync(() => {
+                  if (event.kind === "phase_started" && event.label === phase) {
+                    runGitSyncForFakeCheckout(repoDir, ["checkout", "feature/check"]);
+                  }
+                }),
+            },
+          },
+        ).pipe(Effect.result);
+
+        expect(result).toMatchObject({
+          _tag: "Failure",
+          failure: { detail: expect.stringContaining("Confirm the action again") },
+        });
+        expect(created(providerCalls)).toEqual([]);
+        if (generatesContent) {
+          expect(generatedSummary).toContain("Confirmed commit");
+          expect(generatedSummary).not.toContain("Replacement commit");
+        } else {
+          expect(listedSelectors(providerCalls)).not.toContain("feature/check");
+          expect(generatedSummary).toBeUndefined();
+        }
       }),
   );
 

@@ -1284,6 +1284,7 @@ export const make = Effect.gen(function* () {
     hasOriginRemote: false,
     isDefaultBranch: false,
     branch: null,
+    headOid: null,
     upstreamRef: null,
     hasWorkingTreeChanges: false,
     workingTree: { files: [], insertions: 0, deletions: 0 },
@@ -2557,6 +2558,7 @@ export const make = Effect.gen(function* () {
     filePaths?: readonly string[],
     progressReporter?: GitActionProgressReporter,
     actionId?: string,
+    expectedBranch?: string,
   ) {
     const emit = (event: GitActionProgressPayload) =>
       progressReporter && actionId
@@ -2649,6 +2651,7 @@ export const make = Effect.gen(function* () {
     const committed = yield* gitCore
       .commit(cwd, suggestion.subject, suggestion.body, {
         timeoutMs: COMMIT_TIMEOUT_MS,
+        ...(expectedBranch !== undefined ? { expectedBranch } : {}),
         stage: {
           ...(filePaths ? { filePaths } : {}),
           ...(!preResolvedSuggestion && customCommit ? { unverified: true } : {}),
@@ -2716,11 +2719,21 @@ export const make = Effect.gen(function* () {
       readonly baseBranch: string;
       readonly baseRef: string;
       readonly headBranch: string;
+      readonly headRef: string;
     }) => Effect.Effect<{ readonly title: string; readonly body: string }, E>,
+    expectedBranch?: string,
   ) {
+    const details = yield* gitCore.statusDetails(cwd);
+    const headRef = expectedBranch === undefined ? "HEAD" : details.headOid;
+    if (headRef === null || (expectedBranch !== undefined && details.branch !== expectedBranch)) {
+      return yield* new GitManagerError({
+        operation: "runPrStep",
+        cwd,
+        detail: GitVcsDriver.GIT_CHECKOUT_CHANGED_DETAIL,
+      });
+    }
     const provider = yield* sourceControlProvider(cwd);
     const terms = sourceControlDefinitions.get(provider.kind).changeRequest;
-    const details = yield* gitCore.statusDetails(cwd);
     const branch = details.branch ?? fallbackBranch;
     if (!branch) {
       return yield* new GitManagerError({
@@ -2772,6 +2785,7 @@ export const make = Effect.gen(function* () {
       baseBranch,
       baseRef: requestedBase ?? resolved.baseRef,
       headBranch: headContext.headBranch,
+      headRef,
     });
     const bodyFile = path.join(
       tempDir,
@@ -2792,27 +2806,34 @@ export const make = Effect.gen(function* () {
       kind: "phase_started",
       phase: "pr",
       label: `Creating ${terms.singular}...`,
-    });
-    yield* provider
-      .createChangeRequest({
-        cwd,
-        baseRefName: baseBranch,
-        headSelector: headContext.preferredHeadSelector,
-        ...(provider.kind === "gitlab" &&
-        headContext.isCrossRepository &&
-        headContext.headRepositoryNameWithOwner
-          ? {
-              source: {
-                repository: headContext.headRepositoryNameWithOwner,
-                refName: headContext.headBranch,
-              },
-            }
-          : {}),
-        title: generated.title,
-        bodyFile,
-        ...(draft ? { draft: true } : {}),
-      })
-      .pipe(Effect.ensuring(fileSystem.remove(bodyFile).pipe(Effect.ignore)));
+    }).pipe(
+      Effect.andThen(
+        expectedBranch === undefined
+          ? Effect.void
+          : gitCore.assertCurrentBranch(cwd, expectedBranch),
+      ),
+      Effect.andThen(() =>
+        provider.createChangeRequest({
+          cwd,
+          baseRefName: baseBranch,
+          headSelector: headContext.preferredHeadSelector,
+          ...(provider.kind === "gitlab" &&
+          headContext.isCrossRepository &&
+          headContext.headRepositoryNameWithOwner
+            ? {
+                source: {
+                  repository: headContext.headRepositoryNameWithOwner,
+                  refName: headContext.headBranch,
+                },
+              }
+            : {}),
+          title: generated.title,
+          bodyFile,
+          ...(draft ? { draft: true } : {}),
+        }),
+      ),
+      Effect.ensuring(fileSystem.remove(bodyFile).pipe(Effect.ignore)),
+    );
 
     // The PR already exists at this point, so a failed lookup only loses its metadata.
     const created = yield* findOpenPr(cwd, headContext).pipe(
@@ -2848,7 +2869,8 @@ export const make = Effect.gen(function* () {
     fallbackBranch: string | null,
     threadId: ThreadId | undefined,
     emit: GitActionProgressEmitter,
-    pushRemoteRef?: { readonly remoteName: string; readonly upstreamRef: string },
+    pushRemoteRef: { readonly remoteName: string; readonly upstreamRef: string } | undefined,
+    expectedBranch?: string,
   ) =>
     openPrFromBranch(
       cwd,
@@ -2857,7 +2879,7 @@ export const make = Effect.gen(function* () {
       pushRemoteRef,
       undefined,
       false,
-      ({ provider, baseBranch, baseRef, headBranch }) =>
+      ({ provider, baseBranch, baseRef, headBranch, headRef }) =>
         Effect.gen(function* () {
           const terms = sourceControlDefinitions.get(provider.kind).changeRequest;
           yield* emit({
@@ -2866,7 +2888,7 @@ export const make = Effect.gen(function* () {
             label: `Generating ${terms.shortLabel} content...`,
           });
           const baseRangeRef = yield* resolveBaseRangeRef(cwd, baseRef);
-          const rangeContext = yield* gitCore.readRangeContext(cwd, baseRangeRef);
+          const rangeContext = yield* gitCore.readRangeContext(cwd, baseRangeRef, headRef);
           const policy = yield* resolveStylePolicy(cwd, settings);
           const changeRequestTemplate =
             settings.style.followChangeRequestTemplates && provider.readChangeRequestTemplate
@@ -2890,6 +2912,7 @@ export const make = Effect.gen(function* () {
             projectId: settings.projectId,
           });
         }),
+      expectedBranch,
     );
 
   const openPrivatePullRequest = Effect.fn("GitManager.openPrivatePullRequest")(function* (
@@ -4061,13 +4084,19 @@ export const make = Effect.gen(function* () {
         GitRunStackedActionResult,
         GitManagerServiceError
       > {
+        if (input.expectedBranch !== undefined && input.featureBranch) {
+          return yield* new GitManagerError({
+            operation: "runStackedAction",
+            cwd: input.cwd,
+            detail: "Branch confirmation cannot be combined with creating a feature branch.",
+          });
+        }
         const initialStatus = yield* gitCore.statusDetails(input.cwd);
         if (input.expectedBranch !== undefined && input.expectedBranch !== initialStatus.branch) {
           return yield* new GitManagerError({
             operation: "runStackedAction",
             cwd: input.cwd,
-            detail:
-              "The checkout changed since you opened the confirmation. Confirm the action again.",
+            detail: GitVcsDriver.GIT_CHECKOUT_CHANGED_DETAIL,
           });
         }
         const wantsCommit = isCommitAction(input.action);
@@ -4195,6 +4224,7 @@ export const make = Effect.gen(function* () {
                   input.filePaths,
                   options?.progressReporter,
                   progress.actionId,
+                  input.expectedBranch,
                 ),
               ),
             )
@@ -4234,6 +4264,7 @@ export const make = Effect.gen(function* () {
                     "pushRemote" in push && push.pushRemote && push.upstreamBranch
                       ? { remoteName: push.pushRemote, upstreamRef: push.upstreamBranch }
                       : undefined,
+                    input.expectedBranch,
                   ),
                 ),
               )
