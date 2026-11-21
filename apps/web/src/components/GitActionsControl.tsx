@@ -192,6 +192,7 @@ interface PendingDefaultBranchAction {
 
 interface RunGitActionWithToastInput {
   action: GitStackedAction;
+  expectedBranch?: string;
   commitMessage?: string;
   onConfirmed?: () => void;
   skipDefaultBranchPrompt?: boolean;
@@ -1196,6 +1197,7 @@ function CheckoutGitActionsControl({
 
   async function runGitActionWithToast({
     action,
+    expectedBranch,
     commitMessage,
     onConfirmed,
     skipDefaultBranchPrompt = false,
@@ -1249,6 +1251,7 @@ function CheckoutGitActionsControl({
     const result = await runImmediateGitAction.run({
       actionId,
       action,
+      ...(expectedBranch !== undefined ? { expectedBranch } : {}),
       ...(commitMessage ? { commitMessage } : {}),
       ...(featureBranch ? { featureBranch } : {}),
       ...(filePaths ? { filePaths } : {}),
@@ -1295,10 +1298,12 @@ function CheckoutGitActionsControl({
     if (!pendingDefaultBranchAction || !canWriteSourceControl) return;
     if (featureBranch && (!canCreateFeatureBranch || featureBranchUnavailableReason !== null))
       return;
-    const { action, commitMessage, onConfirmed, filePaths } = pendingDefaultBranchAction;
+    const { action, branchName, commitMessage, onConfirmed, filePaths } =
+      pendingDefaultBranchAction;
     setPendingDefaultBranchAction(null);
     void runGitActionWithToast({
       action,
+      ...(!featureBranch ? { expectedBranch: branchName } : {}),
       ...(commitMessage ? { commitMessage } : {}),
       ...(onConfirmed ? { onConfirmed } : {}),
       ...(filePaths ? { filePaths } : {}),

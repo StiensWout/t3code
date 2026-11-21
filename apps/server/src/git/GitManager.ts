@@ -4057,6 +4057,14 @@ export const make = Effect.gen(function* () {
         GitManagerServiceError
       > {
         const initialStatus = yield* gitCore.statusDetails(input.cwd);
+        if (input.expectedBranch !== undefined && input.expectedBranch !== initialStatus.branch) {
+          return yield* new GitManagerError({
+            operation: "runStackedAction",
+            cwd: input.cwd,
+            detail:
+              "The checkout changed since you opened the confirmation. Confirm the action again.",
+          });
+        }
         const wantsCommit = isCommitAction(input.action);
         const wantsPush =
           input.action === "push" ||

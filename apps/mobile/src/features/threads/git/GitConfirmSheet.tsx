@@ -90,10 +90,11 @@ export function GitConfirmSheet(props: GitConfirmSheetProps) {
   );
 
   const continuePendingAction = async () => {
-    if (!canWriteSourceControl || !confirmAction) return;
+    if (!canWriteSourceControl || !confirmAction || !branchName) return;
     returnToThread({ environmentId, threadId });
     await gitActions.onRunSelectedThreadGitAction({
       action: confirmAction,
+      expectedBranch: branchName,
       ...(params.commitMessage ? { commitMessage: params.commitMessage } : {}),
       ...(params.filePaths ? { filePaths: params.filePaths.split(",") } : {}),
     });
@@ -153,7 +154,7 @@ export function GitConfirmSheet(props: GitConfirmSheetProps) {
         <SheetActionButton
           icon="arrow.right.circle"
           label={copy?.continueLabel ?? gt("Continue")}
-          disabled={!canWriteSourceControl}
+          disabled={!canWriteSourceControl || !confirmAction || !branchName}
           onPress={() => void continuePendingAction()}
         />
         <SheetActionButton
