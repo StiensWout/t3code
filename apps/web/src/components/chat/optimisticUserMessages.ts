@@ -83,6 +83,24 @@ export interface OptimisticBlobPreviews {
   readonly revokeThread: (threadId: ThreadId) => void;
 }
 
+let galleryBlobUrls = new Set<string>();
+const deferredBlobRevocations = new Set<string>();
+
+// The gallery can outlive the timeline's use of any image in its navigation list.
+export function setGalleryBlobPreviews(urls: ReadonlyArray<string>): void {
+  galleryBlobUrls = new Set(urls);
+  for (const url of deferredBlobRevocations) {
+    if (galleryBlobUrls.has(url)) continue;
+    deferredBlobRevocations.delete(url);
+    URL.revokeObjectURL(url);
+  }
+}
+
+function revokeOptimisticBlobPreview(url: string): void {
+  if (galleryBlobUrls.has(url)) deferredBlobRevocations.add(url);
+  else if (typeof URL !== "undefined") URL.revokeObjectURL(url);
+}
+
 export function createOptimisticBlobPreviews(): OptimisticBlobPreviews {
   const ownedByThread = new Map<ThreadId, Set<string>>();
   const handedOff = new Set<string>();
@@ -91,7 +109,7 @@ export function createOptimisticBlobPreviews(): OptimisticBlobPreviews {
     for (const previewUrl of previewUrls) {
       owned?.delete(previewUrl);
       handedOff.delete(previewUrl);
-      if (typeof URL !== "undefined") URL.revokeObjectURL(previewUrl);
+      revokeOptimisticBlobPreview(previewUrl);
     }
   };
   return {
@@ -158,7 +176,7 @@ const handoffPreloadAtom = Atom.family((key: string) => {
       : Effect.forEach(serverUrls, preloadImage, { concurrency: "unbounded", discard: true }).pipe(
           Effect.tap(() =>
             Effect.sync(() => {
-              for (const blobUrl of blobUrls) URL.revokeObjectURL(blobUrl);
+              for (const blobUrl of blobUrls) revokeOptimisticBlobPreview(blobUrl);
             }),
           ),
         ),
