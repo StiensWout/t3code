@@ -10,6 +10,7 @@ import {
   emptyOptimisticUserMessages,
   loadedHandoffMessageIdsAtom,
   reconcileOptimisticUserMessages,
+  setGalleryBlobPreviews,
 } from "./optimisticUserMessages";
 
 const threadA = ThreadId.make("thread-a");
@@ -143,9 +144,9 @@ class FakeImage {
 
 describe("handoff preloads", () => {
   it("reports a handoff loaded, and revokes its blobs, once every server preview loads", async () => {
+    using revoke = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
     vi.stubGlobal("Image", FakeImage);
     try {
-      using revoke = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
       FakeImage.created.length = 0;
       const registry = AtomRegistry.make();
       const atom = loadedHandoffMessageIdsAtom(
@@ -156,6 +157,7 @@ describe("handoff preloads", () => {
       );
       const release = registry.mount(atom);
       const image = (src: string) => FakeImage.created.find((candidate) => candidate.src === src);
+      setGalleryBlobPreviews(["blob:a"]);
 
       image("https://server/a.png")?.fire("load");
       image("https://server/c.png")?.fire("error");
@@ -164,9 +166,13 @@ describe("handoff preloads", () => {
 
       image("https://server/b.png")?.fire("load");
       await vi.waitFor(() => expect(registry.get(atom)).toEqual(["m-loaded"]));
-      expect(revoke.mock.calls.map(([url]) => url)).toEqual(["blob:a", "blob:b"]);
+      expect(revoke.mock.calls.map(([url]) => url)).toEqual(["blob:b"]);
+
+      setGalleryBlobPreviews([]);
+      expect(revoke.mock.calls.map(([url]) => url)).toEqual(["blob:b", "blob:a"]);
       release();
     } finally {
+      setGalleryBlobPreviews([]);
       vi.unstubAllGlobals();
     }
   });
