@@ -6,7 +6,6 @@ import {
 import {
   type EnvironmentId,
   INCOGNITO_BROWSER_PROFILE_ID,
-  type PreviewSessionSnapshot,
   type ScopedProjectRef,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
@@ -73,11 +72,26 @@ export function normalizeHistoryUrl(raw: string): string | null {
   return parsed.href.length > BROWSER_HISTORY_MAX_URL_LENGTH ? null : parsed.href;
 }
 
-function titleLookupKey(normalized: string, environmentHostname?: string | null): string {
-  const parsed = new URL(visitLookupKey(normalized, environmentHostname));
+function titleFallbackKey(visitKey: string): string {
+  const parsed = new URL(visitKey);
   if (parsed.pathname !== "/" && parsed.pathname.endsWith("/"))
     parsed.pathname = parsed.pathname.slice(0, -1);
   return parsed.href;
+}
+
+function findTitleMatchIndex<T>(
+  candidates: ReadonlyArray<T>,
+  key: string,
+  keyOf: (candidate: T) => string | null,
+): number {
+  const exact = candidates.findIndex((candidate) => keyOf(candidate) === key);
+  if (exact !== -1) return exact;
+  // A redirect can add or remove a slash, but an exact visit takes precedence.
+  const fallback = titleFallbackKey(key);
+  return candidates.findIndex((candidate) => {
+    const candidateKey = keyOf(candidate);
+    return candidateKey !== null && titleFallbackKey(candidateKey) === fallback;
+  });
 }
 
 function visitLookupKey(normalized: string, environmentHostname?: string | null): string {
@@ -198,7 +212,7 @@ interface BrowserHistoryStoreState {
     projectKey: string,
     url: string,
     title: string,
-    options?: { environmentHostname?: string | null; onlyIfUntitled?: boolean },
+    options?: { environmentHostname?: string | null; fillVisitKey?: string },
   ) => void;
   removeUrl: (projectKey: string, url: string) => void;
   registerThreadProject: (ref: ScopedThreadRef, projectKey: string) => void;
@@ -421,19 +435,19 @@ export const useBrowserHistoryStore = create<BrowserHistoryStoreState>()((set, g
       const normalized = normalizeHistoryUrl(url);
       const trimmed = title.trim().slice(0, BROWSER_HISTORY_MAX_TITLE_LENGTH);
       if (!normalized || trimmed.length === 0) return;
-      const key = titleLookupKey(normalized, options?.environmentHostname);
+      const key = visitLookupKey(normalized, options?.environmentHostname);
       updateHistory((state) => {
         const entries = state.byProjectKey[projectKey];
-        const index =
-          entries?.findIndex(
-            (candidate) => titleLookupKey(candidate.url, options?.environmentHostname) === key,
-          ) ?? -1;
-        const entry = entries?.[index];
+        if (!entries) return state;
+        const keyOf = (entry: BrowserHistoryEntry) =>
+          visitLookupKey(entry.url, options?.environmentHostname);
+        const index = findTitleMatchIndex(entries, key, keyOf);
+        const entry = entries[index];
         if (
-          !entries ||
           !entry ||
           entry.title === trimmed ||
-          (entry.title && options?.onlyIfUntitled)
+          (options?.fillVisitKey !== undefined &&
+            (entry.title || keyOf(entry) !== options.fillVisitKey))
         )
           return state;
         return {
@@ -647,36 +661,43 @@ function recordPreviewTitles(
   if (!projectKey) return;
   const connection = readPreparedConnection(ref.environmentId);
   const environmentHostname = connection ? new URL(connection.httpBaseUrl).hostname : null;
-  const titleKey = (url: string) => {
-    const normalized = normalizeHistoryUrl(url);
-    return normalized ? titleLookupKey(normalized, environmentHostname) : null;
-  };
-  const visitKeys = "urls" in only ? new Set(only.urls.map(titleKey)) : null;
-  // Resizes and list reconciles replace a session without loading a new page.
-  const settledAgain = (session: PreviewSessionSnapshot, previous?: PreviewSessionSnapshot) =>
-    previous?.navStatus._tag === "Success" &&
-    session.navStatus._tag === "Success" &&
-    previous.navStatus.url === session.navStatus.url &&
-    previous.navStatus.title === session.navStatus.title;
-  const include = (session: PreviewSessionSnapshot, url: string) =>
-    "changedSince" in only
-      ? !settledAgain(session, only.changedSince[session.tabId])
-      : (visitKeys?.has(titleKey(url)) ?? false);
-  // A fill uses the newest eligible title first because it only sets an untitled entry.
-  const sessions = Object.values(preview.sessions).toSorted((a, b) =>
-    "urls" in only
-      ? b.updatedAt.localeCompare(a.updatedAt)
-      : a.updatedAt.localeCompare(b.updatedAt),
-  );
-  for (const session of sessions) {
-    const status = session.navStatus;
-    if (session.profileId === INCOGNITO_BROWSER_PROFILE_ID) continue;
-    if (status._tag !== "Success" || !status.title || !include(session, status.url)) continue;
-    state.setTitleForUrl(projectKey, status.url, status.title, {
-      environmentHostname,
-      onlyIfUntitled: "urls" in only,
+  const titles = Object.values(preview.sessions)
+    .toSorted((a, b) =>
+      "urls" in only
+        ? b.updatedAt.localeCompare(a.updatedAt)
+        : a.updatedAt.localeCompare(b.updatedAt),
+    )
+    .flatMap(({ navStatus, profileId, tabId }) => {
+      if (profileId === INCOGNITO_BROWSER_PROFILE_ID) return [];
+      if (navStatus._tag !== "Success" || !navStatus.title?.trim()) return [];
+      // Resizes and list reconciles replace a session without loading a new page.
+      const previous = "changedSince" in only ? only.changedSince[tabId]?.navStatus : undefined;
+      if (
+        previous?._tag === "Success" &&
+        previous.url === navStatus.url &&
+        previous.title === navStatus.title
+      )
+        return [];
+      return [{ url: navStatus.url, title: navStatus.title }];
     });
+  if ("urls" in only) {
+    const keyForUrl = (url: string) => {
+      const normalized = normalizeHistoryUrl(url);
+      return normalized ? visitLookupKey(normalized, environmentHostname) : null;
+    };
+    for (const visitKey of new Set(only.urls.map(keyForUrl))) {
+      if (visitKey === null) continue;
+      const match = titles[findTitleMatchIndex(titles, visitKey, ({ url }) => keyForUrl(url))];
+      if (match)
+        state.setTitleForUrl(projectKey, match.url, match.title, {
+          environmentHostname,
+          fillVisitKey: visitKey,
+        });
+    }
+    return;
   }
+  for (const { url, title } of titles)
+    state.setTitleForUrl(projectKey, url, title, { environmentHostname });
 }
 
 /** Records settled page titles for every thread with previews, for the life of the page. */
