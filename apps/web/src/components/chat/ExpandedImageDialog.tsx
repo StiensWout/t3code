@@ -1,4 +1,4 @@
-import { memo, useRef, useState, type ReactNode, type KeyboardEvent } from "react";
+import { memo, useLayoutEffect, useRef, useState, type ReactNode, type KeyboardEvent } from "react";
 import { flushSync } from "react-dom";
 import { T, useGT } from "gt-react";
 import {
@@ -350,12 +350,30 @@ registerThreadOverlay((threadKey) => {
 
 export function ExpandedImageDialogHost({ threadKey }: { readonly threadKey: string }) {
   const state = useAtomValue(expandedImagePreviewAtom);
-  const preview = state?.threadKey === threadKey ? state.preview : null;
-  if (preview === null) return null;
+  const displayed = state?.threadKey === threadKey ? state : null;
+  const mountedPreview = useRef<ExpandedImagePreviewState>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a side chat can unmount without the router clearing its gallery
+  useLayoutEffect(() => {
+    if (displayed === null) return;
+    mountedPreview.current = displayed;
+    return () => {
+      mountedPreview.current = null;
+      // StrictMode reattaches the same preview before this cleanup runs.
+      queueMicrotask(() => {
+        if (
+          mountedPreview.current !== displayed &&
+          appAtomRegistry.get(expandedImagePreviewAtom) === displayed
+        ) {
+          closeExpandedImagePreview();
+        }
+      });
+    };
+  }, [displayed]);
+  if (displayed === null) return null;
   return (
     <ExpandedImageDialog
-      key={expandedImageKey(preview)}
-      preview={preview}
+      key={expandedImageKey(displayed.preview)}
+      preview={displayed.preview}
       onClose={closeExpandedImagePreview}
     />
   );

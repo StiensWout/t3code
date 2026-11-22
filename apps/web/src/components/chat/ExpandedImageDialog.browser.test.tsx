@@ -1,11 +1,17 @@
-import { useState } from "react";
+import { StrictMode, useState } from "react";
 import type { SnapShotSource } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
 import "~/index.css";
+import { AppAtomRegistryProvider } from "~/rpc/atomRegistry";
 import { render } from "../../../test/render";
-import { ExpandedImageDialog } from "./ExpandedImageDialog";
+import {
+  ExpandedImageDialog,
+  ExpandedImageDialogHost,
+  openExpandedImagePreview,
+} from "./ExpandedImageDialog";
+import { retainThreadOverlaysForThread } from "./threadOverlayRetention";
 
 const PIXEL =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
@@ -38,6 +44,30 @@ function ImagePreviewOpener() {
 }
 
 describe("ExpandedImageDialog", () => {
+  it("releases the preview URL when its host unmounts without a route change", async () => {
+    const src = URL.createObjectURL(await (await fetch(PIXEL)).blob());
+    using _preview = { [Symbol.dispose]: () => retainThreadOverlaysForThread(null) };
+    openExpandedImagePreview("side-thread", {
+      images: [{ src, name: "shot.png", ownsSrc: true }],
+      index: 0,
+    });
+    await using screen = await render(
+      <StrictMode>
+        <AppAtomRegistryProvider>
+          <ExpandedImageDialogHost threadKey="side-thread" />
+        </AppAtomRegistryProvider>
+      </StrictMode>,
+      // The host unmounts without navigating.
+      { router: false },
+    );
+    await expect.element(page.getByRole("img", { name: "shot.png" })).toBeVisible();
+    expect((await fetch(src)).ok).toBe(true);
+
+    await screen.unmount();
+
+    await expect(fetch(src)).rejects.toThrow();
+  });
+
   it.each([
     { opener: "mouse", focusVisible: false },
     { opener: "keyboard", focusVisible: true },
