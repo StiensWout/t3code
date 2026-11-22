@@ -303,6 +303,53 @@ describe("useBrowserHistoryStore", () => {
     });
   });
 
+  it("retitles the exact path across host aliases even when the other path was visited later", () => {
+    readPreparedConnection.mockReturnValue({ httpBaseUrl: "http://192.168.64.2:3773" });
+    useBrowserHistoryStore.getState().registerThreadProject(threadRef, "proj-a");
+    const directory = "http://localhost:5173/notes/?view=list#today";
+    const document = "http://localhost:5173/notes?view=list#today";
+    recordVisitForThread(threadRef, directory, 1);
+    recordVisitForThread(threadRef, document, 2);
+    settle(document, "Notes document", "tab_a");
+    settle("http://192.168.64.2:5173/notes/?view=list#today", "Notes directory", "tab_b");
+
+    expect(useBrowserHistoryStore.getState().byProjectKey["proj-a"]).toEqual([
+      { url: document, lastVisitedAt: 2, title: "Notes document" },
+      { url: directory, lastVisitedAt: 1, title: "Notes directory" },
+    ]);
+  });
+
+  it.each(["registered", "queued"])(
+    "prefers the exact settled path when filling a %s visit",
+    (registration) => {
+      const store = useBrowserHistoryStore.getState();
+      if (registration === "registered") store.registerThreadProject(threadRef, "proj-a");
+      settle("http://a.test/notes", "Notes document", "tab_a");
+      settle("http://a.test/notes/", "Notes directory", "tab_b");
+      recordVisitForThread(threadRef, "http://a.test/notes", 1);
+      if (registration === "queued") store.registerThreadProject(threadRef, "proj-a");
+
+      expect(useBrowserHistoryStore.getState().byProjectKey["proj-a"]).toEqual([
+        { url: "http://a.test/notes", lastVisitedAt: 1, title: "Notes document" },
+      ]);
+    },
+  );
+
+  it("does not fill another path's visit from a retained tab when recording a new visit", () => {
+    const otherThreadRef = { ...threadRef, threadId: ThreadId.make("thread-2") };
+    const store = useBrowserHistoryStore.getState();
+    store.registerThreadProject(threadRef, "proj-a");
+    store.registerThreadProject(otherThreadRef, "proj-a");
+    settle("http://a.test/notes/", "Notes directory");
+    recordVisitForThread(otherThreadRef, "http://a.test/notes/", 1);
+    recordVisitForThread(threadRef, "http://a.test/notes", 2);
+
+    expect(useBrowserHistoryStore.getState().byProjectKey["proj-a"]).toEqual([
+      { url: "http://a.test/notes", lastVisitedAt: 2 },
+      { url: "http://a.test/notes/", lastVisitedAt: 1 },
+    ]);
+  });
+
   it("matches a requested localhost URL to the resolved environment host", () => {
     useBrowserHistoryStore.getState().registerThreadProject(threadRef, "proj-a");
     recordVisitForThread(threadRef, "http://localhost:5173/app", 1);
