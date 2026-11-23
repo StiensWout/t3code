@@ -378,11 +378,11 @@ function splitNullSeparatedPaths(input: string, truncated: boolean): string[] {
 }
 
 // Parses "git version 2.24.3 (Apple Git-128)" or "git version 2.45.1.windows.1".
-const gitSupportsPathspecFromFile = (versionOutput: string): boolean => {
+const gitVersionAtLeast = (versionOutput: string, minimumMinor: number): boolean => {
   const match = /^git version (\d+)\.(\d+)/.exec(versionOutput);
   if (match === null) return false;
   const major = Number(match[1]);
-  return major > 2 || (major === 2 && Number(match[2]) >= 25);
+  return major > 2 || (major === 2 && Number(match[2]) >= minimumMinor);
 };
 
 export function splitNullSeparatedGitStdoutPaths(
@@ -3166,7 +3166,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     if (pathspecFromFileSupported !== undefined) return pathspecFromFileSupported;
     const version = yield* executeGit("GitVcsDriver.version", cwd, ["version"]).pipe(Effect.option);
     if (Option.isNone(version)) return false;
-    pathspecFromFileSupported = gitSupportsPathspecFromFile(version.value.stdout);
+    pathspecFromFileSupported = gitVersionAtLeast(version.value.stdout, 25);
     return pathspecFromFileSupported;
   });
 
@@ -3512,6 +3512,120 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       );
     });
 
+  const commitOnConfirmedBranch = Effect.fn("GitVcsDriver.commitOnConfirmedBranch")(function* (
+    cwd: string,
+    branch: string,
+    args: readonly string[],
+    options: ExecuteGitOptions,
+  ) {
+    const operation = "GitVcsDriver.commitOnConfirmedBranch";
+    return yield* Effect.scoped(
+      Effect.gen(function* () {
+        const originalHooks = yield* runGitStdout(operation, cwd, [
+          "rev-parse",
+          "--git-path",
+          "hooks",
+        ]);
+        const physicalCwd = yield* fileSystem.realPath(cwd);
+        const directory = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "t3code-commit-hooks-",
+        });
+        const hostEnv = yield* HostProcess.Environment;
+        const rejected = path.join(directory, "checkout-changed");
+        const env = {
+          ...options.env,
+          T3_GIT_ORIGINAL_HOOKS: path.resolve(physicalCwd, originalHooks.replace(/\r?\n$/, "")),
+          T3_GIT_ORIGINAL_CONFIG: hostEnv.GIT_CONFIG_PARAMETERS ?? "",
+          T3_GIT_CONFIRMED_REF: `refs/heads/${branch}`,
+          T3_GIT_CHECKOUT_CHANGED: rejected,
+        };
+
+        // Restore the original config before a repository hook can run nested Git commands.
+        const restoreConfig = `#!/bin/sh
+if [ -n "$T3_GIT_ORIGINAL_CONFIG" ]; then
+  export GIT_CONFIG_PARAMETERS="$T3_GIT_ORIGINAL_CONFIG"
+else
+  unset GIT_CONFIG_PARAMETERS
+fi
+hook="$T3_GIT_ORIGINAL_HOOKS/\${0##*/}"
+`;
+        for (const name of [
+          "pre-commit",
+          "prepare-commit-msg",
+          "commit-msg",
+          "post-commit",
+          "post-index-change",
+        ]) {
+          const original = yield* fileSystem
+            .stat(path.join(env.T3_GIT_ORIGINAL_HOOKS, name))
+            .pipe(Effect.option);
+          if (Option.isNone(original) || original.value.type !== "File") continue;
+          if (hostPlatform !== "win32" && (original.value.mode & 0o111) === 0) continue;
+          yield* fileSystem.writeFileString(
+            path.join(directory, name),
+            restoreConfig + 'exec "$hook" "$@"\n',
+            { mode: 0o755 },
+          );
+        }
+
+        // Git holds its ref locks during the prepared transaction, after commit hooks have run.
+        yield* fileSystem.writeFileString(
+          path.join(directory, "reference-transaction"),
+          restoreConfig +
+            `updates=$(cat && printf '.') || exit 1
+updates=\${updates%.}
+if [ "$1" = prepared ]; then
+  while read -r old new ref; do
+    case "$ref" in
+      HEAD|refs/heads/*)
+        if { [ "$ref" != HEAD ] && [ "$ref" != "$T3_GIT_CONFIRMED_REF" ]; } ||
+           [ "$(git symbolic-ref --quiet HEAD)" != "$T3_GIT_CONFIRMED_REF" ]; then
+          : > "$T3_GIT_CHECKOUT_CHANGED"
+          exit 1
+        fi
+        ;;
+    esac
+  done <<EOF
+$updates
+EOF
+fi
+if [ -x "$hook" ]; then
+  printf '%s' "$updates" | "$hook" "$@"
+fi
+`,
+          { mode: 0o755 },
+        );
+        yield* assertCurrentBranch(cwd, branch);
+        yield* executeGit(operation, cwd, ["-c", `core.hooksPath=${directory}`, ...args], {
+          ...options,
+          env,
+        }).pipe(
+          Effect.catch((error) =>
+            fileSystem.exists(rejected).pipe(
+              Effect.flatMap((changed) =>
+                changed
+                  ? new GitCommandError({
+                      ...gitCommandContext({ operation, cwd, args }),
+                      detail: GitVcsDriver.GIT_CHECKOUT_CHANGED_DETAIL,
+                    })
+                  : error,
+              ),
+            ),
+          ),
+        );
+      }),
+    ).pipe(
+      Effect.catchTags({
+        PlatformError: (cause) =>
+          new GitCommandError({
+            ...gitCommandContext({ operation, cwd, args }),
+            detail: "Failed to prepare the confirmed commit.",
+            cause,
+          }),
+      }),
+    );
+  });
+
   const commit: GitVcsDriver.GitVcsDriver["Service"]["commit"] = Effect.fn("commit")(function* (
     cwd,
     subject,
@@ -3545,6 +3659,21 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       }
     }
     if (options?.expectedBranch !== undefined) {
+      const operation = "GitVcsDriver.commit";
+      const version = yield* runGitStdout(operation, cwd, ["version"]);
+      const referenceHookEnabled = yield* runGitStdout(
+        operation,
+        cwd,
+        ["config", "--type=bool", "--get", "hook.reference-transaction.enabled"],
+        true,
+      );
+      if (!gitVersionAtLeast(version, 28) || referenceHookEnabled.trim() === "false") {
+        return yield* new GitCommandError({
+          ...gitCommandContext({ operation, cwd, args: ["commit"] }),
+          detail:
+            "Confirmed commits require Git 2.28 or newer with reference-transaction hooks enabled.",
+        });
+      }
       yield* assertCurrentBranch(cwd, options.expectedBranch);
     }
     const partialCommitPaths =
@@ -3622,16 +3751,20 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
             onStderrLine: (line: string) =>
               options.progress?.onOutputLine?.({ stream: "stderr", text: line }) ?? Effect.void,
           };
-    if (options?.expectedBranch !== undefined) {
-      yield* assertCurrentBranch(cwd, options.expectedBranch);
-    }
-    yield* executeGit("GitVcsDriver.commit.commit", cwd, args, {
+    const commitOptions = {
       maxOutputBytes: REVIEW_METADATA_MAX_OUTPUT_BYTES,
       ...onlyPathspecStdin,
       ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
       ...(progress ? { progress } : {}),
-    }).pipe(Effect.asVoid);
+    };
+    const expectedBranch = options?.expectedBranch;
+    if (expectedBranch === undefined) {
+      yield* executeGit("GitVcsDriver.commit.commit", cwd, args, commitOptions);
+    } else {
+      yield* commitOnConfirmedBranch(cwd, expectedBranch, args, commitOptions);
+    }
     if (partialCommitPaths) {
+      if (expectedBranch !== undefined) yield* assertCurrentBranch(cwd, expectedBranch);
       // --only runs hooks on a temporary index, so a hook's `git add` never reaches the real one.
       yield* runGit(
         "GitVcsDriver.commit.syncSelectedIndex",
@@ -3640,10 +3773,13 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         onlyPathspecStdin,
       );
     }
-    const commitSha = yield* runGitStdout("GitVcsDriver.commit.revParseHead", cwd, [
-      "rev-parse",
-      "HEAD",
-    ]).pipe(Effect.map((stdout) => stdout.trim()));
+    const commitSha = yield* runGitStdout(
+      "GitVcsDriver.commit.revParseHead",
+      cwd,
+      expectedBranch === undefined
+        ? ["rev-parse", "HEAD"]
+        : ["show-ref", "--verify", "--hash", "--", `refs/heads/${expectedBranch}`],
+    ).pipe(Effect.map((stdout) => stdout.trim()));
 
     return { commitSha };
   });
@@ -3827,6 +3963,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const requestedRemoteName = options?.remoteName?.trim() || null;
     if (requestedRemoteName) {
       const publishBranch = resolvePublishBranchName(branch, requestedRemoteName);
+      if (confirmation) yield* assertCurrentBranch(cwd, confirmation.branch);
       yield* executeGitWithStableDiagnostics(
         "GitVcsDriver.pushCurrentBranch.pushWithRequestedRemote",
         cwd,
@@ -3848,6 +3985,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       details.hasUpstream,
       expectedBranch === undefined ? undefined : (details.upstreamRef ?? undefined),
     );
+    if (confirmation) yield* assertCurrentBranch(cwd, confirmation.branch);
     if (hasNoLocalDelta && details.hasUpstream) {
       if (!destination?.pushRemote) {
         // A local upstream and a separate push URL both leave the publish destination unchecked.
