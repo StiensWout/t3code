@@ -646,6 +646,7 @@ function makeManager(input?: {
   gitConfigReads?: string[];
   gitCommands?: string[];
   gitSpawnGate?: {
+    readonly beforeSpawn?: boolean;
     readonly matches: (args: ReadonlyArray<string>) => boolean;
     readonly reached: Deferred.Deferred<void>;
     readonly release: Deferred.Deferred<void>;
@@ -685,16 +686,15 @@ function makeManager(input?: {
             if (args === null || gitSpawnGate === undefined || !gitSpawnGate.matches(args)) {
               return spawner.spawn(command);
             }
+            const waitForRelease = Deferred.succeed(gitSpawnGate.reached, undefined).pipe(
+              Effect.andThen(Deferred.await(gitSpawnGate.release)),
+            );
+            if (gitSpawnGate.beforeSpawn) {
+              return waitForRelease.pipe(Effect.andThen(spawner.spawn(command)));
+            }
             return spawner
               .spawn(command)
-              .pipe(
-                Effect.tap((handle) =>
-                  handle.exitCode.pipe(
-                    Effect.andThen(Deferred.succeed(gitSpawnGate.reached, undefined)),
-                    Effect.andThen(Deferred.await(gitSpawnGate.release)),
-                  ),
-                ),
-              );
+              .pipe(Effect.tap((handle) => handle.exitCode.pipe(Effect.andThen(waitForRelease))));
           });
         }),
       ).pipe(Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)))
@@ -4392,15 +4392,24 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
   );
 
   it.effect.each([
-    { change: "switching branches", deleteBranch: false },
-    { change: "deleting the branch with a colliding tag", deleteBranch: true },
-  ])("pushes the pinned commit after $change", ({ deleteBranch }) =>
+    { change: "switching after resolving the fork", deleteBranch: false, resolving: false },
+    {
+      change: "deleting the branch after resolving the fork",
+      deleteBranch: true,
+      resolving: false,
+    },
+    { change: "deleting the branch while resolving the fork", deleteBranch: true, resolving: true },
+  ])("protects the confirmed push destination after $change", ({ deleteBranch, resolving }) =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");
       yield* initRepo(repoDir);
       const remoteDir = yield* createBareRemote();
       yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
       yield* runGit(repoDir, ["push", "-u", "origin", "main"]);
+      const forkDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "fork", forkDir]);
+      yield* runGit(repoDir, ["config", "branch.main.pushRemote", "fork"]);
+      yield* runGit(repoDir, ["push", "fork", "main"]);
       yield* runGit(repoDir, ["checkout", "-b", "feature/check"]);
       yield* runGit(repoDir, ["push", "-u", "origin", "feature/check"]);
       yield* runGit(repoDir, ["commit", "--allow-empty", "-m", "Feature commit"]);
@@ -4410,10 +4419,16 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       const initialRemoteRefs = (yield* runGit(remoteDir, ["--git-dir=.", "show-ref", "--heads"]))
         .stdout;
 
+      const forkBefore = (yield* runGit(forkDir, ["--git-dir=.", "show-ref", "--heads"])).stdout;
+
       let pushing = false;
       const gate = {
+        beforeSpawn: true,
         matches: (args: ReadonlyArray<string>) =>
-          pushing && args.join(" ") === "config --get branch.main.remote",
+          pushing &&
+          (resolving
+            ? args.join(" ") === "config --get branch.main.pushRemote"
+            : args.includes("push") && args.includes("fork")),
         reached: yield* Deferred.make<void>(),
         release: yield* Deferred.make<void>(),
       };
@@ -4430,7 +4445,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
                 }),
             },
           },
-        ),
+        ).pipe(Effect.result),
       );
       yield* Deferred.await(gate.reached);
       yield* runGit(repoDir, ["checkout", "feature/check"]);
@@ -4441,10 +4456,61 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       yield* Deferred.succeed(gate.release, undefined);
       const result = yield* Fiber.join(action);
 
-      expect(result.push).toMatchObject({ status: "pushed", branch: "main" });
+      if (resolving) {
+        expect(result).toMatchObject({
+          _tag: "Failure",
+          failure: { detail: expect.stringContaining("Confirm the action again") },
+        });
+      } else {
+        expect(result).toMatchObject({
+          _tag: "Success",
+          success: { push: { status: "pushed", branch: "main", pushRemote: "fork" } },
+        });
+      }
       expect((yield* runGit(remoteDir, ["--git-dir=.", "show-ref", "--heads"])).stdout).toBe(
-        initialRemoteRefs.replace(/^\S+( refs\/heads\/main)$/m, `${mainCommit}$1`),
+        initialRemoteRefs,
       );
+      expect((yield* runGit(forkDir, ["--git-dir=.", "show-ref", "--heads"])).stdout).toBe(
+        resolving ? forkBefore : `${mainCommit} refs/heads/main\n`,
+      );
+    }),
+  );
+
+  it.effect("leaves both branches untouched when a commit hook switches checkout", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      yield* runGit(repoDir, ["push", "-u", "origin", "main"]);
+      yield* runGit(repoDir, ["branch", "feature/check"]);
+      const refsBefore = (yield* runGit(repoDir, ["show-ref", "--heads"])).stdout;
+      const hooks = NodePath.join(repoDir, "custom hooks");
+      NodeFS.mkdirSync(hooks);
+      yield* runGit(repoDir, ["config", "core.hooksPath", "custom hooks"]);
+      NodeFS.writeFileSync(
+        NodePath.join(hooks, "pre-commit"),
+        "#!/bin/sh\nunset GIT_INDEX_FILE\ngit checkout feature/check\n",
+        { mode: 0o755 },
+      );
+      NodeFS.writeFileSync(NodePath.join(repoDir, "README.md"), "change\n");
+      const { manager } = yield* makeManager();
+
+      const result = yield* runStackedAction(manager, {
+        cwd: repoDir,
+        action: "commit_push",
+        expectedBranch: "main",
+        commitMessage: "Confirmed commit",
+      }).pipe(Effect.result);
+
+      expect((yield* runGit(repoDir, ["symbolic-ref", "HEAD"])).stdout).toBe(
+        "refs/heads/feature/check\n",
+      );
+      expect((yield* runGit(repoDir, ["show-ref", "--heads"])).stdout).toBe(refsBefore);
+      expect(result).toMatchObject({
+        _tag: "Failure",
+        failure: { detail: expect.stringContaining("Confirm the action again") },
+      });
     }),
   );
 
