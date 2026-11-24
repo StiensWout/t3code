@@ -16,6 +16,7 @@ import {
   threadLinkContextReferences,
 } from "@t3tools/shared/composerContextReferences";
 
+import { restoreClipboardLinks } from "~/markdown-clipboard";
 import { readThreadShell } from "~/state/entities";
 
 const threadTitle = (ref: ScopedThreadRef) => readThreadShell(ref)?.title;
@@ -23,6 +24,13 @@ const threadTitle = (ref: ScopedThreadRef) => readThreadShell(ref)?.title;
 // Matches ProseMirror's default clipboard parser, which a custom handlePaste bypasses.
 export function readPastedPlainText(clipboardData: Pick<DataTransfer, "getData">): string {
   return clipboardData.getData("text/plain").replace(/\r\n?/g, "\n");
+}
+
+export function readPastedComposerLinkText(clipboardData: Pick<DataTransfer, "getData">): string {
+  return restoreClipboardLinks(
+    readPastedPlainText(clipboardData),
+    clipboardData.getData("text/html"),
+  );
 }
 
 /** Pasted thread links count as context too, so they become chips like a copied chip does. */

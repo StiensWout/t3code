@@ -215,7 +215,7 @@ export interface ComposerPromptEditorProps {
   onCitationSubmitAndSend?: () => boolean;
   /** Saves unsaved citation text into replacedValue when a controlled rewrite replaces the document. */
   onCitationDraftSave?: (replacedValue: string, savedValue: string) => void;
-  onPaste: React.ClipboardEventHandler<HTMLElement>;
+  onPaste: (event: React.ClipboardEvent<HTMLElement>, canRestoreLinks: boolean) => string | void;
   editorRef: React.RefObject<ComposerPromptEditorHandle | null>;
 }
 
@@ -1020,6 +1020,7 @@ function ComposerPromptEditorTiptapInner(
     literalText ? position : expandCollapsedComposerCursor(text, position);
 
   const latestValueRef = useRef(value);
+  const preparedPaste = useRef<{ event: ClipboardEvent; text: string } | null>(null);
   // The editor config is built once, so its handlers reach the current callbacks through here.
   const readCallbacks = useStableCallback(() => ({
     onChange,
@@ -1165,8 +1166,9 @@ function ComposerPromptEditorTiptapInner(
     view: EditorView,
     clipboardData: DataTransfer,
     newLineAt?: number,
+    preparedText?: string,
   ): boolean => {
-    const pastedText = readPastedPlainText(clipboardData);
+    const pastedText = preparedText ?? readPastedPlainText(clipboardData);
     if (!pastedText) return false;
     const onNewLine = newLineAt !== undefined;
     // Paste verbatim inside fences; markdown parsing would split blocks and create unsupported chips.
@@ -1199,7 +1201,7 @@ function ComposerPromptEditorTiptapInner(
     }
     const importFragment = readCallbacks().importContextFragment;
     let text =
-      !literalText && importFragment
+      preparedText === undefined && !literalText && importFragment
         ? importPastedComposerText(clipboardData, importFragment)
         : pastedText;
     const tokens = literalText ? [] : collectComposerPromptInlineTokens(`${text}\n`);
@@ -1566,7 +1568,10 @@ function ComposerPromptEditorTiptapInner(
             (literalText || !readPastedComposerContext(clipboardData)?.records.length)
           )
             return false;
-          if (!insertClipboardText(view, clipboardData)) return false;
+          const prepared = preparedPaste.current;
+          preparedPaste.current = null;
+          const text = prepared?.event === event ? prepared.text : undefined;
+          if (!insertClipboardText(view, clipboardData, undefined, text)) return false;
           event.preventDefault();
           return true;
         },
@@ -2026,7 +2031,13 @@ function ComposerPromptEditorTiptapInner(
               }}
               onKeyUp={(event) => onPageScrollKeyUp?.(event.key)}
               onBlur={onPageScrollRelease}
-              onPasteCapture={onPaste}
+              onPasteCapture={(event) => {
+                const text = onPaste(
+                  event,
+                  !literalText && editor !== null && !isInCodeBlock(editor.view),
+                );
+                if (text !== undefined) preparedPaste.current = { event: event.nativeEvent, text };
+              }}
               onCopyCapture={(event) => handleCopyCut(event, false)}
               onCutCapture={(event) => handleCopyCut(event, true)}
             />

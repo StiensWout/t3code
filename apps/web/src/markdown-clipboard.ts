@@ -255,6 +255,49 @@ function serializeAnchor(anchor: Element, inTableCell: boolean): string {
   return `[${label}](${destination})`;
 }
 
+/** Restores link destinations when both clipboard formats describe the same text. */
+export function restoreClipboardLinks(plain: string, html: string): string {
+  if (!plain || !/<a[\s>]/i.test(html)) return plain;
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  const anchors = new Map<Element, { start: number; end: number }>();
+  const walker = document.createTreeWalker(template.content, NodeFilter.SHOW_TEXT);
+  const richText: string[] = [];
+  let offset = 0;
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const text = (node.textContent ?? "").replace(/\s/g, "");
+    if (!text) continue;
+    richText.push(text);
+    const anchor = node.parentElement?.closest("a[href]");
+    if (anchor) {
+      const range = anchors.get(anchor);
+      if (range) range.end = offset + text.length;
+      else anchors.set(anchor, { start: offset, end: offset + text.length });
+    }
+    offset += text.length;
+  }
+  if (anchors.size === 0 || richText.join("") !== plain.replace(/\s/g, "")) return plain;
+
+  // HTML block boundaries can differ from the plain clipboard's whitespace.
+  const plainOffsets = Array.from(plain.matchAll(/\S/g), (match) => match.index);
+  const parts: string[] = [];
+  let cursor = 0;
+  for (const [anchor, { start, end }] of anchors) {
+    const href = anchor.getAttribute("href")?.trim() ?? "";
+    if (!/^(?:https?:\/\/|mailto:)/i.test(href) || /[\s<>]/.test(href) || !URL.canParse(href)) {
+      continue;
+    }
+    const from = plainOffsets[start]!;
+    const to = plainOffsets[end - 1]! + 1;
+    const link = document.createElement("a");
+    link.setAttribute("href", href);
+    link.textContent = plain.slice(from, to).replace(/\n/g, " ");
+    parts.push(plain.slice(cursor, from), serializeAnchor(link, false));
+    cursor = to;
+  }
+  return parts.length > 0 ? parts.join("") + plain.slice(cursor) : plain;
+}
+
 /**
  * GFM splits a table row at every unescaped pipe, but its math-aware parsing
  * keeps a formula's pipes in the cell, so formula source is copied unescaped.
