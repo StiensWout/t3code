@@ -24,7 +24,7 @@ test(
       data.setData("text/plain", "Copied title");
       data.setData(
         "text/html",
-        `<p><img src="cid:clipboard"><a href="https://app.t3.codes/threads/${environmentId}/${threadId}">Copied title</a></p>`,
+        `<p><img src="cid:clipboard"><a href="https://app.t3.codes/threads/${environmentId}/${encodeURIComponent(threadId)}">Copied title</a></p>`,
       );
       const editor = document.querySelector('[contenteditable="true"]');
       if (!editor) throw new Error("No composer editor");
@@ -34,7 +34,7 @@ test(
     }, target.threadId);
 
     await app.screenshot("pasted-thread-link-and-image");
-    await expect(composer.getByRole("button", "Image attachment", { exact: false })).toHaveCount(1);
+    await expect(screen.getByRole("button", "Preview image.png")).toHaveCount(1);
     await expect(composer.getByText("Linked thread")).toBeVisible();
   },
 );
