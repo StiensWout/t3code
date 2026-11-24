@@ -94,6 +94,7 @@ import {
   pmToFlat,
   serializeEditorDoc,
   serializedMarkdownOffset,
+  isInsideComposerFence,
   serializeSelection,
   skillChipReplacements,
   splitOrLiftListItem,
@@ -1182,29 +1183,29 @@ function ComposerPromptEditorTiptapInner(
       );
       return true;
     }
+    const importFragment = readCallbacks().importContextFragment;
+    let text =
+      !literalText && importFragment
+        ? importPastedComposerText(clipboardData, importFragment, pastedText)
+        : pastedText;
+    const tokens = literalText ? [] : collectComposerPromptInlineTokens(`${text}\n`);
     // Shown Markdown source is parsed when the caret leaves, so paste one line into it as text.
     const sourceType = view.state.schema.marks[MARKDOWN_SOURCE_MARK];
     const { from: pasteFrom, to: pasteTo, $from: $pasteFrom } = view.state.selection;
     if (
       !onNewLine &&
       sourceType?.isInSet($pasteFrom.marks()) &&
-      !pastedText.includes("\n") &&
-      collectComposerPromptInlineTokens(`${pastedText}\n`).length === 0
+      !text.includes("\n") &&
+      tokens.length === 0
     ) {
       view.dispatch(
         markAsClipboardEdit(
-          view.state.tr.insertText(pastedText, pasteFrom, pasteTo),
+          view.state.tr.insertText(text, pasteFrom, pasteTo),
           "paste",
         ).scrollIntoView(),
       );
       return true;
     }
-    const importFragment = readCallbacks().importContextFragment;
-    let text =
-      preparedText === undefined && !literalText && importFragment
-        ? importPastedComposerText(clipboardData, importFragment)
-        : pastedText;
-    const tokens = literalText ? [] : collectComposerPromptInlineTokens(`${text}\n`);
     const isChip = (token: (typeof tokens)[number] | undefined) =>
       token?.type === "mention" ||
       (token?.type === "skill" && skillLabelFor(token.value) !== null) ||
@@ -1563,14 +1564,15 @@ function ComposerPromptEditorTiptapInner(
         handlePaste: (view, event) => {
           const clipboardData = event.clipboardData;
           if (!clipboardData) return false;
+          const prepared = preparedPaste.current;
+          preparedPaste.current = null;
+          const text = prepared?.event === event ? prepared.text : undefined;
           if (
+            text === undefined &&
             clipboardData.files.length > 0 &&
             (literalText || !readPastedComposerContext(clipboardData)?.records.length)
           )
             return false;
-          const prepared = preparedPaste.current;
-          preparedPaste.current = null;
-          const text = prepared?.event === event ? prepared.text : undefined;
           if (!insertClipboardText(view, clipboardData, undefined, text)) return false;
           event.preventDefault();
           return true;
@@ -2032,10 +2034,17 @@ function ComposerPromptEditorTiptapInner(
               onKeyUp={(event) => onPageScrollKeyUp?.(event.key)}
               onBlur={onPageScrollRelease}
               onPasteCapture={(event) => {
-                const text = onPaste(
-                  event,
-                  !literalText && editor !== null && !isInCodeBlock(editor.view),
-                );
+                let canRestoreLinks =
+                  !literalText && editor !== null && !isInCodeBlock(editor.view);
+                if (canRestoreLinks && editor !== null && !richText) {
+                  const { doc, selection } = editor.state;
+                  const map = serializeEditorDoc(doc);
+                  canRestoreLinks = !isInsideComposerFence(
+                    map.value,
+                    flatToMarkdown(map, pmToFlat(map, selection.from)),
+                  );
+                }
+                const text = onPaste(event, canRestoreLinks);
                 preparedPaste.current =
                   text === undefined
                     ? null

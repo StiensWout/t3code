@@ -255,15 +255,60 @@ function serializeAnchor(anchor: Element, inTableCell: boolean): string {
   return `[${label}](${destination})`;
 }
 
+function clipboardTextOffsets(plain: string, richText: string, listStarts: Set<number>) {
+  const offsets = Array.from(plain.matchAll(/\S/g), (match) => match.index);
+  if (richText === plain.replace(/\s/g, "")) return offsets;
+  if (listStarts.size === 0) return null;
+
+  const markers = new Map<number, number>();
+  for (const match of plain.matchAll(/^([ \t]*)(?:\d+[.)]|[-+*•◦▪])[ \t]+/gm)) {
+    markers.set(match.index + match[1]!.length, match.index + match[0].length);
+  }
+  const aligned: number[] = [];
+  let markerEnd = 0;
+  for (const offset of offsets) {
+    if (offset < markerEnd) continue;
+    const end = listStarts.has(aligned.length) ? markers.get(offset) : undefined;
+    if (end !== undefined) {
+      markerEnd = end;
+      continue;
+    }
+    if (plain[offset] !== richText[aligned.length]) return null;
+    aligned.push(offset);
+  }
+  return aligned.length === richText.length ? aligned : null;
+}
+
+function escapeBeforeClipboardLink(prefix: string): string {
+  const bang = prefix.endsWith("!");
+  const end = bang ? prefix.length - 1 : prefix.length;
+  let start = end;
+  while (start > 0 && prefix[start - 1] === "\\") start--;
+  const escaped = (end - start) % 2 === 1;
+  if (bang) return escaped ? prefix : `${prefix.slice(0, end)}\\!`;
+  return escaped ? `${prefix}\\` : prefix;
+}
+
 /** Restores link destinations when both clipboard formats describe the same text. */
 export function restoreClipboardLinks(plain: string, html: string): string {
   if (!plain || !/<a[\s>]/i.test(html)) return plain;
   const template = document.createElement("template");
   template.innerHTML = html;
+  for (const hidden of template.content.querySelectorAll("head, script, style, noscript, title")) {
+    hidden.remove();
+  }
   const anchors = new Map<Element, { start: number; end: number }>();
-  const walker = document.createTreeWalker(template.content, NodeFilter.SHOW_TEXT);
+  const listStarts = new Set<number>();
+  const walker = document.createTreeWalker(
+    template.content,
+    NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
+  );
   let richText = "";
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (node instanceof Element) {
+      if (node.matches("ol > li, ul > li")) listStarts.add(richText.length);
+      continue;
+    }
     const text = (node.textContent ?? "").replace(/\s/g, "");
     if (!text) continue;
     const start = richText.length;
@@ -275,10 +320,11 @@ export function restoreClipboardLinks(plain: string, html: string): string {
       else anchors.set(anchor, { start, end: richText.length });
     }
   }
-  if (anchors.size === 0 || richText !== plain.replace(/\s/g, "")) return plain;
+  if (anchors.size === 0) return plain;
 
-  // HTML block boundaries can differ from the plain clipboard's whitespace.
-  const plainOffsets = Array.from(plain.matchAll(/\S/g), (match) => match.index);
+  // HTML block boundaries and list markers can be present only in the plain clipboard.
+  const plainOffsets = clipboardTextOffsets(plain, richText, listStarts);
+  if (plainOffsets === null) return plain;
   const parts: string[] = [];
   let cursor = 0;
   for (const [anchor, { start, end }] of anchors) {
@@ -288,12 +334,14 @@ export function restoreClipboardLinks(plain: string, html: string): string {
     }
     const from = plainOffsets[start]!;
     const to = plainOffsets[end - 1]! + 1;
-    const label = plain.slice(from, to);
-    if (from < cursor || /[\r\n]/.test(label)) continue;
+    if (from < cursor) continue;
+    const label = plain.slice(from, to).replace(/\r\n?|\n/g, " ");
     const link = document.createElement("a");
     link.setAttribute("href", href);
     link.textContent = label;
-    parts.push(plain.slice(cursor, from), serializeAnchor(link, false));
+    const markdown = serializeAnchor(link, false);
+    const prefix = plain.slice(cursor, from);
+    parts.push(markdown.startsWith("[") ? escapeBeforeClipboardLink(prefix) : prefix, markdown);
     cursor = to;
   }
   return parts.length > 0 ? parts.join("") + plain.slice(cursor) : plain;

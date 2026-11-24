@@ -621,6 +621,22 @@ export function isClosingFence(line: string, fence: string): boolean {
   return run[0] === fence[0] && run.length >= fence.length;
 }
 
+export function isInsideComposerFence(markdown: string, position = markdown.length): boolean {
+  let fence: string | null = null;
+  let lineStart = 0;
+  for (const line of markdown.split("\n")) {
+    if (lineStart > position) break;
+    const lineEnd = lineStart + line.length;
+    if (fence !== null) {
+      if (isClosingFence(line, fence)) fence = null;
+    } else if (lineEnd <= position) {
+      fence = parseOpeningFence(line)?.fence ?? null;
+    }
+    lineStart = lineEnd + 1;
+  }
+  return fence !== null;
+}
+
 type ListLinePrefix =
   | ({ kind: "task" } & TaskLinePrefix)
   | { kind: "bullet" | "ordered"; indent: string; marker: string; space: string };

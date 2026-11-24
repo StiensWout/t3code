@@ -29,6 +29,7 @@ import "~/index.css";
 import { act, fakeTimers, render } from "../../test/render";
 
 import { flatToMarkdown, pmToFlat, serializeEditorDoc } from "~/composer-rich-text-doc";
+import { readPastedComposerLinkText } from "./composerInlineTokenPaste";
 import { isMacPlatform } from "~/lib/utils";
 import { registerCommands } from "~/shortcuts/dispatcher";
 import {
@@ -66,6 +67,7 @@ function Composer({
   onChange,
   onCommandKeyDown = () => false,
   importContextFragment,
+  onPaste = () => {},
   literalText = false,
   disabled = false,
   placeholder = "",
@@ -77,6 +79,7 @@ function Composer({
   onChange?: ComposerPromptEditorProps["onChange"] | undefined;
   onCommandKeyDown?: ComposerPromptEditorProps["onCommandKeyDown"] | undefined;
   importContextFragment?: ComposerPromptEditorProps["importContextFragment"];
+  onPaste?: ComposerPromptEditorProps["onPaste"];
   literalText?: boolean;
   disabled?: boolean;
   placeholder?: string;
@@ -98,7 +101,7 @@ function Composer({
         setPrompt({ value: args[0], cursor: args[1] });
         onChange?.(...args);
       }}
-      onPaste={() => {}}
+      onPaste={onPaste}
       onCommandKeyDown={onCommandKeyDown}
       importContextFragment={importContextFragment}
       literalText={literalText}
@@ -755,6 +758,40 @@ it.each([
     expect(importContextFragment).toHaveBeenCalledTimes(imports);
   },
 );
+
+it.each([
+  { value: "", richTextEnabled: true, image: true, expected: "[Docs](https://example.com)" },
+  { value: "```\n", richTextEnabled: false, image: false, expected: "```\nDocs" },
+  {
+    value: "```\n```\n",
+    richTextEnabled: false,
+    image: false,
+    expected: "```\n```\n[Docs](https://example.com)",
+  },
+])("pastes link text at the current editor position: %j", async (row) => {
+  await using screen = await render(
+    <Composer
+      value={row.value}
+      richTextEnabled={row.richTextEnabled}
+      skills={[]}
+      onPaste={(event, canRestoreLinks) =>
+        canRestoreLinks ? readPastedComposerLinkText(event.clipboardData) : undefined
+      }
+    />,
+  );
+  const editor = editorIn(screen.container);
+  await act(async () => {
+    editor.commands.focus("end");
+    const clipboardData = new DataTransfer();
+    if (row.image) clipboardData.items.add(new File(["image"], "shot.png", { type: "image/png" }));
+    clipboardData.setData("text/plain", "Docs");
+    clipboardData.setData("text/html", '<a href="https://example.com">Docs</a>');
+    editor.view.dom.dispatchEvent(
+      new ClipboardEvent("paste", { clipboardData, bubbles: true, cancelable: true }),
+    );
+  });
+  expect(serializeEditorDoc(editor.state.doc).value).toBe(row.expected);
+});
 
 it.each(["x\r\n\r\ny", "x\r\ry"])(
   "pastes %j with the same blank line as x\\n\\ny",

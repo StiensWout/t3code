@@ -50,6 +50,23 @@ describe("importPastedComposerText", () => {
     expect(text).toBe(chip("Login"));
   });
 
+  it.each([
+    {
+      plain: "Fix login",
+      source: "[Fix login](https://app.t3.codes/threads/env-1/thread-1)",
+      expected: chip("Fix login"),
+    },
+    {
+      plain: "https://app.t3.codes/threads/env-1/thread-1 and docs",
+      source: "https://app.t3.codes/threads/env-1/thread-1 and [docs](https://example.com)",
+      expected: `${chip("Thread")} and [docs](https://example.com)`,
+    },
+  ])("imports thread links from the prepared paste $source", ({ plain, source, expected }) => {
+    expect(
+      importPastedComposerText(clipboard({ "text/plain": plain }), importAll([]), source),
+    ).toBe(expected);
+  });
+
   it("keeps the link when the composer cannot take the thread", () => {
     const pasted = "https://app.t3.codes/threads/env-1/thread-1";
     expect(importPastedComposerText(clipboard({ "text/plain": pasted }), () => new Map())).toBe(

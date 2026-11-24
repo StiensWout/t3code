@@ -36,8 +36,8 @@ export function readPastedComposerLinkText(clipboardData: Pick<DataTransfer, "ge
 /** Pasted thread links count as context too, so they become chips like a copied chip does. */
 export function readPastedComposerContext(
   clipboardData: Pick<DataTransfer, "getData">,
+  pastedText = readPastedPlainText(clipboardData),
 ): ComposerContextClipboardFragment | null {
-  const pastedText = clipboardData.getData("text/plain");
   const decodedFragment =
     decodeComposerContextFragment(clipboardData.getData(COMPOSER_CONTEXT_CLIPBOARD_MIME)) ??
     decodeComposerContextClipboardHtml(clipboardData.getData("text/html"));
@@ -77,9 +77,12 @@ export function importPastedComposerText(
   importContextFragment?: (
     fragment: ComposerContextClipboardFragment,
   ) => ReadonlyMap<string, string>,
+  sourceText = readPastedPlainText(clipboardData),
 ): string {
-  const pastedText = readPastedPlainText(clipboardData);
-  const fragment = importContextFragment ? readPastedComposerContext(clipboardData) : null;
+  const pastedText = sourceText.replace(/\r\n?/g, "\n");
+  const fragment = importContextFragment
+    ? readPastedComposerContext(clipboardData, pastedText)
+    : null;
   const rewrittenIds =
     fragment && fragment.records.length > 0 ? importContextFragment!(fragment) : null;
   if (!rewrittenIds || rewrittenIds.size === 0) return pastedText;

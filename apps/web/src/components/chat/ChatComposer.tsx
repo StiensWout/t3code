@@ -1,3 +1,4 @@
+import { isInsideComposerFence } from "~/composer-rich-text-doc";
 import { copySnapshot } from "./copySnapshot";
 import { VoiceInputSetup } from "./VoiceInputSetup";
 import { useComposerTypingGuard } from "./useComposerTypingGuard";
@@ -2850,7 +2851,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       return false;
     }
     if (options?.clipboardData) {
-      text = importPastedComposerText(options.clipboardData, importContextFragment);
+      text = importPastedComposerText(options.clipboardData, importContextFragment, text);
     }
     const prompt = promptRef.current;
     const cursor = position === "cursor" ? readComposerSnapshot().expandedCursor : prompt.length;
@@ -3024,9 +3025,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     const { files, folders } = splitTransferredFiles(event.clipboardData);
     const plainText = event.clipboardData.getData("text/plain");
     const bypassAutoAttachment = consumePasteAsTextShortcut(pasteAsTextShortcutUntilRef);
+    const text =
+      canRestoreLinks && !bypassAutoAttachment
+        ? readPastedComposerLinkText(event.clipboardData)
+        : plainText;
+    const preparedText = text !== plainText ? text : undefined;
     const pastedContext =
       !isLiteralPendingAnswer &&
-      (readPastedComposerContext(event.clipboardData)?.records.length ?? 0) > 0;
+      (readPastedComposerContext(event.clipboardData, text)?.records.length ?? 0) > 0;
     const canAttachFiles = !pastedContext && activeThreadId !== null && files.length > 0;
     const htmlImageContent =
       canAttachFiles && plainText.length > 0
@@ -3051,7 +3057,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       return;
     }
 
-    if (pastedContext) return;
+    if (pastedContext) return preparedText;
     const imagesBesideText = imagesToAttachBesidePastedText({
       files,
       plainText,
@@ -3059,12 +3065,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       htmlHasImageAndText: htmlImageContent === "image-and-text",
     });
     if (imagesBesideText.length > 0) void addComposerAttachments(imagesBesideText);
-    const text =
-      canRestoreLinks && !bypassAutoAttachment
-        ? readPastedComposerLinkText(event.clipboardData)
-        : plainText;
     if (!foldPastedText(text, bypassAutoAttachment)) {
-      return text !== plainText ? text : undefined;
+      return preparedText;
     }
 
     event.preventDefault();
@@ -3331,15 +3333,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       insertTextAtEnd: insertComposerTextAtEndStable,
       pasteTextAtEnd: (text, clipboardData, plainOnly) => {
         if (speechInput.freezesEditor) return false;
-        const pastedContext = (readPastedComposerContext(clipboardData)?.records.length ?? 0) > 0;
-        if (pastedContext) return insertComposerTextAtEndStable(text, { clipboardData });
         const shortcutArmed = consumePasteAsTextShortcut(pasteAsTextShortcutUntilRef);
         const bypassAutoAttachment = plainOnly || shortcutArmed;
+        const prompt = promptRef.current;
         const pastedText =
-          bypassAutoAttachment || isLiteralPendingAnswer
+          bypassAutoAttachment || isLiteralPendingAnswer || isInsideComposerFence(prompt)
             ? text
             : readPastedComposerLinkText(clipboardData);
-        const promptLength = promptRef.current.length;
+        if ((readPastedComposerContext(clipboardData, pastedText)?.records.length ?? 0) > 0) {
+          return insertComposerTextAtEndStable(pastedText, { clipboardData });
+        }
+        const promptLength = prompt.length;
         if (
           foldPastedText(pastedText, bypassAutoAttachment, {
             start: promptLength,
@@ -3349,9 +3353,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           focusComposer();
           return true;
         }
-        return pastedText === text
-          ? insertComposerTextAtEndStable(text, { clipboardData })
-          : insertComposerTextAtEndStable(pastedText.replace(/\r\n?/g, "\n"));
+        return insertComposerTextAtEndStable(pastedText, { clipboardData });
       },
       citeAssistantText: (citation, sourceAnchor) =>
         insertComposerTextStable(
