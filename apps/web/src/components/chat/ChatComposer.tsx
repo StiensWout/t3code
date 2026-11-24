@@ -3030,17 +3030,20 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         ? readPastedComposerLinkText(event.clipboardData)
         : plainText;
     const preparedText = text !== plainText ? text : undefined;
-    const pastedContext =
-      !isLiteralPendingAnswer &&
-      (readPastedComposerContext(event.clipboardData, text)?.records.length ?? 0) > 0;
-    const canAttachFiles = !pastedContext && activeThreadId !== null && files.length > 0;
+    const records = isLiteralPendingAnswer
+      ? []
+      : (readPastedComposerContext(event.clipboardData, text)?.records ?? []);
+    const pastedContext = records.length > 0;
+    const includesCopiedImage = records.some((record) => record.kind === "image");
+    const canAttachFiles = !includesCopiedImage && activeThreadId !== null && files.length > 0;
     const htmlImageContent =
       canAttachFiles && plainText.length > 0
         ? clipboardHtmlImageContent(event.clipboardData.getData("text/html"))
         : "none";
     if (
       folders.length > 0 ||
-      (canAttachFiles &&
+      (!pastedContext &&
+        canAttachFiles &&
         shouldHandleComposerAttachmentPaste({
           files,
           plainText,
@@ -3057,7 +3060,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       return;
     }
 
-    if (pastedContext) return preparedText;
     const imagesBesideText = imagesToAttachBesidePastedText({
       files,
       plainText,
@@ -3065,7 +3067,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       htmlHasImageAndText: htmlImageContent === "image-and-text",
     });
     if (imagesBesideText.length > 0) void addComposerAttachments(imagesBesideText);
-    if (!foldPastedText(text, bypassAutoAttachment)) {
+    if (pastedContext || !foldPastedText(text, bypassAutoAttachment)) {
       return preparedText;
     }
 

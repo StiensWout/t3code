@@ -23,6 +23,12 @@ describe("restoreClipboardLinks", () => {
       expected: "3. [Docs](https://example.com)\r\n  • [More](https://example.org)",
     },
     {
+      name: "retains a literal number in a partially copied list",
+      plain: "2024. Docs\n2. More",
+      html: '<ol><li>2024. <a href="https://example.com">Docs</a></li><li><a href="https://example.org">More</a></li></ol>',
+      expected: "2024. [Docs](https://example.com)\n2. [More](https://example.org)",
+    },
+    {
       name: "keeps a literal bang from turning a restored link into an image",
       plain: "!Docs",
       html: '!<a href="https://example.com">Docs</a>',

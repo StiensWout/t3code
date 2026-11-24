@@ -28,7 +28,13 @@ import { cdp, userEvent } from "vite-plus/test/browser";
 import "~/index.css";
 import { act, fakeTimers, render } from "../../test/render";
 
-import { flatToMarkdown, pmToFlat, serializeEditorDoc } from "~/composer-rich-text-doc";
+import {
+  flatToMarkdown,
+  flatToPm,
+  markdownToFlat,
+  pmToFlat,
+  serializeEditorDoc,
+} from "~/composer-rich-text-doc";
 import { readPastedComposerLinkText } from "./composerInlineTokenPaste";
 import { isMacPlatform } from "~/lib/utils";
 import { registerCommands } from "~/shortcuts/dispatcher";
@@ -763,6 +769,19 @@ it.each([
   { value: "", richTextEnabled: true, image: true, expected: "[Docs](https://example.com)" },
   { value: "```\n", richTextEnabled: false, image: false, expected: "```\nDocs" },
   {
+    value: "```\ncode\n```",
+    cursor: 9,
+    richTextEnabled: false,
+    image: false,
+    expected: "```\ncode\nDocs```",
+  },
+  {
+    value: "```\ncode\n```",
+    richTextEnabled: false,
+    image: false,
+    expected: "```\ncode\n```Docs",
+  },
+  {
     value: "```\n```\n",
     richTextEnabled: false,
     image: false,
@@ -781,7 +800,10 @@ it.each([
   );
   const editor = editorIn(screen.container);
   await act(async () => {
-    editor.commands.focus("end");
+    const map = serializeEditorDoc(editor.state.doc);
+    editor.commands.focus(
+      row.cursor === undefined ? "end" : flatToPm(map, markdownToFlat(map, row.cursor)),
+    );
     const clipboardData = new DataTransfer();
     if (row.image) clipboardData.items.add(new File(["image"], "shot.png", { type: "image/png" }));
     clipboardData.setData("text/plain", "Docs");

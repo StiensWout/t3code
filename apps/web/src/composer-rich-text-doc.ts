@@ -628,7 +628,7 @@ export function isInsideComposerFence(markdown: string, position = markdown.leng
     if (lineStart > position) break;
     const lineEnd = lineStart + line.length;
     if (fence !== null) {
-      if (isClosingFence(line, fence)) fence = null;
+      if (lineEnd < position && isClosingFence(line, fence)) fence = null;
     } else if (lineEnd <= position) {
       fence = parseOpeningFence(line)?.fence ?? null;
     }

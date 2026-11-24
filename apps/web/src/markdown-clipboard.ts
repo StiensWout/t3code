@@ -257,19 +257,26 @@ function serializeAnchor(anchor: Element, inTableCell: boolean): string {
 
 function clipboardTextOffsets(plain: string, richText: string, listStarts: Set<number>) {
   const offsets = Array.from(plain.matchAll(/\S/g), (match) => match.index);
-  if (richText === plain.replace(/\s/g, "")) return offsets;
+  const compact = plain.replace(/\s/g, "");
+  if (richText === compact) return offsets;
   if (listStarts.size === 0) return null;
 
   const markers = new Map<number, number>();
   for (const match of plain.matchAll(/^([ \t]*)(?:\d+[.)]|[-+*•◦▪])[ \t]+/gm)) {
     markers.set(match.index + match[1]!.length, match.index + match[0].length);
   }
+  const starts = [...listStarts];
+  const itemEnds = new Map(
+    starts.map((start, index) => [start, starts[index + 1] ?? richText.length]),
+  );
   const aligned: number[] = [];
   let markerEnd = 0;
-  for (const offset of offsets) {
+  for (const [index, offset] of offsets.entries()) {
     if (offset < markerEnd) continue;
-    const end = listStarts.has(aligned.length) ? markers.get(offset) : undefined;
-    if (end !== undefined) {
+    const itemEnd = itemEnds.get(aligned.length);
+    const end = itemEnd === undefined ? undefined : markers.get(offset);
+    // A marker-shaped prefix can be part of the item itself in a partial selection.
+    if (end !== undefined && !compact.startsWith(richText.slice(aligned.length, itemEnd), index)) {
       markerEnd = end;
       continue;
     }
@@ -281,8 +288,11 @@ function clipboardTextOffsets(plain: string, richText: string, listStarts: Set<n
 
 // A bare bang before a link makes it an image; an odd backslash run escapes its opener.
 function escapeBeforeClipboardLink(prefix: string): string {
-  const [, backslashes = "", bang] = /(\\*)(!?)$/.exec(prefix)!;
-  const escaped = backslashes.length % 2 === 1;
+  const bang = prefix.endsWith("!");
+  const end = bang ? prefix.length - 1 : prefix.length;
+  let start = end;
+  while (start > 0 && prefix[start - 1] === "\\") start--;
+  const escaped = (end - start) % 2 === 1;
   if (bang) return escaped ? prefix : `${prefix.slice(0, -1)}\\!`;
   return escaped ? `${prefix}\\` : prefix;
 }
