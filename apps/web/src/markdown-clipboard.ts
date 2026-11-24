@@ -255,6 +255,45 @@ function serializeAnchor(anchor: Element, inTableCell: boolean): string {
   return `[${label}](${destination})`;
 }
 
+/** Restores link destinations where the HTML and plain clipboard text describe the same content. */
+export function restoreClipboardLinks(plain: string, html: string): string {
+  if (!plain || !/<a[\s>]/i.test(html)) return plain;
+  // A template keeps clipboard markup inert, including images and custom elements.
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  const walker = document.createTreeWalker(template.content, NodeFilter.SHOW_TEXT);
+  const plainCharacters = plain.matchAll(/\S/g);
+  const ranges = new Map<Element, { start: number; end: number }>();
+
+  // Match in document order so repeated labels only change at their linked occurrence.
+  while (walker.nextNode()) {
+    const node = walker.currentNode;
+    const anchor = node.parentElement?.closest("a[href]");
+    for (const character of (node.textContent ?? "").matchAll(/\S/g)) {
+      const match = plainCharacters.next().value;
+      if (!match || match[0] !== character[0]) return plain;
+      if (!anchor) continue;
+      const range = ranges.get(anchor);
+      if (range) range.end = match.index + 1;
+      else ranges.set(anchor, { start: match.index, end: match.index + 1 });
+    }
+  }
+  if (!plainCharacters.next().done) return plain;
+
+  let text = "";
+  let cursor = 0;
+  for (const [anchor, { start, end }] of ranges) {
+    const href = anchor.getAttribute("href") ?? "";
+    if (!/^(?:https?:\/\/|mailto:)[^\s<>]+$/i.test(href)) continue;
+    // Only the href comes from HTML. Copy-only attributes and nested formatting do not.
+    anchor.removeAttribute("data-markdown-copy");
+    anchor.textContent = plain.slice(start, end);
+    text += plain.slice(cursor, start) + serializeAnchor(anchor, false);
+    cursor = end;
+  }
+  return text + plain.slice(cursor);
+}
+
 /**
  * GFM splits a table row at every unescaped pipe, but its math-aware parsing
  * keeps a formula's pipes in the cell, so formula source is copied unescaped.

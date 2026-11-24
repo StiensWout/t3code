@@ -15,7 +15,12 @@ import {
 import { isLocalEnvironmentDisabled } from "../../localEnvironment";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { useRightPanelStore } from "~/rightPanelStore";
-import { importPastedComposerText, readPastedComposerContext } from "../composerInlineTokenPaste";
+import {
+  importPastedComposerText,
+  readPastedComposerContext,
+  readPastedPlainText,
+} from "../composerInlineTokenPaste";
+import { restoreClipboardLinks } from "~/markdown-clipboard";
 import {
   questionAttachmentDraftId,
   trackOpenQuestionAttachmentDraft,
@@ -324,7 +329,10 @@ export interface ChatComposerHandle {
     text: string,
     options?: { ensureLeadingBoundary?: boolean; clipboardData?: DataTransfer },
   ) => boolean;
-  pasteTextAtEnd: (text: string, options?: { bypassAutoAttachment?: boolean }) => boolean;
+  pasteTextAtEnd: (
+    text: string,
+    options: { bypassAutoAttachment: boolean; clipboardData: DataTransfer },
+  ) => boolean;
   citeAssistantText: (
     citation: AssistantCitation,
     sourceAnchor: AssistantCitationSourceAnchor,
@@ -3016,7 +3024,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   };
   const addComposerFoldersStable = useStableCallback(addComposerFolders);
 
-  const onComposerPaste = (event: React.ClipboardEvent<HTMLElement>) => {
+  const onComposerPaste = (event: React.ClipboardEvent<HTMLElement>, allowRichText: boolean) => {
     const { files, folders } = splitTransferredFiles(event.clipboardData);
     const plainText = event.clipboardData.getData("text/plain");
     const bypassAutoAttachment = consumePasteAsTextShortcut(pasteAsTextShortcutUntilRef);
@@ -3055,9 +3063,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       htmlHasImageAndText: htmlImageContent === "image-and-text",
     });
     if (imagesBesideText.length > 0) void addComposerAttachments(imagesBesideText);
-    if (!foldPastedText(plainText, bypassAutoAttachment)) {
-      return;
-    }
+    const normalizedText = readPastedPlainText(event.clipboardData);
+    const text =
+      allowRichText && !bypassAutoAttachment
+        ? restoreClipboardLinks(normalizedText, event.clipboardData.getData("text/html"))
+        : normalizedText;
+    const linkedText = text === normalizedText ? undefined : text;
+    if (!foldPastedText(linkedText ?? plainText, bypassAutoAttachment)) return linkedText;
 
     event.preventDefault();
     event.stopPropagation();
@@ -3321,21 +3333,27 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         countPreparingComposerImages(attachmentTargetKey) > 0 ||
         pendingDraftWork.has(attachmentTargetKey),
       insertTextAtEnd: insertComposerTextAtEndStable,
-      pasteTextAtEnd: (text: string, options) => {
+      pasteTextAtEnd: (text, { bypassAutoAttachment, clipboardData }) => {
         if (speechInput.freezesEditor) return false;
         const shortcutArmed = consumePasteAsTextShortcut(pasteAsTextShortcutUntilRef);
-        const bypassAutoAttachment = options?.bypassAutoAttachment === true || shortcutArmed;
+        const pasteAsText = bypassAutoAttachment || shortcutArmed;
+        const pastedContext = (readPastedComposerContext(clipboardData)?.records.length ?? 0) > 0;
+        const linkedText =
+          pasteAsText || isLiteralPendingAnswer || pastedContext
+            ? text
+            : restoreClipboardLinks(text, clipboardData.getData("text/html"));
         const promptLength = promptRef.current.length;
         if (
-          !foldPastedText(text, bypassAutoAttachment, {
-            start: promptLength,
-            end: promptLength,
-          })
+          !pastedContext &&
+          foldPastedText(linkedText, pasteAsText, { start: promptLength, end: promptLength })
         ) {
-          return false;
+          focusComposer();
+          return true;
         }
-        focusComposer();
-        return true;
+        return insertComposerTextAtEndStable(
+          linkedText,
+          linkedText === text ? { clipboardData } : undefined,
+        );
       },
       citeAssistantText: (citation, sourceAnchor) =>
         insertComposerTextStable(

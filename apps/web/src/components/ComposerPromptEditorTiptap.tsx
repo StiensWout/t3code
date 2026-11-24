@@ -215,7 +215,7 @@ export interface ComposerPromptEditorProps {
   onCitationSubmitAndSend?: () => boolean;
   /** Saves unsaved citation text into replacedValue when a controlled rewrite replaces the document. */
   onCitationDraftSave?: (replacedValue: string, savedValue: string) => void;
-  onPaste: React.ClipboardEventHandler<HTMLElement>;
+  onPaste: (event: React.ClipboardEvent<HTMLElement>, allowRichText: boolean) => string | void;
   editorRef: React.RefObject<ComposerPromptEditorHandle | null>;
 }
 
@@ -1160,13 +1160,16 @@ function ComposerPromptEditorTiptapInner(
     "aria-placeholder": placeholder,
   };
 
+  const richPasteText = useRef(new WeakMap<ClipboardEvent, string>());
+
   /** `newLineAt` inserts on a fresh line created at that block boundary, in the same undo step. */
   const insertClipboardText = (
     view: EditorView,
     clipboardData: DataTransfer,
     newLineAt?: number,
+    richTextOverride?: string,
   ): boolean => {
-    const pastedText = readPastedPlainText(clipboardData);
+    const pastedText = richTextOverride ?? readPastedPlainText(clipboardData);
     if (!pastedText) return false;
     const onNewLine = newLineAt !== undefined;
     // Paste verbatim inside fences; markdown parsing would split blocks and create unsupported chips.
@@ -1199,7 +1202,7 @@ function ComposerPromptEditorTiptapInner(
     }
     const importFragment = readCallbacks().importContextFragment;
     let text =
-      !literalText && importFragment
+      richTextOverride === undefined && !literalText && importFragment
         ? importPastedComposerText(clipboardData, importFragment)
         : pastedText;
     const tokens = literalText ? [] : collectComposerPromptInlineTokens(`${text}\n`);
@@ -1566,7 +1569,10 @@ function ComposerPromptEditorTiptapInner(
             (literalText || !readPastedComposerContext(clipboardData)?.records.length)
           )
             return false;
-          if (!insertClipboardText(view, clipboardData)) return false;
+          if (
+            !insertClipboardText(view, clipboardData, undefined, richPasteText.current.get(event))
+          )
+            return false;
           event.preventDefault();
           return true;
         },
@@ -2026,7 +2032,13 @@ function ComposerPromptEditorTiptapInner(
               }}
               onKeyUp={(event) => onPageScrollKeyUp?.(event.key)}
               onBlur={onPageScrollRelease}
-              onPasteCapture={onPaste}
+              onPasteCapture={(event) => {
+                const text = onPaste(
+                  event,
+                  !literalText && !!editor && !isInCodeBlock(editor.view),
+                );
+                if (typeof text === "string") richPasteText.current.set(event.nativeEvent, text);
+              }}
               onCopyCapture={(event) => handleCopyCut(event, false)}
               onCutCapture={(event) => handleCopyCut(event, true)}
             />
