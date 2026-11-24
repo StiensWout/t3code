@@ -262,21 +262,20 @@ export function restoreClipboardLinks(plain: string, html: string): string {
   template.innerHTML = html;
   const anchors = new Map<Element, { start: number; end: number }>();
   const walker = document.createTreeWalker(template.content, NodeFilter.SHOW_TEXT);
-  const richText: string[] = [];
-  let offset = 0;
+  let richText = "";
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
     const text = (node.textContent ?? "").replace(/\s/g, "");
     if (!text) continue;
-    richText.push(text);
+    const start = richText.length;
+    richText += text;
     const anchor = node.parentElement?.closest("a[href]");
     if (anchor) {
       const range = anchors.get(anchor);
-      if (range) range.end = offset + text.length;
-      else anchors.set(anchor, { start: offset, end: offset + text.length });
+      if (range) range.end = richText.length;
+      else anchors.set(anchor, { start, end: richText.length });
     }
-    offset += text.length;
   }
-  if (anchors.size === 0 || richText.join("") !== plain.replace(/\s/g, "")) return plain;
+  if (anchors.size === 0 || richText !== plain.replace(/\s/g, "")) return plain;
 
   // HTML block boundaries can differ from the plain clipboard's whitespace.
   const plainOffsets = Array.from(plain.matchAll(/\S/g), (match) => match.index);
