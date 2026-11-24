@@ -289,9 +289,11 @@ export function restoreClipboardLinks(plain: string, html: string): string {
     }
     const from = plainOffsets[start]!;
     const to = plainOffsets[end - 1]! + 1;
+    const label = plain.slice(from, to);
+    if (from < cursor || /[\r\n]/.test(label)) continue;
     const link = document.createElement("a");
     link.setAttribute("href", href);
-    link.textContent = plain.slice(from, to).replace(/\n/g, " ");
+    link.textContent = label;
     parts.push(plain.slice(cursor, from), serializeAnchor(link, false));
     cursor = to;
   }

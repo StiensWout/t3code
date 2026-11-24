@@ -28,7 +28,7 @@ export function readPastedPlainText(clipboardData: Pick<DataTransfer, "getData">
 
 export function readPastedComposerLinkText(clipboardData: Pick<DataTransfer, "getData">): string {
   return restoreClipboardLinks(
-    readPastedPlainText(clipboardData),
+    clipboardData.getData("text/plain"),
     clipboardData.getData("text/html"),
   );
 }

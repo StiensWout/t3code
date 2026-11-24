@@ -2036,7 +2036,10 @@ function ComposerPromptEditorTiptapInner(
                   event,
                   !literalText && editor !== null && !isInCodeBlock(editor.view),
                 );
-                if (text !== undefined) preparedPaste.current = { event: event.nativeEvent, text };
+                preparedPaste.current =
+                  text === undefined
+                    ? null
+                    : { event: event.nativeEvent, text: text.replace(/\r\n?/g, "\n") };
               }}
               onCopyCapture={(event) => handleCopyCut(event, false)}
               onCutCapture={(event) => handleCopyCut(event, true)}

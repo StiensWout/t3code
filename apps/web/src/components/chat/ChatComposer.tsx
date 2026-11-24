@@ -3349,7 +3349,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           focusComposer();
           return true;
         }
-        return insertComposerTextAtEndStable(pastedText);
+        return pastedText === text
+          ? insertComposerTextAtEndStable(text, { clipboardData })
+          : insertComposerTextAtEndStable(pastedText.replace(/\r\n?/g, "\n"));
       },
       citeAssistantText: (citation, sourceAnchor) =>
         insertComposerTextStable(
