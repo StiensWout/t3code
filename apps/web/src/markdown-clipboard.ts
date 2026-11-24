@@ -279,13 +279,11 @@ function clipboardTextOffsets(plain: string, richText: string, listStarts: Set<n
   return aligned.length === richText.length ? aligned : null;
 }
 
+// A bare bang before a link makes it an image; an odd backslash run escapes its opener.
 function escapeBeforeClipboardLink(prefix: string): string {
-  const bang = prefix.endsWith("!");
-  const end = bang ? prefix.length - 1 : prefix.length;
-  let start = end;
-  while (start > 0 && prefix[start - 1] === "\\") start--;
-  const escaped = (end - start) % 2 === 1;
-  if (bang) return escaped ? prefix : `${prefix.slice(0, end)}\\!`;
+  const [, backslashes = "", bang] = /(\\*)(!?)$/.exec(prefix)!;
+  const escaped = backslashes.length % 2 === 1;
+  if (bang) return escaped ? prefix : `${prefix.slice(0, -1)}\\!`;
   return escaped ? `${prefix}\\` : prefix;
 }
 
