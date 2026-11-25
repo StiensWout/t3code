@@ -1766,6 +1766,69 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
       }),
     );
 
+    it.effect("imports Pi sessions started or resumed after the project scan", () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const fs = yield* FileSystem.FileSystem;
+        const nowMs = Date.parse("2026-08-24T12:00:00.000Z");
+        yield* TestClock.setTime(nowMs);
+        const claudeHomePath = yield* makeTempDir("t3code-claude-home-");
+        const codexHomePath = yield* makeTempDir("t3code-codex-home-");
+        const workspace = yield* makeTempDir("t3code-workspace-");
+        const sessions = path.join(claudeHomePath, "pi-agent", "sessions", "--workspace--");
+        const writeSession = (id: string, mtimeMs: number) =>
+          writeTranscript({
+            filePath: path.join(sessions, `${id}.jsonl`),
+            contents:
+              [
+                { type: "session", version: 3, id, cwd: workspace },
+                {
+                  type: "message",
+                  id: "a1",
+                  parentId: null,
+                  message: { role: "user", content: id },
+                },
+                {
+                  type: "message",
+                  id: "a2",
+                  parentId: "a1",
+                  message: { role: "assistant", content: [{ type: "text", text: "Done" }] },
+                },
+              ]
+                .map(encodeTranscriptRecord)
+                .join("\n") + "\n",
+            mtimeMs,
+          });
+
+        yield* writeSession("resumed", nowMs - 31 * 24 * 60 * 60 * 1000);
+        yield* Effect.gen(function* () {
+          const scanner = yield* AgentSessionScanner.AgentSessionScanner;
+          const scan = yield* scanner.scan;
+          expect(scan.candidates).toMatchObject([{ path: workspace, threadCount: 1 }]);
+
+          const resumedPath = path.join(sessions, "resumed.jsonl");
+          yield* fs.writeFileString(
+            resumedPath,
+            encodeTranscriptRecord({
+              type: "message",
+              id: "a3",
+              parentId: "a2",
+              message: { role: "user", content: "Continue this conversation" },
+            }) + "\n",
+            { flag: "a" },
+          );
+          yield* fs.utimes(resumedPath, nowMs / 1000 - 1, nowMs / 1000 - 1);
+          yield* writeSession("new", nowMs - 2_000);
+
+          const outcomes = yield* scanner.recentThreads(workspace).pipe(Stream.runCollect);
+          const imported = Array.from(outcomes).flatMap((outcome) =>
+            outcome._tag === "Importable" ? [outcome.thread.providerSessionId] : [],
+          );
+          expect(imported.toSorted()).toEqual(["new", "resumed"]);
+        }).pipe(Effect.provide(layerScannerTest({ claudeHomePath, codexHomePath })));
+      }),
+    );
+
     it.effect("keeps the provider instance that owns a custom session home", () =>
       Effect.gen(function* () {
         const path = yield* Path.Path;
