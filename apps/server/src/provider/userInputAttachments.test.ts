@@ -649,6 +649,19 @@ describe("question answer paths", () => {
     Effect.gen(function* () {
       const config = yield* ServerConfig.ServerConfig;
       const cases = [
+        {
+          ext: "docx",
+          bounded: true,
+          parts: {
+            "word/document.xml":
+              '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:tbl>' +
+              "<w:tblGrid><w:gridCol/><w:gridCol/><w:gridCol/></w:tblGrid>" +
+              "<w:tr><w:tc><w:p><w:r><w:t>Region</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Units</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Revenue</w:t></w:r></w:p></w:tc></w:tr>" +
+              '<w:tr><w:trPr><w:gridBefore w:val="1"/></w:trPr><w:tc><w:p><w:r><w:t>12</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>$240</w:t></w:r></w:p></w:tc></w:tr>' +
+              "</w:tbl></w:body></w:document>",
+          },
+          expected: ["Region\tUnits\tRevenue\n\t12\t$240"],
+        },
         // Word stores object layout and field data outside the visible document text.
         {
           ext: "docx",
