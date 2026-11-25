@@ -392,21 +392,23 @@ export function ProviderAuthenticationSection({
                   outputOffset={interaction.outputOffset}
                   onResponse={(response) => {
                     if (readOnly || !auth?.flowId) return;
-                    for (
-                      let offset = 0;
-                      offset < Math.max(1, response.data.length);
-                      offset += 4_096
-                    ) {
+                    const { data } = response;
+                    let offset = 0;
+                    do {
+                      let end = Math.min(offset + 4_096, data.length);
+                      // Keep surrogate pairs together across separately encoded PTY writes.
+                      if ((data.codePointAt(end - 1) ?? 0) > 0xffff) end -= 1;
                       terminalQueue.current.push({
                         instanceId,
                         flowId: auth.flowId,
                         interactionId: interaction.id,
                         response: {
                           ...response,
-                          data: response.data.slice(offset, offset + 4_096),
+                          data: data.slice(offset, end),
                         },
                       });
-                    }
+                      offset = end;
+                    } while (offset < data.length);
                     if (terminalSending.current) return;
                     terminalSending.current = true;
                     void (async () => {
