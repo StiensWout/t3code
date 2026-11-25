@@ -758,7 +758,7 @@ export const layer = Layer.effect(
     // Compared with the last PATH seen here, since other features re-read the login shell too.
     const hostEnvironment = yield* HostProcess.Environment;
     const readHostPath = () => hostEnvironment.PATH ?? hostEnvironment.Path ?? hostEnvironment.path;
-    let lastHostPath = readHostPath();
+    const lastHostPathRef = yield* Ref.make(readHostPath());
     const instancesWithStalePath = new WeakSet<ProviderInstance>();
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const refreshHostPath = yield* refreshWindowsPath().pipe(
@@ -768,12 +768,11 @@ export const layer = Layer.effect(
         Effect.gen(function* () {
           const instances = yield* instanceRegistry.listInstances;
           const path = readHostPath();
-          if (path !== lastHostPath) {
+          if ((yield* Ref.getAndSet(lastHostPathRef, path)) !== path) {
             // An installed instance can report missing on a later probe, after PATH has settled.
             for (const instance of instances) {
               instancesWithStalePath.add(instance);
             }
-            lastHostPath = path;
           }
           const providers = yield* Ref.get(providersRef);
           const missingIds = new Set(
