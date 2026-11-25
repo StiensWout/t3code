@@ -2373,7 +2373,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     Deferred.succeed(persistenceStopping, undefined).pipe(Effect.andThen(persistenceDrained.await)),
   );
 
-  const enqueuePersistence = Effect.fn("terminal.enqueuePersistence")(function* (
+  const queuePersist = Effect.fn("terminal.queuePersist")(function* (
     threadId: string,
     terminalId: string,
     history: BoundedTerminalHistory,
@@ -2389,14 +2389,6 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     });
   }, Effect.uninterruptible);
 
-  const queuePersist = Effect.fn("terminal.queuePersist")(function* (
-    threadId: string,
-    terminalId: string,
-    history: BoundedTerminalHistory,
-  ) {
-    yield* enqueuePersistence(threadId, terminalId, history, false);
-  });
-
   const flushPersist = Effect.fn("terminal.flushPersist")(function* (
     threadId: string,
     terminalId: string,
@@ -2409,7 +2401,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     terminalId: string,
     history: BoundedTerminalHistory,
   ) {
-    yield* enqueuePersistence(threadId, terminalId, history, true);
+    yield* queuePersist(threadId, terminalId, history, true);
     yield* flushPersist(threadId, terminalId);
   });
 
@@ -2745,7 +2737,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
 
       if (action.type === "output") {
         if (action.history !== null) {
-          yield* queuePersist(action.threadId, action.terminalId, action.history);
+          yield* queuePersist(action.threadId, action.terminalId, action.history, false);
         }
 
         yield* publishEvent({
