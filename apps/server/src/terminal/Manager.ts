@@ -1970,15 +1970,10 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
                         Effect.map((stat) => {
                           const [, parent, processGroup] = procStatFields(stat);
                           const parentPid = Number(parent);
-                          const pgid = Number(processGroup);
-                          if (
+                          return (
                             !Number.isInteger(parentPid) ||
-                            !Number.isInteger(pgid) ||
-                            pgid <= 0
-                          ) {
-                            return true;
-                          }
-                          return parentPid === terminalPid && pgid !== group;
+                            (parentPid === terminalPid && Number(processGroup) !== group)
+                          );
                         }),
                         Effect.catch((error) => Effect.succeed(error.reason._tag !== "NotFound")),
                       ),
