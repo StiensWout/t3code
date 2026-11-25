@@ -20,6 +20,7 @@ import { T, useGT, useMessages, Var } from "gt-react";
 
 import { commandForProjectScript, primaryProjectScript } from "~/projectScripts";
 import { shortcutLabelForCommand } from "~/keybindings";
+import { useStableCallback } from "~/hooks/useStableCallback";
 import { serverEnvironment } from "~/state/server";
 import { readEnvironmentScope } from "~/state/session";
 import {
@@ -69,7 +70,7 @@ interface ProjectScriptsControlProps {
   environmentId: EnvironmentId;
   scripts: ReadonlyArray<ProjectScript>;
   fileScripts?: ReadonlyArray<T3ProjectFileScript>;
-  onActionsMenuOpen?: () => void;
+  onRefreshFileScripts?: () => Promise<ReadonlyArray<T3ProjectFileScript>>;
   preferredScriptId?: string | null;
   onRunScript?: ((script: ProjectScript) => void) | undefined;
   onAddScript: (input: NewProjectScriptInput) => Promise<ProjectScriptActionResult>;
@@ -87,7 +88,7 @@ export default function ProjectScriptsControl({
   environmentId,
   scripts,
   fileScripts = NO_FILE_SCRIPTS,
-  onActionsMenuOpen,
+  onRefreshFileScripts,
   preferredScriptId = null,
   onRunScript,
   onAddScript,
@@ -107,31 +108,57 @@ export default function ProjectScriptsControl({
     scripts: false,
     imports: false,
   });
+  const [editorRequest, setEditorRequest] = useState<ProjectScriptEditorRequest | null>(null);
+  const editorRequestIdRef = React.useRef(0);
   if (actionsMenuOpen.presentation !== presentation) {
     setActionsMenuOpen({ presentation, scripts: false, imports: false });
   }
   const openActionsMenu = (menus: { scripts: boolean; imports: boolean }) => {
-    if (menus.scripts || menus.imports) onActionsMenuOpen?.();
+    if (menus.scripts || menus.imports) {
+      editorRequestIdRef.current += 1;
+      void onRefreshFileScripts?.();
+    }
     setActionsMenuOpen({ presentation, ...menus });
   };
-  const [editorRequest, setEditorRequest] = useState<ProjectScriptEditorRequest | null>(null);
-  const editorRequestIdRef = React.useRef(0);
 
   const primaryScript =
     (preferredScriptId ? scripts.find((script) => script.id === preferredScriptId) : undefined) ??
     primaryProjectScript(scripts);
-  const importableScripts = fileScripts.filter(
-    (fileScript) =>
-      !scripts.some(
-        (script) =>
-          script.command === fileScript.command ||
-          script.name.toLowerCase() === fileScript.name.toLowerCase(),
-      ),
-  );
+  const isImportable = (fileScript: T3ProjectFileScript) =>
+    !scripts.some(
+      (script) =>
+        script.command === fileScript.command ||
+        script.name.toLowerCase() === fileScript.name.toLowerCase(),
+    );
+  const importableScripts = fileScripts.filter(isImportable);
 
   const openAddDialog = () => {
     editorRequestIdRef.current += 1;
     setEditorRequest({ scriptId: null, initial: EMPTY_PROJECT_SCRIPT_INPUT });
+  };
+
+  const showRefreshedActions = useStableCallback(
+    (requestId: number, refreshedScripts: ReadonlyArray<T3ProjectFileScript>) => {
+      if (requestId !== editorRequestIdRef.current) return;
+      if (refreshedScripts.some(isImportable)) {
+        setActionsMenuOpen({
+          presentation,
+          scripts: scripts.length > 0,
+          imports: scripts.length === 0,
+        });
+      } else {
+        openAddDialog();
+      }
+    },
+  );
+
+  const openEmptyActions = async () => {
+    if (!onRefreshFileScripts) {
+      openAddDialog();
+      return;
+    }
+    const requestId = ++editorRequestIdRef.current;
+    showRefreshedActions(requestId, await onRefreshFileScripts());
   };
 
   const openEditDialog = (script: ProjectScript) => {
@@ -471,7 +498,7 @@ export default function ProjectScriptsControl({
               className={isPanel ? undefined : "w-7 sm:w-6 @3xl/header-actions:w-auto!"}
               aria-label={isPanel ? gt("Add project script") : gt("Add action")}
               data-toolbar-control=""
-              onClick={openAddDialog}
+              onClick={() => void openEmptyActions()}
             />
           }
           label={isPanel ? gt("Add project script") : gt("Add action")}

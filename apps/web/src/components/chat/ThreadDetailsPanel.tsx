@@ -240,11 +240,12 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
 
                     {show.scripts && props.activeProjectScripts ? (
                       <ProjectScriptsControl
+                        key={JSON.stringify([props.environmentId, props.threadId, props.gitCwd])}
                         environmentId={props.environmentId}
                         displayMode="panel"
                         scripts={props.activeProjectScripts}
                         fileScripts={t3File.scripts}
-                        onActionsMenuOpen={t3File.refresh}
+                        onRefreshFileScripts={t3File.refreshScripts}
                         preferredScriptId={props.preferredScriptId}
                         onRunScript={props.onRunProjectScript}
                         onAddScript={props.onAddProjectScript}
