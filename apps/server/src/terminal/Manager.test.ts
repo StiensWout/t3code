@@ -1288,6 +1288,49 @@ it.layer(
       Effect.provide(layerWithHostPlatform(platform)),
     );
 
+  it.effect("protects a newly started terminal command when the process query times out", () =>
+    Effect.gen(function* () {
+      const ptyAdapter = new FakePtyAdapter();
+      let timedOut = false;
+      const runner: ProcessRunner.ProcessRunner["Service"] = {
+        run: () =>
+          Effect.sync(() => ({
+            stdout: timedOut
+              ? ""
+              : ptyAdapter.processes[0]?.writes.includes("node server.js\r")
+                ? "9000 1 bash\n100 9000 node\n"
+                : "9000 1 bash\n",
+            stderr: "",
+            code: timedOut ? null : ChildProcessSpawner.ExitCode(0),
+            timedOut,
+            stdoutTruncated: false,
+            stderrTruncated: false,
+            stdoutInvalidUtf8: false,
+            stderrInvalidUtf8: false,
+          })),
+      };
+      const { manager } = yield* createManager(5, {
+        ptyAdapter,
+        shellResolver: () => "/bin/bash",
+        subprocessPollIntervalMs: 1_000,
+        processKillGraceMs: 0,
+      }).pipe(
+        Effect.provideService(ProcessRunner.ProcessRunner, runner),
+        Effect.provide(layerWithHostPlatform("linux")),
+      );
+      const threadId = "thread-1";
+      yield* manager.open(openInput({ threadId }));
+      yield* TestClock.adjust("1 second");
+
+      yield* manager.write({ threadId, terminalId: DEFAULT_TERMINAL_ID, data: "node server.js\r" });
+      timedOut = true;
+      const protectedDuringTimeout = yield* manager.hasActiveSubprocess({ threadId });
+      timedOut = false;
+      expect(yield* manager.hasActiveSubprocess({ threadId })).toBe(true);
+      expect(protectedDuringTimeout).toBe(true);
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
   it.effect.each(["linux", "win32"] as const)(
     "reports activity from a slow but successful %s process-table query",
     (platform) =>
