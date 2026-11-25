@@ -6,11 +6,18 @@ import * as Effect from "effect/Effect";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Observe the existing synchronous shell probe without launching the user's login shell.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeOS from "node:os";
-import { assert, it, vi } from "vite-plus/test";
+import * as FileSystem from "effect/FileSystem";
+import { assert, expect, it, vi } from "vite-plus/test";
 
-import { fixPath, hydratePosixHome, refreshWindowsPath } from "./os-jank.ts";
+import {
+  fixPath,
+  hydratePosixHome,
+  refreshPathFromLoginShell,
+  refreshWindowsPath,
+} from "./os-jank.ts";
 
 vi.mock("node:child_process", { spy: true });
+vi.mock("node:os", { spy: true });
 
 it("hydrates HOME independently of a blank process HOME", () => {
   const originalHome = process.env.HOME;
@@ -228,4 +235,34 @@ effectIt.effect("adds a directory an installer wrote to the registry after launc
 
     assert.deepEqual(env, { PATH: `C:\\Tools;C:\\Windows;${installed}` });
   }),
+);
+
+effectIt.live("refreshes PATH from the account login shell when inherited SHELL is gone", () =>
+  Effect.gen(function* () {
+    if (process.platform === "win32") return;
+    const fs = yield* FileSystem.FileSystem;
+    const dir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-account-login-shell-" });
+    const shell = `${dir}/sh`;
+    const writeProfile = (path: string) =>
+      fs.writeFileString(shell, `#!/bin/sh\nPATH="${path}" exec /bin/sh -c "$2"\n`);
+    yield* writeProfile("/opt/original/bin:/usr/bin");
+    yield* fs.chmod(shell, 0o755);
+    const userInfo = NodeOS.userInfo();
+    yield* Effect.acquireRelease(
+      Effect.sync(() => vi.spyOn(NodeOS, "userInfo").mockReturnValue({ ...userInfo, shell })),
+      (mock) => Effect.sync(() => mock.mockRestore()),
+    );
+
+    const env: NodeJS.ProcessEnv = { SHELL: `${dir}/removed-shell`, PATH: "/usr/bin" };
+    yield* Effect.gen(function* () {
+      yield* fixPath();
+      expect(env.PATH).toBe("/opt/original/bin:/usr/bin");
+      yield* writeProfile("/opt/pi/bin:/opt/original/bin:/usr/bin");
+      yield* refreshPathFromLoginShell();
+      expect(env.PATH).toBe("/opt/pi/bin:/opt/original/bin:/usr/bin");
+    }).pipe(
+      Effect.provideService(HostProcess.Platform, "linux"),
+      Effect.provideService(HostProcess.Environment, env),
+    );
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
