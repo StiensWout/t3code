@@ -1392,12 +1392,11 @@ export const make = Effect.gen(function* () {
                 metadataBytes += bytes;
                 checkHistoryBudget(metadataBytes);
               }, selectPiTranscriptMetadataPath);
-              let full: typeof fullReader | undefined = fullReader;
               let overflow: TranscriptJsonLimitError | undefined;
               const readFull = <A>(read: (reader: typeof fullReader) => A): A | undefined => {
-                if (full === undefined) return undefined;
+                if (overflow !== undefined) return undefined;
                 try {
-                  return read(full);
+                  return read(fullReader);
                 } catch (cause) {
                   if (
                     !isTranscriptJsonLimitError(cause) ||
@@ -1406,7 +1405,6 @@ export const make = Effect.gen(function* () {
                     throw cause;
                   }
                   overflow = cause;
-                  full = undefined;
                 }
               };
               return {
