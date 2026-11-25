@@ -555,6 +555,22 @@ describe("mergePathValues", () => {
 });
 
 effectIt.layer(NodeServices.layer)("resolveCommandPath", (it) => {
+  it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "finds a POSIX executable with a literal backslash in its name",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const directory = yield* fs.makeTempDirectoryScoped();
+        const command = "audit\\command";
+        const executable = path.join(directory, command);
+        yield* fs.writeFileString(executable, "#!/bin/sh\n");
+        yield* fs.chmod(executable, 0o755);
+
+        expect(yield* resolveCommandPath(command, { env: { PATH: directory } })).toBe(executable);
+      }),
+  );
+
   // Windows rejects `"` in file names.
   it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
     "finds executables in a POSIX PATH directory ending in whitespace and quotes",
