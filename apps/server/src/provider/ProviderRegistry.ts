@@ -843,10 +843,9 @@ export const layer = Layer.effect(
       return yield* refreshInstance(defaultInstanceIdForDriver(provider));
     });
 
-    const refreshInstance = Effect.fn("refreshInstance")(function* (
+    const refreshCurrentInstance = Effect.fn("refreshCurrentInstance")(function* (
       instanceId: ProviderInstanceId,
     ) {
-      yield* refreshHostPath;
       yield* syncLiveSourcesAndContinue;
       const instance = (yield* Ref.get(liveSubsRef)).get(instanceId);
       if (!instance) {
@@ -854,6 +853,9 @@ export const layer = Layer.effect(
       }
       return yield* refreshOneSource(instance);
     });
+
+    const refreshInstance = (instanceId: ProviderInstanceId) =>
+      refreshHostPath.pipe(Effect.andThen(refreshCurrentInstance(instanceId)));
 
     const reloadSecretsAndRefresh = Effect.fn("reloadSecretsAndRefresh")(function* (
       instanceId?: ProviderInstanceId,
@@ -1243,6 +1245,8 @@ export const layer = Layer.effect(
       ) {
         return providers;
       }
+      // A new PATH can rebuild the instance, so resolve the workspace scanner afterward.
+      if (input.fresh) yield* refreshHostPath;
       // Use scan start for TTL, not checkedAt inherited from the machine health check.
       const scannedAt = DateTime.formatIso(now);
       const instance = yield* instanceRegistry.getInstance(input.instanceId);
@@ -1256,7 +1260,7 @@ export const layer = Layer.effect(
       // A machine refresh can change this cwd's snapshot, so the scan publishes against the result.
       const refreshMachineSnapshot = input.fresh
         ? (instance.invalidateCaches ?? Effect.void).pipe(
-            Effect.andThen(refreshInstance(input.instanceId)),
+            Effect.andThen(refreshCurrentInstance(input.instanceId)),
             Effect.andThen(Ref.get(providersRef)),
             Effect.map((current) =>
               workspaceSnapshotOf(
