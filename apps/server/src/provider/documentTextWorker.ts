@@ -13,13 +13,14 @@ const MAX_OUTPUT = 1_000_000;
 const CELL_START = Symbol("cell-start");
 const CELL_END = Symbol("cell-end");
 const LINE_START = Symbol("line-start");
+const ROW_START = Symbol("row-start");
 const MARKUP_COMPATIBILITY_NS = "http://schemas.openxmlformats.org/markup-compatibility/2006";
 type TextPart =
   | string
   | typeof CELL_START
   | typeof CELL_END
   | typeof LINE_START
-  | { leadingTabs: number }
+  | typeof ROW_START
   | { fallback: string };
 
 const TRUNCATED = "\n\n[Extracted text truncated at document extraction limits.]";
@@ -389,6 +390,9 @@ function* table(node: XmlNode): Generator<TextPart, void> {
     yield* paragraphs(caption);
     yield LINE_START;
   }
+  const grid =
+    node.name === "tbl" ? children(node).find((child) => child.name === "tblGrid") : undefined;
+  const gridWidth = grid && children(grid).filter((child) => child.name === "gridCol").length;
   let rowCount = 0;
   for (const row of all(node, ["tr", "table-row"], ["caption"])) {
     // Word nests a cell inside w:sdt when a content control wraps the whole cell.
@@ -403,13 +407,16 @@ function* table(node: XmlNode): Generator<TextPart, void> {
     const gridBefore = children(trPr)
       .find((child) => child.name === "gridBefore")
       ?.attrs.val?.trim();
-    const leadingTabs = gridBefore && /^\+?[0-9]+$/.test(gridBefore) ? Number(gridBefore) : 0;
+    const offset = gridBefore && /^\+?[0-9]+$/.test(gridBefore) ? Number(gridBefore) : 0;
+    // WordprocessingML ignores offsets larger than the declared table grid.
+    const leadingTabs = gridWidth !== undefined && offset > gridWidth ? 0 : offset;
     const repeat = repeatCount(row.attrs["number-rows-repeated"]);
     for (let index = 0; index < repeat; index++) {
       if (++rowCount > 10_000) throw new Truncation("Row limit");
       let column = leadingTabs;
       if (column >= 512) throw new Truncation("Column limit");
-      if (leadingTabs) yield { leadingTabs };
+      yield ROW_START;
+      if (leadingTabs) yield "\t".repeat(leadingTabs);
       let gap = 0;
       for (const cell of cells) {
         const count = repeatCount(cell.attrs["number-columns-repeated"]);
@@ -1050,7 +1057,7 @@ export async function extractDocumentText(path: string, extension: string): Prom
   let space = false;
   let midLine = false;
   let truncated = false;
-  let firstGridGap: number | undefined;
+  let firstRowStart: number | undefined;
   try {
     // Charge raw text before normalization so repeated whitespace also exhausts the budget.
     for await (let part of document(path, extension)) {
@@ -1071,9 +1078,9 @@ export async function extractDocumentText(path: string, extension: string): Prom
         if (!midLine) continue;
         part = "\n";
       }
-      if (typeof part !== "string" && "leadingTabs" in part) {
-        if (!cellDepth) firstGridGap ??= result.length;
-        part = "\t".repeat(part.leadingTabs);
+      if (part === ROW_START) {
+        if (!cellDepth) firstRowStart ??= result.length;
+        continue;
       }
       if (typeof part !== "string" && started) continue;
       const raw = typeof part === "string" ? part : part.fallback;
@@ -1098,10 +1105,10 @@ export async function extractDocumentText(path: string, extension: string): Prom
     if (!(error instanceof Truncation)) throw error;
     truncated = true;
   }
-  // Keep omitted columns when a table is the first visible content in the document.
+  // Keep structural tabs when a table is the first visible content in the document.
   result =
-    firstGridGap !== undefined && !/\S/.test(result.slice(0, firstGridGap))
-      ? result.slice(firstGridGap)
+    firstRowStart !== undefined && !/\S/.test(result.slice(0, firstRowStart))
+      ? result.slice(firstRowStart)
       : result.trimStart();
   result = result.replaceAll(/\n(?:[ \t]*\n){2,}/g, "\n\n").trimEnd();
   if (!result && !truncated) throw new Error("No text extracted");
