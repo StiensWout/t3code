@@ -1965,7 +1965,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
                     if (platform !== "linux") return result;
 
                     // Bash puts background jobs in their own group. Prompt helpers inherit the shell's group.
-                    const hasBackgroundJob = yield* Effect.findFirst(children, (pid) =>
+                    const backgroundJob = yield* Effect.findFirst(children, (pid) =>
                       fileSystem.readFileString(`/proc/${pid}/stat`).pipe(
                         Effect.map((stat) => {
                           const [, parent, processGroup] = procStatFields(stat);
@@ -1977,14 +1977,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
                         }),
                         Effect.catch((error) => Effect.succeed(error.reason._tag !== "NotFound")),
                       ),
-                    ).pipe(
-                      Effect.map(Option.isSome),
-                      Effect.timeoutOrElse({
-                        duration: CLOSE_IDLE_QUERY_TIMEOUT.posix,
-                        orElse: () => Effect.succeed(true),
-                      }),
                     );
-                    return hasBackgroundJob ? active() : result;
+                    return Option.isSome(backgroundJob) ? active() : result;
                   });
                 },
             ),
