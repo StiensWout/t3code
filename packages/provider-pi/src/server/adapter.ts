@@ -4392,10 +4392,7 @@ function walkPiBranch(
 
 // A move can leave prompts behind in the source file without a later app turn pointing there.
 // Keep steers sent during the retained turn. Null means the boundary could not be verified.
-function piEntryAfterRetainedTurn(
-  data: unknown,
-  target: OrchestrationV2ProviderTurn | null,
-): string | undefined | null {
+function piEntryAfterRetainedTurn(data: unknown, target: OrchestrationV2ProviderTurn | null) {
   const listing = piSessionListing(data);
   const targetId = piTurnEntryId(target);
   if (listing === null || targetId === undefined || !listing.entries.has(targetId)) return null;
