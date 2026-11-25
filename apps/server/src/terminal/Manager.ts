@@ -693,6 +693,29 @@ const resolveShellCandidates = Effect.fn("terminal.resolveShellCandidates")(func
   ]);
 });
 
+const hasMissingLinuxShellInterpreter = Effect.fn("terminal.hasMissingLinuxShellInterpreter")(
+  function* (fileSystem: FileSystem.FileSystem, executable: string) {
+    // Linux reads at most 256 bytes of a shebang. Only check complete absolute interpreter paths.
+    const headerSize = 256;
+    const header = yield* fileSystem.open(executable, { flag: "r" }).pipe(
+      Effect.flatMap((file) => file.readAlloc(headerSize)),
+      Effect.scoped,
+      Effect.orElseSucceed(() => undefined),
+    );
+    if (!header) return false;
+
+    const text = new TextDecoder().decode(header);
+    const shebang = header.length < headerSize ? text + "\0" : text;
+    const interpreter = /^#![ \t]*(\/[^ \t\n\0]+)(?=[ \t\n\0])/.exec(shebang)?.[1];
+    if (!interpreter || interpreter.includes("\uFFFD")) return false;
+
+    return yield* fileSystem.stat(interpreter).pipe(
+      Effect.as(false),
+      Effect.catch((error) => Effect.succeed(error.reason._tag === "NotFound")),
+    );
+  },
+);
+
 function isRetryableShellSpawnError(error: PtyAdapter.PtySpawnError): boolean {
   const queue: unknown[] = [error];
   const seen = new Set<unknown>();
@@ -2832,7 +2855,10 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       platform !== "win32"
         ? yield* Effect.promise(async () => resolveExecutable(shellCommand, platform, lookupEnv))
         : candidate.shell;
-    if (executable === undefined) {
+    if (
+      executable === undefined ||
+      (platform === "linux" && (yield* hasMissingLinuxShellInterpreter(fileSystem, executable)))
+    ) {
       return yield* trySpawn(
         shellCandidates,
         spawnEnv,
