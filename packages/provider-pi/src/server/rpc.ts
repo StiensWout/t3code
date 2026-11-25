@@ -24,6 +24,7 @@ import { signalProcessGroup } from "@t3tools/provider-core/server/processGroup";
 export class PiRpcError extends Schema.TaggedError<PiRpcError>()("PiRpcError", {
   operation: Schema.String,
   detail: Schema.optional(Schema.String),
+  exitCode: Schema.optional(Schema.Finite),
   cause: Schema.optional(Schema.Defect()),
 }) {
   override get message(): string {
@@ -175,7 +176,7 @@ function summarizePiError(error: unknown): string {
 
 // Pi 0.84+ may exit 1 during import without any protocol output.
 function describePiStdoutClosure(exitCode: number | undefined): string {
-  if (exitCode === undefined || !Number.isFinite(exitCode)) {
+  if (exitCode === undefined) {
     return "pi process closed stdout";
   }
   return `pi process exited with code ${exitCode}`;
@@ -394,12 +395,12 @@ export const makePiRpcConnection = Effect.fnUntraced(function* (options: PiRpcSp
               Effect.provideService(Clock.Clock, Clock.Clock.defaultValue()),
               Effect.orElseSucceed(() => Option.none<number>()),
             );
+        const exitCode = Option.getOrUndefined(Option.filter(maybeExitCode, Number.isFinite));
         return yield* failTransport(
           new PiRpcError({
             operation: "read",
-            detail: describePiStdoutClosure(
-              Option.isSome(maybeExitCode) ? maybeExitCode.value : undefined,
-            ),
+            detail: describePiStdoutClosure(exitCode),
+            exitCode,
           }),
         );
       }),

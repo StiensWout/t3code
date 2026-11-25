@@ -71,7 +71,7 @@ import {
   piRecordNumber as recordNumber,
   piRecordString as recordString,
   type PiRpcConnection,
-  type PiRpcError,
+  PiRpcError,
   type PiRpcRecord,
 } from "./rpc.ts";
 import {
@@ -2883,7 +2883,6 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             Effect.gen(function* () {
               runtimeRetired = true;
               const state = threadState;
-              // Pi ending while nothing is in flight is an idle exit, not a failure.
               const idle =
                 state !== null &&
                 state.activeTurn === null &&
@@ -2895,6 +2894,13 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                 rollbackBarrier === null &&
                 extensionStatusReset === null &&
                 pendingPromptResponsesDrained === null;
+              const failedExit = Option.exists(
+                Cause.findErrorOption(cause),
+                (error) =>
+                  error instanceof PiRpcError &&
+                  error.exitCode !== undefined &&
+                  error.exitCode !== 0,
+              );
               closed = true;
               if (pendingPromptResponsesDrained !== null)
                 yield* Deferred.fail(
@@ -2928,7 +2934,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               if (unsolicitedActivityDetected) {
                 yield* updateProviderSession("error", PI_UNSOLICITED_ACTIVITY_ERROR);
                 yield* Queue.end(events);
-              } else if (stopRequested || idle) {
+              } else if (stopRequested || (idle && !failedExit)) {
                 yield* updateProviderSession("stopped", null);
                 yield* Queue.end(events);
               } else {
