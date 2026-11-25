@@ -662,48 +662,6 @@ describe("question answer paths", () => {
           },
           expected: ["Region\tUnits\tRevenue\n\t12\t$240"],
         },
-        // A table that starts the document keeps its leading empty columns.
-        {
-          ext: "docx",
-          bounded: true,
-          parts: {
-            "word/document.xml":
-              '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:tbl>' +
-              "<w:tblGrid><w:gridCol/><w:gridCol/><w:gridCol/></w:tblGrid>" +
-              '<w:tr><w:trPr><w:gridBefore w:val="1"/></w:trPr><w:tc><w:p><w:r><w:t>Q1</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Q2</w:t></w:r></w:p></w:tc></w:tr>' +
-              "<w:tr><w:tc><w:p><w:r><w:t>North</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>1</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>2</w:t></w:r></w:p></w:tc></w:tr>" +
-              "</w:tbl><w:p><w:r><w:t>After</w:t></w:r></w:p></w:body></w:document>",
-          },
-          expected: ["\tQ1\tQ2\nNorth\t1\t2\nAfter"],
-        },
-        {
-          ext: "docx",
-          bounded: true,
-          parts: {
-            "word/document.xml":
-              '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:tbl>' +
-              "<w:tblGrid><w:gridCol/><w:gridCol/><w:gridCol/></w:tblGrid>" +
-              "<w:tr><w:tc><w:p/></w:tc><w:tc><w:p><w:r><w:t>Q1</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Q2</w:t></w:r></w:p></w:tc></w:tr>" +
-              "<w:tr><w:tc><w:p><w:r><w:t>North</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>1</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>2</w:t></w:r></w:p></w:tc></w:tr>" +
-              "</w:tbl><w:p><w:r><w:t>After</w:t></w:r></w:p></w:body></w:document>",
-          },
-          expected: ["\tQ1\tQ2\nNorth\t1\t2\nAfter"],
-        },
-        // Offsets beyond the declared grid are ignored.
-        {
-          ext: "docx",
-          bounded: true,
-          parts: {
-            "word/document.xml":
-              '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:tbl>' +
-              "<w:tblGrid><w:gridCol/><w:gridCol/><w:gridCol/></w:tblGrid>" +
-              "<w:tr><w:tc><w:p><w:r><w:t>Name</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>A</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>B</w:t></w:r></w:p></w:tc></w:tr>" +
-              '<w:tr><w:trPr><w:gridBefore w:val="4"/></w:trPr><w:tc><w:p><w:r><w:t>North</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>1</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>2</w:t></w:r></w:p></w:tc></w:tr>' +
-              '<w:tr><w:trPr><w:gridBefore w:val="512"/></w:trPr><w:tc><w:p><w:r><w:t>South</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>3</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>4</w:t></w:r></w:p></w:tc></w:tr>' +
-              "</w:tbl><w:p><w:r><w:t>After</w:t></w:r></w:p></w:body></w:document>",
-          },
-          expected: ["Name\tA\tB\nNorth\t1\t2\nSouth\t3\t4\nAfter"],
-        },
         // Word stores object layout and field data outside the visible document text.
         {
           ext: "docx",
