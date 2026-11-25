@@ -7,6 +7,7 @@ import {
   mergePathValues,
   readEnvironmentFromLoginShell,
   readPathFromLaunchctl,
+  readUserLoginShell,
   resolveWindowsEnvironment,
   setWindowsPath,
   WindowsShellEnvironment,
@@ -199,10 +200,23 @@ export const refreshPathFromLoginShell = Effect.fn("refreshPathFromLoginShell")(
   const platform = yield* HostProcess.Platform;
   if (platform !== "darwin" && platform !== "linux") return;
   const env = yield* HostProcess.Environment;
-  const [shell] = listLoginShellCandidates(platform, env.SHELL);
+  const accountShell = readUserLoginShell();
+  let [shell] = listLoginShellCandidates(platform, env.SHELL, accountShell ?? "");
   if (!shell) return;
 
   const output = yield* readLoginShellOutput(shell).pipe(
+    Effect.catch((error) => {
+      if (
+        error.reason._tag === "NotFound" &&
+        error.reason.method === "spawn" &&
+        accountShell &&
+        accountShell !== shell
+      ) {
+        shell = accountShell;
+        return readLoginShellOutput(shell);
+      }
+      return Effect.fail(error);
+    }),
     Effect.catchCause((cause) =>
       Effect.logWarning(`Failed to read PATH from login shell ${shell}.`, cause).pipe(
         Effect.as(Option.some("")),
