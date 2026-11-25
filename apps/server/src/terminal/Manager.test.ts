@@ -3075,6 +3075,46 @@ it.layer(
       }
     }),
   );
+  it.effect("restores recently displayed terminal output after a server shutdown", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { join } = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3code-terminal-restart-" });
+      const ptyAdapter = new FakePtyAdapter();
+      const options = { logsDir: join(baseDir, "terminals"), ptyAdapter };
+      const makeManager = TerminalManager.makeWithOptions(options).pipe(
+        Effect.provideService(SpawnExecutableResolution, (command) => command),
+      );
+      const scope = yield* Scope.make();
+      const manager = yield* makeManager.pipe(Effect.provideService(Scope.Scope, scope));
+      const input = openInput();
+      const shown = yield* Deferred.make<void>();
+      const stop = yield* manager.attachStream(input, (event) =>
+        event.type === "output" ? Deferred.succeed(shown, undefined).pipe(Effect.asVoid) : Effect.void,
+      );
+      yield* Effect.addFinalizer(() => Effect.sync(stop));
+      const shell = ptyAdapter.processes[0]!;
+      shell.onKill = (signal) => {
+        if (signal === "SIGTERM") shell.emitExit({ exitCode: 0, signal: 0 });
+      };
+      shell.emitData("last line before restart\n");
+      yield* Deferred.await(shown);
+
+      const shutdown = yield* Scope.close(scope, Exit.void).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* TestClock.adjust("250 millis");
+      yield* Fiber.join(shutdown);
+      const restarted = yield* makeManager;
+      const reopened = yield* restarted.open(input);
+      const reopenedShell = ptyAdapter.processes[1]!;
+      reopenedShell.onKill = (signal) => {
+        if (signal === "SIGTERM") reopenedShell.emitExit({ exitCode: 0, signal: 0 });
+      };
+      expect(reopened.history).toContain("last line before restart");
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
   it.effect("removes terminal metadata subscriptions when initial delivery fails", () =>
     Effect.gen(function* () {
       const { manager } = yield* createManager();
