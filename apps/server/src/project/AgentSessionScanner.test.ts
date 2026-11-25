@@ -1766,6 +1766,72 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
       }),
     );
 
+    it.effect("imports Pi messages around oversized tool output", () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const nowMs = Date.parse("2026-08-24T12:00:00.000Z");
+        yield* TestClock.setTime(nowMs);
+        const claudeHomePath = yield* makeTempDir("t3code-claude-home-");
+        const codexHomePath = yield* makeTempDir("t3code-codex-home-");
+        const workspace = yield* makeTempDir("t3code-workspace-");
+        yield* writeTranscript({
+          filePath: path.join(claudeHomePath, "pi-agent", "sessions", "--workspace--", "pi.jsonl"),
+          contents:
+            [
+              { type: "session", version: 3, id: "large-tool-output", cwd: workspace },
+              {
+                type: "message",
+                id: "a1",
+                parentId: null,
+                message: { role: "user", content: "Check the build output" },
+              },
+              {
+                type: "message",
+                id: "a2",
+                parentId: "a1",
+                message: {
+                  role: "assistant",
+                  content: [{ type: "toolCall", id: "call-1", name: "build_log", arguments: {} }],
+                },
+              },
+              {
+                type: "message",
+                id: "a3",
+                parentId: "a2",
+                message: {
+                  role: "toolResult",
+                  toolCallId: "call-1",
+                  toolName: "build_log",
+                  content: [{ type: "text", text: "build log line\n".repeat(1_200_000) }],
+                },
+              },
+              {
+                type: "message",
+                id: "a4",
+                parentId: "a3",
+                message: {
+                  role: "assistant",
+                  content: [{ type: "text", text: "Build succeeded" }],
+                },
+              },
+            ]
+              .map(encodeTranscriptRecord)
+              .join("\n") + "\n",
+          mtimeMs: nowMs - 1_000,
+        });
+
+        const threads = yield* runRecentThreads({
+          claudeHomePath,
+          codexHomePath,
+          workspaceRoot: workspace,
+        });
+
+        expect(threads.flatMap((thread) => thread.messages.map((message) => message.text))).toEqual(
+          ["Check the build output", "Build succeeded"],
+        );
+      }),
+    );
+
     it.effect("keeps the provider instance that owns a custom session home", () =>
       Effect.gen(function* () {
         const path = yield* Path.Path;
