@@ -984,7 +984,6 @@ function TerminalSessionViewport({
         if (generation === null) return;
         const writeInput = terminalInputWriter(
           JSON.stringify([environmentId, threadId, terminalId]),
-          () => appAtomRegistry.mount(terminalSessionAtom),
         );
         let reported = false;
         const report = (message: string) => {
@@ -995,9 +994,9 @@ function TerminalSessionViewport({
         return writeInput(
           data,
           async (chunk) => {
+            if (terminalRef.current !== terminal) return "not-dispatched";
             const currentSession = readInputSession();
             if (
-              terminalRef.current !== terminal ||
               currentSession.lifecycleVersion !== lifecycleVersion ||
               writableSessionGeneration(currentSession, canWriteInput()) !== generation
             ) {
@@ -1011,14 +1010,20 @@ function TerminalSessionViewport({
             }
             return false;
           },
-          // Close the bracket only for the process that saw it open; wait while its pid is unknown.
+          // Recovery can outlive the viewport. Use metadata so it never attaches a size-bearing view.
           async () => {
             const pid = session.summary?.pid ?? null;
-            const current = readInputSession();
-            const currentPid = current.summary?.pid ?? null;
+            if (!canWriteInput()) return false;
+            const metadata = appAtomRegistry.get(
+              terminalEnvironment.metadata({ environmentId, input: null }),
+            );
+            const current = AsyncResult.getOrElse(metadata, () => []).find(
+              (summary) => summary.threadId === threadId && summary.terminalId === terminalId,
+            );
+            const currentPid = current?.pid ?? null;
             if (currentPid === null) return false;
             if (pid !== null && currentPid !== pid) return true;
-            if (writableSessionGeneration(current, canWriteInput()) === null) return false;
+            if (current?.status !== "running") return false;
             const result = await writeInputChunk("\x1b[201~");
             if (result._tag === "Success") return true;
             if (!isAtomCommandInterrupted(result)) {
