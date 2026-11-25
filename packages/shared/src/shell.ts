@@ -1186,7 +1186,7 @@ export const resolveSpawnCommand = Effect.fnUntraced(function* (
   }
   // Cache successful PATH lookups. Explicit paths and misses stay uncached so
   // newly installed executables are discoverable immediately.
-  const explicitPath = isExplicitCommandPath(command, platform);
+  const explicitPath = command.includes("/") || command.includes("\\");
   const cache = yield* CommandResolutionCache;
   const cacheKey = [
     "spawn",
