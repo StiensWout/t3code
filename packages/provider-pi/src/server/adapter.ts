@@ -2971,6 +2971,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         sourceFile: string,
         boundary: PiForkBoundary,
         providerThreadCreatedAt: DateTime.Utc,
+        retainedTurn?: OrchestrationV2ProviderTurn,
       ) {
         const forkLaunch = buildPiRpcLaunch({
           launchArgs: resolvedLaunchArgs.args,
@@ -2994,15 +2995,17 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               Effect.ignore,
               Effect.forkScoped,
             );
-            const beforeEntry =
-              boundary.type === "nothing"
-                ? null
-                : yield* piForkEntry(
-                    boundary,
-                    providerThreadCreatedAt,
-                    forkConnection.request({ type: "get_entries" }),
-                  );
-            if (beforeEntry !== null) {
+            const readEntries = forkConnection.request({ type: "get_entries" });
+            let beforeEntry: string | undefined;
+            if (boundary.type !== "nothing") {
+              beforeEntry = yield* piForkEntry(boundary, providerThreadCreatedAt, readEntries);
+            } else if (retainedTurn !== undefined) {
+              const entry = piEntryAfterRetainedTurn(yield* readEntries, retainedTurn);
+              if (entry === null)
+                return yield* protocolError("Pi fork could not verify the retained session head");
+              beforeEntry = entry;
+            }
+            if (beforeEntry !== undefined) {
               const result = yield* forkConnection.request({
                 type: "fork",
                 entryId: beforeEntry,
@@ -4087,28 +4090,15 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                   } else if (switchedTo === undefined) {
                     return piThreadSnapshot(state.providerThread);
                   } else {
-                    const listing = piSessionListing(yield* request({ type: "get_entries" }));
-                    const walk =
-                      listing !== null && targetId !== undefined && listing.entries.has(targetId)
-                        ? walkPiBranch(listing.entries, listing.leafId, targetId)
-                        : null;
-                    if (listing === null || walk?.reachedStop !== true)
+                    const entry = piEntryAfterRetainedTurn(
+                      yield* request({ type: "get_entries" }),
+                      target,
+                    );
+                    if (entry === null)
                       return yield* protocolError(
                         "Pi rollback could not verify the retained session head",
                       );
-                    // A move can leave prompts behind in the source file, even when no later
-                    // app turn points at that file. Keep steers sent during the retained turn.
-                    for (const id of [...walk.userEntryIds].reverse()) {
-                      const timestamp = listing.entries.get(id)?.timestamp;
-                      if (timestamp == null || target?.completedAt == null)
-                        return yield* protocolError(
-                          "Pi rollback could not verify the retained session head",
-                        );
-                      if (timestamp >= DateTime.toEpochMillis(target.completedAt)) {
-                        forkEntryId = id;
-                        break;
-                      }
-                    }
+                    forkEntryId = entry;
                   }
                   if (forkEntryId !== undefined) {
                     const forkData = yield* lifecycleRequest({
@@ -4224,7 +4214,19 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             const boundaryFile =
               boundary.type === "nothing" ? undefined : boundary.turn.nativeThreadRef?.nativeId;
             const sourceFile = targetFile ?? boundaryFile ?? currentFile;
-            const nativeId = yield* forkSessionIntoCwd(sourceFile, boundary, source.createdAt).pipe(
+            const retainedTurn =
+              targetFile !== undefined &&
+              path.resolve(cwd, targetFile) !== path.resolve(cwd, currentFile) &&
+              target?.completedAt != null &&
+              piTurnEntryId(target) !== undefined
+                ? target
+                : undefined;
+            const nativeId = yield* forkSessionIntoCwd(
+              sourceFile,
+              boundary,
+              source.createdAt,
+              retainedTurn,
+            ).pipe(
               Effect.catchTags({
                 PiRpcError: (error) => {
                   if (
@@ -4386,6 +4388,25 @@ function walkPiBranch(
     current = entry.parentId;
   }
   return { entryCount: visited.size, userEntryIds, reachedStop: current === stopAt };
+}
+
+// A move can leave prompts behind in the source file without a later app turn pointing there.
+// Keep steers sent during the retained turn. Null means the boundary could not be verified.
+function piEntryAfterRetainedTurn(
+  data: unknown,
+  target: OrchestrationV2ProviderTurn | null,
+): string | undefined | null {
+  const listing = piSessionListing(data);
+  const targetId = piTurnEntryId(target);
+  if (listing === null || targetId === undefined || !listing.entries.has(targetId)) return null;
+  const walk = walkPiBranch(listing.entries, listing.leafId, targetId);
+  if (walk?.reachedStop !== true) return null;
+  for (const id of [...walk.userEntryIds].reverse()) {
+    const timestamp = listing.entries.get(id)?.timestamp;
+    if (timestamp == null || target?.completedAt == null) return null;
+    if (timestamp >= DateTime.toEpochMillis(target.completedAt)) return id;
+  }
+  return undefined;
 }
 
 type PiForkBoundary =
