@@ -205,17 +205,12 @@ export const refreshPathFromLoginShell = Effect.fn("refreshPathFromLoginShell")(
   if (!shell) return;
 
   const output = yield* readLoginShellOutput(shell).pipe(
-    Effect.catch((error) => {
-      if (
-        error.reason._tag === "NotFound" &&
-        error.reason.method === "spawn" &&
-        accountShell &&
-        accountShell !== shell
-      ) {
-        shell = accountShell;
-        return readLoginShellOutput(shell);
+    Effect.catchReason("PlatformError", "NotFound", (reason, error) => {
+      if (reason.method !== "spawn" || !accountShell || accountShell === shell) {
+        return Effect.fail(error);
       }
-      return Effect.fail(error);
+      shell = accountShell;
+      return readLoginShellOutput(shell);
     }),
     Effect.catchCause((cause) =>
       Effect.logWarning(`Failed to read PATH from login shell ${shell}.`, cause).pipe(
