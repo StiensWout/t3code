@@ -758,29 +758,39 @@ export const layer = Layer.effect(
     // Compared with the last PATH seen here, since other features re-read the login shell too.
     const hostEnvironment = yield* HostProcess.Environment;
     const readHostPath = () => hostEnvironment.PATH ?? hostEnvironment.Path ?? hostEnvironment.path;
-    const lastHostPathRef = yield* Ref.make(readHostPath());
+    let lastHostPath = readHostPath();
+    const instancesWithStalePath = new WeakSet<ProviderInstance>();
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const refreshHostPath = yield* refreshWindowsPath().pipe(
       Effect.andThen(refreshPathFromLoginShell()),
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       Effect.andThen(
-        Effect.suspend(() => {
+        Effect.gen(function* () {
+          const instances = yield* instanceRegistry.listInstances;
           const path = readHostPath();
-          return Ref.getAndSet(lastHostPathRef, path).pipe(Effect.map((last) => last !== path));
-        }),
-      ),
-      Effect.flatMap((changed) =>
-        changed
-          ? Ref.get(providersRef).pipe(
-              Effect.flatMap((providers) =>
-                instanceRegistryMutator.rebuild(
-                  providers
-                    .filter((provider) => provider.enabled && !provider.installed)
-                    .map((provider) => provider.instanceId),
-                ),
-              ),
+          if (path !== lastHostPath) {
+            // An installed instance can report missing on a later probe, after PATH has settled.
+            for (const instance of instances) {
+              instancesWithStalePath.add(instance);
+            }
+            lastHostPath = path;
+          }
+          const providers = yield* Ref.get(providersRef);
+          const missingIds = new Set(
+            providers
+              .filter((provider) => provider.enabled && !provider.installed)
+              .map((provider) => provider.instanceId),
+          );
+          const rebuildIds = instances
+            .filter(
+              (instance) =>
+                instancesWithStalePath.has(instance) && missingIds.has(instance.instanceId),
             )
-          : Effect.void,
+            .map((instance) => instance.instanceId);
+          if (rebuildIds.length > 0) {
+            yield* instanceRegistryMutator.rebuild(rebuildIds);
+          }
+        }),
       ),
       Effect.cachedWithTTL(Duration.seconds(10)),
     );
