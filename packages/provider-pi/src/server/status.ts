@@ -26,7 +26,6 @@ import * as Schema from "effect/Schema";
 import * as HttpClient from "effect/http/HttpClient";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
-import * as NodePath from "node:path";
 
 import { buildPiRpcLaunch, resolvePiLaunchArgs } from "./mcpInjection.ts";
 import {
@@ -583,7 +582,7 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
     cwd !== undefined &&
     (yield* HostProcess.Platform) !== "win32" &&
     binaryPath.includes("/") &&
-    !NodePath.posix.isAbsolute(binaryPath)
+    !binaryPath.startsWith("/")
   ) {
     const serverCwd = yield* HostProcess.WorkingDirectory;
     // Match the version check's executable without collapsing symlink/.. segments.
