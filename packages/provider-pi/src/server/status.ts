@@ -6,6 +6,7 @@ import {
   type ServerProviderModel,
 } from "@t3tools/contracts";
 import type { PiSettings } from "../settings.ts";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { causeErrorTag } from "@t3tools/shared/observability";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import {
@@ -25,6 +26,7 @@ import * as Schema from "effect/Schema";
 import * as HttpClient from "effect/http/HttpClient";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import * as NodePath from "node:path";
 
 import { buildPiRpcLaunch, resolvePiLaunchArgs } from "./mcpInjection.ts";
 import {
@@ -575,8 +577,22 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
     });
   }
 
+  const { binaryPath } = piSettings;
+  let discoverySettings = piSettings;
+  if (
+    cwd !== undefined &&
+    (yield* HostProcess.Platform) !== "win32" &&
+    binaryPath.includes("/") &&
+    !NodePath.posix.isAbsolute(binaryPath)
+  ) {
+    const serverCwd = yield* HostProcess.WorkingDirectory;
+    // Match the version check's executable without collapsing symlink/.. segments.
+    const base = serverCwd.endsWith("/") ? serverCwd : `${serverCwd}/`;
+    discoverySettings = { ...piSettings, binaryPath: `${base}${binaryPath}` };
+  }
+
   const discoveryExit = yield* discoverPiViaRpc(
-    piSettings,
+    discoverySettings,
     probeEnvironment,
     resolvedLaunchArgs.args,
     cwd,
