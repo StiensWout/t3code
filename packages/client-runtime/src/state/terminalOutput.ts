@@ -191,15 +191,11 @@ function appendOutput(
     return appendRetainedOutput(current, data, maxBufferBytes);
   }
   const continuation = skipTerminalSnapshotContinuation(pending, data);
-  return appendRetainedOutput(
-    {
-      ...current,
-      pendingSnapshotSequenceState:
-        continuation.state === TERMINAL_SEQUENCE_GROUND ? undefined : continuation.state,
-    },
-    continuation.data,
-    maxBufferBytes,
-  );
+  return {
+    ...appendRetainedOutput(current, continuation.data, maxBufferBytes),
+    pendingSnapshotSequenceState:
+      continuation.state === TERMINAL_SEQUENCE_GROUND ? undefined : continuation.state,
+  };
 }
 
 function appendRetainedOutput(
