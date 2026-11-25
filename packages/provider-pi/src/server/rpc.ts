@@ -190,11 +190,6 @@ function parsePiRecord(line: string): PiRpcRecord | undefined {
   }
 }
 
-/**
- * `hasExited` is consulted before each signal. Once the original child is
- * gone its pid/pgid can be recycled by the OS, so escalating blindly could
- * deliver SIGKILL to an unrelated process.
- */
 const terminatePiProcess = Effect.fn("PiRpc.terminatePiProcess")(function* (
   kill: (signal: NodeJS.Signals) => boolean,
   hasExited: () => boolean,
@@ -202,12 +197,12 @@ const terminatePiProcess = Effect.fn("PiRpc.terminatePiProcess")(function* (
 ) {
   if (hasExited()) return;
   if (!kill("SIGTERM")) return;
-  yield* Effect.sleep(TERMINATION_POLL_INTERVAL).pipe(
+  const groupDrained = yield* Effect.sleep(TERMINATION_POLL_INTERVAL).pipe(
     Effect.repeat({ until: groupGone }),
     Effect.timeoutOption(TERMINATION_GRACE),
   );
-  if (hasExited()) return;
-  kill("SIGKILL");
+  // The group can still contain extension workers after Pi exits.
+  if (Option.isNone(groupDrained) && !groupGone()) kill("SIGKILL");
 });
 
 export const makePiRpcConnection = Effect.fnUntraced(function* (options: PiRpcSpawnOptions) {
@@ -286,7 +281,7 @@ export const makePiRpcConnection = Effect.fnUntraced(function* (options: PiRpcSp
   const terminateProcess =
     platform === "win32"
       ? terminateWindowsTree
-      : terminatePiProcess(killProcessGroup, hasExited, processGroupGone);
+      : yield* Effect.cached(terminatePiProcess(killProcessGroup, hasExited, processGroupGone));
 
   // Register teardown immediately after spawn so interrupted setup cannot leak a detached process.
   yield* Scope.addFinalizer(scope, terminateProcess.pipe(Effect.ignore, Effect.uninterruptible));
