@@ -1,3 +1,7 @@
+import * as Clock from "effect/Clock";
+import { PiDriver } from "@t3tools/provider-pi/server";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
+import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
 import * as CodexErrors from "effect-codex-app-server/errors";
 import { vi } from "vite-plus/test";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
@@ -2860,6 +2864,150 @@ it.layer(
           ),
         );
       }),
+    );
+
+    const withPiLoginShell = <A, E, R>(
+      run: (input: {
+        registry: ProviderRegistry.ProviderRegistry["Service"];
+        instanceId: ProviderInstanceId;
+        cwd: string;
+      }) => Effect.Effect<A, E, R>,
+    ) =>
+      withLateLoginShell((shell) => {
+        // Advance the PATH cache independently of the live CLI transport timers.
+        const liveClock = Clock.Clock.defaultValue();
+        let time = 1_000_000;
+        const advancePastPathCache = Effect.sync(() => {
+          time += 11_000;
+        });
+        return Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const root = yield* fs
+            .makeTempDirectoryScoped({ prefix: "t3-pi-refresh-" })
+            .pipe(Effect.flatMap(fs.realPath));
+          const instanceId = ProviderInstanceId.make("pi-local");
+          const oldBin = `${root}/old`;
+          const newBin = `${root}/new`;
+          const cwd = `${root}/workspace`;
+          const install = (bin: string) =>
+            fs
+              .writeFileString(
+                `${bin}/t3-test-pi`,
+                `#!${process.execPath}
+if (process.argv.includes("--version")) {
+  console.log("pi 1.0.2");
+} else {
+  require("node:readline").createInterface({ input: process.stdin }).on("line", (line) => {
+    const request = JSON.parse(line);
+    const data = request.type === "get_commands"
+      ? { commands: process.cwd() === ${JSON.stringify(cwd)}
+          ? [{ name: "workspace-prompt", source: "prompt" }]
+          : [] }
+      : request.type === "get_available_models" ? { models: [{ provider: "test", id: "test" }] } : {};
+    console.log(JSON.stringify({ type: "response", id: request.id, success: true, data }));
+  });
+}
+`,
+              )
+              .pipe(Effect.andThen(fs.chmod(`${bin}/t3-test-pi`, 0o755)));
+          const updateProfile = (bin: string) =>
+            fs.writeFileString(shell, `#!/bin/sh\nPATH="${bin}:/usr/bin" exec /bin/sh -c "$2"\n`);
+          yield* fs.makeDirectory(cwd);
+          yield* fs.makeDirectory(oldBin);
+          yield* fs.makeDirectory(newBin);
+          yield* updateProfile(oldBin);
+          yield* Effect.acquireRelease(
+            Effect.sync(() =>
+              vi
+                .stubEnv("PATH", `${oldBin}:/usr/bin`)
+                .stubEnv("SHELL", shell)
+                .stubEnv("APPDIR", undefined)
+                .stubEnv("APPIMAGE", undefined),
+            ),
+            () =>
+              Effect.sync(() => {
+                vi.unstubAllEnvs();
+              }),
+          );
+          const built = yield* ProviderInstanceRegistry.makeProviderInstanceRegistry({
+            drivers: [PiDriver],
+            configMap: {
+              [instanceId]: {
+                driver: PiDriver.driverKind,
+                config: { ...PiDriver.defaultConfig(), enabled: true, binaryPath: "t3-test-pi" },
+                enabled: true,
+              },
+            },
+          }).pipe(
+            Effect.provide(
+              Layer.mergeAll(
+                IdAllocator.layer,
+                McpProviderSessions.layer,
+                Layer.mock(SecretResolver.SecretResolver)({}),
+                TestProviderHost.layer({ runBackgroundWork: false }),
+              ),
+            ),
+          );
+          return yield* Effect.gen(function* () {
+            const registry = yield* ProviderRegistry.ProviderRegistry;
+            const initial = yield* registry.refreshInstance(instanceId);
+            expect(initial.find((provider) => provider.instanceId === instanceId)?.installed).toBe(
+              false,
+            );
+            yield* install(newBin);
+            yield* updateProfile(newBin);
+            yield* advancePastPathCache;
+            return yield* run({ registry, instanceId, cwd });
+          }).pipe(
+            Effect.provide(
+              ProviderRegistry.layer.pipe(
+                Layer.provide(
+                  Layer.succeed(ProviderInstanceRegistry.ProviderInstanceRegistry, built.registry),
+                ),
+                Layer.provide(
+                  Layer.succeed(
+                    ProviderInstanceRegistryMutator.ProviderInstanceRegistryMutator,
+                    built.mutator,
+                  ),
+                ),
+                Layer.provide(ServerConfig.layerTest(cwd, { prefix: "t3-pi-provider-refresh-" })),
+              ),
+            ),
+          );
+        }).pipe(
+          Effect.provideService(Clock.Clock, {
+            sleep: (duration) => liveClock.sleep(duration),
+            monotonicTimeNanosUnsafe: () => liveClock.monotonicTimeNanosUnsafe(),
+            monotonicTimeNanos: liveClock.monotonicTimeNanos,
+            currentTimeMillisUnsafe: () => time,
+            currentTimeMillis: Effect.sync(() => time),
+            currentTimeNanosUnsafe: () => BigInt(time) * 1_000_000n,
+            currentTimeNanos: Effect.sync(() => BigInt(time) * 1_000_000n),
+          }),
+          Effect.provideService(HostProcess.Environment, process.env),
+          Effect.provideService(HostProcess.Platform, "linux"),
+        );
+      });
+
+    it.effect("finds workspace commands on the first fresh refresh after Pi is installed", () =>
+      process.platform === "win32"
+        ? Effect.void
+        : withPiLoginShell(({ registry, instanceId, cwd }) =>
+            Effect.gen(function* () {
+              const request = { instanceId, cwd, fresh: true };
+              const first = yield* registry.refreshWorkspaceSnapshot(request);
+              const second = yield* registry.refreshWorkspaceSnapshot(request);
+              const findPi = (providers: ReadonlyArray<ServerProvider>) =>
+                providers.find((provider) => provider.instanceId === instanceId);
+              const commands = (providers: ReadonlyArray<ServerProvider>) =>
+                findPi(providers)
+                  ?.workspaceSnapshots?.find((snapshot) => snapshot.cwd === cwd)
+                  ?.slashCommands?.map((command) => command.name) ?? [];
+              expect(findPi(first)?.installed).toBe(true);
+              expect(commands(second)).toContain("workspace-prompt");
+              expect(commands(first)).toContain("workspace-prompt");
+            }),
+          ),
     );
 
     it.effect("publishes a new label for an instance the registry kept live", () =>
