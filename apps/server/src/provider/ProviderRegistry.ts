@@ -843,9 +843,10 @@ export const layer = Layer.effect(
       return yield* refreshInstance(defaultInstanceIdForDriver(provider));
     });
 
-    const refreshCurrentInstance = Effect.fn("refreshCurrentInstance")(function* (
+    const refreshInstance = Effect.fn("refreshInstance")(function* (
       instanceId: ProviderInstanceId,
     ) {
+      yield* refreshHostPath;
       yield* syncLiveSourcesAndContinue;
       const instance = (yield* Ref.get(liveSubsRef)).get(instanceId);
       if (!instance) {
@@ -853,9 +854,6 @@ export const layer = Layer.effect(
       }
       return yield* refreshOneSource(instance);
     });
-
-    const refreshInstance = (instanceId: ProviderInstanceId) =>
-      refreshHostPath.pipe(Effect.andThen(refreshCurrentInstance(instanceId)));
 
     const reloadSecretsAndRefresh = Effect.fn("reloadSecretsAndRefresh")(function* (
       instanceId?: ProviderInstanceId,
@@ -1260,7 +1258,7 @@ export const layer = Layer.effect(
       // A machine refresh can change this cwd's snapshot, so the scan publishes against the result.
       const refreshMachineSnapshot = input.fresh
         ? (instance.invalidateCaches ?? Effect.void).pipe(
-            Effect.andThen(refreshCurrentInstance(input.instanceId)),
+            Effect.andThen(refreshInstance(input.instanceId)),
             Effect.andThen(Ref.get(providersRef)),
             Effect.map((current) =>
               workspaceSnapshotOf(
