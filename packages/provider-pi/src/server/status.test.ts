@@ -1,9 +1,12 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
+import { writeFakeCli } from "@t3tools/provider-testing/fakeCli";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as TestClock from "effect/testing/TestClock";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
@@ -11,6 +14,7 @@ import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import { expect } from "vite-plus/test";
 
 import { checkPiProviderStatus } from "./status.ts";
 
@@ -182,6 +186,52 @@ const BROKEN_ADVISORY = {
 } as const;
 
 describe("PiProvider", () => {
+  it.live.skipIf(process.platform === "win32")(
+    "discovers models for a relative Pi binary when the status probe has its own directory",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const directory = yield* fs.makeTempDirectoryScoped();
+        const executable = writeFakeCli({
+          directory,
+          name: "pi",
+          source: `
+            import { createInterface } from "node:readline";
+            if (process.argv.includes("--version")) {
+              console.log("pi 1.0.2");
+            } else {
+              for await (const line of createInterface({ input: process.stdin })) {
+                const { id, type } = JSON.parse(line);
+                const data = type === "get_available_models"
+                  ? { models: [{ provider: "example", id: "discovered-model" }] }
+                  : {};
+                console.log(JSON.stringify({ id, type: "response", command: type, success: true, data }));
+              }
+            }
+          `,
+        });
+        const binaryPath = path.relative(process.cwd(), executable);
+        // Keep the relative path from climbing back to the executable through the filesystem root.
+        const probeCwd = path.join(directory, ...binaryPath.split(path.sep).map(() => "probe"));
+        yield* fs.makeDirectory(probeCwd, { recursive: true });
+
+        const absolute = yield* checkPiProviderStatus(
+          { ...settings, binaryPath: executable },
+          undefined,
+          probeCwd,
+        );
+        expect(absolute.models.map((model) => model.slug)).toContain("example/discovered-model");
+        const snapshot = yield* checkPiProviderStatus(
+          { ...settings, binaryPath },
+          undefined,
+          probeCwd,
+        );
+        expect(snapshot.version).toBe("1.0.2");
+        expect(snapshot.models.map((model) => model.slug)).toContain("example/discovered-model");
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("reports a version the policy rates broken as an error", () =>
     Effect.gen(function* () {
       const snapshot = yield* checkPiProviderStatus(settings, undefined, undefined, () =>
