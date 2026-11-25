@@ -28,29 +28,31 @@ export function useT3ProjectFileState(
   const { canReadFiles } = useFilesystemReadAccess(environmentId);
   const contents = query.data && !query.data.truncated ? query.data.contents : null;
   const isPending = query.isPending;
+  const refresh = query.refresh;
   const refreshScripts = async () => {
     if (cwd === null || !canReadFiles) return NO_SCRIPTS;
     query.refresh();
     const file = await readT3ProjectFile(environmentId, cwd);
     return file?.scripts ?? NO_SCRIPTS;
   };
-  const refreshActions = { refresh: query.refresh, refreshScripts };
   if (contents === null) {
     return {
       status: isPending ? "loading" : "missing",
       file: null,
       scripts: NO_SCRIPTS,
-      ...refreshActions,
+      refresh,
+      refreshScripts,
     } as const;
   }
   const file = parseT3ProjectFile(contents);
   if (file === null) {
-    return { status: "invalid", file: null, scripts: NO_SCRIPTS, ...refreshActions } as const;
+    return { status: "invalid", file: null, scripts: NO_SCRIPTS, refresh, refreshScripts } as const;
   }
   return {
     status: "valid",
     file,
     scripts: file.scripts ?? NO_SCRIPTS,
-    ...refreshActions,
+    refresh,
+    refreshScripts,
   } as const;
 }
