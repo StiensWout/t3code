@@ -1010,7 +1010,8 @@ function TerminalSessionViewport({
             }
             return false;
           },
-          // A retry uses the input's current viewport, which can differ from the one that opened the paste.
+          // Close the bracket only for the process that saw it open; wait while its pid is unknown.
+          // A retry reads the session through the current view, not the one that opened the paste.
           async (readSession) => {
             const pid = session.summary?.pid ?? null;
             const current = readSession?.();
