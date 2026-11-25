@@ -2123,15 +2123,17 @@ export const make = Effect.gen(function* () {
     const cutoffMs = nowMs - RECENT_THREAD_WINDOW_MS;
 
     // Imports recorded since a budget-truncated collection can free budget for transcripts it cut off.
-    const cached = cachedCandidates;
     let candidates: ReadonlyArray<RawCandidate>;
-    if (cached === null || cached.metadataTruncated) {
+    if (cachedCandidates === null || cachedCandidates.metadataTruncated) {
       cachedCandidates = yield* collectCandidates();
       candidates = cachedCandidates.candidates;
     } else {
       // Pi can start sessions or update their recency while the project picker is open.
       const pi = yield* collectCandidates(["pi"]);
-      candidates = [...cached.candidates.filter(({ source }) => source !== "pi"), ...pi.candidates];
+      candidates = [
+        ...cachedCandidates.candidates.filter(({ source }) => source !== "pi"),
+        ...pi.candidates,
+      ];
     }
 
     // The scan counts a linked worktree's sessions toward its main checkout, so import them with it.
