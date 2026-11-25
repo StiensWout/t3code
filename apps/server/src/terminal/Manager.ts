@@ -810,7 +810,7 @@ function deriveSubprocessInspectResult(
   terminalPid: number,
   shell: string | null,
   platform: NodeJS.Platform,
-  foregroundProcessGroup?: number | null,
+  hasActiveShellChild = false,
 ): TerminalSubprocessInspectResult {
   const commandName = (pid: number) =>
     normalizeChildCommandName(snapshot.commandById.get(pid) ?? "", platform);
@@ -822,8 +822,7 @@ function deriveSubprocessInspectResult(
     shellName !== null &&
     shellName !== normalizeChildCommandName(shell, platform) &&
     !INTERACTIVE_SHELL_NAMES.has(shellName.replace(/^-/, ""));
-  // Async prompt themes fork childless shell helpers that are not user commands;
-  // a foreground job owns the terminal's process group, and an unknown one counts as foreground.
+  // Childless copies of the shell need a job-control check to distinguish them from prompt helpers.
   const childPid = rootIsCommand
     ? terminalPid
     : (snapshot.childrenByParent.get(terminalPid) ?? []).find(
@@ -831,7 +830,7 @@ function deriveSubprocessInspectResult(
           shellName === null ||
           commandName(pid) !== shellName ||
           (snapshot.childrenByParent.get(pid)?.length ?? 0) > 0 ||
-          (foregroundProcessGroup !== undefined && foregroundProcessGroup !== terminalPid),
+          hasActiveShellChild,
       );
   if (childPid === undefined) {
     return { hasRunningSubprocess: false, childCommand: null, processIds: [] };
@@ -855,10 +854,9 @@ function deriveSubprocessInspectResult(
   };
 }
 
-// Field 8 of /proc/<pid>/stat is the tty's foreground process group; comm (field 2) may hold spaces or parens.
-function parseProcStatForegroundProcessGroup(stat: string): number | null {
-  const tpgid = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[5]);
-  return Number.isInteger(tpgid) ? tpgid : null;
+// Fields after comm (which may contain spaces or parens): state, ppid, pgrp, session, tty_nr, tpgid.
+function procStatFields(stat: string): string[] {
+  return stat.slice(stat.lastIndexOf(")") + 2).split(" ");
 }
 
 const POSIX_PS_ABSOLUTE_PATHS = ["/bin/ps", "/usr/bin/ps"] as const;
@@ -1907,7 +1905,10 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     ((terminalPid: number) =>
       platform === "linux"
         ? fileSystem.readFileString(`/proc/${terminalPid}/stat`).pipe(
-            Effect.map(parseProcStatForegroundProcessGroup),
+            Effect.map((stat) => {
+              const tpgid = Number(procStatFields(stat)[5]);
+              return Number.isInteger(tpgid) ? tpgid : null;
+            }),
             Effect.orElseSucceed(() => null),
           )
         : processRunner
@@ -1948,17 +1949,48 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
               (table): TerminalSubprocessInspector =>
                 (terminalPid, shell) => {
                   const result = deriveSubprocessInspectResult(table, terminalPid, shell, platform);
-                  // Only shell-named childless children are ambiguous; read the foreground group for those alone.
+                  const children = table.childrenByParent.get(terminalPid) ?? [];
                   if (
                     result.hasRunningSubprocess ||
                     platform === "win32" ||
-                    (table.childrenByParent.get(terminalPid)?.length ?? 0) === 0
+                    children.length === 0
                   ) {
                     return Effect.succeed(result);
                   }
-                  return Effect.map(foregroundProcessGroup(terminalPid), (group) =>
-                    deriveSubprocessInspectResult(table, terminalPid, shell, platform, group),
-                  );
+                  const active = () =>
+                    deriveSubprocessInspectResult(table, terminalPid, shell, platform, true);
+                  return Effect.gen(function* () {
+                    const group = yield* foregroundProcessGroup(terminalPid);
+                    if (group !== terminalPid) return active();
+                    if (platform !== "linux") return result;
+
+                    // Bash puts background jobs in their own group. Prompt helpers inherit the shell's group.
+                    const hasBackgroundJob = yield* Effect.findFirst(children, (pid) =>
+                      fileSystem.readFileString(`/proc/${pid}/stat`).pipe(
+                        Effect.map((stat) => {
+                          const [, parent, processGroup] = procStatFields(stat);
+                          const parentPid = Number(parent);
+                          const pgid = Number(processGroup);
+                          if (
+                            !Number.isInteger(parentPid) ||
+                            !Number.isInteger(pgid) ||
+                            pgid <= 0
+                          ) {
+                            return true;
+                          }
+                          return parentPid === terminalPid && pgid !== group;
+                        }),
+                        Effect.catch((error) => Effect.succeed(error.reason._tag !== "NotFound")),
+                      ),
+                    ).pipe(
+                      Effect.map(Option.isSome),
+                      Effect.timeoutOrElse({
+                        duration: CLOSE_IDLE_QUERY_TIMEOUT.posix,
+                        orElse: () => Effect.succeed(true),
+                      }),
+                    );
+                    return hasBackgroundJob ? active() : result;
+                  });
                 },
             ),
             snapshotSucceeded,
