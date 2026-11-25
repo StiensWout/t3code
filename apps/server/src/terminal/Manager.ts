@@ -58,6 +58,7 @@ import * as Equal from "effect/Equal";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
+import * as Latch from "effect/Latch";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
@@ -347,6 +348,7 @@ interface TerminalViewer {
 interface PersistHistoryRequest {
   history: BoundedTerminalHistory;
   immediate: boolean;
+  requestCount: number;
 }
 
 type PendingProcessEvent =
@@ -2300,6 +2302,10 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   });
 
   const persistedHistory = new WeakMap<BoundedTerminalHistory, TerminalHistoryPersistenceCursor>();
+  const persistenceDrained = yield* Latch.make(true);
+  const persistenceStopping = yield* Deferred.make<void>();
+  // Pending writes can outlive an evicted session. Count requests until their coalesced write settles.
+  let pendingPersistence = 0;
   const persistWorker = yield* makeKeyedCoalescingWorker<
     string,
     PersistHistoryRequest,
@@ -2309,50 +2315,87 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     merge: (current, next) => ({
       history: next.history,
       immediate: current.immediate || next.immediate,
+      requestCount: current.requestCount + next.requestCount,
     }),
-    process: Effect.fn("terminal.persistHistoryWorker")(function* (sessionKey, request) {
-      if (!request.immediate) {
-        yield* Effect.sleep(DEFAULT_PERSIST_DEBOUNCE_MS);
-      }
+    process: Effect.fn("terminal.persistHistoryWorker")(
+      function* (sessionKey, request) {
+        if (!request.immediate) {
+          yield* Effect.raceFirst(
+            Effect.sleep(DEFAULT_PERSIST_DEBOUNCE_MS),
+            Deferred.await(persistenceStopping),
+          );
+        }
 
-      const [threadId, terminalId] = sessionKey.split("\u0000");
-      if (!threadId || !terminalId) {
-        return;
-      }
+        const [threadId, terminalId] = sessionKey.split("\u0000");
+        if (!threadId || !terminalId) {
+          return;
+        }
 
-      const update = request.history.persistenceUpdate(
-        request.immediate ? undefined : persistedHistory.get(request.history),
-      );
-      if (update.append && update.data.length === 0) return;
-      // An append may partially succeed before failing. Retry from a full snapshot,
-      // never from an uncertain file offset.
-      persistedHistory.delete(request.history);
-      yield* fileSystem
-        .writeFileString(historyPath(threadId, terminalId), update.data, {
-          flag: update.append ? "a" : "w",
-        })
-        .pipe(
-          Effect.tap(() => Effect.sync(() => persistedHistory.set(request.history, update.cursor))),
-          Effect.catch((error) =>
-            Effect.logWarning("failed to persist terminal history", {
-              threadId,
-              terminalId,
-              error,
+        const update = request.history.persistenceUpdate(
+          request.immediate ? undefined : persistedHistory.get(request.history),
+        );
+        if (update.append && update.data.length === 0) return;
+        // An append may partially succeed before failing. Retry from a full snapshot,
+        // never from an uncertain file offset.
+        persistedHistory.delete(request.history);
+        yield* fileSystem
+          .writeFileString(historyPath(threadId, terminalId), update.data, {
+            flag: update.append ? "a" : "w",
+          })
+          .pipe(
+            Effect.tap(() =>
+              Effect.sync(() => persistedHistory.set(request.history, update.cursor)),
+            ),
+            Effect.catch((error) =>
+              Effect.logWarning("failed to persist terminal history", {
+                threadId,
+                terminalId,
+                error,
+              }),
+            ),
+          );
+      },
+      (effect, _sessionKey, request) =>
+        effect.pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              pendingPersistence -= request.requestCount;
+              if (pendingPersistence === 0) persistenceDrained.openUnsafe();
             }),
           ),
-        );
-    }),
-  });
+        ),
+    ),
+  }).pipe(Effect.provideService(Scope.Scope, workerScope));
+
+  // The sequential scope drains history before interrupting the persistence worker.
+  yield* Scope.addFinalizer(
+    workerScope,
+    Deferred.succeed(persistenceStopping, undefined).pipe(Effect.andThen(persistenceDrained.await)),
+  );
+
+  const enqueuePersistence = (
+    threadId: string,
+    terminalId: string,
+    history: BoundedTerminalHistory,
+    immediate: boolean,
+  ) =>
+    Effect.gen(function* () {
+      if (Deferred.isDoneUnsafe(persistenceStopping)) return;
+      pendingPersistence++;
+      persistenceDrained.closeUnsafe();
+      yield* persistWorker.enqueue(toSessionKey(threadId, terminalId), {
+        history,
+        immediate,
+        requestCount: 1,
+      });
+    }).pipe(Effect.uninterruptible);
 
   const queuePersist = Effect.fn("terminal.queuePersist")(function* (
     threadId: string,
     terminalId: string,
     history: BoundedTerminalHistory,
   ) {
-    yield* persistWorker.enqueue(toSessionKey(threadId, terminalId), {
-      history,
-      immediate: false,
-    });
+    yield* enqueuePersistence(threadId, terminalId, history, false);
   });
 
   const flushPersist = Effect.fn("terminal.flushPersist")(function* (
@@ -2367,10 +2410,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     terminalId: string,
     history: BoundedTerminalHistory,
   ) {
-    yield* persistWorker.enqueue(toSessionKey(threadId, terminalId), {
-      history,
-      immediate: true,
-    });
+    yield* enqueuePersistence(threadId, terminalId, history, true);
     yield* flushPersist(threadId, terminalId);
   });
 
