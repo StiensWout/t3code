@@ -1795,7 +1795,7 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
                   message: { role: "assistant", content: [{ type: "text", text: "Done" }] },
                 },
               ]
-                .map((record) => encodeTranscriptRecord(record))
+                .map(encodeTranscriptRecord)
                 .join("\n") + "\n",
             mtimeMs,
           });
