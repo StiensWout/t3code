@@ -19,6 +19,7 @@ type TextPart =
   | typeof CELL_START
   | typeof CELL_END
   | typeof LINE_START
+  | { leadingTabs: number }
   | { fallback: string };
 
 const TRUNCATED = "\n\n[Extracted text truncated at document extraction limits.]";
@@ -395,10 +396,20 @@ function* table(node: XmlNode): Generator<TextPart, void> {
     // ODS writers pad sheets with repeated empty rows and trailing cells.
     while (cells.length && !hasCellText(cells.at(-1)!)) cells.pop();
     if (!cells.length) continue;
+    const trPr =
+      row.name === "tr" && node.name === "tbl"
+        ? children(row).find((child) => child.name === "trPr")
+        : undefined;
+    const gridBefore = children(trPr)
+      .find((child) => child.name === "gridBefore")
+      ?.attrs.val?.trim();
+    const leadingTabs = gridBefore && /^\+?[0-9]+$/.test(gridBefore) ? Number(gridBefore) : 0;
     const repeat = repeatCount(row.attrs["number-rows-repeated"]);
     for (let index = 0; index < repeat; index++) {
       if (++rowCount > 10_000) throw new Truncation("Row limit");
-      let column = 0;
+      let column = leadingTabs;
+      if (column >= 512) throw new Truncation("Column limit");
+      if (leadingTabs) yield { leadingTabs };
       let gap = 0;
       for (const cell of cells) {
         const count = repeatCount(cell.attrs["number-columns-repeated"]);
@@ -1039,6 +1050,7 @@ export async function extractDocumentText(path: string, extension: string): Prom
   let space = false;
   let midLine = false;
   let truncated = false;
+  let firstGridGap: number | undefined;
   try {
     // Charge raw text before normalization so repeated whitespace also exhausts the budget.
     for await (let part of document(path, extension)) {
@@ -1058,6 +1070,10 @@ export async function extractDocumentText(path: string, extension: string): Prom
         // A nested list starts its own line unless its parent item's text already ended one.
         if (!midLine) continue;
         part = "\n";
+      }
+      if (typeof part !== "string" && "leadingTabs" in part) {
+        if (!cellDepth) firstGridGap ??= result.length;
+        part = "\t".repeat(part.leadingTabs);
       }
       if (typeof part !== "string" && started) continue;
       const raw = typeof part === "string" ? part : part.fallback;
@@ -1082,7 +1098,12 @@ export async function extractDocumentText(path: string, extension: string): Prom
     if (!(error instanceof Truncation)) throw error;
     truncated = true;
   }
-  result = result.replaceAll(/\n(?:[ \t]*\n){2,}/g, "\n\n").trim();
+  // Keep omitted columns when a table is the first visible content in the document.
+  result =
+    firstGridGap !== undefined && !/\S/.test(result.slice(0, firstGridGap))
+      ? result.slice(firstGridGap)
+      : result.trimStart();
+  result = result.replaceAll(/\n(?:[ \t]*\n){2,}/g, "\n\n").trimEnd();
   if (!result && !truncated) throw new Error("No text extracted");
   return truncated ? result.replace(/[\uD800-\uDBFF]$/, "").trimEnd() + TRUNCATED : result;
 }
