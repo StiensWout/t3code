@@ -146,8 +146,8 @@ export default function ProjectScriptsControl({
       if (refreshedScripts.some(isImportable)) {
         setActionsMenuOpen({
           presentation,
-          scripts: scripts.length > 0,
-          imports: scripts.length === 0,
+          scripts: primaryScript !== null,
+          imports: primaryScript === null,
         });
       } else {
         openAddDialog();
