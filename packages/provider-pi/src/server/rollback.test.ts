@@ -24,6 +24,7 @@ import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
+import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import { makePiAdapterV2, PI_PROVIDER } from "./adapter.ts";
 
@@ -45,7 +46,7 @@ const entry = (
   id,
   parentId,
   timestamp: DateTime.formatIso(time(seconds)),
-  message: { role, content: [] },
+  message: { role, content: [{ type: "text", text: id }] },
 });
 const ref = (nativeId: string, strength: "strong" | "weak" = "strong") => ({
   driver: PI_PROVIDER,
@@ -72,9 +73,11 @@ it.effect.each([
   "checkpoint inherited by a prior fork",
   "repeated rollback after a handoff",
   "handoff prompt left in the source",
+  "a fork from a checkpoint followed by a handoff prompt",
   "switch timed out after attaching",
 ] as const)("restores exactly the retained Pi history for %s", (scenario) =>
   Effect.gen(function* () {
+    const repro = scenario === "a fork from a checkpoint followed by a handoff prompt";
     const fs = yield* FileSystem.FileSystem;
     const dir = yield* fs.makeTempDirectoryScoped();
     const oldFile = `${dir}/old.jsonl`;
@@ -89,7 +92,7 @@ it.effect.each([
       entry("a2", "steer", "assistant", 35),
     ];
     const inherited = scenario === "checkpoint inherited by a prior fork";
-    const handoffEntry = entry("u3", inherited ? "a2" : null, "user", 50);
+    const handoffEntry = entry("u3", inherited ? "a2" : null, "user", repro ? 55 : 50);
     const newEntries =
       scenario === "command-only handoff"
         ? []
@@ -99,7 +102,18 @@ it.effect.each([
     const repeated = scenario === "repeated rollback after a handoff";
     const oldSuffix = repeated || scenario === "handoff prompt left in the source";
     const sessions = new Map([
-      [oldFile, oldSuffix ? [...oldEntries, entry("discarded", "a2", "user", 45)] : oldEntries],
+      [
+        oldFile,
+        repro
+          ? [
+              ...oldEntries,
+              entry("discarded", "a2", "user", 52),
+              entry("discarded-answer", "discarded", "assistant", 54),
+            ]
+          : oldSuffix
+            ? [...oldEntries, entry("discarded", "a2", "user", 45)]
+            : oldEntries,
+      ],
       [currentFile, newEntries],
     ]);
     if (repeated) sessions.set(previousForkFile, [...oldEntries, entry("u3", "a2", "user", 50)]);
@@ -112,65 +126,75 @@ it.effect.each([
       );
     }
 
-    const output = yield* Queue.unbounded<Uint8Array>();
     const switchApplied = yield* Deferred.make<void>();
     const sessionRequests: { readonly type: string; readonly file: string }[] = [];
     let liveFile = currentFile;
-    let pending = "";
-    const encoder = new TextEncoder();
-    const decoder = new TextDecoder();
-    const stdin = Sink.forEach((chunk: Uint8Array) =>
+    const spawner = ChildProcessSpawner.make((command) =>
       Effect.gen(function* () {
-        const lines = (pending + decoder.decode(chunk, { stream: true })).split("\n");
-        pending = lines.pop() ?? "";
-        for (const line of lines) {
-          const request = decodeRequest(line);
-          const entries = sessions.get(liveFile) ?? [];
-          let data: unknown = {};
-          let error: string | undefined;
-          if (request.type === "get_state") data = { sessionFile: liveFile };
-          if (request.type === "get_entries")
-            data = { entries, leafId: entries.at(-1)?.id ?? null };
-          if (request.type === "switch_session") {
-            if (request.sessionPath !== undefined && sessions.has(request.sessionPath)) {
-              liveFile = request.sessionPath;
-              sessionRequests.push({ type: "switch_session", file: liveFile });
-              if (scenario === "switch timed out after attaching") {
-                yield* Deferred.succeed(switchApplied, undefined);
-                continue;
+        const args = ChildProcess.isStandardCommand(command) ? command.args : [];
+        const forkIndex = args.indexOf("--fork");
+        const source = forkIndex === -1 ? undefined : args[forkIndex + 1];
+        const clonedFile = `${dir}/cloned.jsonl`;
+        if (source !== undefined) sessions.set(clonedFile, [...sessions.get(source)!]);
+        let file = source === undefined ? currentFile : clonedFile;
+        const output = yield* Queue.unbounded<Uint8Array>();
+        let pending = "";
+        const encoder = new TextEncoder();
+        const decoder = new TextDecoder();
+        const stdin = Sink.forEach((chunk: Uint8Array) =>
+          Effect.gen(function* () {
+            const lines = (pending + decoder.decode(chunk, { stream: true })).split("\n");
+            pending = lines.pop() ?? "";
+            for (const line of lines) {
+              const request = decodeRequest(line);
+              const entries = sessions.get(file) ?? [];
+              let data: unknown = {};
+              let error: string | undefined;
+              if (request.type === "get_messages")
+                data = { messages: entries.map(({ message }) => message) };
+              if (request.type === "get_state") data = { sessionFile: file };
+              if (request.type === "get_entries")
+                data = { entries, leafId: entries.at(-1)?.id ?? null };
+              if (request.type === "switch_session") {
+                if (request.sessionPath !== undefined && sessions.has(request.sessionPath)) {
+                  file = request.sessionPath;
+                  if (source === undefined) liveFile = file;
+                  sessionRequests.push({ type: "switch_session", file });
+                  if (scenario === "switch timed out after attaching") {
+                    yield* Deferred.succeed(switchApplied, undefined);
+                    continue;
+                  }
+                  data = { cancelled: false };
+                } else error = "Session not found";
               }
-              data = { cancelled: false };
-            } else error = "Session not found";
-          }
-          if (request.type === "fork") {
-            const index = entries.findIndex(({ id }) => id === request.entryId);
-            if (index === -1) error = "Invalid entry ID for forking";
-            else {
-              sessionRequests.push({ type: "fork", file: liveFile });
-              sessions.set(forkedFile, entries.slice(0, index));
-              liveFile = forkedFile;
-              data = { cancelled: false };
+              if (request.type === "fork") {
+                const index = entries.findIndex(({ id }) => id === request.entryId);
+                if (index === -1) error = "Invalid entry ID for forking";
+                else {
+                  sessionRequests.push({ type: "fork", file });
+                  sessions.set(forkedFile, entries.slice(0, index));
+                  file = forkedFile;
+                  if (source === undefined) liveFile = file;
+                  data = { cancelled: false };
+                }
+              }
+              yield* Queue.offer(
+                output,
+                encoder.encode(
+                  JSON.stringify({
+                    type: "response",
+                    id: request.id,
+                    command: request.type,
+                    success: error === undefined,
+                    data,
+                    error,
+                  }) + "\n",
+                ),
+              );
             }
-          }
-          yield* Queue.offer(
-            output,
-            encoder.encode(
-              JSON.stringify({
-                type: "response",
-                id: request.id,
-                command: request.type,
-                success: error === undefined,
-                data,
-                error,
-              }) + "\n",
-            ),
-          );
-        }
-      }),
-    );
-    const spawner = ChildProcessSpawner.make(() =>
-      Effect.succeed(
-        ChildProcessSpawner.makeHandle({
+          }),
+        );
+        return ChildProcessSpawner.makeHandle({
           pid: ChildProcessSpawner.ProcessId(999_999_999),
           exitCode: Effect.never,
           isRunning: Effect.succeed(true),
@@ -182,8 +206,8 @@ it.effect.each([
           all: Stream.empty,
           getInputFd: () => Sink.drain,
           getOutputFd: () => Stream.empty,
-        }),
-      ),
+        });
+      }),
     );
     const instanceId = ProviderInstanceId.make("pi");
     const adapter = yield* makePiAdapterV2({
@@ -233,6 +257,20 @@ it.effect.each([
     );
     const shouldFork = scenario === "earlier checkpoint" || scenario === "legacy turns";
     const target = turns[shouldFork ? 0 : 1]!;
+    if (repro) {
+      const forked = yield* runtime.forkThread({
+        sourceProviderThread: providerThread,
+        sourceProviderTurns: turns,
+        providerTurnId: target.id,
+        targetThreadId: ThreadId.make("pi-fork"),
+      });
+      const snapshot = yield* runtime.readThreadSnapshot({ providerThread: forked });
+      assert.deepEqual(
+        snapshot.messages.map(({ text }) => text),
+        ["u1", "a1", "u2", "steer", "a2"],
+      );
+      return;
+    }
     const rollback = runtime.rollbackThread({
       providerThread,
       target: {
