@@ -81,6 +81,15 @@ describe("terminal session reducers", () => {
       escapeReplay: "\u001b[31m",
     },
     {
+      title: "carriage return inside an oversized CSI",
+      history: "working\u001b\\",
+      budget: 8_192,
+      chunks: ["\r", "m"],
+      attach: false,
+      historySequenceState: terminalSequenceStateAfter(0, "\u001b["),
+      escapeReplay: "\r",
+    },
+    {
       title: "split string terminator after an omitted OSC",
       history: "before\n",
       budget: 8_192,
