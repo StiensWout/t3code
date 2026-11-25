@@ -169,6 +169,8 @@ const decodePiEntryLinks = Schema.decodeUnknownOption(
   }),
 );
 const selectTranscriptPath = createTranscriptJsonSelector(TranscriptRecord);
+const selectPiTranscriptMetadataPath: typeof selectTranscriptPath = (path) =>
+  !(path[0] === "message" && path[1] === "content") && selectTranscriptPath(path);
 // Only the fields extractCwd reads, so a cwd record carrying a large image stays small in memory.
 const selectCwdPath = createTranscriptJsonSelector(
   Schema.Struct({
@@ -1368,15 +1370,66 @@ export const make = Effect.gen(function* () {
             let historyBytes = prefix?.historyBytes ?? 0;
             let recordBytes = 0;
             let bytesRead = 0;
-            const reserve = (bytes: number) => {
-              recordBytes += bytes;
-              if (historyBytes + recordBytes > MAX_IMPORT_HISTORY_BYTES) {
+            const checkHistoryBudget = (bytes: number) => {
+              if (historyBytes + bytes > MAX_IMPORT_HISTORY_BYTES) {
                 throw new TranscriptJsonLimitError({
                   message: "Transcript selected history exceeds the 32 MiB memory budget",
                 });
               }
             };
-            let reader = createTranscriptJsonReader(reserve, selectTranscriptPath);
+            const createReader = () => {
+              const fullReader = createTranscriptJsonReader((bytes) => {
+                recordBytes += bytes;
+                checkHistoryBudget(recordBytes);
+              }, selectTranscriptPath);
+              if (source !== "pi") return fullReader;
+
+              // Pi's role can follow its content. Keep a bounded projection that can still
+              // identify the record and link its branch if the full record exceeds the budget.
+              let metadataBytes = 0;
+              const metadata = createTranscriptJsonReader((bytes) => {
+                metadataBytes += bytes;
+                checkHistoryBudget(metadataBytes);
+              }, selectPiTranscriptMetadataPath);
+              let full: typeof fullReader | undefined = fullReader;
+              let overflow: TranscriptJsonLimitError | undefined;
+              const readFull = <A>(read: (reader: typeof fullReader) => A): A | undefined => {
+                if (full === undefined) return undefined;
+                try {
+                  return read(full);
+                } catch (cause) {
+                  if (
+                    !(cause instanceof TranscriptJsonLimitError) ||
+                    historyBytes + recordBytes <= MAX_IMPORT_HISTORY_BYTES
+                  ) {
+                    throw cause;
+                  }
+                  overflow = cause;
+                  full = undefined;
+                }
+              };
+              return {
+                write: (chunk: string) => {
+                  metadata.write(chunk);
+                  readFull((reader) => reader.write(chunk));
+                },
+                finish: () => {
+                  const fullValue = readFull((reader) => reader.finish());
+                  if (overflow === undefined) return fullValue;
+                  const value = metadata.finish();
+                  const record = decodeTranscriptValue(value);
+                  if (
+                    Option.isSome(record) &&
+                    record.value.type === "message" &&
+                    !isPiConversationRecord(record.value)
+                  ) {
+                    return value;
+                  }
+                  throw overflow;
+                },
+              };
+            };
+            let reader = createReader();
             let decoder = new TextDecoder();
             let recordStarted = false;
 
@@ -1410,7 +1463,7 @@ export const make = Effect.gen(function* () {
                 }
               }
               recordBytes = 0;
-              reader = createTranscriptJsonReader(reserve, selectTranscriptPath);
+              reader = createReader();
               decoder = new TextDecoder();
               recordStarted = false;
               return records.length <= MAX_IMPORT_RECORDS;
