@@ -1,6 +1,7 @@
 import {
   AuthTerminalOperateScope,
   AuthTerminalReadScope,
+  chunkTerminalWrite,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
@@ -136,12 +137,18 @@ export function useThreadTerminalActions(threadRef: ScopedThreadRef | null) {
     });
   };
 
-  const writeToTerminal = (terminalId: string, data: string) => {
-    if (!threadRef || !canWrite()) return null;
-    return writeTerminal({
-      environmentId: threadRef.environmentId,
-      input: { threadId: threadRef.threadId, terminalId, data },
-    });
+  const writeToTerminal = async (target: ScopedThreadRef, terminalId: string, data: string) => {
+    const { environmentId, threadId } = target;
+    if (!readEnvironmentScope(environmentId, AuthTerminalOperateScope)) return null;
+    let result: Awaited<ReturnType<typeof writeTerminal>> | null = null;
+    for (const chunk of chunkTerminalWrite(data)) {
+      result = await writeTerminal({
+        environmentId,
+        input: { threadId, terminalId, data: chunk },
+      });
+      if (result._tag === "Failure") return result;
+    }
+    return result;
   };
 
   return {

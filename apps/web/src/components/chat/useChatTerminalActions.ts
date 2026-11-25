@@ -283,6 +283,7 @@ export function useChatTerminalActions(input: ChatTerminalActionsInput) {
     }
 
     const writeResult = await terminalActions.writeToTerminal(
+      activeThreadRef,
       targetTerminalId,
       options?.shellHistory === "preserve"
         ? `${script.command}\r`
