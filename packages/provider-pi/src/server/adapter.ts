@@ -71,7 +71,7 @@ import {
   piRecordNumber as recordNumber,
   piRecordString as recordString,
   type PiRpcConnection,
-  PiRpcError,
+  type PiRpcError,
   type PiRpcRecord,
 } from "./rpc.ts";
 import {
@@ -2897,7 +2897,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               const failedExit = Option.exists(
                 Cause.findErrorOption(cause),
                 (error) =>
-                  error instanceof PiRpcError &&
+                  error._tag === "PiRpcError" &&
                   error.exitCode !== undefined &&
                   error.exitCode !== 0,
               );
