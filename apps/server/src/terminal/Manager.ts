@@ -4003,16 +4003,15 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     const { inspector } = yield* acquireSubprocessInspector(
       platform === "win32" ? CLOSE_IDLE_QUERY_TIMEOUT.win32 : CLOSE_IDLE_QUERY_TIMEOUT.posix,
     );
-    // An idle poll can predate a command starting. Require a fresh check before settling.
-    if (Result.isFailure(inspector)) return true;
-    return Option.isSome(
-      yield* Effect.findFirst(running, (session) =>
-        inspector.success(session.pid, session.shell).pipe(
-          Effect.map((result) => result.hasRunningSubprocess),
-          Effect.orElseSucceed(() => true),
-        ),
-      ),
-    );
+    // An idle poll can predate a command starting, so a failed process query counts as active.
+    const isActive = (session: (typeof running)[number]) =>
+      Result.isFailure(inspector)
+        ? Effect.succeed(true)
+        : inspector.success(session.pid, session.shell).pipe(
+            Effect.map((result) => result.hasRunningSubprocess),
+            Effect.orElseSucceed(() => true),
+          );
+    return Option.isSome(yield* Effect.findFirst(running, isActive));
   });
 
   return TerminalManager.of({
