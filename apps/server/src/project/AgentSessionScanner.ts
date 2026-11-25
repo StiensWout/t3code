@@ -1832,7 +1832,9 @@ export const make = Effect.gen(function* () {
     }));
   });
 
-  const collectCandidates = Effect.fn("AgentSessionScanner.collectCandidates")(function* () {
+  const collectCandidates = Effect.fn("AgentSessionScanner.collectCandidates")(function* (
+    sources: ReadonlyArray<AgentSessionSource> = ["claudeAgent", "codex", "pi"],
+  ) {
     const settings = yield* serverSettings.getSettings.pipe(
       Effect.mapError((cause) => new AgentSessionScanError({ operation: "read-settings", cause })),
     );
@@ -1855,8 +1857,9 @@ export const make = Effect.gen(function* () {
     );
     const raw: Array<RawCandidate> = [];
     let truncated = false;
+    let metadataTruncated = false;
 
-    for (const source of ["claudeAgent", "codex", "pi"] as const) {
+    for (const source of sources) {
       const instances: Array<{
         readonly instanceId: ProviderInstanceId;
         readonly config: ProviderInstanceConfig;
@@ -2000,14 +2003,17 @@ export const make = Effect.gen(function* () {
           importedByFile,
         )),
       );
-      truncated ||= metadataBudget.truncated;
+      metadataTruncated ||= metadataBudget.truncated;
     }
 
-    return { candidates: raw, truncated };
+    return { candidates: raw, truncated: truncated || metadataTruncated, metadataTruncated };
   });
 
+  let cachedCandidates: Effect.Success<ReturnType<typeof collectCandidates>> | null = null;
+
   const scan: AgentSessionScanner["Service"]["scan"] = Effect.gen(function* () {
-    const { candidates: raw, truncated } = yield* collectCandidates();
+    cachedCandidates = yield* collectCandidates();
+    const { candidates: raw, truncated } = cachedCandidates;
 
     const merged = new Map<
       string,
@@ -2116,7 +2122,17 @@ export const make = Effect.gen(function* () {
     const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
     const cutoffMs = nowMs - RECENT_THREAD_WINDOW_MS;
 
-    const { candidates } = yield* collectCandidates();
+    // Imports recorded since a budget-truncated collection can free budget for transcripts it cut off.
+    const cached = cachedCandidates;
+    let candidates: ReadonlyArray<RawCandidate>;
+    if (cached === null || cached.metadataTruncated) {
+      cachedCandidates = yield* collectCandidates();
+      candidates = cachedCandidates.candidates;
+    } else {
+      // Pi can start sessions or update their recency while the project picker is open.
+      const pi = yield* collectCandidates(["pi"]);
+      candidates = [...cached.candidates.filter(({ source }) => source !== "pi"), ...pi.candidates];
+    }
 
     // The scan counts a linked worktree's sessions toward its main checkout, so import them with it.
     const candidateDirectories = candidates.flatMap((candidate) => {
