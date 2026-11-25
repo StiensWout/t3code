@@ -1010,20 +1010,15 @@ function TerminalSessionViewport({
             }
             return false;
           },
-          // Recovery can outlive the viewport. Use metadata so it never attaches a size-bearing view.
-          async () => {
+          // A retry uses the input's current viewport, which can differ from the one that opened the paste.
+          async (readSession) => {
             const pid = session.summary?.pid ?? null;
-            if (!canWriteInput()) return false;
-            const metadata = appAtomRegistry.get(
-              terminalEnvironment.metadata({ environmentId, input: null }),
-            );
-            const current = AsyncResult.getOrElse(metadata, () => []).find(
-              (summary) => summary.threadId === threadId && summary.terminalId === terminalId,
-            );
-            const currentPid = current?.pid ?? null;
+            const current = readSession?.();
+            if (!current) return false;
+            const currentPid = current.summary?.pid ?? null;
             if (currentPid === null) return false;
             if (pid !== null && currentPid !== pid) return true;
-            if (current?.status !== "running") return false;
+            if (writableSessionGeneration(current, canWriteInput()) === null) return false;
             const result = await writeInputChunk("\x1b[201~");
             if (result._tag === "Success") return true;
             if (!isAtomCommandInterrupted(result)) {
@@ -1034,6 +1029,7 @@ function TerminalSessionViewport({
           },
           () =>
             report(m(msg("Terminal paste interrupted. Paste again when the terminal is ready."))),
+          () => (terminalRef.current === terminal ? readInputSession() : null),
         );
       };
 
