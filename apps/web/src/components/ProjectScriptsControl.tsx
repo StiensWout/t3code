@@ -110,12 +110,13 @@ export default function ProjectScriptsControl({
   });
   const [editorRequest, setEditorRequest] = useState<ProjectScriptEditorRequest | null>(null);
   const editorRequestIdRef = React.useRef(0);
+  const refreshRequestIdRef = React.useRef(0);
   if (actionsMenuOpen.presentation !== presentation) {
     setActionsMenuOpen({ presentation, scripts: false, imports: false });
   }
   const openActionsMenu = (menus: { scripts: boolean; imports: boolean }) => {
     if (menus.scripts || menus.imports) {
-      editorRequestIdRef.current += 1;
+      refreshRequestIdRef.current += 1;
       void onRefreshFileScripts?.();
     }
     setActionsMenuOpen({ presentation, ...menus });
@@ -139,7 +140,7 @@ export default function ProjectScriptsControl({
 
   const showRefreshedActions = useStableCallback(
     (requestId: number, refreshedScripts: ReadonlyArray<T3ProjectFileScript>) => {
-      if (requestId !== editorRequestIdRef.current) return;
+      if (requestId !== refreshRequestIdRef.current) return;
       if (refreshedScripts.some(isImportable)) {
         setActionsMenuOpen({
           presentation,
@@ -157,7 +158,7 @@ export default function ProjectScriptsControl({
       openAddDialog();
       return;
     }
-    const requestId = ++editorRequestIdRef.current;
+    const requestId = ++refreshRequestIdRef.current;
     showRefreshedActions(requestId, await onRefreshFileScripts());
   };
 
