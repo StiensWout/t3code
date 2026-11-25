@@ -700,12 +700,14 @@ const hasMissingLinuxShellInterpreter = Effect.fn("terminal.hasMissingLinuxShell
     const header = yield* fileSystem.open(executable, { flag: "r" }).pipe(
       Effect.flatMap((file) => file.readAlloc(headerSize)),
       Effect.scoped,
-      Effect.orElseSucceed(() => undefined),
+      Effect.orElseSucceed(() => Option.none()),
     );
-    if (!header) return false;
+    if (Option.isNone(header)) return false;
 
-    const text = new TextDecoder().decode(header);
-    const shebang = header.length < headerSize ? text + "\0" : text;
+    const bytes = header.value;
+    if (bytes[0] !== 0x23 || bytes[1] !== 0x21) return false;
+    const text = new TextDecoder().decode(bytes);
+    const shebang = bytes.length < headerSize ? text + "\0" : text;
     const interpreter = /^#![ \t]*(\/[^ \t\n\0]+)(?=[ \t\n\0])/.exec(shebang)?.[1];
     if (!interpreter || interpreter.includes("\uFFFD")) return false;
 
