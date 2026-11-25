@@ -108,17 +108,27 @@ export function skipTerminalSnapshotContinuation(state: number, data: string) {
   }
 
   const escape = data.indexOf("\u001b");
-  const prefix = escape < 0 ? data : data.slice(0, escape);
-  const end = terminalSequenceEnd(state, prefix);
-  const next = terminalSequenceStateAfter(state, prefix, 0, end);
-  if (next === TERMINAL_SEQUENCE_GROUND || escape < 0) {
-    return { state: next, data: data.slice(end) };
+  const limit = escape < 0 ? data.length : escape;
+  let end = 0;
+  let controls = "";
+  while (end < limit && state !== TERMINAL_SEQUENCE_GROUND) {
+    const unit = data.charCodeAt(end);
+    const next = nextTerminalSequenceState(state, unit);
+    // CSI executes C0 controls as they arrive. CAN and SUB cancel it instead.
+    if ((state & 7) === SEQUENCE_CSI && next === SEQUENCE_CSI && unit < 0x20) {
+      controls += data.charAt(end);
+    }
+    state = next;
+    end += 1;
+  }
+  if (state === TERMINAL_SEQUENCE_GROUND || escape < 0) {
+    return { state, data: controls + data.slice(end) };
   }
   // Hold a final ESC until we know whether it starts a new sequence or completes ST.
-  if (escape + 1 === data.length) return { state: SEQUENCE_ESCAPE, data: "" };
+  if (escape + 1 === data.length) return { state: SEQUENCE_ESCAPE, data: controls };
   return {
     state: TERMINAL_SEQUENCE_GROUND,
-    data: data.slice(data[escape + 1] === "\\" ? escape + 2 : escape),
+    data: controls + data.slice(data[escape + 1] === "\\" ? escape + 2 : escape),
   };
 }
 
