@@ -390,9 +390,6 @@ function* table(node: XmlNode): Generator<TextPart, void> {
     yield* paragraphs(caption);
     yield LINE_START;
   }
-  const grid =
-    node.name === "tbl" ? children(node).find((child) => child.name === "tblGrid") : undefined;
-  const gridWidth = grid && children(grid).filter((child) => child.name === "gridCol").length;
   let rowCount = 0;
   for (const row of all(node, ["tr", "table-row"], ["caption"])) {
     // Word nests a cell inside w:sdt when a content control wraps the whole cell.
@@ -407,9 +404,7 @@ function* table(node: XmlNode): Generator<TextPart, void> {
     const gridBefore = children(trPr)
       .find((child) => child.name === "gridBefore")
       ?.attrs.val?.trim();
-    const offset = gridBefore && /^\+?[0-9]+$/.test(gridBefore) ? Number(gridBefore) : 0;
-    // WordprocessingML ignores offsets larger than the declared table grid.
-    const leadingTabs = gridWidth !== undefined && offset > gridWidth ? 0 : offset;
+    const leadingTabs = gridBefore && /^\+?[0-9]+$/.test(gridBefore) ? Number(gridBefore) : 0;
     const repeat = repeatCount(row.attrs["number-rows-repeated"]);
     for (let index = 0; index < repeat; index++) {
       if (++rowCount > 10_000) throw new Truncation("Row limit");
