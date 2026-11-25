@@ -16,6 +16,7 @@ export interface T3ProjectFileState {
   status: "loading" | "missing" | "invalid" | "valid";
   file: T3ProjectFile | null;
   scripts: ReadonlyArray<T3ProjectFileScript>;
+  refresh: () => void;
   refreshScripts: () => Promise<ReadonlyArray<T3ProjectFileScript>>;
 }
 
@@ -33,22 +34,23 @@ export function useT3ProjectFileState(
     const file = await readT3ProjectFile(environmentId, cwd);
     return file?.scripts ?? NO_SCRIPTS;
   };
+  const refreshActions = { refresh: query.refresh, refreshScripts };
   if (contents === null) {
     return {
       status: isPending ? "loading" : "missing",
       file: null,
       scripts: NO_SCRIPTS,
-      refreshScripts,
+      ...refreshActions,
     } as const;
   }
   const file = parseT3ProjectFile(contents);
   if (file === null) {
-    return { status: "invalid", file: null, scripts: NO_SCRIPTS, refreshScripts } as const;
+    return { status: "invalid", file: null, scripts: NO_SCRIPTS, ...refreshActions } as const;
   }
   return {
     status: "valid",
     file,
     scripts: file.scripts ?? NO_SCRIPTS,
-    refreshScripts,
+    ...refreshActions,
   } as const;
 }

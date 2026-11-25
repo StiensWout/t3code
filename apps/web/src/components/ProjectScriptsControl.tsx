@@ -70,6 +70,7 @@ interface ProjectScriptsControlProps {
   environmentId: EnvironmentId;
   scripts: ReadonlyArray<ProjectScript>;
   fileScripts?: ReadonlyArray<T3ProjectFileScript>;
+  onActionsMenuOpen?: () => void;
   onRefreshFileScripts?: () => Promise<ReadonlyArray<T3ProjectFileScript>>;
   preferredScriptId?: string | null;
   onRunScript?: ((script: ProjectScript) => void) | undefined;
@@ -88,6 +89,7 @@ export default function ProjectScriptsControl({
   environmentId,
   scripts,
   fileScripts = NO_FILE_SCRIPTS,
+  onActionsMenuOpen,
   onRefreshFileScripts,
   preferredScriptId = null,
   onRunScript,
@@ -117,7 +119,7 @@ export default function ProjectScriptsControl({
   const openActionsMenu = (menus: { scripts: boolean; imports: boolean }) => {
     if (menus.scripts || menus.imports) {
       refreshRequestIdRef.current += 1;
-      void onRefreshFileScripts?.();
+      onActionsMenuOpen?.();
     }
     setActionsMenuOpen({ presentation, ...menus });
   };
