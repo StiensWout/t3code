@@ -171,6 +171,7 @@ const decodePiEntryLinks = Schema.decodeUnknownOption(
 const selectTranscriptPath = createTranscriptJsonSelector(TranscriptRecord);
 const selectPiTranscriptMetadataPath: typeof selectTranscriptPath = (path) =>
   !(path[0] === "message" && path[1] === "content") && selectTranscriptPath(path);
+const isTranscriptJsonLimitError = Schema.is(TranscriptJsonLimitError);
 // Only the fields extractCwd reads, so a cwd record carrying a large image stays small in memory.
 const selectCwdPath = createTranscriptJsonSelector(
   Schema.Struct({
@@ -1399,7 +1400,7 @@ export const make = Effect.gen(function* () {
                   return read(full);
                 } catch (cause) {
                   if (
-                    !(cause instanceof TranscriptJsonLimitError) ||
+                    !isTranscriptJsonLimitError(cause) ||
                     historyBytes + recordBytes <= MAX_IMPORT_HISTORY_BYTES
                   ) {
                     throw cause;
