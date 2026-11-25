@@ -1,4 +1,5 @@
 import {
+  replayTrimmedTerminalOutput,
   retainTerminalSnapshotHistory,
   skipTerminalSnapshotContinuation,
   TERMINAL_SEQUENCE_GROUND,
@@ -313,10 +314,10 @@ function clearOutput(current: TerminalOutputState, maxBufferBytes: number): Term
   return { ...cleared, textStartOffset: cleared.nextOffset };
 }
 
-/** Everything a fresh emulator replays: retained output from outside any control sequence. */
+/** Everything a fresh emulator can replay from the retained buffer. */
 export function terminalOutputReplay(output: TerminalOutputState): string {
   const text = output.chunks.map((chunk) => chunk.data).join("");
-  return text.slice(terminalSequenceEnd(output.sequenceState, text));
+  return replayTrimmedTerminalOutput(output.sequenceState, text).data;
 }
 
 /** The output as plain text, for surfaces that do not interpret escape sequences. */
@@ -344,14 +345,11 @@ export function readTerminalOutputUpdate(
     cursor.offset < (firstChunk?.startOffset ?? output.nextOffset)
   ) {
     const text = output.chunks.map((chunk) => chunk.data).join("");
-    const start = terminalSequenceEnd(output.sequenceState, text);
+    const replay = replayTrimmedTerminalOutput(output.sequenceState, text);
     return {
       type: "reset",
-      data: text.slice(start),
-      cursor: {
-        ...position,
-        sequenceState: terminalSequenceStateAfter(output.sequenceState, text, 0, start),
-      },
+      data: replay.data,
+      cursor: { ...position, sequenceState: replay.state },
     };
   }
 
@@ -366,15 +364,12 @@ export function readTerminalOutputUpdate(
     .slice(firstUnread)
     .map((chunk) => chunk.data.slice(Math.max(0, cursor.offset - chunk.startOffset)))
     .join("");
-  const start = terminalSequenceEnd(cursor.sequenceState, text);
-  const nextCursor = {
-    ...position,
-    sequenceState: terminalSequenceStateAfter(cursor.sequenceState, text, 0, start),
-  };
-  if (start === text.length) {
+  const replay = replayTrimmedTerminalOutput(cursor.sequenceState, text);
+  const nextCursor = { ...position, sequenceState: replay.state };
+  if (replay.data.length === 0) {
     return { type: "none", cursor: nextCursor };
   }
-  return { type: "append", data: text.slice(start), cursor: nextCursor };
+  return { type: "append", data: replay.data, cursor: nextCursor };
 }
 
 export { appendOutput, clearOutput, resetOutput };

@@ -97,6 +97,23 @@ export function terminalSequenceEnd(state: number, text: string): number {
   return index;
 }
 
+/** Replay a buffer whose beginning cut through a control sequence. */
+export function replayTrimmedTerminalOutput(state: number, data: string) {
+  let end = 0;
+  let controls = "";
+  while (end < data.length && state !== TERMINAL_SEQUENCE_GROUND) {
+    const unit = data.charCodeAt(end);
+    const mode = state & 7;
+    // Ghostty executes 0x00–0x0F in CSI and ESC intermediate sequences.
+    if (unit < 0x10 && (mode === SEQUENCE_CSI || mode === SEQUENCE_ESCAPE_INTERMEDIATE)) {
+      controls += data.charAt(end);
+    }
+    state = nextTerminalSequenceState(state, unit);
+    end += 1;
+  }
+  return { state, data: controls + data.slice(end) };
+}
+
 /** Skip the continuation of an omitted snapshot prefix, retaining any new escape sequence. */
 export function skipTerminalSnapshotContinuation(state: number, data: string) {
   if (data.length === 0) return { state, data };
@@ -108,27 +125,16 @@ export function skipTerminalSnapshotContinuation(state: number, data: string) {
   }
 
   const escape = data.indexOf("\u001b");
-  const limit = escape < 0 ? data.length : escape;
-  let end = 0;
-  let controls = "";
-  while (end < limit && state !== TERMINAL_SEQUENCE_GROUND) {
-    const unit = data.charCodeAt(end);
-    const next = nextTerminalSequenceState(state, unit);
-    // CSI executes C0 controls as they arrive. CAN and SUB cancel it instead.
-    if ((state & 7) === SEQUENCE_CSI && next === SEQUENCE_CSI && unit < 0x20) {
-      controls += data.charAt(end);
-    }
-    state = next;
-    end += 1;
-  }
-  if (state === TERMINAL_SEQUENCE_GROUND || escape < 0) {
-    return { state, data: controls + data.slice(end) };
+  if (escape < 0) return replayTrimmedTerminalOutput(state, data);
+  const prefix = replayTrimmedTerminalOutput(state, data.slice(0, escape));
+  if (prefix.state === TERMINAL_SEQUENCE_GROUND) {
+    return { state: prefix.state, data: prefix.data + data.slice(escape) };
   }
   // Hold a final ESC until we know whether it starts a new sequence or completes ST.
-  if (escape + 1 === data.length) return { state: SEQUENCE_ESCAPE, data: controls };
+  if (escape + 1 === data.length) return { state: SEQUENCE_ESCAPE, data: prefix.data };
   return {
     state: TERMINAL_SEQUENCE_GROUND,
-    data: controls + data.slice(data[escape + 1] === "\\" ? escape + 2 : escape),
+    data: prefix.data + data.slice(data[escape + 1] === "\\" ? escape + 2 : escape),
   };
 }
 

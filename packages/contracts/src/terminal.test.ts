@@ -4,10 +4,12 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   chunkTerminalWrite,
   DEFAULT_TERMINAL_ID,
+  skipTerminalSnapshotContinuation,
   TERMINAL_WRITE_MAX_LENGTH,
   TerminalError,
   TerminalOpenInput,
   TerminalProviderEnvironmentError,
+  terminalSequenceStateAfter,
 } from "./terminal.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 
@@ -69,5 +71,16 @@ describe("chunkTerminalWrite", () => {
     expect(chunks[0]).toHaveLength(TERMINAL_WRITE_MAX_LENGTH - 1);
     expect(chunks[1]).toBe("😀tail");
     expect(chunks.join("")).toBe(data);
+  });
+});
+
+describe("omitted terminal sequence continuations", () => {
+  it.each([
+    ["CSI", "\u001b[", "1\u0010\rmnext"],
+    ["ESC intermediate", "\u001b ", "\rFnext"],
+  ])("preserves executed controls inside %s", (_name, prefix, continuation) => {
+    expect(
+      skipTerminalSnapshotContinuation(terminalSequenceStateAfter(0, prefix), continuation),
+    ).toEqual({ state: 0, data: "\rnext" });
   });
 });
