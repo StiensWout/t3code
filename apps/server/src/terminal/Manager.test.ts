@@ -1136,6 +1136,52 @@ it.layer(
     }).pipe(Effect.provide(TestClock.layer())),
   );
 
+  it.effect.skipIf(HostProcess.Platform.defaultValue() !== "linux")(
+    "detects a builtin-only Bash job running in the background",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const runner = yield* ProcessRunner.ProcessRunner;
+        const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-terminal-background-" });
+        const fifo = path.join(baseDir, "fifo");
+        const created = yield* runner.run({ command: "mkfifo", args: [fifo] });
+        expect(created.code).toBe(0);
+        const ptyAdapter = yield* PtyAdapter.PtyAdapter.pipe(Effect.provide(NodePtyAdapter.layer));
+        const manager = yield* TerminalManager.makeWithOptions({
+          logsDir: path.join(baseDir, "logs"),
+          ptyAdapter,
+          shellResolver: () => "/bin/bash",
+          env: { ...process.env, HOME: baseDir, PROMPT_COMMAND: "", PS1: "test-prompt> " },
+        });
+        const ready = yield* Deferred.make<void>();
+        let output = "";
+        const unsubscribe = yield* manager.subscribe((event) => {
+          if (event.type !== "output") return Effect.void;
+          output += event.data;
+          return /background-ready-\d+/.test(output)
+            ? Deferred.succeed(ready, undefined).pipe(Effect.asVoid)
+            : Effect.void;
+        });
+        yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
+        yield* manager.open(openInput({ cwd: baseDir }));
+        yield* manager.write({
+          threadId: "thread-1",
+          terminalId: DEFAULT_TERMINAL_ID,
+          data: "(printf 'background-ready-%s\\n' \"$BASHPID\"; read -rt 30 -u 9 || :) 9<>fifo &\r",
+        });
+        yield* Deferred.await(ready);
+        const active = yield* manager.hasActiveSubprocess({ threadId: "thread-1" });
+        yield* manager.write({
+          threadId: "thread-1",
+          terminalId: DEFAULT_TERMINAL_ID,
+          data: "kill $!\r",
+        });
+
+        expect(active).toBe(true);
+      }),
+  );
+
   it.effect("keeps a terminal whose shell was replaced by exec open on settlement", () =>
     Effect.gen(function* () {
       const { manager, ptyAdapter } = yield* createManager(5, {
