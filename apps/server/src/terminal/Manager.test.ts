@@ -2563,6 +2563,57 @@ it.layer(
       }),
   );
 
+  it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "starts a configured shell with a literal backslash in its name through PATH",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-real-shell-" });
+        const startup = path.join(baseDir, "startup");
+        yield* fs.writeFileString(startup, 'printf "active-shell:%s\n" "$TERMINAL_REPRO_SHELL"\n');
+        const toolsDir = path.join(baseDir, "tools");
+        yield* fs.makeDirectory(toolsDir);
+        const shellName = String.raw`custom\shell`;
+        const shellPath = path.join(toolsDir, shellName);
+        yield* fs.writeFileString(shellPath, "#!/bin/sh\nexport TERMINAL_REPRO_SHELL=configured\nexec /bin/sh\n");
+        yield* fs.chmod(shellPath, 0o755);
+
+        const ptyAdapter = yield* PtyAdapter.PtyAdapter.pipe(Effect.provide(NodePtyAdapter.layer));
+        const manager = yield* TerminalManager.makeWithOptions({
+          logsDir: path.join(baseDir, "logs"),
+          ptyAdapter,
+          env: {
+            SHELL: "/bin/sh",
+            PATH: toolsDir,
+            ENV: startup,
+            TERMINAL_REPRO_SHELL: "fallback",
+            T3CODE_TERMINAL_SHELL: shellName,
+          },
+        });
+        const outcome = yield* Deferred.make<string>();
+        let output = "";
+        const unsubscribe = yield* manager.subscribe((event) => {
+          if (event.type === "exited") {
+            return Deferred.succeed(outcome, "exited").pipe(Effect.asVoid);
+          }
+          if (event.type === "error") {
+            return Deferred.succeed(outcome, event.message).pipe(Effect.asVoid);
+          }
+          if (event.type === "output") {
+            output += event.data;
+            const match = /active-shell:(configured|fallback)\r?\n/.exec(output);
+            if (match?.[1]) return Deferred.succeed(outcome, match[1]).pipe(Effect.asVoid);
+          }
+          return Effect.void;
+        });
+        yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
+
+        yield* manager.open(openInput({ cwd: baseDir }));
+        expect(yield* Deferred.await(outcome)).toBe("configured");
+      }),
+  );
+
   it.effect("preserves Windows Path casing when appending managed ACP binaries", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
