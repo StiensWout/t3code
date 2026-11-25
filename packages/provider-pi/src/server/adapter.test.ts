@@ -1,4 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
+import { expect } from "vite-plus/test";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   CheckpointId,
@@ -2111,6 +2112,39 @@ describe("PiAdapterV2", () => {
       const exit = yield* Fiber.join(drained);
       assert.isTrue(Exit.isSuccess(exit));
       assert.deepEqual(statuses.at(-1), { status: "stopped", lastError: null });
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("reports a nonzero Pi exit as a session error while idle", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const exited = yield* Deferred.make<ChildProcessSpawner.ExitCode>();
+      const { runtime, takeEvent } = yield* openRuntime({
+        ...fake,
+        spawner: ChildProcessSpawner.make((command) =>
+          fake.spawner.spawn(command).pipe(
+            Effect.map((child) =>
+              ChildProcessSpawner.makeHandle({ ...child, exitCode: Deferred.await(exited) }),
+            ),
+          ),
+        ),
+      });
+      yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* Deferred.succeed(exited, ChildProcessSpawner.ExitCode(1));
+      yield* fake.closeStdout;
+      const event = yield* takeEvent(
+        (candidate) =>
+          candidate.type === "provider_session.updated" &&
+          (candidate.providerSession.status === "stopped" ||
+            candidate.providerSession.status === "error"),
+      );
+      assert(event.type === "provider_session.updated");
+      expect(event.providerSession.status).toBe("error");
+      expect(event.providerSession.lastError).toMatch(/exit/i);
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
