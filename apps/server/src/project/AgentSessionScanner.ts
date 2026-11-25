@@ -1855,7 +1855,6 @@ export const make = Effect.gen(function* () {
     );
     const raw: Array<RawCandidate> = [];
     let truncated = false;
-    let metadataTruncated = false;
 
     for (const source of ["claudeAgent", "codex", "pi"] as const) {
       const instances: Array<{
@@ -2001,17 +2000,14 @@ export const make = Effect.gen(function* () {
           importedByFile,
         )),
       );
-      metadataTruncated ||= metadataBudget.truncated;
+      truncated ||= metadataBudget.truncated;
     }
 
-    return { candidates: raw, truncated: truncated || metadataTruncated, metadataTruncated };
+    return { candidates: raw, truncated };
   });
 
-  let cachedCandidates: Effect.Success<ReturnType<typeof collectCandidates>> | null = null;
-
   const scan: AgentSessionScanner["Service"]["scan"] = Effect.gen(function* () {
-    cachedCandidates = yield* collectCandidates();
-    const { candidates: raw, truncated } = cachedCandidates;
+    const { candidates: raw, truncated } = yield* collectCandidates();
 
     const merged = new Map<
       string,
@@ -2120,11 +2116,7 @@ export const make = Effect.gen(function* () {
     const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
     const cutoffMs = nowMs - RECENT_THREAD_WINDOW_MS;
 
-    // Imports recorded since a budget-truncated collection can free budget for transcripts it cut off.
-    if (cachedCandidates === null || cachedCandidates.metadataTruncated) {
-      cachedCandidates = yield* collectCandidates();
-    }
-    const { candidates } = cachedCandidates;
+    const { candidates } = yield* collectCandidates();
 
     // The scan counts a linked worktree's sessions toward its main checkout, so import them with it.
     const candidateDirectories = candidates.flatMap((candidate) => {
