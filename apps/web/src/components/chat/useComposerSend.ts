@@ -1693,11 +1693,11 @@ export function useComposerSend(input: ComposerSendInput) {
       optimisticBlobPreviews.release(optimisticMessage);
       const draftStore = useComposerDraftStore.getState();
       if (composerDraftHasUserContent(draftStore.getComposerDraft(composerDraftTarget))) {
+        // A draft typed meanwhile keeps the composer, so the failed text stays reachable here.
         draftStore.addImages(
           composerDraftTarget,
           sendSnapshot.images.map(cloneComposerImageForRetry),
         );
-        // Keep the failed text reachable without changing what the user typed meanwhile.
         const failedText = sendSnapshot.draftText;
         const hasText = failedText.trim().length > 0;
         // An image-only message has nothing to copy, but its failure still needs a notice.
