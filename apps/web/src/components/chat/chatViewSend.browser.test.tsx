@@ -13,7 +13,6 @@ import { DraftId, useComposerDraftStore } from "../../composerDraftStore";
 import { ToastProvider } from "../ui/toast";
 import { ComposerBannerStack } from "./ComposerBannerStack";
 import { useFailedAttachmentsBanner } from "./ComposerFailedAttachments";
-
 import { restoreFailedSendAttachments } from "./chatViewSend";
 
 function RecoveryBanner({ target }: { target: Parameters<typeof useFailedAttachmentsBanner>[0] }) {
