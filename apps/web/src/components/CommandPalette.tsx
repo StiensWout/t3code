@@ -60,7 +60,7 @@ import {
   type ScopedProjectRef,
 } from "@t3tools/contracts";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
-import { useLocation, useNavigate } from "@tanstack/react-router";
+import { useLocation, useNavigate, useRouter } from "@tanstack/react-router";
 import {
   ArrowLeftIcon,
   BugIcon,
@@ -447,6 +447,7 @@ function OpenCommandPaletteDialog(props: {
   const gt = useGT();
   const messages = useMessages();
   const navigate = useNavigate();
+  const router = useRouter();
   const pathname = useLocation({ select: (location) => location.pathname });
   const { openChildSearch, setOpen } = props;
   // Keyed by palette session: the intent and restored search only seed this
@@ -599,10 +600,14 @@ function OpenCommandPaletteDialog(props: {
     await navigate({ to: "/draft/$draftId", params: { draftId: addProjectDraftId } });
     return true;
   };
-  const openAddedProject = async (projectRef: ScopedProjectRef): Promise<void> => {
+  const openAddedProject = async (
+    projectRef: ScopedProjectRef,
+    originLocation?: typeof router.history.location,
+  ): Promise<void> => {
     // A moved draft is keyed from the project record, so wait for it to reach this client.
     const project =
       addProjectDraftId === null ? null : await waitForProject(projectRef, 3_000).catch(() => null);
+    if (originLocation !== undefined && router.history.location !== originLocation) return;
     if (project !== null && (await moveDraftToAddedProject(project))) return;
     await handleNewThread(projectRef);
   };
@@ -2349,6 +2354,7 @@ function OpenCommandPaletteDialog(props: {
       return;
     }
 
+    const originLocation = router.history.location;
     setIsRemoteProjectCloning(true);
     const startResult = await startProjectClone({
       environmentId: addProjectCloneFlow.environmentId,
@@ -2383,7 +2389,9 @@ function OpenCommandPaletteDialog(props: {
       startResult.value.projectId,
     );
     await waitForProject(projectRef, 3_000).catch(() => null);
-    const navigationResult = await settlePromise(() => openAddedProject(projectRef));
+    const navigationResult = await settlePromise(() =>
+      openAddedProject(projectRef, originLocation),
+    );
     if (navigationResult._tag === "Failure") {
       const error = squashAtomCommandFailure(navigationResult);
       toastManager.add(
