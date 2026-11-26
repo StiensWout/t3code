@@ -24,7 +24,7 @@ import {
   promptLinkPullRequestUrl,
 } from "@t3tools/shared/promptLinks";
 import { useAtomValue } from "@effect/atom-react";
-import { useLocation, useNavigate } from "@tanstack/react-router";
+import { useLocation, useNavigate, useRouter } from "@tanstack/react-router";
 import { Atom } from "effect/reactivity";
 import { T, useGT } from "gt-react";
 import { type ReactNode, useEffect, useEffectEvent, useRef, useState } from "react";
@@ -108,6 +108,7 @@ export function NewThreadLinkView({ link }: { readonly link: NewThreadLink }) {
   const locationKey = useLocation({ select: (location) => location.state.__TSR_key ?? "" });
   const gt = useGT();
   const navigate = useNavigate();
+  const router = useRouter();
   const ready = useAtomValue(allReachableShellsLiveAtom);
   const projects = useProjects();
   const threads = useThreadShells();
@@ -223,6 +224,7 @@ export function NewThreadLinkView({ link }: { readonly link: NewThreadLink }) {
       });
       return;
     }
+    const originLocation = router.history.location;
     setState({ status: "opening" });
     const remoteUrl = `https://github.com/${repository.owner}/${repository.name}.git`;
     const settings = serverConfig.settings;
@@ -252,7 +254,9 @@ export function NewThreadLinkView({ link }: { readonly link: NewThreadLink }) {
           }),
         );
       }
-      setState({ status: "missing-repository", repository });
+      if (router.history.location === originLocation) {
+        setState({ status: "missing-repository", repository });
+      }
       return;
     }
     void suggestAppAccessForRemote(
@@ -263,6 +267,7 @@ export function NewThreadLinkView({ link }: { readonly link: NewThreadLink }) {
       scopeProjectRef(environmentId, result.value.projectId),
       5_000,
     ).catch(() => null);
+    if (router.history.location !== originLocation) return;
     if (project === null) {
       setState({
         status: "failed",

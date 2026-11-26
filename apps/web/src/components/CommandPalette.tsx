@@ -602,16 +602,16 @@ function OpenCommandPaletteDialog(props: {
   };
   const openAddedProject = async (
     projectRef: ScopedProjectRef,
-    originLocation?: typeof router.history.location,
+    originLocation: typeof router.history.location,
   ): Promise<void> => {
     // A moved draft is keyed from the project record, so wait for it to reach this client.
     const project =
       addProjectDraftId === null ? null : await waitForProject(projectRef, 3_000).catch(() => null);
-    if (originLocation !== undefined && router.history.location !== originLocation) return;
+    if (router.history.location !== originLocation) return;
     if (project !== null && (await moveDraftToAddedProject(project))) return;
     await handleNewThread(projectRef);
   };
-  const createNewProject = useNewProject(openAddedProject);
+  const createNewProject = useNewProject();
   const cloneLookupGeneration = useRef(0);
   const [isRemoteProjectLookingUp, setIsRemoteProjectLookingUp] = useState(false);
   const [isRemoteProjectCloning, setIsRemoteProjectCloning] = useState(false);
@@ -2098,6 +2098,7 @@ function OpenCommandPaletteDialog(props: {
       return;
     }
     const projectId = newProjectId();
+    const originLocation = router.history.location;
     const createResult = await createProject({
       environmentId: input.environmentId,
       input: {
@@ -2123,7 +2124,7 @@ function OpenCommandPaletteDialog(props: {
     }
 
     const navigationResult = await settlePromise(() =>
-      openAddedProject(scopeProjectRef(input.environmentId, projectId)),
+      openAddedProject(scopeProjectRef(input.environmentId, projectId), originLocation),
     );
     if (navigationResult._tag === "Failure") {
       const error = squashAtomCommandFailure(navigationResult);
@@ -2173,11 +2174,13 @@ function OpenCommandPaletteDialog(props: {
     }
     newProjectSubmittingRef.current = true;
     setIsCreatingNewProject(true);
+    const originLocation = router.history.location;
     const created = await settlePromise(() =>
       createNewProject({
         environmentId: newProjectFlow.environmentId,
         name: newProjectName,
         publishTo: newProjectPublishes ? newProjectPublishTarget : null,
+        openProject: (projectRef) => openAddedProject(projectRef, originLocation),
       }),
     );
     newProjectSubmittingRef.current = false;
