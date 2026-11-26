@@ -1249,7 +1249,7 @@ export async function extractDocumentText(path: string, extension: string): Prom
   }
   const firstText = result.search(/\S/u);
   // Keep column separators on the first visible line even when trimming document whitespace.
-  const firstLine = firstText < 0 ? result.length : result.lastIndexOf("\n", firstText) + 1;
+  const firstLine = result.lastIndexOf("\n", firstText) + 1;
   const leadingGap = columnGapOffsets.find((offset) => offset >= firstLine && offset < firstText);
   result = result
     .slice(leadingGap ?? Math.max(0, firstText))
