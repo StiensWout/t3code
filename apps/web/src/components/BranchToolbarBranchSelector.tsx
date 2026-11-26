@@ -244,7 +244,9 @@ export function BranchToolbarBranchSelector({
     const currentDraft = useComposerDraftStore.getState().getDraftThread(draftId ?? threadRef);
     if (
       currentDraft?.environmentId !== environmentId ||
-      currentDraft.projectId !== activeProject.id
+      currentDraft.projectId !== activeProject.id ||
+      currentDraft.worktreePath !== draftThread?.worktreePath ||
+      currentDraft.envMode !== draftThread?.envMode
     ) {
       return false;
     }
