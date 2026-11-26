@@ -880,6 +880,107 @@ it.layer(
     }),
   );
 
+  // This probe runs as the POSIX terminal's foreground program.
+  it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "delivers only the remaining viewer's terminal reply after a split paste",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "t3-terminal-reply-" });
+        const shell = path.join(cwd, "cursor-query");
+        yield* fs.writeFileString(
+          shell,
+          String.raw`#!/usr/bin/env node
+process.stdin.setRawMode(true);
+let input = "";
+let asked = false;
+process.stdin.on("data", (chunk) => {
+  input += chunk.toString();
+  if (!asked && input.includes("partial")) {
+    asked = true;
+    process.stdout.write("\x1b[6n");
+  }
+  if (input.includes("finished")) {
+    const replies = input.match(/\x1b\[\d+;\d+R/g) ?? [];
+    process.stdout.write("Cursor replies received: " + replies.length + "\r\n");
+  }
+});
+process.stdout.write("Cursor probe ready\r\n");
+`,
+        );
+        yield* fs.chmod(shell, 0o755);
+        const ptyAdapter = yield* PtyAdapter.PtyAdapter.pipe(Effect.provide(NodePtyAdapter.layer));
+        const manager = yield* TerminalManager.makeWithOptions({
+          logsDir: path.join(cwd, "logs"),
+          ptyAdapter,
+          shellResolver: () => shell,
+          env: { ...process.env, T3CODE_TERMINAL_SHELL: shell },
+        });
+        const input = openInput({ cwd });
+        const target = { threadId: input.threadId, terminalId: input.terminalId };
+        const ready = yield* Deferred.make<void>();
+        const asked = yield* Deferred.make<void>();
+        const result = yield* Deferred.make<string>();
+        let output = "";
+        const detachFirst = yield* manager.attachStream(
+          input,
+          (event) =>
+            Effect.gen(function* () {
+              if (event.type !== "output") return;
+              output += event.data;
+              if (output.includes("Cursor probe ready")) yield* Deferred.succeed(ready, undefined);
+              if (output.includes("\x1b[6n")) yield* Deferred.succeed(asked, undefined);
+            }),
+          undefined,
+          "first",
+        );
+        let secondOutput = "";
+        const detachSecond = yield* manager.attachStream(
+          input,
+          (event) => {
+            if (event.type !== "output") return Effect.void;
+            secondOutput += event.data;
+            const line = secondOutput.match(/Cursor replies received: \d+\r*\n/)?.[0].trimEnd();
+            return line ? Deferred.succeed(result, line).pipe(Effect.asVoid) : Effect.void;
+          },
+          undefined,
+          "second",
+        );
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            detachFirst();
+            detachSecond();
+          }),
+        );
+
+        yield* Deferred.await(ready);
+        yield* manager.write(
+          { ...target, data: TERMINAL_BRACKETED_PASTE_START + "partial", bracketedPaste: "start" },
+          "second",
+        );
+        yield* Deferred.await(asked);
+        const reply = { ...target, data: "\x1b[2;3R", reply: true } as const;
+        const first = yield* manager
+          .write(reply, "first")
+          .pipe(Effect.forkScoped({ startImmediately: true }));
+        detachFirst();
+        const second = yield* manager
+          .write(reply, "second")
+          .pipe(Effect.forkScoped({ startImmediately: true }));
+
+        yield* manager.write(
+          { ...target, data: TERMINAL_BRACKETED_PASTE_END, bracketedPaste: "end" },
+          "second",
+        );
+        yield* Fiber.join(first);
+        yield* Fiber.join(second);
+        yield* manager.write({ ...target, data: "finished" }, "second");
+
+        expect(yield* Deferred.await(result)).toBe("Cursor replies received: 1");
+      }),
+  );
+
   it.effect.each(["complete", "abort", "timeout", "close"] as const)(
     "releases pending terminal input after paste %s",
     (interruption) =>
