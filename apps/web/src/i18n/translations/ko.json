@@ -12948,8 +12948,8 @@
     },
     "개 더 보기"
   ],
-  "ef8c84b3940871f9": "Attachments from the failed message were added to your draft.",
-  "64e696c12a4c5994": "Attachments still waiting to be restored",
-  "9ef7b0d406cb0016": "Make room in the original draft, then restore the remaining attachments.",
-  "74373f36a6350383": "Restore attachments"
+  "ef8c84b3940871f9": "전송하지 못한 메시지의 첨부 파일을 초안에 추가했습니다.",
+  "64e696c12a4c5994": "아직 복원할 첨부 파일이 있습니다",
+  "b9b7d8738fe213d6": "이 초안에서 첨부 파일을 줄인 다음 나머지를 복원하세요.",
+  "74373f36a6350383": "첨부 파일 복원"
 }

@@ -1,78 +1,120 @@
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { EnvironmentId, PROVIDER_SEND_TURN_MAX_ATTACHMENTS, ThreadId } from "@t3tools/contracts";
+import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import {
+  EnvironmentId,
+  ProjectId,
+  PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
+  ThreadId,
+} from "@t3tools/contracts";
 import { expect, it, onTestFinished } from "vite-plus/test";
 import { page } from "vite-plus/test/browser";
 
 import { render } from "../../../test/render";
-import { useComposerDraftStore } from "../../composerDraftStore";
+import { DraftId, useComposerDraftStore } from "../../composerDraftStore";
 import { ToastProvider } from "../ui/toast";
+import { ComposerBannerStack } from "./ComposerBannerStack";
+import { useFailedAttachmentsBanner } from "./ComposerFailedAttachments";
+
 import { restoreFailedSendAttachments } from "./chatViewSend";
 
-it("restores failed images and files after making room in the newer draft", async () => {
-  const target = scopeThreadRef(EnvironmentId.make("test"), ThreadId.make("attachment-retry"));
-  const store = useComposerDraftStore.getState();
-  onTestFinished(() => store.clearComposerContent(target));
-  store.setPrompt(target, "Keep this new draft");
+function RecoveryBanner({ target }: { target: Parameters<typeof useFailedAttachmentsBanner>[0] }) {
+  const recovery = useFailedAttachmentsBanner(target);
+  return <ComposerBannerStack items={recovery ? [recovery] : []} />;
+}
 
-  const file = new File(["notes"], "notes.txt", { type: "text/plain" });
-  const attachment = {
-    type: "file" as const,
-    id: "failed-file",
-    name: file.name,
-    mimeType: file.type,
-    sizeBytes: file.size,
-    file,
-  };
-  const newerFiles = Array.from({ length: PROVIDER_SEND_TURN_MAX_ATTACHMENTS }, (_, index) => ({
-    ...attachment,
-    id: `new-file-${index}`,
-  }));
-  store.addFiles(target, newerFiles, { allowDuplicates: true });
+it.each(["promoted", "discarded"] as const)(
+  "recovers attachments from a %s draft",
+  async (transition) => {
+    const environment = EnvironmentId.make("test");
+    const thread = scopeThreadRef(environment, ThreadId.make(`attachment-retry-${transition}`));
+    const target = DraftId.make(`draft-${transition}`);
+    const store = useComposerDraftStore.getState();
+    onTestFinished(() => {
+      store.clearDraftThread(target);
+      store.clearComposerContent(thread);
+    });
+    store.setProjectDraftThreadId(scopeProjectRef(environment, ProjectId.make("project")), target, {
+      threadId: thread.threadId,
+    });
+    store.setPrompt(target, "Keep this new draft");
 
-  const screenshot = new File(
-    [
-      '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><rect width="16" height="16"/></svg>',
-    ],
-    "screenshot.svg",
-    { type: "image/svg+xml" },
-  );
-  const originalPreview = URL.createObjectURL(screenshot);
-  URL.revokeObjectURL(originalPreview);
-  await using _screen = await render(<ToastProvider>{null}</ToastProvider>);
-  restoreFailedSendAttachments(target, {
-    images: [
-      {
-        type: "image",
-        id: "failed-image",
-        name: screenshot.name,
-        mimeType: screenshot.type,
-        sizeBytes: screenshot.size,
-        file: screenshot,
-        previewUrl: originalPreview,
-      },
-    ],
-    files: [attachment],
-  });
+    const file = new File(["notes"], "notes.txt", { type: "text/plain" });
+    const attachment = {
+      type: "file" as const,
+      id: "failed-file",
+      name: file.name,
+      mimeType: file.type,
+      sizeBytes: file.size,
+      file,
+    };
+    const newerFiles = Array.from({ length: PROVIDER_SEND_TURN_MAX_ATTACHMENTS }, (_, index) => ({
+      ...attachment,
+      id: `new-file-${index}`,
+    }));
+    store.addFiles(target, newerFiles, { allowDuplicates: true });
 
-  expect(store.getComposerDraft(target)?.images).toEqual([]);
-  expect(store.getComposerDraft(target)?.files).toEqual(newerFiles);
-  const retry = page.getByRole("button", { name: "Restore attachments" });
-  await expect.element(retry).toBeVisible();
+    const screenshot = new File(
+      [
+        '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><rect width="16" height="16"/></svg>',
+      ],
+      "screenshot.svg",
+      { type: "image/svg+xml" },
+    );
+    const originalPreview = URL.createObjectURL(screenshot);
+    URL.revokeObjectURL(originalPreview);
+    await using screen = await render(
+      <ToastProvider>
+        <RecoveryBanner target={target} />
+      </ToastProvider>,
+    );
+    restoreFailedSendAttachments(target, {
+      images: [
+        {
+          type: "image",
+          id: "failed-image",
+          name: screenshot.name,
+          mimeType: screenshot.type,
+          sizeBytes: screenshot.size,
+          file: screenshot,
+          previewUrl: originalPreview,
+        },
+      ],
+      files: [attachment],
+    });
 
-  store.removeFile(target, "new-file-0");
-  await retry.click();
-  await expect.element(retry).toBeVisible();
-  store.removeFile(target, "new-file-1");
-  await retry.click();
+    expect(store.getComposerDraft(target)?.images).toEqual([]);
+    expect(store.getComposerDraft(target)?.files).toEqual(newerFiles);
+    const retry = page.getByRole("button", { name: "Restore attachments" });
+    await expect.element(retry).toBeVisible();
 
-  const previewUrl = store.getComposerDraft(target)?.images[0]?.previewUrl;
-  if (!previewUrl) throw new Error("Expected the recovered screenshot to have a preview");
-  onTestFinished(() => URL.revokeObjectURL(previewUrl));
-  const preview = new Image();
-  preview.src = previewUrl;
-  await preview.decode();
-  expect(preview.naturalWidth).toBe(16);
-  expect(store.getComposerDraft(target)?.prompt).toBe("Keep this new draft");
-  expect(store.getComposerDraft(target)?.files).toEqual([...newerFiles.slice(2), attachment]);
-  await expect.element(retry).not.toBeInTheDocument();
-});
+    if (transition === "promoted") {
+      store.markDraftThreadPromoting(target, thread);
+      store.finalizePromotedDraftThread(target);
+    } else {
+      store.clearDraftThread(target);
+      store.setPrompt(thread, "Keep this new draft");
+      store.addFiles(thread, newerFiles, { allowDuplicates: true });
+    }
+    await screen.rerender(
+      <ToastProvider>
+        <RecoveryBanner target={thread} />
+      </ToastProvider>,
+    );
+    store.removeFile(thread, "new-file-0");
+    await retry.click();
+    await expect.element(retry).toBeVisible();
+    store.removeFile(thread, "new-file-1");
+    await retry.click();
+
+    const previewUrl = store.getComposerDraft(thread)?.images[0]?.previewUrl;
+    if (!previewUrl) throw new Error("Expected the recovered screenshot to have a preview");
+    onTestFinished(() => URL.revokeObjectURL(previewUrl));
+    const preview = new Image();
+    preview.src = previewUrl;
+    await preview.decode();
+    expect(preview.naturalWidth).toBe(16);
+    expect(store.getComposerDraft(thread)?.prompt).toBe("Keep this new draft");
+    expect(store.getComposerDraft(thread)?.files).toEqual([...newerFiles.slice(2), attachment]);
+    await expect.element(retry).not.toBeInTheDocument();
+    expect(store.getComposerDraft(target)).toBeNull();
+  },
+);

@@ -13010,8 +13010,8 @@
     },
     " más en Elementos vinculados"
   ],
-  "ef8c84b3940871f9": "Attachments from the failed message were added to your draft.",
-  "64e696c12a4c5994": "Attachments still waiting to be restored",
-  "9ef7b0d406cb0016": "Make room in the original draft, then restore the remaining attachments.",
-  "74373f36a6350383": "Restore attachments"
+  "ef8c84b3940871f9": "Los archivos adjuntos del mensaje que no se pudo enviar se añadieron al borrador.",
+  "64e696c12a4c5994": "Hay archivos adjuntos pendientes de restaurar",
+  "b9b7d8738fe213d6": "Libera espacio en este borrador y restaura los archivos adjuntos restantes.",
+  "74373f36a6350383": "Restaurar archivos adjuntos"
 }

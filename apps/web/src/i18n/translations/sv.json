@@ -13022,8 +13022,8 @@
     },
     " till i Länkade objekt"
   ],
-  "ef8c84b3940871f9": "Attachments from the failed message were added to your draft.",
-  "64e696c12a4c5994": "Attachments still waiting to be restored",
-  "9ef7b0d406cb0016": "Make room in the original draft, then restore the remaining attachments.",
-  "74373f36a6350383": "Restore attachments"
+  "ef8c84b3940871f9": "Bilagorna från meddelandet som inte kunde skickas lades till i utkastet.",
+  "64e696c12a4c5994": "Det finns bilagor kvar att återställa",
+  "b9b7d8738fe213d6": "Gör plats i det här utkastet och återställ sedan de återstående bilagorna.",
+  "74373f36a6350383": "Återställ bilagor"
 }

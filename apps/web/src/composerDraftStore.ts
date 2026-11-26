@@ -556,7 +556,14 @@ interface ProjectDraftSession extends DraftSessionState {
 
 export type ComposerThreadTarget = ScopedThreadRef | DraftId;
 
+export interface FailedComposerAttachments {
+  target: ComposerThreadTarget;
+  images: ComposerImageAttachment[];
+  files: ComposerFileAttachment[];
+}
+
 interface ComposerDraftStoreState {
+  failedComposerAttachments: readonly FailedComposerAttachments[];
   draftsByThreadKey: Record<string, ComposerThreadDraftState>;
   draftThreadsByThreadKey: Record<string, DraftThreadState>;
   logicalProjectDraftThreadKeyByLogicalProjectKey: Record<string, string>;
@@ -1685,9 +1692,9 @@ function getComposerDraftState(
 /** Where a draft lives now: its thread once promoted, or null once it was discarded. */
 export function resolveLiveComposerDraftTarget(
   target: ComposerThreadTarget,
+  state = composerDraftStore.getState(),
 ): ComposerThreadTarget | null {
   if (typeof target !== "string") return target;
-  const state = composerDraftStore.getState();
   const promoted = state.promotedDraftRedirects[target];
   if (promoted) return promoted;
   return state.draftThreadsByThreadKey[target] || state.draftsByThreadKey[target] ? target : null;
@@ -2852,6 +2859,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
         logicalProjectDraftThreadKeyByLogicalProjectKey: {},
         backgroundSubmissionThreadKeys: {},
         promotedDraftRedirects: {},
+        failedComposerAttachments: [],
         rewindingThreadKeys: new Set<string>(),
         stickyModelSelectionByProvider: {},
         stickyOptionsByModelByProvider: {},

@@ -31,6 +31,8 @@ import {
   type ComposerFileAttachment,
   type ComposerImageAttachment,
   type ComposerThreadTarget,
+  type FailedComposerAttachments,
+  resolveLiveComposerDraftTarget,
   useComposerDraftStore,
   DraftId,
 } from "../../composerDraftStore";
@@ -298,52 +300,68 @@ function withRestored<T>(
   return [...kept, ...restored.filter((item) => !kept.some((other) => key(other) === key(item)))];
 }
 
+function restoreFailedAttachments(
+  target: ComposerThreadTarget,
+  { images, files }: Pick<FailedComposerAttachments, "images" | "files">,
+) {
+  const store = useComposerDraftStore.getState();
+  const restoredImages = store.addImages(target, images.map(cloneComposerImageForRetry), {
+    allowDuplicates: true,
+  });
+  const restoredFiles = store.addFiles(target, files, { allowDuplicates: true });
+  if (restoredImages.length + restoredFiles.length > 0) {
+    toastManager.add({
+      type: "info",
+      title: m(msg("Attachments from the failed message were added to your draft.")),
+    });
+  }
+  const draft = store.getComposerDraft(target);
+  const attachedIds = new Set([
+    ...(draft?.images.map((image) => image.id) ?? []),
+    ...(draft?.files.map((file) => file.id) ?? []),
+  ]);
+  return {
+    images: images.filter((image) => !attachedIds.has(image.id)),
+    files: files.filter((file) => !attachedIds.has(file.id)),
+  };
+}
+
 export function restoreFailedSendAttachments(
-  draftTarget: ComposerThreadTarget,
+  target: ComposerThreadTarget,
   snapshot: Pick<ComposerSendSnapshot, "images" | "files">,
 ) {
-  const restore = ({ images, files }: typeof snapshot) => {
-    const store = useComposerDraftStore.getState();
-    const restoredImages = store.addImages(draftTarget, images.map(cloneComposerImageForRetry), {
-      allowDuplicates: true,
-    });
-    const restoredFiles = store.addFiles(draftTarget, files, { allowDuplicates: true });
-    if (restoredImages.length + restoredFiles.length > 0) {
-      toastManager.add({
-        type: "info",
-        title: m(msg("Attachments from the failed message were added to your draft.")),
-      });
-    }
-    const draft = store.getComposerDraft(draftTarget);
-    const attachedIds = new Set([
-      ...(draft?.images.map((image) => image.id) ?? []),
-      ...(draft?.files.map((file) => file.id) ?? []),
-    ]);
-    return {
-      images: images.filter((image) => !attachedIds.has(image.id)),
-      files: files.filter((file) => !attachedIds.has(file.id)),
-    };
-  };
-
-  let pending = restore(snapshot);
+  const live = resolveLiveComposerDraftTarget(target);
+  const pending = live === null ? snapshot : restoreFailedAttachments(live, snapshot);
   if (pending.images.length + pending.files.length === 0) return;
-  const notice = toastManager.add(
-    stackedThreadToast({
-      type: "warning",
-      title: m(msg("Attachments still waiting to be restored")),
-      description: m(
-        msg("Make room in the original draft, then restore the remaining attachments."),
-      ),
-      timeout: 0,
-      actionProps: {
-        children: m(msg("Restore attachments")),
-        onClick: () => {
-          pending = restore(pending);
-          if (pending.images.length + pending.files.length === 0) toastManager.close(notice);
-        },
-      },
-    }),
-  );
+  useComposerDraftStore.setState((state) => ({
+    failedComposerAttachments: [...state.failedComposerAttachments, { ...pending, target }],
+  }));
+}
+
+export function retryFailedSendAttachments(
+  entry: FailedComposerAttachments,
+  composerTarget: ComposerThreadTarget,
+) {
+  if (!useComposerDraftStore.getState().failedComposerAttachments.includes(entry)) return;
+  const live =
+    resolveLiveComposerDraftTarget(entry.target) ?? resolveLiveComposerDraftTarget(composerTarget);
+  if (live === null) return;
+  const pending = restoreFailedAttachments(live, entry);
+  useComposerDraftStore.setState((state) => ({
+    failedComposerAttachments: state.failedComposerAttachments.flatMap((item) =>
+      item !== entry
+        ? [item]
+        : pending.images.length + pending.files.length > 0
+          ? [{ ...pending, target: live }]
+          : [],
+    ),
+  }));
+}
+
+export function discardFailedSendAttachments(entry: FailedComposerAttachments) {
+  useComposerDraftStore.setState((state) => ({
+    failedComposerAttachments: state.failedComposerAttachments.filter((item) => item !== entry),
+  }));
 }
 
 /**

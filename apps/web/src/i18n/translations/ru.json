@@ -13014,8 +13014,8 @@
     },
     " в разделе «Привязанные элементы»"
   ],
-  "ef8c84b3940871f9": "Attachments from the failed message were added to your draft.",
-  "64e696c12a4c5994": "Attachments still waiting to be restored",
-  "9ef7b0d406cb0016": "Make room in the original draft, then restore the remaining attachments.",
-  "74373f36a6350383": "Restore attachments"
+  "ef8c84b3940871f9": "Вложения из неотправленного сообщения добавлены в черновик.",
+  "64e696c12a4c5994": "Остались вложения для восстановления",
+  "b9b7d8738fe213d6": "Освободите место в этом черновике и восстановите оставшиеся вложения.",
+  "74373f36a6350383": "Восстановить вложения"
 }

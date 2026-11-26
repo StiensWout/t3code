@@ -13015,8 +13015,8 @@
     },
     " mais em Itens vinculados"
   ],
-  "ef8c84b3940871f9": "Attachments from the failed message were added to your draft.",
-  "64e696c12a4c5994": "Attachments still waiting to be restored",
-  "9ef7b0d406cb0016": "Make room in the original draft, then restore the remaining attachments.",
-  "74373f36a6350383": "Restore attachments"
+  "ef8c84b3940871f9": "Os anexos da mensagem que não foi enviada foram adicionados ao rascunho.",
+  "64e696c12a4c5994": "Ainda há anexos para restaurar",
+  "b9b7d8738fe213d6": "Libere espaço neste rascunho e restaure os anexos restantes.",
+  "74373f36a6350383": "Restaurar anexos"
 }

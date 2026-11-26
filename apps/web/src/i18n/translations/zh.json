@@ -13029,8 +13029,8 @@
     },
     " 项"
   ],
-  "ef8c84b3940871f9": "Attachments from the failed message were added to your draft.",
-  "64e696c12a4c5994": "Attachments still waiting to be restored",
-  "9ef7b0d406cb0016": "Make room in the original draft, then restore the remaining attachments.",
-  "74373f36a6350383": "Restore attachments"
+  "ef8c84b3940871f9": "发送失败的消息中的附件已添加到草稿。",
+  "64e696c12a4c5994": "还有附件等待恢复",
+  "b9b7d8738fe213d6": "请先在此草稿中腾出空间，再恢复其余附件。",
+  "74373f36a6350383": "恢复附件"
 }
