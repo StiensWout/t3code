@@ -671,6 +671,18 @@ describe("question answer paths", () => {
       const config = yield* ServerConfig.ServerConfig;
       const cases = [
         {
+          ext: "docx",
+          parts: {
+            "word/document.xml":
+              '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:tbl>' +
+              '<w:tblGrid><w:gridCol w:w="2000"/><w:gridCol w:w="2000"/></w:tblGrid>' +
+              '<w:tr><w:trPr><w:gridBefore w:val="1"/></w:trPr><w:tc><w:p><w:r><w:t>500</w:t></w:r></w:p></w:tc></w:tr>' +
+              "<w:tr><w:tc><w:p><w:r><w:t>North</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>600</w:t></w:r></w:p></w:tc></w:tr>" +
+              "</w:tbl></w:body></w:document>",
+          },
+          expected: ["\t500\nNorth\t600"],
+        },
+        {
           ext: "epub",
           bounded: true,
           parts: {
@@ -1832,9 +1844,10 @@ describe("question answer paths", () => {
         let previous = -1;
         for (const expected of item.expected) {
           const index = extracted.indexOf(expected);
-          expect(index, `${item.ext}: ${expected} in ${extracted.slice(0, 500)}`).toBeGreaterThan(
-            previous,
-          );
+          expect(
+            index,
+            `${item.ext}: ${JSON.stringify(expected)} in ${JSON.stringify(extracted.slice(0, 500))}`,
+          ).toBeGreaterThan(previous);
           previous = index;
         }
         if ("occurrences" in item)
