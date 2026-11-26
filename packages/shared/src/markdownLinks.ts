@@ -486,21 +486,14 @@ function markdownLinkTailScanner(markdown: string) {
   const titleWhitespaceEnd = markdownRunEndFinder(markdown, /\S|\n[ \t\r]*\n/g);
   return (start: number) => {
     const end = whitespaceEnd(start);
-    const opener = markdown[end];
-    if (opener === ")") return end + 1;
-    if (end === start) return null;
-    const findTitleEnd =
-      opener === '"'
-        ? doubleQuoteEnd
-        : opener === "'"
-          ? singleQuoteEnd
-          : opener === "("
-            ? parenthesisEnd
-            : null;
-    if (findTitleEnd === null) return null;
-    const titleEnd = findTitleEnd(end + 1);
-    if (markdown[titleEnd] !== (opener === "(" ? ")" : opener)) return null;
-    const close = titleWhitespaceEnd(titleEnd + 1);
+    const quote = markdown[end];
+    if (quote === ")") return end + 1;
+    if (end === start || (quote !== '"' && quote !== "'" && quote !== "(")) return null;
+    const quoteEnd = (
+      quote === '"' ? doubleQuoteEnd : quote === "'" ? singleQuoteEnd : parenthesisEnd
+    )(end + 1);
+    if (markdown[quoteEnd] !== (quote === "(" ? ")" : quote)) return null;
+    const close = titleWhitespaceEnd(quoteEnd + 1);
     return markdown[close] === ")" ? close + 1 : null;
   };
 }
