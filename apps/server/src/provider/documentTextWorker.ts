@@ -21,6 +21,7 @@ type TextPart =
   | typeof CELL_END
   | typeof LINE_START
   | typeof THEMATIC_BREAK
+  | { columnGap: number }
   | { imageDescription: string }
   | { fallback: string };
 
@@ -517,7 +518,7 @@ function* table(node: XmlNode): Generator<TextPart, void> {
         for (let i = 0; i < count; i++) {
           column += span;
           if (column > 512) throw new Truncation("Column limit");
-          if (gap) yield "\t".repeat(gap);
+          if (gap) yield { columnGap: gap };
           gap = span;
           // LibreOffice hides the contents a merge covers; the cell still holds its column.
           if (covered(cell)) continue;
@@ -1143,6 +1144,7 @@ function endsMidLine(text: string) {
 
 export async function extractDocumentText(path: string, extension: string): Promise<string> {
   let result = "";
+  const columnGapOffsets: number[] = [];
   let remaining = MAX_OUTPUT;
   let cellDepth = 0;
   let started = false;
@@ -1181,7 +1183,10 @@ export async function extractDocumentText(path: string, extension: string): Prom
       let raw: string;
       let isImageDescription = false;
       if (typeof part === "string") raw = part;
-      else if ("imageDescription" in part) {
+      else if ("columnGap" in part) {
+        raw = "\t".repeat(part.columnGap);
+        if (extension === ".docx" && !cellDepth && !midLine) columnGapOffsets.push(result.length);
+      } else if ("imageDescription" in part) {
         raw = part.imageDescription;
         isImageDescription = true;
       } else {
@@ -1242,7 +1247,14 @@ export async function extractDocumentText(path: string, extension: string): Prom
     if (!(error instanceof Truncation)) throw error;
     truncated = true;
   }
-  result = result.replaceAll(/\n(?:[ \t]*\n){2,}/g, "\n\n").trim();
+  const firstText = result.search(/\S/u);
+  // Keep column separators on the first visible line even when trimming document whitespace.
+  const firstLine = firstText < 0 ? result.length : result.lastIndexOf("\n", firstText) + 1;
+  const leadingGap = columnGapOffsets.find((offset) => offset >= firstLine && offset < firstText);
+  result = result
+    .slice(leadingGap ?? Math.max(0, firstText))
+    .replaceAll(/\n(?:[ \t]*\n){2,}/g, "\n\n")
+    .trimEnd();
   if (!result && !truncated) throw new Error("No text extracted");
   return truncated ? result.replace(/[\uD800-\uDBFF]$/, "").trimEnd() + TRUNCATED : result;
 }
