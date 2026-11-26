@@ -271,7 +271,6 @@ export function replaceThreadLinks(
     parts.push(markdown.slice(cursor, start), replacement);
     cursor = end;
   }
-  if (parts.length === 0) return markdown;
   parts.push(markdown.slice(cursor));
   return parts.join("");
 }
