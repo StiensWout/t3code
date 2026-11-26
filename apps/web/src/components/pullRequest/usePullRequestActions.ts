@@ -369,7 +369,10 @@ export function prepareDraftCheckout(
     );
     return prepared;
   });
-  trackPendingDraftCheckout(draftId, pointed);
+  trackPendingDraftCheckout(
+    draftId,
+    pointed.then((prepared) => prepared._tag === "Success" && !isCancelled()),
+  );
   return pointed;
 }
 
