@@ -55,33 +55,35 @@ const THREAD_LINK_OUTSIDE_CODE = new RegExp(
 const decodeThreadId = Schema.decodeUnknownOption(ThreadId);
 const decodeEnvironmentId = Schema.decodeUnknownOption(EnvironmentId);
 
-function* listFences(
-  node: Root | RootContent,
-  markdown: string,
-  inList = false,
-): Generator<{ start: number; end: number }> {
-  switch (node.type) {
-    case "code": {
-      const start = node.position?.start.offset;
-      const end = node.position?.end.offset;
-      if (
-        inList &&
-        start !== undefined &&
-        end !== undefined &&
-        (markdown[start] === "`" || markdown[start] === "~")
-      ) {
-        yield { start, end };
+function* listFences(root: Root, markdown: string): Generator<{ start: number; end: number }> {
+  // Remark excludes the leading BOM from its source offsets.
+  const bomLength = markdown.startsWith("\uFEFF") ? 1 : 0;
+  const pending: Array<{ node: Root | RootContent; inList: boolean }> = [
+    { node: root, inList: false },
+  ];
+  for (let entry = pending.pop(); entry !== undefined; entry = pending.pop()) {
+    const { node, inList } = entry;
+    switch (node.type) {
+      case "code": {
+        const start = node.position?.start.offset;
+        const end = node.position?.end.offset;
+        if (inList && start !== undefined && end !== undefined) {
+          const marker = markdown[start + bomLength];
+          if (marker === "`" || marker === "~") {
+            yield { start: start + bomLength, end: end + bomLength };
+          }
+        }
+        break;
       }
-      break;
+      case "root":
+      case "blockquote":
+      case "list":
+      case "listItem":
+        for (let index = node.children.length - 1; index >= 0; index--) {
+          pending.push({ node: node.children[index]!, inList: inList || node.type === "listItem" });
+        }
+        break;
     }
-    case "root":
-    case "blockquote":
-    case "list":
-    case "listItem":
-      for (const child of node.children) {
-        yield* listFences(child, markdown, inList || node.type === "listItem");
-      }
-      break;
   }
 }
 

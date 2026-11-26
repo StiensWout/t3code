@@ -180,6 +180,10 @@ describe("thread links", () => {
       ["> ```ts", '> const fence = "```";', `> ${hidden}`, "> ```", `> ${after}`],
       ["> ```", ` > ${hidden}`, "> ```", after],
       ["- ```bash", "  echo hi", "  ```", "", after],
+      ["- ```bash", `  ${hidden}`, "", after],
+      ["> - ```sh", `>   ${hidden}`, ">", `> ${after}`],
+      ["\uFEFFintro", "", "- ```sh", `  ${hidden}`, "", after],
+      ["\uFEFF- item", "", "  ```sh", `  ${hidden}`, "", after],
       ["- > ```md", `  > ${hidden}`, "  > ```", "", after],
       ["1. Run:", "", "    ```bash", '    echo "```"', `    ${hidden}`, "    ```", "", after],
       ["````md", "```", hidden, "````", after],
@@ -193,6 +197,20 @@ describe("thread links", () => {
     ]) {
       expect(threadLinkRefs(markdown.join("\n"), local)).toEqual([ref("env-1", "t1")]);
     }
+  });
+
+  it("preserves links inside unclosed list fences while rewriting links after dedent", () => {
+    const code = "- ```sh\n  <t3-thread://v2/local/in-code>";
+    expect(threadLinkRefs(code, local)).toEqual([]);
+    expect(relabelThreadLinks(code, local, () => "Found")).toBe(code);
+    expect(
+      relabelThreadLinks(`\uFEFF${code}\n\n<t3-thread://v2/local/t1>`, local, () => "Found"),
+    ).toBe(`\uFEFF${code}\n\n[Found](t3-thread://v2/local/t1)`);
+  });
+
+  it("finds thread links after deeply nested Markdown", () => {
+    const markdown = `- ${">".repeat(5_000)} example ~~~\n\n${hostedThreadLink(ref("local"))}`;
+    expect(threadLinkRefs(markdown, local)).toEqual([ref("local")]);
   });
 
   it("lists the threads a message's links can name, outside code", () => {
