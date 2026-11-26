@@ -1,6 +1,8 @@
 import { scopedProjectKey } from "@t3tools/client-runtime/environment";
 import { EnvironmentId, ProjectId, ThreadId, type PullRequestRef } from "@t3tools/contracts";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
+import * as Cause from "effect/Cause";
+import { AsyncResult } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
 
@@ -8,7 +10,11 @@ import { act, render } from "../../../test/render";
 import { DraftId, useComposerDraftStore } from "~/composerDraftStore";
 import { readPendingWorkspaceDefault } from "~/lib/draftWorkspaceDefaults";
 import { ToastProvider } from "../ui/toast";
-import { usePullRequestActionRunner, usePullRequestHandoffs } from "./usePullRequestActions";
+import {
+  prepareDraftCheckout,
+  usePullRequestActionRunner,
+  usePullRequestHandoffs,
+} from "./usePullRequestActions";
 
 const state = vi.hoisted(() => ({
   runAction: vi.fn(),
@@ -183,6 +189,44 @@ function CheckOutButton() {
     </button>
   );
 }
+
+it("keeps an older checkout from moving the draft after a newer checkout fails", async () => {
+  const draftId = DraftId.make("draft-reused-for-checkout");
+  const projectRef = {
+    environmentId: EnvironmentId.make("environment"),
+    projectId: ProjectId.make("project"),
+  };
+  useComposerDraftStore.getState().setProjectDraftThreadId(projectRef, draftId, {
+    threadId: ThreadId.make("thread-reused-for-checkout"),
+    branch: "main",
+  });
+  const result = AsyncResult.success({
+    branch: "older-checkout",
+    worktreePath: "/repo-worktrees/older-checkout",
+    isOnPullRequestHead: true,
+    pullRequest: {
+      number: 1,
+      title: "Older checkout",
+      url: "https://github.com/owner/repo/pull/1",
+      baseBranch: "main",
+      headBranch: "older-checkout",
+      state: "open" as const,
+    },
+  });
+  const older = Promise.withResolvers<typeof result>();
+  const olderPrepared = prepareDraftCheckout(draftId, older.promise);
+  const newerPrepared = prepareDraftCheckout(
+    draftId,
+    Promise.resolve(AsyncResult.failure(Cause.die(new Error("Checkout failed")))),
+  );
+  await newerPrepared;
+  older.resolve(result);
+  await olderPrepared;
+  expect(useComposerDraftStore.getState().getDraftSession(draftId)).toMatchObject({
+    branch: "main",
+    worktreePath: null,
+  });
+});
 
 it("moves the draft the user typed into during a checkout onto the checkout", async () => {
   setup();
