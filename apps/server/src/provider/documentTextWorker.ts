@@ -68,7 +68,6 @@ interface XmlNode {
   hasTextChoice?: boolean;
   markupCompatibility?: boolean;
   hasSelectedChoice?: boolean;
-  epubBlock?: boolean;
   epubTable?: boolean;
 }
 
@@ -144,12 +143,6 @@ function xml(source: string, extension: string): XmlNode {
       children: [],
     };
     if (extension === ".epub" && node.name === "table") node.epubTable = true;
-    if (
-      extension === ".epub" &&
-      stack[1]?.name === "html" &&
-      ["main", "footer"].includes(node.name)
-    )
-      node.epubBlock = true;
     if (odf && node.name === "s") node.spaceCount = repeatCount(node.attrs.c);
     stack.at(-1)!.children.push(node);
     stack.push(node);
@@ -354,7 +347,7 @@ function* paragraphs(node: XmlNode): Generator<TextPart, void> {
       yield* text(child);
       yield "\n";
     } else if (
-      (child.epubBlock || ["blockquote", "figcaption", "aside", "address"].includes(child.name)) &&
+      ["blockquote", "figcaption", "aside", "address", "main", "footer"].includes(child.name) &&
       child.hasText
     ) {
       yield LINE_START;
