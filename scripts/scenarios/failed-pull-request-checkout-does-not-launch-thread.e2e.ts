@@ -72,8 +72,7 @@ test(
     await screen.getByRole("button", "Submit message", { exact: true }).tap();
 
     await browser.evaluate(() => {
-      window.dispatchEvent(new Event("scenario:fail-checkout"));
-      return null;
+      return window.dispatchEvent(new Event("scenario:fail-checkout"));
     });
     await screen
       .getByText("Could not prepare the pull request checkout", { exact: true })
