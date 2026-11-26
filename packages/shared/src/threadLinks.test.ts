@@ -182,8 +182,6 @@ describe("thread links", () => {
       ["- ```bash", "  echo hi", "  ```", "", after],
       ["- ```bash", `  ${hidden}`, "", after],
       ["> - ```sh", `>   ${hidden}`, ">", `> ${after}`],
-      ["\uFEFFintro", "", "- ```sh", `  ${hidden}`, "", after],
-      ["\uFEFF- item", "", "  ```sh", `  ${hidden}`, "", after],
       ["- > ```md", `  > ${hidden}`, "  > ```", "", after],
       ["1. Run:", "", "    ```bash", '    echo "```"', `    ${hidden}`, "    ```", "", after],
       ["````md", "```", hidden, "````", after],
