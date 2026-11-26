@@ -3991,13 +3991,12 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
           terminalId,
         });
       }
-      if (input.reply && !acceptsQueryReply(toSessionKey(input.threadId, terminalId), viewerId)) {
-        return;
-      }
+      const replySessionKey = input.reply ? toSessionKey(input.threadId, terminalId) : undefined;
       const replyViewer =
-        input.reply && viewerId !== undefined
-          ? terminalViewers.get(toSessionKey(input.threadId, terminalId))?.get(viewerId)
+        replySessionKey !== undefined && viewerId !== undefined
+          ? terminalViewers.get(replySessionKey)?.get(viewerId)
           : undefined;
+      if (input.reply && viewerId !== undefined && !replyViewer) return;
       const writeError = (cause: unknown) =>
         new TerminalWriteError({
           threadId: input.threadId,
@@ -4008,8 +4007,13 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       const writeData = (data: string, binary?: boolean) =>
         Effect.try({
           try: () => {
-            // A queued reply belongs to the original attachment, even if the viewer rejoins.
-            if (replyViewer?.streams === 0) return;
+            // Elect at delivery so replies queued behind a paste can survive an ownership handoff.
+            if (
+              replySessionKey !== undefined &&
+              (replyViewer?.streams === 0 || !acceptsQueryReply(replySessionKey, viewerId))
+            ) {
+              return;
+            }
             session.inputCount += 1;
             process.write(PtyAdapter.ptyInput(data, binary));
           },
