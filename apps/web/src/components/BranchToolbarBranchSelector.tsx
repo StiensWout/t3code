@@ -156,6 +156,7 @@ export function BranchToolbarBranchSelector({
   const draftThread = useComposerDraftStore((store) =>
     draftId ? store.getDraftSession(draftId) : store.getDraftThreadByRef(threadRef),
   );
+  const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
 
   const activeProjectRef = serverThread
     ? scopeProjectRef(serverThread.environmentId, serverThread.projectId)
@@ -240,9 +241,7 @@ export function BranchToolbarBranchSelector({
       onActiveThreadBranchOverrideChange?.(branch);
       return true;
     }
-    const draftStore = useComposerDraftStore.getState();
-    const draftTarget = draftId ?? threadRef;
-    const currentDraft = draftStore.getDraftThread(draftTarget);
+    const currentDraft = useComposerDraftStore.getState().getDraftThread(draftId ?? threadRef);
     if (
       currentDraft?.environmentId !== environmentId ||
       currentDraft.projectId !== activeProject.id
@@ -254,11 +253,12 @@ export function BranchToolbarBranchSelector({
       currentWorktreePath: activeWorktreePath,
       effectiveEnvMode,
     });
-    draftStore.setDraftThreadContext(draftTarget, {
+    setDraftThreadContext(draftId ?? threadRef, {
       branch,
       worktreePath,
       envMode: nextDraftEnvMode,
       environmentSelection: automatic ? (draftThread?.environmentSelection ?? "auto") : "manual",
+      projectRef: scopeProjectRef(environmentId, activeProject.id),
     });
     return true;
   };
