@@ -90,7 +90,6 @@ function* threadLinksIn(markdown: string) {
   const pattern = new RegExp(THREAD_LINK_OUTSIDE_CODE);
   function* scan(start: number, end: number) {
     const prose = markdown.slice(start, end);
-    pattern.lastIndex = 0;
     // Hermes' matchAll omits named groups; exec keeps them.
     for (let match = pattern.exec(prose); match !== null; match = pattern.exec(prose)) {
       const groups = match.groups;
