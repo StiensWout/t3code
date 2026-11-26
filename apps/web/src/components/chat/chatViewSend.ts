@@ -298,6 +298,54 @@ function withRestored<T>(
   return [...kept, ...restored.filter((item) => !kept.some((other) => key(other) === key(item)))];
 }
 
+export function restoreFailedSendAttachments(
+  draftTarget: ComposerThreadTarget,
+  snapshot: Pick<ComposerSendSnapshot, "images" | "files">,
+) {
+  const restore = ({ images, files }: typeof snapshot) => {
+    const store = useComposerDraftStore.getState();
+    const restoredImages = store.addImages(draftTarget, images.map(cloneComposerImageForRetry), {
+      allowDuplicates: true,
+    });
+    const restoredFiles = store.addFiles(draftTarget, files, { allowDuplicates: true });
+    if (restoredImages.length + restoredFiles.length > 0) {
+      toastManager.add({
+        type: "info",
+        title: m(msg("Attachments from the failed message were added to your draft.")),
+      });
+    }
+    const draft = store.getComposerDraft(draftTarget);
+    const attachedIds = new Set([
+      ...(draft?.images.map((image) => image.id) ?? []),
+      ...(draft?.files.map((file) => file.id) ?? []),
+    ]);
+    return {
+      images: images.filter((image) => !attachedIds.has(image.id)),
+      files: files.filter((file) => !attachedIds.has(file.id)),
+    };
+  };
+
+  let pending = restore(snapshot);
+  if (pending.images.length + pending.files.length === 0) return;
+  const notice = toastManager.add(
+    stackedThreadToast({
+      type: "warning",
+      title: m(msg("Attachments still waiting to be restored")),
+      description: m(
+        msg("Make room in the original draft, then restore the remaining attachments."),
+      ),
+      timeout: 0,
+      actionProps: {
+        children: m(msg("Restore attachments")),
+        onClick: () => {
+          pending = restore(pending);
+          if (pending.images.length + pending.files.length === 0) toastManager.close(notice);
+        },
+      },
+    }),
+  );
+}
+
 /**
  * Writes a failed send's composer contents back into its draft, after anything
  * typed since. Returns the restored images, which are fresh copies so their

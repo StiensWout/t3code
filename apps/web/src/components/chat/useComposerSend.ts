@@ -13,7 +13,6 @@ import {
   boundAttachmentIds,
   formatOutgoingPrompt,
   optimisticMessageAttachments,
-  cloneComposerImageForRetry,
   planComposerTurn,
   deriveComposerSendTitle,
   snapshotComposerSend,
@@ -136,6 +135,7 @@ import {
   resolveMultipleModelTargets,
   prepareTurnAttachments,
   restoreComposerDraft,
+  restoreFailedSendAttachments,
 } from "./chatViewSend";
 import type {
   EnvironmentProject,
@@ -1693,11 +1693,15 @@ export function useComposerSend(input: ComposerSendInput) {
       optimisticBlobPreviews.release(optimisticMessage);
       const draftStore = useComposerDraftStore.getState();
       if (composerDraftHasUserContent(draftStore.getComposerDraft(composerDraftTarget))) {
+        if (sendSnapshot.attachments.length > 0) {
+          restoreFailedSendAttachments(composerDraftTarget, sendSnapshot);
+          if (currentRouteThreadKeyRef.current === routeThreadKey) {
+            const restoredDraft = draftStore.getComposerDraft(composerDraftTarget);
+            composerImagesRef.current = restoredDraft?.images ?? [];
+            composerFilesRef.current = restoredDraft?.files ?? [];
+          }
+        }
         // A draft typed meanwhile keeps the composer, so the failed text stays reachable here.
-        draftStore.addImages(
-          composerDraftTarget,
-          sendSnapshot.images.map(cloneComposerImageForRetry),
-        );
         const failedText = sendSnapshot.draftText;
         const hasText = failedText.trim().length > 0;
         // An image-only message has nothing to copy, but its failure still needs a notice.
