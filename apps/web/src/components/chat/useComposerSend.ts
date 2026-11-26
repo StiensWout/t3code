@@ -13,6 +13,7 @@ import {
   boundAttachmentIds,
   formatOutgoingPrompt,
   optimisticMessageAttachments,
+  cloneComposerImageForRetry,
   planComposerTurn,
   deriveComposerSendTitle,
   snapshotComposerSend,
@@ -1690,12 +1691,13 @@ export function useComposerSend(input: ComposerSendInput) {
       });
       // A restored draft clones its images, so the sent copies are no longer used.
       optimisticBlobPreviews.release(optimisticMessage);
-      if (
-        composerDraftHasUserContent(
-          useComposerDraftStore.getState().getComposerDraft(composerDraftTarget),
-        )
-      ) {
-        // A draft typed meanwhile keeps the composer, so the failed text stays reachable here.
+      const draftStore = useComposerDraftStore.getState();
+      if (composerDraftHasUserContent(draftStore.getComposerDraft(composerDraftTarget))) {
+        draftStore.addImages(
+          composerDraftTarget,
+          sendSnapshot.images.map(cloneComposerImageForRetry),
+        );
+        // Keep the failed text reachable without changing what the user typed meanwhile.
         const failedText = sendSnapshot.draftText;
         const hasText = failedText.trim().length > 0;
         // An image-only message has nothing to copy, but its failure still needs a notice.
@@ -1708,7 +1710,7 @@ export function useComposerSend(input: ComposerSendInput) {
             description: hasText
               ? m(msg("Your new draft was kept. Copy the failed message to send it again."))
               : m(msg("Your new draft was kept.")),
-            // The toast holds the only trace of the failed message, so it stays until dismissed.
+            // The toast is the only way to copy the failed text, so it stays until dismissed.
             timeout: 0,
             data: { hideCopyButton: true },
             ...(hasText
