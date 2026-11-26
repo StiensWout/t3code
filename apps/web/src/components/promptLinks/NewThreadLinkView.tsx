@@ -254,9 +254,7 @@ export function NewThreadLinkView({ link }: { readonly link: NewThreadLink }) {
           }),
         );
       }
-      if (router.history.location === originLocation) {
-        setState({ status: "missing-repository", repository });
-      }
+      setState({ status: "missing-repository", repository });
       return;
     }
     void suggestAppAccessForRemote(
