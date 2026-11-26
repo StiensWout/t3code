@@ -3991,9 +3991,14 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
           terminalId,
         });
       }
-      if (input.reply && !acceptsQueryReply(toSessionKey(input.threadId, terminalId), viewerId)) {
+      const replySessionKey = input.reply ? toSessionKey(input.threadId, terminalId) : undefined;
+      if (replySessionKey !== undefined && !acceptsQueryReply(replySessionKey, viewerId)) {
         return;
       }
+      const replyViewer =
+        replySessionKey !== undefined && viewerId !== undefined
+          ? terminalViewers.get(replySessionKey)?.get(viewerId)
+          : undefined;
       const writeError = (cause: unknown) =>
         new TerminalWriteError({
           threadId: input.threadId,
@@ -4004,6 +4009,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       const writeData = (data: string, binary?: boolean) =>
         Effect.try({
           try: () => {
+            // A queued reply belongs to the original attachment, even if the viewer rejoins.
+            if (replyViewer?.streams === 0) return;
             session.inputCount += 1;
             process.write(PtyAdapter.ptyInput(data, binary));
           },
