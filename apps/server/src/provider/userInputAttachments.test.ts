@@ -672,6 +672,17 @@ describe("question answer paths", () => {
       const cases = [
         {
           ext: "epub",
+          parts: {
+            "META-INF/container.xml": '<container><rootfile full-path="book.opf"/></container>',
+            "book.opf":
+              '<package><manifest><item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="chapter"/></spine></package>',
+            "chapter.xhtml":
+              '<html xmlns="http://www.w3.org/1999/xhtml"><body><main>Carry your passport.</main><footer>Updated in June.</footer></body></html>',
+          },
+          expected: ["Carry your passport.\nUpdated in June."],
+        },
+        {
+          ext: "epub",
           bounded: true,
           parts: {
             "META-INF/container.xml": '<container><rootfile full-path="book.opf"/></container>',
@@ -1832,9 +1843,10 @@ describe("question answer paths", () => {
         let previous = -1;
         for (const expected of item.expected) {
           const index = extracted.indexOf(expected);
-          expect(index, `${item.ext}: ${expected} in ${extracted.slice(0, 500)}`).toBeGreaterThan(
-            previous,
-          );
+          expect(
+            index,
+            `${item.ext}: ${JSON.stringify(expected)} in ${JSON.stringify(extracted.slice(0, 500))}`,
+          ).toBeGreaterThan(previous);
           previous = index;
         }
         if ("occurrences" in item)
