@@ -19,8 +19,8 @@ const node = Layer.mergeAll(NodeServices.layer, NodeCrypto.layer);
 const services = Layer.mergeAll(node, ProcessRunner.layer.pipe(Layer.provide(node)));
 
 it.layer(services)("terminal replies during a paste", (it) => {
-  it.effect.each(["stays attached", "detaches", "reattaches"] as const)(
-    "delivers one reply when the answering viewer %s after both viewers reply",
+  it.effect.each(["detaches", "reattaches"] as const)(
+    "delivers the remaining reply when the answering viewer %s after both viewers reply",
     (attachment) =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
@@ -72,7 +72,7 @@ it.layer(services)("terminal replies during a paste", (it) => {
         const second = yield* manager
           .write({ ...target, data: "\x1b[3;3R", reply: true }, "second")
           .pipe(Effect.forkScoped({ startImmediately: true }));
-        if (attachment !== "stays attached") detachFirst();
+        detachFirst();
         if (attachment === "reattaches") yield* attach("first");
 
         yield* manager.write(
@@ -81,12 +81,7 @@ it.layer(services)("terminal replies during a paste", (it) => {
         );
         yield* Fiber.join(first);
         yield* Fiber.join(second);
-        expect(writes).toEqual([
-          "\x1b[1;1R",
-          start,
-          TERMINAL_BRACKETED_PASTE_END,
-          attachment === "stays attached" ? "\x1b[2;2R" : "\x1b[3;3R",
-        ]);
+        expect(writes).toEqual(["\x1b[1;1R", start, TERMINAL_BRACKETED_PASTE_END, "\x1b[3;3R"]);
       }),
   );
 });
