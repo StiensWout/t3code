@@ -3991,13 +3991,12 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
           terminalId,
         });
       }
-      const replySessionKey = input.reply ? toSessionKey(input.threadId, terminalId) : undefined;
-      if (replySessionKey !== undefined && !acceptsQueryReply(replySessionKey, viewerId)) {
+      if (input.reply && !acceptsQueryReply(toSessionKey(input.threadId, terminalId), viewerId)) {
         return;
       }
       const replyViewer =
-        replySessionKey !== undefined && viewerId !== undefined
-          ? terminalViewers.get(replySessionKey)?.get(viewerId)
+        input.reply && viewerId !== undefined
+          ? terminalViewers.get(toSessionKey(input.threadId, terminalId))?.get(viewerId)
           : undefined;
       const writeError = (cause: unknown) =>
         new TerminalWriteError({
