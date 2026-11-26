@@ -1,6 +1,9 @@
 import { EnvironmentId, ThreadId, type ScopedThreadRef } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import type { Root, RootContent } from "mdast";
+import remarkParse from "remark-parse";
+import { unified } from "unified";
 
 import { DEFAULT_HOSTED_APP_URL } from "./connectAuth.ts";
 
@@ -13,7 +16,11 @@ const HOSTED_LINK = `${HOSTED_PREFIX.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}${H
 const THREAD_HREF = String.raw`t3-thread:\/\/v[12]\/`;
 // A label stops at any bracket, so a run of unclosed brackets is scanned once, not once per bracket.
 const LABEL = String.raw`[^[\]\n]*`;
-const LIST_MARKERS = String.raw`(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)*`;
+const LIST_MARKER = String.raw`(?:[-*+]|\d{1,9}[.)])`;
+const LIST_MARKERS = String.raw`(?:${LIST_MARKER}[ \t]+)*`;
+const POSSIBLE_LIST = new RegExp(String.raw`^[\uFEFF \t>]*${LIST_MARKER}(?:[ \t]|$)`, "m");
+const FENCE = /`{3,}|~{3,}/;
+const markdownParser = unified().use(remarkParse);
 // CommonMark fences start on their own line (optional blockquotes, indentation, or list markers)
 // and close on a line with at least as many of the same marker; backtick info strings hold no `.
 // Quote markers are compared from the first `>`, so lines may indent them differently.
@@ -47,6 +54,70 @@ const THREAD_LINK_OUTSIDE_CODE = new RegExp(
 
 const decodeThreadId = Schema.decodeUnknownOption(ThreadId);
 const decodeEnvironmentId = Schema.decodeUnknownOption(EnvironmentId);
+
+function* listFences(
+  node: Root | RootContent,
+  markdown: string,
+  inList = false,
+): Generator<{ start: number; end: number }> {
+  switch (node.type) {
+    case "code": {
+      const start = node.position?.start.offset;
+      const end = node.position?.end.offset;
+      if (
+        inList &&
+        start !== undefined &&
+        end !== undefined &&
+        (markdown[start] === "`" || markdown[start] === "~")
+      ) {
+        yield { start, end };
+      }
+      break;
+    }
+    case "root":
+    case "blockquote":
+    case "list":
+    case "listItem":
+      for (const child of node.children) {
+        yield* listFences(child, markdown, inList || node.type === "listItem");
+      }
+      break;
+  }
+}
+
+function* threadLinksIn(markdown: string) {
+  if (!hasThreadLinks(markdown)) return;
+  const pattern = new RegExp(THREAD_LINK_OUTSIDE_CODE);
+  function* scan(start: number, end: number) {
+    const prose = markdown.slice(start, end);
+    pattern.lastIndex = 0;
+    // Hermes' matchAll omits named groups; exec keeps them.
+    for (let match = pattern.exec(prose); match !== null; match = pattern.exec(prose)) {
+      const groups = match.groups;
+      const href = groups?.angleHref ?? groups?.href ?? groups?.autolink ?? groups?.bare;
+      const link = href === undefined ? null : parseThreadLinkHref(href);
+      if (link !== null) {
+        yield {
+          link,
+          label: groups?.label,
+          start: start + match.index,
+          end: start + pattern.lastIndex,
+        };
+      }
+    }
+  }
+
+  let start = 0;
+  // A list fence ends with its item, even without a closing marker. Use the Markdown parser
+  // for those boundaries and keep the link scanner's fast path for text without list fences.
+  if (FENCE.test(markdown) && POSSIBLE_LIST.test(markdown)) {
+    for (const fence of listFences(markdownParser.parse(markdown), markdown)) {
+      yield* scan(start, fence.start);
+      start = fence.end;
+    }
+  }
+  yield* scan(start, markdown.length);
+}
 
 /** A v1 link names no environment; the message's own, or a unique match, stands in. */
 export interface ThreadLink {
@@ -180,13 +251,7 @@ export function threadLinkRefs(
   messageEnvironmentId: EnvironmentId,
 ): ReadonlyArray<ScopedThreadRef> {
   const refs = new Map<string, ScopedThreadRef>();
-  // Hermes' matchAll yields matches without `groups`; exec keeps them.
-  const pattern = new RegExp(THREAD_LINK_OUTSIDE_CODE);
-  for (let match = pattern.exec(markdown); match !== null; match = pattern.exec(markdown)) {
-    const href =
-      match.groups?.angleHref ?? match.groups?.href ?? match.groups?.autolink ?? match.groups?.bare;
-    const link = href === undefined ? null : parseThreadLinkHref(href);
-    if (link === null) continue;
+  for (const { link } of threadLinksIn(markdown)) {
     for (const ref of threadLinkCandidates(link, messageEnvironmentId)) {
       refs.set(`${ref.environmentId}/${ref.threadId}`, ref);
     }
@@ -199,13 +264,15 @@ export function replaceThreadLinks(
   markdown: string,
   replace: (link: ThreadLink, label: string | undefined) => string | undefined,
 ): string {
-  if (!hasThreadLinks(markdown)) return markdown;
-  return markdown.replace(THREAD_LINK_OUTSIDE_CODE, (source, ...args) => {
-    const groups = args.at(-1) as Partial<
-      Record<"angleHref" | "href" | "autolink" | "bare" | "label", string>
-    >;
-    const href = groups.angleHref ?? groups.href ?? groups.autolink ?? groups.bare;
-    const link = href === undefined ? null : parseThreadLinkHref(href);
-    return (link && replace(link, groups.label)) ?? source;
-  });
+  const parts: string[] = [];
+  let cursor = 0;
+  for (const { link, label, start, end } of threadLinksIn(markdown)) {
+    const replacement = replace(link, label);
+    if (replacement === undefined) continue;
+    parts.push(markdown.slice(cursor, start), replacement);
+    cursor = end;
+  }
+  if (parts.length === 0) return markdown;
+  parts.push(markdown.slice(cursor));
+  return parts.join("");
 }
