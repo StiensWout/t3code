@@ -37,6 +37,18 @@ const attachment = {
   mimeType: "text/plain",
   sizeBytes: 4,
 };
+const BLOCK_TAGS = [
+  "main",
+  "footer",
+  "header",
+  "article",
+  "nav",
+  "figure",
+  "details",
+  "summary",
+  "hgroup",
+];
+
 describe("question answer paths", () => {
   it.effect.each([false, true])(
     "keeps unrelated files available during extraction (failure: %s)",
@@ -680,6 +692,23 @@ describe("question answer paths", () => {
               '<html xmlns="http://www.w3.org/1999/xhtml"><body><main>Carry your passport.</main><footer>Updated in June.</footer></body></html>',
           },
           expected: ["Carry your passport.\nUpdated in June."],
+        },
+        {
+          ext: "epub",
+          parts: {
+            "META-INF/container.xml": '<container><rootfile full-path="book.opf"/></container>',
+            "book.opf":
+              '<package><manifest><item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="chapter"/></spine></package>',
+            "chapter.xhtml": `<html xmlns="http://www.w3.org/1999/xhtml"><body>${BLOCK_TAGS.map(
+              (tag) => {
+                const wrapper = tag === "summary" ? "details" : "div";
+                return `<${wrapper}>Before ${tag}.<${tag}> </${tag}>Still before.<${tag}><span>${tag} block.</span></${tag}>After ${tag}.</${wrapper}>`;
+              },
+            ).join("")}</body></html>`,
+          },
+          expected: BLOCK_TAGS.map(
+            (tag) => `Before ${tag}. Still before.\n${tag} block.\nAfter ${tag}.`,
+          ),
         },
         {
           ext: "epub",
