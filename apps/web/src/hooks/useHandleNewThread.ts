@@ -94,6 +94,7 @@ function keepsProvisionalWorkspace(
     draft.promotedTo == null &&
     draft.envMode === provisional.envMode &&
     draft.worktreePath === null &&
+    !draft.workspaceExplicit &&
     (provisional.openedManual || draft.environmentSelection !== "manual")
   );
 }
