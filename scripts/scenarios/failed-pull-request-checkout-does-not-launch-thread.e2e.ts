@@ -73,6 +73,7 @@ test(
 
     await browser.evaluate(() => {
       window.dispatchEvent(new Event("scenario:fail-checkout"));
+      return null;
     });
     await screen
       .getByText("Could not prepare the pull request checkout", { exact: true })
