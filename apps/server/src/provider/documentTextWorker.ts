@@ -517,6 +517,19 @@ function wordStyleOutlineLevel(
   return level;
 }
 
+function applyWordDefaultOutline(node: XmlNode, level: number) {
+  for (const paragraph of all(node, "p", ["pPrChange"])) {
+    if (
+      paragraph.hasText &&
+      paragraph.wordOutlineHeadingLevel === undefined &&
+      !all(paragraph, "pStyle", ["pPrChange", "txbxContent"]).next().value
+    )
+      paragraph.wordOutlineHeadingLevel = level;
+    // The walk stops at each match, so continue into any text boxes anchored in it.
+    applyWordDefaultOutline(paragraph, level);
+  }
+}
+
 function* paragraphs(node: XmlNode): Generator<TextPart, void> {
   if (HIDDEN.has(node.name)) return;
   if (node.imageDescription !== undefined) {
@@ -1244,13 +1257,16 @@ async function* document(path: string, extension: string): AsyncGenerator<TextPa
       if (has(styles)) {
         const outlines = new Map<string, number | string | undefined>();
         const headings = new Map<string, string>();
+        let defaultOutline: number | string | undefined;
         for (const style of all(read(styles), "style")) {
-          const id = style.attrs.styleId;
-          if ((style.attrs.type ?? "paragraph") !== "paragraph" || !id) continue;
+          if ((style.attrs.type ?? "paragraph") !== "paragraph") continue;
           const properties = children(style);
           const outline =
             style.wordOutlineHeadingLevel ??
             properties.find((c) => c.name === "basedOn")?.attrs.val;
+          if (["true", "1", "on"].includes(style.attrs.default ?? "")) defaultOutline = outline;
+          const id = style.attrs.styleId;
+          if (!id) continue;
           if (outline !== undefined) outlines.set(id, outline);
           // Word localizes style ids while keeping built-in English names.
           const name = properties.find((c) => c.name === "name")?.attrs.val;
@@ -1267,6 +1283,11 @@ async function* document(path: string, extension: string): AsyncGenerator<TextPa
               if (heading) pStyle.attrs.val = heading;
             }
           }
+        const defaultLevel =
+          typeof defaultOutline === "string"
+            ? wordStyleOutlineLevel(outlines, defaultOutline)
+            : defaultOutline;
+        if (defaultLevel) applyWordDefaultOutline(doc, defaultLevel);
       }
       yield* paragraphs(doc);
     } else if ([".odt", ".ods", ".odp"].includes(extension)) {
