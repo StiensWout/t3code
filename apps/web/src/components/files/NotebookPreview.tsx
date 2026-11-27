@@ -18,7 +18,6 @@ const savedPositions = createPositionMemory<{
   readonly outputHeights?: ReadonlyMap<string, number>;
 }>();
 const cellsOf = (root: HTMLElement) => root.querySelectorAll(":scope > div > section");
-const outputSelector = "[data-notebook-output]";
 const defaultOutputHeight = 80;
 
 // Saved notebooks must not load URLs or turn authored links into app actions.
@@ -73,7 +72,7 @@ export default function NotebookPreview(props: {
       if (!position) return;
       // Restore against the same layout while the output iframes are being recreated.
       const outputHeights = new Map<string, number>();
-      for (const node of root.querySelectorAll<HTMLElement>(outputSelector)) {
+      for (const node of root.querySelectorAll<HTMLElement>("[data-notebook-output]")) {
         const key = node.dataset.notebookOutput;
         const height = node.clientHeight;
         if (key !== undefined && height > 0 && height !== defaultOutputHeight) {
@@ -125,7 +124,7 @@ export default function NotebookPreview(props: {
     };
     const viewportObserver = new IntersectionObserver(track(inView), { root });
     const preloadObserver = new IntersectionObserver(track(nearby), { root, rootMargin: "160px" });
-    for (const node of root.querySelectorAll(outputSelector)) {
+    for (const node of root.querySelectorAll("[data-notebook-output]")) {
       viewportObserver.observe(node);
       preloadObserver.observe(node);
     }
