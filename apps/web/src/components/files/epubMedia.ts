@@ -57,8 +57,7 @@ export function ttmlCaptions(root: XmlNode) {
   function parameter(name: string) {
     return (attributes?.[ttmlParameters + name] ?? attributes?.[dfxpParameters + name])?.trim();
   }
-  const frameRateText = parameter("frameRate");
-  const rate = frameRateText ?? "30";
+  const rate = parameter("frameRate") ?? "30";
   const nominalFrameRate = /^\d+$/.test(rate) ? Number(rate) : NaN;
   const multiplier = parameter("frameRateMultiplier") ?? "1 1";
   const ratio = /^(\d+)\s+(\d+)$/.exec(multiplier);
@@ -68,7 +67,7 @@ export function ttmlCaptions(root: XmlNode) {
   const tickRateText = parameter("tickRate");
   const tickRate =
     tickRateText === undefined
-      ? frameRateText === undefined
+      ? parameter("frameRate") === undefined
         ? 1
         : frameRate * subFrameRate
       : /^\d+$/.test(tickRateText)
