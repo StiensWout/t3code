@@ -57,19 +57,35 @@ export function ttmlCaptions(root: XmlNode) {
   function parameter(name: string) {
     return (attributes?.[ttmlParameters + name] ?? attributes?.[dfxpParameters + name])?.trim();
   }
-  const rate = parameter("frameRate") ?? "30";
+  const frameRateText = parameter("frameRate");
+  const rate = frameRateText ?? "30";
   const nominalFrameRate = /^\d+$/.test(rate) ? Number(rate) : NaN;
   const multiplier = parameter("frameRateMultiplier") ?? "1 1";
   const ratio = /^(\d+)\s+(\d+)$/.exec(multiplier);
   const frameRate = nominalFrameRate * (Number(ratio?.[1]) / Number(ratio?.[2]));
   const subFrameRateText = parameter("subFrameRate") ?? "1";
   const subFrameRate = /^\d+$/.test(subFrameRateText) ? Number(subFrameRateText) : NaN;
+  const tickRateText = parameter("tickRate");
+  const tickRate =
+    tickRateText === undefined
+      ? frameRateText === undefined
+        ? 1
+        : frameRate * subFrameRate
+      : /^\d+$/.test(tickRateText)
+        ? Number(tickRateText)
+        : NaN;
   const timeBase = parameter("timeBase") ?? "media";
   const continuousSmpte = timeBase === "smpte" && parameter("markerMode") === "continuous";
   const dropMode = parameter("dropMode") ?? "nonDrop";
 
   function captionTime(value: string | undefined) {
     const time = value?.trim() ?? "";
+    const ticks = /^(\d+(?:\.\d+)?)t$/.exec(time);
+    if (ticks) {
+      if (timeBase !== "media" || !Number.isFinite(tickRate) || tickRate <= 0) return;
+      const seconds = Number(ticks[1]) / tickRate;
+      return Number.isFinite(seconds * 1000) ? seconds : undefined;
+    }
     const offset = /^(\d+(?:\.\d+)?)f$/.exec(time);
     const clockMatch = /^(\d{2,}:[0-5]\d:[0-5]\d)(?::(\d{2,})(?:\.(\d+))?)?$/.exec(time);
     const clock = continuousSmpte || clockMatch?.[2] !== undefined ? clockMatch : null;
