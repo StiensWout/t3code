@@ -1257,16 +1257,15 @@ async function* document(path: string, extension: string): AsyncGenerator<TextPa
       if (has(styles)) {
         const outlines = new Map<string, number | string | undefined>();
         const headings = new Map<string, string>();
-        let defaultOutline: number | string | undefined;
+        let defaultId = "";
         for (const style of all(read(styles), "style")) {
-          if ((style.attrs.type ?? "paragraph") !== "paragraph") continue;
+          const id = style.attrs.styleId;
+          if ((style.attrs.type ?? "paragraph") !== "paragraph" || !id) continue;
+          if (["true", "1", "on"].includes(style.attrs.default ?? "")) defaultId = id;
           const properties = children(style);
           const outline =
             style.wordOutlineHeadingLevel ??
             properties.find((c) => c.name === "basedOn")?.attrs.val;
-          if (["true", "1", "on"].includes(style.attrs.default ?? "")) defaultOutline = outline;
-          const id = style.attrs.styleId;
-          if (!id) continue;
           if (outline !== undefined) outlines.set(id, outline);
           // Word localizes style ids while keeping built-in English names.
           const name = properties.find((c) => c.name === "name")?.attrs.val;
@@ -1283,10 +1282,7 @@ async function* document(path: string, extension: string): AsyncGenerator<TextPa
               if (heading) pStyle.attrs.val = heading;
             }
           }
-        const defaultLevel =
-          typeof defaultOutline === "string"
-            ? wordStyleOutlineLevel(outlines, defaultOutline)
-            : defaultOutline;
+        const defaultLevel = wordStyleOutlineLevel(outlines, defaultId);
         if (defaultLevel) applyWordDefaultOutline(doc, defaultLevel);
       }
       yield* paragraphs(doc);
