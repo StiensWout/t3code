@@ -181,34 +181,84 @@ function isXhtmlElement(
   );
 }
 
-function importantDisplayHidden(style: string): boolean | undefined {
-  // Stylesheet rules can override non-important inline display.
-  if (!style || style.includes("\\") || !/display/i.test(style) || !/important/i.test(style))
-    return undefined;
-  let badString = false;
-  const declarations = style.replaceAll(
-    /\/\*[\s\S]*?(?:\*\/|$)|"[^"]*(?:"|$)|'[^']*(?:'|$)/g,
-    (token) => {
-      if (token.startsWith("/")) return " ";
-      // CSS ends a string at a newline, so later declarations can still apply.
-      if (/[\n\r\f]/.test(token)) badString = true;
-      return '""';
-    },
+const CSS_WIDE_KEYWORD = /^(?:initial|inherit|unset|revert|revert-layer)$/;
+const DISPLAY_OUTSIDE = /^(?:block|inline|run-in)$/;
+const DISPLAY_INSIDE = /^(?:flow|flow-root|table|flex|grid|ruby|math)$/;
+const DISPLAY_SINGLE_KEYWORD =
+  /^(?:none|contents|list-item|inline-block|inline-table|inline-flex|inline-grid|table-(?:row-group|header-group|footer-group|row|cell|column-group|column|caption)|ruby-(?:base|text|base-container|text-container))$/;
+
+function isDisplayValue(value: string): boolean {
+  const keywords = value.split(" ");
+  if (keywords.length === 1)
+    return (
+      DISPLAY_SINGLE_KEYWORD.test(value) ||
+      DISPLAY_OUTSIDE.test(value) ||
+      DISPLAY_INSIDE.test(value)
+    );
+  const outside = keywords.filter((keyword) => DISPLAY_OUTSIDE.test(keyword));
+  const inside = keywords.filter((keyword) => DISPLAY_INSIDE.test(keyword));
+  const listItem = keywords.includes("list-item");
+  return (
+    outside.length <= 1 &&
+    inside.length <= 1 &&
+    outside.length + inside.length + Number(listItem) === keywords.length &&
+    (!listItem || inside.length === 0 || inside[0] === "flow" || inside[0] === "flow-root")
   );
-  // Semicolons in blocks can be part of a declaration's value.
-  if (badString || /[()[\]{}]/.test(declarations)) return undefined;
-  let hidden: boolean | undefined;
-  for (const [declaration] of declarations.matchAll(/[^;]+/g)) {
-    const match =
-      /^[\t\n\f\r ]*(display|all)[\t\n\f\r ]*:([^!]+)![\t\n\f\r ]*important[\t\n\f\r ]*$/i.exec(
-        declaration,
-      );
-    if (!match) continue;
-    const [, property, value] = match;
-    if (!value?.trim()) continue;
-    hidden = property?.toLowerCase() === "display" && /^[\t\n\f\r ]*none[\t\n\f\r ]*$/i.test(value);
+}
+
+function* inlineCssDeclarations(style: string) {
+  // Mask strings and escapes before splitting so punctuation inside them cannot start a declaration.
+  const declarations = style.replaceAll(
+    /\/\*[\s\S]*?(?:\*\/|$)|"(?:\\(?:\r\n|[\s\S])|[^"\\\r\n\f])*"?|'(?:\\(?:\r\n|[\s\S])|[^'\\\r\n\f])*'?|\\(?:\r\n|[\s\S])/g,
+    (token) => (token.startsWith("/") ? " " : '""'),
+  );
+  const closing: string[] = [];
+  let start = 0;
+  for (const { 0: token, index } of declarations.matchAll(/[()[\]{};]/g)) {
+    if (token === "(") closing.push(")");
+    else if (token === "[") closing.push("]");
+    else if (token === "{") closing.push("}");
+    else if (token === closing.at(-1)) closing.pop();
+    else if (token === ";" && closing.length === 0) {
+      yield declarations.slice(start, index);
+      start = index + 1;
+    }
   }
-  return hidden;
+  if (closing.length === 0) yield declarations.slice(start);
+}
+
+function inlineVisibility(style: string) {
+  type Declaration = { value: string; important: boolean };
+  let display: Declaration | undefined;
+  let visibility: Declaration | undefined;
+  for (const declaration of inlineCssDeclarations(style)) {
+    const match = /^[\t\n\f\r ]*(display|visibility|all)[\t\n\f\r ]*:/i.exec(declaration);
+    if (!match) continue;
+    const property = match[1]?.toLowerCase();
+    const rawValue = declaration.slice(match[0].length);
+    const priority = /![\t\n\f\r ]*important[\t\n\f\r ]*$/i.exec(rawValue);
+    const value = rawValue
+      .slice(0, priority?.index)
+      .toLowerCase()
+      .replaceAll(/[\t\n\f\r ]+/g, " ")
+      .replace(/^ | $/g, "");
+    const important = priority !== null;
+    const reset = property === "all" && CSS_WIDE_KEYWORD.test(value);
+    if (
+      (reset ||
+        (property === "display" && (CSS_WIDE_KEYWORD.test(value) || isDisplayValue(value)))) &&
+      (important || !display?.important)
+    )
+      display = { value, important };
+    if (
+      (reset ||
+        (property === "visibility" &&
+          (CSS_WIDE_KEYWORD.test(value) || /^(?:visible|hidden|collapse)$/.test(value)))) &&
+      (important || !visibility?.important)
+    )
+      visibility = { value, important };
+  }
+  return { display, visibility };
 }
 
 function xml(source: string, extension: string): XmlNode {
@@ -313,8 +363,10 @@ function xml(source: string, extension: string): XmlNode {
       parent.markupCompatibility;
     if (odf && (node.name === "p" || node.name === "h")) collapseOdfWhitespace(node);
     const epubHtml = extension === ".epub" && (stack[1] ?? node).name === "html";
-    const style = epubHtml ? (tag.attributes.style ?? "") : "";
-    const displayHidden = importantDisplayHidden(style);
+    const style = epubHtml ? tag.attributes.style : undefined;
+    const inline = style ? inlineVisibility(style) : undefined;
+    const displayHidden = inline?.display?.value === "none";
+    // Stylesheet rules can override non-important inline display on chapter content.
     if (
       node.pptxHidden ||
       (node.odfParagraphHidden && namespaceOf(tag.name, [...stack, node]) === ODF_TEXT_NS) ||
@@ -325,7 +377,7 @@ function xml(source: string, extension: string): XmlNode {
       (epubHtml &&
         ((Object.hasOwn(tag.attributes, "hidden") &&
           !/^until-found$/i.test(String(tag.attributes.hidden))) ||
-          displayHidden)) ||
+          (displayHidden && inline?.display?.important))) ||
       (extension === ".docx" && node.name === "del") ||
       (extension === ".docx" &&
         node.name === "r" &&
@@ -388,8 +440,9 @@ function xml(source: string, extension: string): XmlNode {
       node.name === "img" &&
       stack[1]?.name === "html" &&
       alt?.trim() &&
-      !(displayHidden ?? /(?:^|;)\s*display\s*:\s*none\s*(?:!important\s*)?(?:;|$)/i.test(style)) &&
-      !/(?:^|;)\s*visibility\s*:\s*(?:hidden|collapse)\s*(?:!important\s*)?(?:;|$)/i.test(style)
+      !displayHidden &&
+      inline?.visibility?.value !== "hidden" &&
+      inline?.visibility?.value !== "collapse"
     ) {
       node.imageDescription = alt;
       node.hasText = true;
