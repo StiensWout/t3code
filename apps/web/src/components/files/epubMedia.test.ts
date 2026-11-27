@@ -9,6 +9,14 @@ const smpte = 'p:timeBase="smpte" p:markerMode="continuous"';
 const ntscRate = 'p:frameRate="30" p:frameRateMultiplier="1000 1001"';
 
 it.each([
+  [
+    "tick offsets at 1000 ticks per second",
+    ttml,
+    'p:tickRate="1000"',
+    "1500t",
+    "2500t",
+    "00:00:01.500 --> 00:00:02.500",
+  ],
   ["frame clock times", ttml, "", "00:01:01:15", "00:01:03:00", "00:01:01.500 --> 00:01:03.000"],
   [
     "frame offsets at 25 fps",
@@ -84,7 +92,7 @@ it.each([
   ],
 ])("keeps captions using %s", (_label, namespace, parameters, begin, end, timing) => {
   const captions = parseXml(`
-    <tt xmlns="${namespace}" xmlns:p="${namespace}#parameter" ${parameters}>
+    <tt xmlns="${namespace}" xmlns:p="${namespace}#parameter" xml:lang="en" ${parameters}>
       <body><div><p begin="${begin}" end="${end}">Door closes</p></div></body>
     </tt>
   `);
