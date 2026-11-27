@@ -723,6 +723,20 @@ describe("question answer paths", () => {
       const cases = [
         {
           ext: "epub",
+          parts: {
+            "META-INF/container.xml": '<container><rootfile full-path="book.opf"/></container>',
+            "book.opf":
+              '<package><manifest><item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="chapter"/></spine></package>',
+            "chapter.xhtml":
+              '<html xmlns="http://www.w3.org/1999/xhtml"><body><p>See <img src="pier.svg" alt="Map of the east pier" style="display: none !important; display: inline !important"/> before boarding.</p></body></html>',
+            "pier.svg":
+              '<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"><path d="M0 0L2 2"/></svg>',
+          },
+          expected: [],
+          exact: "## Chapter 1\nSee Map of the east pier before boarding.",
+        },
+        {
+          ext: "epub",
           bounded: true,
           parts: {
             "META-INF/container.xml": '<container><rootfile full-path="book.opf"/></container>',
