@@ -45,6 +45,7 @@ type TextPart =
   | { notebookOutput: Iterable<string> };
 
 const NOTEBOOK_OUTPUT_HEADING = "\nOutput:\n";
+const WORD_HEADING_STYLE_ID = /^Heading([1-6])$/i;
 const NOTEBOOK_OUTPUT_TEXT = /[^\s\0]/u;
 
 const TRUNCATED = "\n\n[Extracted text truncated at document extraction limits.]";
@@ -565,7 +566,7 @@ function* paragraphs(node: XmlNode): Generator<TextPart, void> {
             ? Number(child.name[1])
             : (child.wordOutlineHeadingLevel ??
               style?.wordOutlineHeadingLevel ??
-              (Number(style?.attrs.val?.match(/^Heading([1-6])$/i)?.[1]) || 0));
+              (Number(style?.attrs.val?.match(WORD_HEADING_STYLE_ID)?.[1]) || 0));
       if (level) yield `${"#".repeat(Math.min(6, level))} `;
       yield* text(child);
       yield "\n";
@@ -1271,14 +1272,16 @@ async function* document(path: string, extension: string): AsyncGenerator<TextPa
           const id = style.attrs.styleId;
           if ((style.attrs.type ?? "paragraph") !== "paragraph" || !id) continue;
           const properties = children(style);
-          const outline =
-            style.wordOutlineHeadingLevel ??
-            properties.find((c) => c.name === "basedOn")?.attrs.val;
-          if (outline !== undefined) outlines.set(id, outline);
           // Word localizes style ids while keeping built-in English names.
           const name = properties.find((c) => c.name === "name")?.attrs.val;
           const level = name?.match(/^heading ([1-6])$/i)?.[1];
           if (level && id !== `Heading${level}`) headings.set(id, `Heading${level}`);
+          const inferredLevel = level ?? id.match(WORD_HEADING_STYLE_ID)?.[1];
+          const outline =
+            style.wordOutlineHeadingLevel ??
+            properties.find((c) => c.name === "basedOn")?.attrs.val ??
+            (inferredLevel === undefined ? undefined : Number(inferredLevel));
+          if (outline !== undefined) outlines.set(id, outline);
         }
         if (outlines.size || headings.size)
           for (const pStyle of all(doc, "pStyle", ["pPrChange"])) {
