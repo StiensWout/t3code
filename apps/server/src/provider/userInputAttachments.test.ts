@@ -722,6 +722,23 @@ describe("question answer paths", () => {
       const config = yield* ServerConfig.ServerConfig;
       const cases = [
         {
+          ext: "xlsx",
+          parts: {
+            "xl/workbook.xml":
+              '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Formulas" sheetId="1" r:id="sheet"/></sheets></workbook>',
+            "xl/_rels/workbook.xml.rels":
+              '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="sheet" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>',
+            "xl/worksheets/sheet1.xml":
+              '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1">' +
+              '<c r="A1" t="str"><f>B1</f><v>_x0000_</v></c>' +
+              '<c r="B1" t="inlineStr"><is><t>_x0000_</t></is></c>' +
+              '<c r="C1" t="inlineStr"><is><t>Formula row</t></is></c>' +
+              "</row></sheetData></worksheet>",
+          },
+          expected: [],
+          exact: "## Sheet: Formulas\nB1\t\tFormula row",
+        },
+        {
           ext: "epub",
           bounded: true,
           parts: {
