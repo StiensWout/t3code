@@ -699,6 +699,24 @@ describe("question answer paths", () => {
       const config = yield* ServerConfig.ServerConfig;
       const cases = [
         {
+          ext: "xlsx",
+          bounded: true,
+          parts: {
+            "xl/workbook.xml": '<workbook><sheet name="Results" r:id="a"/></workbook>',
+            "xl/_rels/workbook.xml.rels":
+              '<Relationships><Relationship Id="a" Target="worksheets/a.xml"/></Relationships>',
+            "xl/worksheets/a.xml":
+              '<worksheet><sheetData><row r="1"><c r="A1" t="str"><f t="shared" ref="A1:A10001" si="0">CHAR(13)</f><v>_x000D_</v></c></row>' +
+              Array.from(
+                { length: 10_000 },
+                (_, index) =>
+                  `<row r="${index + 2}"><c r="A${index + 2}" t="str"><f t="shared" si="0"/><v>_x000D_</v></c></row>`,
+              ).join("") +
+              '<row r="10002"><c r="A10002" t="inlineStr"><is><t>Final total</t></is></c></row></sheetData></worksheet>',
+          },
+          expected: ["Final total"],
+        },
+        {
           ext: "epub",
           bounded: true,
           parts: {
