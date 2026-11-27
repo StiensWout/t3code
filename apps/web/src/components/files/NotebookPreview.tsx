@@ -204,14 +204,16 @@ export default function NotebookPreview(props: {
                         />
                       ) : null
                     ) : output.kind === "image" ? (
-                      <img
-                        src={output.text}
-                        alt={gt("Cell {number} output", { number: String(index + 1) })}
-                        loading="lazy"
-                        width={output.width}
-                        height={output.height}
-                        className="h-auto max-h-96 max-w-full p-4 object-contain"
-                      />
+                      <div className="p-4">
+                        <img
+                          src={output.text}
+                          alt={gt("Cell {number} output", { number: String(index + 1) })}
+                          loading="lazy"
+                          width={output.width}
+                          height={output.height}
+                          className="h-auto max-h-88 max-w-full object-contain"
+                        />
+                      </div>
                     ) : (
                       <pre className="overflow-x-auto p-4 text-xs whitespace-pre-wrap break-words">
                         {output.text}
