@@ -517,12 +517,25 @@ function wordStyleOutlineLevel(
   return level;
 }
 
+function wordHeadingLevel(id: string | undefined): number {
+  return Number(id?.match(/^Heading([1-6])$/i)?.[1]) || 0;
+}
+
+function hasWordParagraphText(node: XmlNode): boolean {
+  if (HIDDEN.has(node.name) || node.name === "txbxContent") return false;
+  if (node.name === "noBreakHyphen") return true;
+  return node.children.some((child) =>
+    typeof child === "string" ? child.trim() !== "" : hasWordParagraphText(child),
+  );
+}
+
 function applyWordDefaultOutline(node: XmlNode, level: number) {
   for (const paragraph of all(node, "p", ["pPrChange"])) {
     if (
       paragraph.hasText &&
       paragraph.wordOutlineHeadingLevel === undefined &&
-      !all(paragraph, "pStyle", ["pPrChange", "txbxContent"]).next().value
+      !all(paragraph, "pStyle", ["pPrChange", "txbxContent"]).next().value &&
+      hasWordParagraphText(paragraph)
     )
       paragraph.wordOutlineHeadingLevel = level;
     // The walk stops at each match, so continue into any text boxes anchored in it.
@@ -555,7 +568,7 @@ function* paragraphs(node: XmlNode): Generator<TextPart, void> {
             ? Number(child.name[1])
             : (child.wordOutlineHeadingLevel ??
               style?.wordOutlineHeadingLevel ??
-              (Number(style?.attrs.val?.match(/^Heading([1-6])$/i)?.[1]) || 0));
+              wordHeadingLevel(style?.attrs.val));
       if (level) yield `${"#".repeat(Math.min(6, level))} `;
       yield* text(child);
       yield "\n";
@@ -1282,7 +1295,9 @@ async function* document(path: string, extension: string): AsyncGenerator<TextPa
               if (heading) pStyle.attrs.val = heading;
             }
           }
-        const defaultLevel = wordStyleOutlineLevel(outlines, defaultId);
+        const defaultLevel =
+          wordStyleOutlineLevel(outlines, defaultId) ??
+          wordHeadingLevel(headings.get(defaultId) ?? defaultId);
         if (defaultLevel) applyWordDefaultOutline(doc, defaultLevel);
       }
       yield* paragraphs(doc);
