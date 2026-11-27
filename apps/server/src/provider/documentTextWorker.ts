@@ -1272,14 +1272,14 @@ async function* document(path: string, extension: string): AsyncGenerator<TextPa
           const id = style.attrs.styleId;
           if ((style.attrs.type ?? "paragraph") !== "paragraph" || !id) continue;
           const properties = children(style);
-          // Word localizes style ids while keeping built-in English names.
-          const name = properties.find((c) => c.name === "name")?.attrs.val;
-          const inferredLevel =
-            name?.match(/^heading ([1-6])$/i)?.[1] ?? id.match(WORD_HEADING_STYLE_ID)?.[1];
           const base = properties.find((c) => c.name === "basedOn")?.attrs.val;
           const outline = style.wordOutlineHeadingLevel ?? base;
           if (outline !== undefined) outlines.set(id, outline);
-          const heading = inferredLevel === undefined ? base : Number(inferredLevel);
+          // Word localizes style ids while keeping built-in English names.
+          const name = properties.find((c) => c.name === "name")?.attrs.val;
+          const level =
+            name?.match(/^heading ([1-6])$/i)?.[1] ?? id.match(WORD_HEADING_STYLE_ID)?.[1];
+          const heading = level === undefined ? base : Number(level);
           if (heading !== undefined) headings.set(id, heading);
         }
         if (outlines.size || headings.size)
