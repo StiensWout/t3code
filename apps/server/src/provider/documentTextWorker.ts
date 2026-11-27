@@ -14,6 +14,7 @@ const CELL_START = Symbol("cell-start");
 const CELL_END = Symbol("cell-end");
 const LINE_START = Symbol("line-start");
 const THEMATIC_BREAK = Symbol("thematic-break");
+const RTF_ROW_END = Symbol("rtf-row-end");
 const PRESENTATIONML_NAMESPACES = new Set([
   "http://schemas.openxmlformats.org/presentationml/2006/main",
   "http://purl.oclc.org/ooxml/presentationml/main",
@@ -39,6 +40,7 @@ type TextPart =
   | typeof CELL_END
   | typeof LINE_START
   | typeof THEMATIC_BREAK
+  | typeof RTF_ROW_END
   | { columnGap: number }
   | { imageDescription: string }
   | { fallback: string }
@@ -1007,7 +1009,8 @@ function* rtf(source: string): Generator<TextPart, void> {
       afterNestedCell = true;
       continue;
     }
-    const text = typeof part === "string" ? part.replaceAll("\0", "") : "\t";
+    const text =
+      typeof part === "string" ? part.replaceAll("\0", "") : part === RTF_ROW_END ? "\n" : "\t";
     if (text) {
       if (afterNestedCell && /\S/u.test(last) && /\S/u.test(text[0]!)) yield " ";
       afterNestedCell = false;
@@ -1178,7 +1181,7 @@ function* rtfParts(source: string): Generator<TextPart | typeof RTF_NESTED_CELL_
           yield "\n";
         else if (!hidden() && control === "tab") yield "\t";
         // Table structure survives tracked deletions; only the deleted cell text is dropped.
-        else if (!state.skip && control === "row") yield "\n";
+        else if (!state.skip && control === "row") yield RTF_ROW_END;
         else if (!state.skip && control === "cell") yield { columnGap: 1 };
         else if (!state.skip && control === "nestcell") yield RTF_NESTED_CELL_END;
         else if (!hidden() && symbols.has(control)) yield symbols.get(control)!;
@@ -1511,6 +1514,7 @@ export async function extractDocumentText(path: string, extension: string): Prom
   let started = false;
   let space = false;
   let midLine = false;
+  let pendingRtfGaps = 0;
   let pendingThematicBreak: string | undefined;
   let endsWithWord = false;
   let afterImageDescription = false;
@@ -1544,6 +1548,10 @@ export async function extractDocumentText(path: string, extension: string): Prom
       if (part === LINE_START) {
         // A list starts its own line unless the text before it already ended one.
         if (!midLine) continue;
+        part = "\n";
+      }
+      if (part === RTF_ROW_END) {
+        pendingRtfGaps = 0;
         part = "\n";
       }
       let raw: string;
@@ -1622,7 +1630,19 @@ export async function extractDocumentText(path: string, extension: string): Prom
         }
       } else {
         // Trim leading text whitespace here so leading table column gaps survive trimEnd().
-        if (!result && !isColumnGap) value = value.trimStart();
+        if (!result) {
+          if (isColumnGap && extension === ".rtf") {
+            // Opening RTF rows may have no text. Take the budget now and emit only with text.
+            pendingRtfGaps += value.length;
+            value = "";
+          } else if (!isColumnGap) {
+            value = value.trimStart();
+            if (value && pendingRtfGaps) {
+              value = "\t".repeat(pendingRtfGaps) + value;
+              pendingRtfGaps = 0;
+            }
+          }
+        }
         midLine = endsMidLine(value) ?? midLine;
       }
       result += value;
