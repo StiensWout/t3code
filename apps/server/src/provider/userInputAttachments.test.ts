@@ -340,6 +340,11 @@ describe("question answer paths", () => {
       "A\tB\t\nC",
     ],
     [
+      "leading empty table cell",
+      String.raw`{\rtf1\ansi\trowd\cellx1000\cellx2000\pard\intbl\cell\pard\intbl Revenue\cell\row}`,
+      "\tRevenue",
+    ],
+    [
       "nested table cell boundaries",
       String.raw`{\rtf1\ansi\trowd\cellx3000\cellx5000
 \pard\intbl\itap2 One\nestcell
