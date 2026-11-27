@@ -476,7 +476,7 @@ function* xstringText(node: XmlNode): Generator<string, void> {
 }
 
 function hasXstringText(node: XmlNode): boolean {
-  for (const value of xstringText(node)) if (value.trim()) return true;
+  for (const value of xstringText(node)) if (value.replaceAll("\0", "").trim()) return true;
   return false;
 }
 
