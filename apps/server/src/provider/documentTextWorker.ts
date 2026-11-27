@@ -1137,6 +1137,7 @@ async function* document(path: string, extension: string): AsyncGenerator<TextPa
               if (
                 (cell.attrs.t === undefined || cell.attrs.t === "n") &&
                 hasValue &&
+                raw.trim() &&
                 formatId &&
                 formatId !== "0"
               )
