@@ -230,12 +230,7 @@ export const make = () => {
         const port = yield* reserveLoopbackPort(wildcardHost);
         if (yield* isPortAvailableOnLoopback(port)) return port;
       }
-      return yield* new NetError({
-        message:
-          wildcardHost === undefined
-            ? "Failed to find an available loopback port"
-            : "Failed to find an available wildcard port",
-      });
+      return yield* new NetError({ message: "Failed to find an available port" });
     }),
   } satisfies NetServiceShape;
 };
