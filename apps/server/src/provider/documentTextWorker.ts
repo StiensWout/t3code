@@ -423,6 +423,14 @@ function* all(
     else if (!skip.includes(child.name)) yield* all(child, name, skip);
   }
 }
+function* odfInlineChildren(node: XmlNode): Generator<XmlNode | string, void> {
+  for (const child of node.children) {
+    if (typeof child !== "string" && ["list", "list-item", "list-header"].includes(child.name))
+      yield* odfInlineChildren(child);
+    else yield child;
+  }
+}
+
 function* text(node: XmlNode): Generator<TextPart, void> {
   if (HIDDEN.has(node.name)) return;
   if (node.imageDescription !== undefined) {
@@ -434,7 +442,7 @@ function* text(node: XmlNode): Generator<TextPart, void> {
   else if (node.odfInlineParagraphs) {
     // ODF boxes and notes can sit inline, so only add breaks between their own paragraphs.
     let seenParagraph = false;
-    for (const child of node.children) {
+    for (const child of odfInlineChildren(node)) {
       if (typeof child === "string") {
         yield child;
         continue;
