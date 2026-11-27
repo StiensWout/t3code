@@ -60,7 +60,7 @@ export default function NotebookPreview(props: {
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Restore the saved cell and record output geometry before the browser removes it.
   useLayoutEffect(() => {
     const root = scroll.current;
-    if (!root || positionKey === null) return;
+    if (!root) return;
     const cell = saved ? cellsOf(root)[saved.cell] : undefined;
     if (saved && cell) {
       root.scrollTop +=
