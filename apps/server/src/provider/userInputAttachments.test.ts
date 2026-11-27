@@ -722,6 +722,21 @@ describe("question answer paths", () => {
       const config = yield* ServerConfig.ServerConfig;
       const cases = [
         {
+          ext: "docx",
+          parts: {
+            "word/styles.xml":
+              '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' +
+              '<w:style w:type="paragraph" w:default="1" w:styleId="ReportSection"><w:pPr><w:outlineLvl w:val="1"/></w:pPr></w:style>' +
+              "</w:styles>",
+            "word/document.xml":
+              '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>' +
+              "<w:p><w:r><w:t>Annual report</w:t></w:r></w:p>" +
+              "</w:body></w:document>",
+          },
+          expected: [],
+          exact: "## Annual report",
+        },
+        {
           ext: "epub",
           bounded: true,
           parts: {
