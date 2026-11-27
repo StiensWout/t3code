@@ -3,7 +3,7 @@ import * as NodeOS from "node:os";
 
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { vi } from "vite-plus/test";
+import { expect, vi } from "vite-plus/test";
 
 import * as NetService from "./Net.ts";
 
@@ -105,6 +105,33 @@ it.layer(NetService.layer)("NetService", (it) => {
             assert.ok(resolved > 0);
             assert.notEqual(resolved, preferred);
             assert.notEqual(yield* net.findAvailablePort(preferred, ownIpv4), preferred);
+          }),
+        closeServer,
+      ),
+    );
+
+    it.effect("selects a fallback the server can bind on explicit IPv6 loopback", () =>
+      Effect.acquireUseRelease(
+        openServer("::1"),
+        (server) =>
+          Effect.gen(function* () {
+            const net = yield* NetService.NetService;
+            const occupied = getPort(server);
+            const listen = NodeNet.Server.prototype.listen;
+            let firstIpv4Allocation = true;
+            using _ephemeralPort = vi
+              .spyOn(NodeNet.Server.prototype, "listen")
+              .mockImplementation(function (this: NodeNet.Server, ...args: unknown[]) {
+                // An IPv4 ephemeral allocation can use a port already held on IPv6.
+                if (firstIpv4Allocation && args[0] === 0 && args[1] === "127.0.0.1") {
+                  firstIpv4Allocation = false;
+                  args[0] = occupied;
+                }
+                return Reflect.apply(listen, this, args);
+              });
+
+            const selected = yield* net.findAvailablePort(occupied, "::1");
+            expect(yield* net.probeListenOnHost(selected, "::1")).toBe(true);
           }),
         closeServer,
       ),
