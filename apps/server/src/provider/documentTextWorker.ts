@@ -430,7 +430,6 @@ function* odfInlineChildren(node: XmlNode): Generator<XmlNode | string, void> {
     else yield child;
   }
 }
-
 function* text(node: XmlNode): Generator<TextPart, void> {
   if (HIDDEN.has(node.name)) return;
   if (node.imageDescription !== undefined) {
