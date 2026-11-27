@@ -722,6 +722,17 @@ describe("question answer paths", () => {
       const config = yield* ServerConfig.ServerConfig;
       const cases = [
         {
+          ext: "docx",
+          parts: {
+            "word/styles.xml":
+              '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/></w:style><w:style w:type="paragraph" w:styleId="ReportHeading" w:customStyle="1"><w:name w:val="Report Heading"/><w:basedOn w:val="Heading2"/></w:style></w:styles>',
+            "word/document.xml":
+              '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:pPr><w:pStyle w:val="Heading2"/></w:pPr><w:r><w:t>Income</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val="ReportHeading"/></w:pPr><w:r><w:t>Expenses</w:t></w:r></w:p></w:body></w:document>',
+          },
+          expected: [],
+          exact: "## Income\n## Expenses",
+        },
+        {
           ext: "epub",
           bounded: true,
           parts: {
