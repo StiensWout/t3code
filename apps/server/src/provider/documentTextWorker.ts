@@ -164,10 +164,10 @@ function isXhtmlElement(
   );
 }
 
-function hasImportantDisplayNone(style: string): boolean {
+function importantDisplayIsHidden(style: string): boolean | undefined {
   // Stylesheet rules can override non-important inline display.
   if (!style || style.includes("\\") || !/display/i.test(style) || !/important/i.test(style))
-    return false;
+    return undefined;
   let badString = false;
   const declarations = style.replaceAll(
     /\/\*[\s\S]*?(?:\*\/|$)|"[^"]*(?:"|$)|'[^']*(?:'|$)/g,
@@ -179,8 +179,8 @@ function hasImportantDisplayNone(style: string): boolean {
     },
   );
   // Semicolons in blocks can be part of a declaration's value.
-  if (badString || /[()[\]{}]/.test(declarations)) return false;
-  let hidden = false;
+  if (badString || /[()[\]{}]/.test(declarations)) return undefined;
+  let hidden: boolean | undefined;
   for (const [declaration] of declarations.matchAll(/[^;]+/g)) {
     const match =
       /^[\t\n\f\r ]*(display|all)[\t\n\f\r ]*:([^!]+)![\t\n\f\r ]*important[\t\n\f\r ]*$/i.exec(
@@ -278,17 +278,19 @@ function xml(source: string, extension: string): XmlNode {
       parent.name === "AlternateContent" &&
       parent.markupCompatibility;
     if (odf && (node.name === "p" || node.name === "h")) collapseOdfWhitespace(node);
+    const epubHtml = extension === ".epub" && (stack[1] ?? node).name === "html";
+    const style = tag.attributes.style ?? "";
+    const importantDisplayHidden = epubHtml ? importantDisplayIsHidden(style) : undefined;
     if (
       node.pptxHidden ||
       isMathmlAlternative ||
       (extension === ".epub" &&
         node.name === "template" &&
         isXhtmlElement(tag.name, [...stack, node], rootTagName)) ||
-      (extension === ".epub" &&
-        (stack[1] ?? node).name === "html" &&
+      (epubHtml &&
         ((Object.hasOwn(tag.attributes, "hidden") &&
           !/^until-found$/i.test(String(tag.attributes.hidden))) ||
-          hasImportantDisplayNone(tag.attributes.style ?? ""))) ||
+          importantDisplayHidden === true)) ||
       (extension === ".docx" && node.name === "del") ||
       (extension === ".docx" &&
         node.name === "r" &&
@@ -343,9 +345,11 @@ function xml(source: string, extension: string): XmlNode {
       node.name === "img" &&
       stack[1]?.name === "html" &&
       alt?.trim() &&
-      !/(?:^|;)\s*(?:display\s*:\s*none|visibility\s*:\s*(?:hidden|collapse))\s*(?:!important\s*)?(?:;|$)/i.test(
-        String(tag.attributes.style ?? ""),
-      )
+      !(
+        importantDisplayHidden ??
+        /(?:^|;)\s*display\s*:\s*none\s*(?:!important\s*)?(?:;|$)/i.test(style)
+      ) &&
+      !/(?:^|;)\s*visibility\s*:\s*(?:hidden|collapse)\s*(?:!important\s*)?(?:;|$)/i.test(style)
     ) {
       node.imageDescription = alt;
       node.hasText = true;
