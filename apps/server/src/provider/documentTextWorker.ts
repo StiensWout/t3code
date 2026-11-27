@@ -1267,31 +1267,27 @@ async function* document(path: string, extension: string): AsyncGenerator<TextPa
       const styles = NodePath.posix.resolve(dir, target || "styles.xml").slice(1);
       if (has(styles)) {
         const outlines = new Map<string, number | string | undefined>();
-        const headings = new Map<string, string>();
+        const headings = new Map<string, number | string | undefined>();
         for (const style of all(read(styles), "style")) {
           const id = style.attrs.styleId;
           if ((style.attrs.type ?? "paragraph") !== "paragraph" || !id) continue;
           const properties = children(style);
           // Word localizes style ids while keeping built-in English names.
           const name = properties.find((c) => c.name === "name")?.attrs.val;
-          const level = name?.match(/^heading ([1-6])$/i)?.[1];
-          if (level && id !== `Heading${level}`) headings.set(id, `Heading${level}`);
-          const inferredLevel = level ?? id.match(WORD_HEADING_STYLE_ID)?.[1];
-          const outline =
-            style.wordOutlineHeadingLevel ??
-            properties.find((c) => c.name === "basedOn")?.attrs.val ??
-            (inferredLevel === undefined ? undefined : Number(inferredLevel));
+          const inferredLevel =
+            name?.match(/^heading ([1-6])$/i)?.[1] ?? id.match(WORD_HEADING_STYLE_ID)?.[1];
+          const base = properties.find((c) => c.name === "basedOn")?.attrs.val;
+          const outline = style.wordOutlineHeadingLevel ?? base;
           if (outline !== undefined) outlines.set(id, outline);
+          const heading = inferredLevel === undefined ? base : Number(inferredLevel);
+          if (heading !== undefined) headings.set(id, heading);
         }
         if (outlines.size || headings.size)
           for (const pStyle of all(doc, "pStyle", ["pPrChange"])) {
             const id = pStyle.attrs.val ?? "";
-            const outline = wordStyleOutlineLevel(outlines, id);
+            const outline =
+              wordStyleOutlineLevel(outlines, id) ?? wordStyleOutlineLevel(headings, id);
             if (outline !== undefined) pStyle.wordOutlineHeadingLevel = outline;
-            else {
-              const heading = headings.get(id);
-              if (heading) pStyle.attrs.val = heading;
-            }
           }
       }
       yield* paragraphs(doc);
