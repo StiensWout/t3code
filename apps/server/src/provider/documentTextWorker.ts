@@ -471,7 +471,7 @@ function* odfNoteBodyChildren(node: XmlNode): Generator<XmlNode | string, void> 
     if (typeof child === "string") {
       if (node.name === "note-body" || child.trim()) yield child;
     } else if (["list", "list-item", "list-header"].includes(child.name)) {
-      yield* odfNoteBodyChildren(child);
+      if (child.hasText) yield* odfNoteBodyChildren(child);
     } else {
       yield child;
     }
