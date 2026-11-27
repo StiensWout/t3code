@@ -720,7 +720,46 @@ describe("question answer paths", () => {
   it.effect("preserves office structure and EPUB reading order with bounded archives", () =>
     Effect.gen(function* () {
       const config = yield* ServerConfig.ServerConfig;
+      const imageStyles = [
+        ["display: none; display: bogus !important", false],
+        ["display: none; all: bogus !important", false],
+        ["display: none !important; display: inline table flex !important", false],
+        ["display: none; display: inline", true],
+        ["display: inline; display: none", false],
+        ["display: inline !important; display: none", true],
+        ["display: none !important; display: inline", false],
+        ["display: none; all: unset", true],
+        ["display: none; display: inline flex", true],
+        ["display: none !important; width: calc(100% - 1em); display: inline !important", true],
+        ["--options: { note: [x;display:none!important;] };", true],
+        ['--label: "x;display:none!important;visibility:hidden;";', true],
+        ["/* draft; display:none; visibility:hidden; */", true],
+        ["visibility: hidden; visibility: visible", true],
+        ["visibility: hidden !important; visibility: visible !important", true],
+        ["visibility: visible !important; visibility: hidden", true],
+        ["visibility: hidden !important; all: unset !important", true],
+        ["visibility: hidden !important; all: unset", false],
+        ["visibility: visible; visibility: collapse", false],
+      ] as const;
       const cases = [
+        {
+          ext: "epub",
+          parts: {
+            "META-INF/container.xml": '<container><rootfile full-path="book.opf"/></container>',
+            "book.opf":
+              '<package><manifest><item id="c" href="chapter.xhtml"/></manifest><spine><itemref idref="c"/></spine></package>',
+            "chapter.xhtml": `<html xmlns="http://www.w3.org/1999/xhtml"><body>${imageStyles
+              .map(
+                ([style], index) =>
+                  `<p><img alt="[map ${index}]" style="${style.replaceAll('"', "&quot;")}"/></p>`,
+              )
+              .join("")}</body></html>`,
+          },
+          expected: imageStyles.flatMap(([, visible], index) =>
+            visible ? [`[map ${index}]`] : [],
+          ),
+          absent: imageStyles.flatMap(([, visible], index) => (visible ? [] : [`[map ${index}]`])),
+        },
         {
           ext: "epub",
           parts: {
