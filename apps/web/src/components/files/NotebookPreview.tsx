@@ -15,8 +15,11 @@ const savedPositions = createPositionMemory<{
   readonly visible: number;
   readonly cell: number;
   readonly offset: number;
+  readonly outputHeights?: ReadonlyMap<string, number>;
 }>();
 const cellsOf = (root: HTMLElement) => root.querySelectorAll(":scope > div > section");
+const outputSelector = "[data-notebook-output]";
+const defaultOutputHeight = 80;
 
 // Saved notebooks must not load URLs or turn authored links into app actions.
 const NOTEBOOK_MARKDOWN: MarkdownExtensions = { inert: true };
@@ -56,17 +59,33 @@ export default function NotebookPreview(props: {
       offset: top - (cells[cell]?.getBoundingClientRect().top ?? top),
     });
   };
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Return a reopened notebook to its saved cell once the cells have laid out.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Restore the saved cell and record output geometry before the browser removes it.
   useLayoutEffect(() => {
     const root = scroll.current;
-    const cell = saved && root ? cellsOf(root)[saved.cell] : undefined;
-    if (!root || !saved || !cell) return;
-    root.scrollTop +=
-      cell.getBoundingClientRect().top - root.getBoundingClientRect().top + saved.offset;
-  }, [saved]);
+    if (!root || positionKey === null) return;
+    const cell = saved ? cellsOf(root)[saved.cell] : undefined;
+    if (saved && cell) {
+      root.scrollTop +=
+        cell.getBoundingClientRect().top - root.getBoundingClientRect().top + saved.offset;
+    }
+    return () => {
+      const position = savedPositions.get(positionKey);
+      if (!position) return;
+      // Restore against the same layout while the output iframes are being recreated.
+      const outputHeights = new Map<string, number>();
+      for (const node of root.querySelectorAll<HTMLElement>(outputSelector)) {
+        const key = node.dataset.notebookOutput;
+        const height = node.clientHeight;
+        if (key !== undefined && height > 0 && height !== defaultOutputHeight) {
+          outputHeights.set(key, height);
+        }
+      }
+      savedPositions.set(positionKey, { ...position, outputHeights });
+    };
+  }, [positionKey, saved]);
   const [outputView, setOutputView] = useState(() => ({
     mounted: new Set<string>(),
-    heights: new Map<string, number>(),
+    heights: new Map(saved?.outputHeights),
   }));
   const outputCount = props.notebook.cells
     .slice(0, visible)
@@ -106,7 +125,7 @@ export default function NotebookPreview(props: {
     };
     const viewportObserver = new IntersectionObserver(track(inView), { root });
     const preloadObserver = new IntersectionObserver(track(nearby), { root, rootMargin: "160px" });
-    for (const node of root.querySelectorAll("[data-notebook-output]")) {
+    for (const node of root.querySelectorAll(outputSelector)) {
       viewportObserver.observe(node);
       preloadObserver.observe(node);
     }
@@ -165,7 +184,7 @@ export default function NotebookPreview(props: {
               {cell.outputs.map((output, outputIndex) => {
                 const key = `${index}-${outputIndex}`;
                 const mounted = outputView.mounted.has(key);
-                const estimatedHeight = outputView.heights.get(key) ?? 80;
+                const estimatedHeight = outputView.heights.get(key) ?? defaultOutputHeight;
                 return (
                   <div
                     key={outputIndex}
