@@ -503,7 +503,7 @@ export function usePullRequestHandoffs({
       }),
       () => cancelled,
     );
-    if (prepared._tag === "Skipped" || cancelled) {
+    if (prepared._tag === "Skipped") {
       setHandoff(null);
       toastManager.close(toastId);
       return;
