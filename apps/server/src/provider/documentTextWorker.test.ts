@@ -10,6 +10,33 @@ const outputHeading = "\nOutput:\n";
 
 it.each([
   {
+    name: "skips an empty opening row before a paragraph",
+    body: "\\cell\\cell\\row\\pard Revenue",
+    expected: "Revenue",
+  },
+  {
+    name: "keeps the leading cell of a populated row after an empty opening row",
+    body: "\\cell\\cell\\row\\cell Revenue\\cell\\row",
+    expected: "\tRevenue",
+  },
+  {
+    name: "keeps the leading cells when a paragraph break occurs within the row",
+    body: "\\cell\\par\\cell Revenue\\cell\\row",
+    expected: "\t\tRevenue",
+  },
+])("$name", async ({ body, expected }) => {
+  const folder = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-rtf-rows-"));
+  try {
+    const path = NodePath.join(folder, "table.rtf");
+    await NodeFSP.writeFile(path, "{\\rtf1\\ansi " + body + "}");
+    expect(await extractDocumentText(path, ".rtf")).toBe(expected);
+  } finally {
+    await NodeFSP.rm(folder, { recursive: true, force: true });
+  }
+});
+
+it.each([
+  {
     name: "omits the output heading when only half an emoji fits after it",
     source: "x".repeat(1_000_000 - cellHeading.length - outputHeading.length - 1),
     outputs: ["😀"],
