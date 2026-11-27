@@ -15,6 +15,7 @@ const savedPositions = createPositionMemory<{
   readonly visible: number;
   readonly cell: number;
   readonly offset: number;
+  readonly revision: string;
   readonly outputHeights?: ReadonlyMap<string, number>;
 }>();
 const cellsOf = (root: HTMLElement) => root.querySelectorAll(":scope > div > section");
@@ -44,6 +45,9 @@ export default function NotebookPreview(props: {
   const [saved] = useState(() => savedPositions.get(positionKey));
   const [visible, setVisible] = useState(saved?.visible ?? 20);
   const scroll = useRef<HTMLDivElement>(null);
+  const measuredHeights = useRef(new Map<string, number>());
+  const revision = props.notebook.revision;
+  const savedHeights = saved?.revision === revision ? saved.outputHeights : undefined;
   const savePosition = (root: HTMLElement, expanded: number) => {
     const top = root.getBoundingClientRect().top;
     const cells = Array.from(cellsOf(root));
@@ -53,11 +57,12 @@ export default function NotebookPreview(props: {
     );
     savedPositions.set(positionKey, {
       visible: expanded,
+      revision,
       cell,
       offset: top - (cells[cell]?.getBoundingClientRect().top ?? top),
     });
   };
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Restore the saved cell and record output geometry before the browser removes it.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Restore the saved cell and retain measured output heights on close.
   useLayoutEffect(() => {
     const root = scroll.current;
     if (!root) return;
@@ -68,19 +73,16 @@ export default function NotebookPreview(props: {
     }
     return () => {
       const position = savedPositions.get(positionKey);
-      if (!position) return;
-      // Restore against the same layout while the output iframes are being recreated.
-      const outputHeights = new Map<string, number>();
-      for (const node of root.querySelectorAll<HTMLElement>("[data-notebook-output]")) {
-        if (node.clientHeight > 0)
-          outputHeights.set(node.dataset.notebookOutput!, node.clientHeight);
-      }
-      savedPositions.set(positionKey, { ...position, outputHeights });
+      if (position?.revision !== revision) return;
+      savedPositions.set(positionKey, {
+        ...position,
+        outputHeights: new Map([...(savedHeights ?? []), ...measuredHeights.current]),
+      });
     };
-  }, [positionKey, saved]);
+  }, [positionKey, revision, saved, savedHeights]);
   const [outputView, setOutputView] = useState(() => ({
     mounted: new Set<string>(),
-    heights: new Map(saved?.outputHeights),
+    heights: new Map(savedHeights),
   }));
   const outputCount = props.notebook.cells
     .slice(0, visible)
@@ -109,9 +111,11 @@ export default function NotebookPreview(props: {
       }
       const departing = [...active].filter((node) => !next.has(node));
       if (active.size === next.size && departing.length === 0) return;
-      const measured = departing
-        .map((node) => [outputKey(node), node.clientHeight] as const)
-        .filter(([, height]) => height > 0);
+      const measured = departing.flatMap((node) => {
+        const key = outputKey(node);
+        const height = measuredHeights.current.get(key);
+        return height === undefined ? [] : [[key, height] as const];
+      });
       active = next;
       setOutputView((old) => ({
         mounted: new Set(Array.from(next, outputKey)),
@@ -196,6 +200,7 @@ export default function NotebookPreview(props: {
                           name={gt("Cell {number} HTML output", { number: String(index + 1) })}
                           output
                           estimatedOutputHeight={estimatedHeight}
+                          onOutputHeight={(height) => measuredHeights.current.set(key, height)}
                         />
                       ) : null
                     ) : output.kind === "image" ? (
@@ -203,7 +208,9 @@ export default function NotebookPreview(props: {
                         src={output.text}
                         alt={gt("Cell {number} output", { number: String(index + 1) })}
                         loading="lazy"
-                        className="max-h-96 max-w-full p-4 object-contain"
+                        width={output.width}
+                        height={output.height}
+                        className="h-auto max-h-96 max-w-full p-4 object-contain"
                       />
                     ) : (
                       <pre className="overflow-x-auto p-4 text-xs whitespace-pre-wrap break-words">

@@ -85,6 +85,7 @@ export default function DocumentPages(props: {
   readonly name: string;
   readonly output?: boolean;
   readonly estimatedOutputHeight?: number;
+  readonly onOutputHeight?: (height: number) => void;
   readonly details?: string;
 }) {
   const gt = useGT();
@@ -147,7 +148,10 @@ export default function DocumentPages(props: {
           if (!body) return;
           const measure = () => {
             const height = Math.ceil(body.getBoundingClientRect().height);
-            if (height > 0) setOutputHeight(height);
+            if (height > 0) {
+              setOutputHeight(height);
+              props.onOutputHeight?.(height);
+            }
           };
           stopObserving.current = observeResize(body, measure);
           measure();

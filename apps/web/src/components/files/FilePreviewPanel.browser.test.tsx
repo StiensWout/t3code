@@ -1198,6 +1198,7 @@ describe("notebook scroll position", () => {
     <NotebookPreview
       notebook={{
         type: "notebook",
+        revision: "reading-position-fixture",
         language: "python",
         cells: Array.from({ length: 40 }, (_, index) => ({
           kind: "raw" as const,

@@ -447,6 +447,8 @@ Third}`;
   });
 
   it("reads saved notebook cells and preferred outputs without executing code", () => {
+    const png =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==";
     const result = openNotebook(
       bytes(
         JSON.stringify({
@@ -470,6 +472,7 @@ Third}`;
                   name: "stderr",
                   text: ["\r 10%|#         |", "\r100%|##########|\n", "done\r\n", "🚀 ready\rX\n"],
                 },
+                { data: { "image/png": png, "text/plain": ["Plot"] } },
                 { data: { "text/html": ["<b>Results</b>"], "text/plain": ["Results"] } },
                 { output_type: "display_data", data: { "text/markdown": ["| a |\n", "|---|"] } },
                 { data: { "text/plain": "plain wins", "text/markdown": "**markdown**" } },
@@ -481,6 +484,7 @@ Third}`;
     );
     expect(result).toEqual({
       type: "notebook",
+      revision: expect.any(String),
       language: "python",
       cells: [
         { kind: "markdown", source: "# Results", outputs: [] },
@@ -493,6 +497,7 @@ Third}`;
             { kind: "text", text: "space fallback" },
             { kind: "text", text: "42\n" },
             { kind: "text", text: "100%|##########|\ndone\nX  ready\n" },
+            { kind: "image", text: `data:image/png;base64,${png}`, width: 1, height: 1 },
             { kind: "html", text: "<b>Results</b>" },
             { kind: "text", text: "| a |\n|---|" },
             { kind: "text", text: "plain wins" },

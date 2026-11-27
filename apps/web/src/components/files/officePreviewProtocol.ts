@@ -23,7 +23,15 @@ export type OfficeWorkerRequest =
 export type NotebookCell = {
   readonly kind: "markdown" | "code" | "raw";
   readonly source: string;
-  readonly outputs: { readonly kind: "text" | "image" | "html"; readonly text: string }[];
+  readonly outputs: (
+    | { readonly kind: "text" | "html"; readonly text: string }
+    | {
+        readonly kind: "image";
+        readonly text: string;
+        readonly width: number;
+        readonly height: number;
+      }
+  )[];
 };
 
 export type EpubLocation = { readonly index: number; readonly anchor?: string };
@@ -63,7 +71,12 @@ export type OfficeWorkerResult =
       readonly navigation: "page" | "slide";
       readonly pages: { title: string | undefined; html: string }[];
     }
-  | { readonly type: "notebook"; readonly language: string; readonly cells: NotebookCell[] }
+  | {
+      readonly type: "notebook";
+      readonly language: string;
+      readonly cells: NotebookCell[];
+      readonly revision: string;
+    }
   | ({ readonly type: "error" } & PreviewFailure)
   | {
       readonly type: "docx" | "xlsx" | "pptx";

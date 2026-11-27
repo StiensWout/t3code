@@ -1,3 +1,5 @@
+import { sha256 } from "@noble/hashes/sha2.js";
+import { bytesToHex } from "@noble/hashes/utils.js";
 import { pipe } from "effect/Function";
 import { IMAGE_DIMENSIONS_HEADER_BYTES } from "@t3tools/shared/imageDimensions";
 import { decodeHTMLAttribute } from "entities";
@@ -16,6 +18,7 @@ import {
   find,
   imageFits,
   parseXml,
+  previewImageSize,
   repeat,
   text,
   type XmlNode,
@@ -24,17 +27,18 @@ import {
 const TABLE_PREVIEW_MAX_ROWS = 500;
 const TABLE_PREVIEW_MAX_COLUMNS = 50;
 
-function base64ImageFits(base64: string) {
-  return (
-    /^[a-z\d+/]*={0,2}$/i.test(base64) &&
-    base64.length % 4 !== 1 &&
-    (!base64.endsWith("=") || base64.length % 4 === 0) &&
-    imageFits(
-      Uint8Array.from(
-        atob(base64.slice(0, 4 * Math.ceil(IMAGE_DIMENSIONS_HEADER_BYTES / 3))),
-        (char) => char.charCodeAt(0),
-      ),
-    )
+function base64ImageSize(base64: string) {
+  if (
+    !/^[a-z\d+/]*={0,2}$/i.test(base64) ||
+    base64.length % 4 === 1 ||
+    (base64.endsWith("=") && base64.length % 4 !== 0)
+  )
+    return null;
+  return previewImageSize(
+    Uint8Array.from(
+      atob(base64.slice(0, 4 * Math.ceil(IMAGE_DIMENSIONS_HEADER_BYTES / 3))),
+      (char) => char.charCodeAt(0),
+    ).subarray(0, IMAGE_DIMENSIONS_HEADER_BYTES),
   );
 }
 function htmlImagesFit(html: string) {
@@ -42,7 +46,7 @@ function htmlImagesFit(html: string) {
   for (const match of decodeHTMLAttribute(html).matchAll(
     /(?<=[\t\n\f\r "'/])src[\t\n\f\r ]*=[\t\n\f\r ]*(["'])[\t\n\f\r ]*data:image\/(?:png|jpeg|gif|webp);base64,([a-z\d+/\t\n\f\r ]*(?:=[\t\n\f\r ]*){0,2})\1|data:image\/(?:png|jpeg|gif|webp);base64,([a-z\d+/]*={0,2})/gi,
   ))
-    if (!base64ImageFits(match[2]?.replaceAll(/[\t\n\f\r ]/g, "") ?? match[3]!)) return false;
+    if (!base64ImageSize(match[2]?.replaceAll(/[\t\n\f\r ]/g, "") ?? match[3]!)) return false;
   return true;
 }
 async function imageData(archive: JSZip, path: string | null): Promise<string> {
@@ -340,8 +344,9 @@ export function openNotebook(bytes: ArrayBuffer): OfficeWorkerResult {
           for (const mime of ["image/png", "image/jpeg", "image/gif", "image/webp"]) {
             if (data[mime]) {
               const base64 = notebookText(data[mime], 4 * 1024 * 1024).replaceAll(/\s/g, "");
-              if (base64ImageFits(base64))
-                return { kind: "image" as const, text: `data:${mime};base64,${base64}` };
+              const size = base64ImageSize(base64);
+              if (size)
+                return { kind: "image" as const, text: `data:${mime};base64,${base64}`, ...size };
             }
           }
           const html = notebookText(data["text/html"]);
@@ -367,7 +372,7 @@ export function openNotebook(bytes: ArrayBuffer): OfficeWorkerResult {
         .filter((output) => output.text.trim().length > 0),
     };
   });
-  return { type: "notebook", language, cells };
+  return { type: "notebook", language, cells, revision: bytesToHex(sha256(new Uint8Array(bytes))) };
 }
 
 // Characters RTF writes as control symbols (`\~`) and control words (`\emspace`).
