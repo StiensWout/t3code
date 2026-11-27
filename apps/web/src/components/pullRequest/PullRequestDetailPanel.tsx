@@ -1157,6 +1157,11 @@ export function PullRequestDetailPanel({
         threadId: opened.threadId,
       }),
     );
+    if (prepared._tag === "Skipped") {
+      setHandoff(null);
+      toastManager.close(toastId);
+      return;
+    }
     if (prepared._tag === "Failure") {
       setHandoff(null);
       toastManager.update(toastId, {

@@ -352,9 +352,10 @@ export function prepareDraftCheckout(
   draftId: DraftId,
   checkout: Promise<PreparedCheckout>,
   isCancelled: () => boolean = () => false,
-): Promise<PreparedCheckout> {
+): Promise<PreparedCheckout | { _tag: "Skipped" }> {
   const pointed = checkout.then((prepared) => {
-    if (!isCurrent() || isCancelled() || prepared._tag === "Failure") return prepared;
+    if (!isCurrent() || isCancelled()) return { _tag: "Skipped" } as const;
+    if (prepared._tag === "Failure") return prepared;
     const { branch, worktreePath, pullRequest } = prepared.value;
     // A waiting send resumes right after this and must render the checkout first.
     flushSync(() =>
@@ -371,7 +372,7 @@ export function prepareDraftCheckout(
   });
   const isCurrent = trackPendingDraftCheckout(
     draftId,
-    pointed.then((prepared) => prepared._tag === "Success" || isCancelled()),
+    pointed.then((prepared) => prepared._tag === "Success"),
   );
   return pointed;
 }
@@ -502,8 +503,9 @@ export function usePullRequestHandoffs({
       }),
       () => cancelled,
     );
-    if (cancelled) {
+    if (prepared._tag === "Skipped" || cancelled) {
       setHandoff(null);
+      toastManager.close(toastId);
       return;
     }
     if (prepared._tag === "Failure") {

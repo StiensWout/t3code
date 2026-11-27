@@ -190,43 +190,51 @@ function CheckOutButton() {
   );
 }
 
-it("keeps an older checkout from moving the draft after a newer checkout fails", async () => {
-  const draftId = DraftId.make("draft-reused-for-checkout");
-  const projectRef = {
-    environmentId: EnvironmentId.make("environment"),
-    projectId: ProjectId.make("project"),
-  };
-  useComposerDraftStore.getState().setProjectDraftThreadId(projectRef, draftId, {
-    threadId: ThreadId.make("thread-reused-for-checkout"),
-    branch: "main",
-  });
-  const result = AsyncResult.success({
-    branch: "older-checkout",
-    worktreePath: "/repo-worktrees/older-checkout",
-    isOnPullRequestHead: true,
-    pullRequest: {
-      number: 1,
-      title: "Older checkout",
-      url: "https://github.com/owner/repo/pull/1",
-      baseBranch: "main",
-      headBranch: "older-checkout",
-      state: "open" as const,
-    },
-  });
-  const older = Promise.withResolvers<typeof result>();
-  const olderPrepared = prepareDraftCheckout(draftId, older.promise);
-  const newerPrepared = prepareDraftCheckout(
-    draftId,
-    Promise.resolve(AsyncResult.failure(Cause.die(new Error("Checkout failed")))),
-  );
-  await newerPrepared;
-  older.resolve(result);
-  await olderPrepared;
-  expect(useComposerDraftStore.getState().getDraftSession(draftId)).toMatchObject({
-    branch: "main",
-    worktreePath: null,
-  });
-});
+it.each(["superseded", "cancelled before success", "cancelled before failure"] as const)(
+  "keeps the draft and waiting prompt in place when checkout is %s",
+  async (outcome) => {
+    const draftId = DraftId.make("draft-reused-for-checkout");
+    const projectRef = {
+      environmentId: EnvironmentId.make("environment"),
+      projectId: ProjectId.make("project"),
+    };
+    useComposerDraftStore.getState().setProjectDraftThreadId(projectRef, draftId, {
+      threadId: ThreadId.make("thread-reused-for-checkout"),
+      branch: "main",
+    });
+    const result = AsyncResult.success({
+      branch: "older-checkout",
+      worktreePath: "/repo-worktrees/older-checkout",
+      isOnPullRequestHead: true,
+      pullRequest: {
+        number: 1,
+        title: "Older checkout",
+        url: "https://github.com/owner/repo/pull/1",
+        baseBranch: "main",
+        headBranch: "older-checkout",
+        state: "open" as const,
+      },
+    });
+    const failure = AsyncResult.failure<never, never>(Cause.die(new Error("Checkout failed")));
+    const checkout = Promise.withResolvers<typeof result | typeof failure>();
+    let cancelled = false;
+    const prepared = prepareDraftCheckout(draftId, checkout.promise, () => cancelled);
+    const waitingSend = readPendingWorkspaceDefault(draftId);
+    expect(waitingSend).not.toBeNull();
+    if (outcome === "superseded") {
+      await prepareDraftCheckout(draftId, Promise.resolve(failure));
+    } else {
+      cancelled = true;
+    }
+    checkout.resolve(outcome === "cancelled before failure" ? failure : result);
+    expect(await prepared).toEqual({ _tag: "Skipped" });
+    expect(await waitingSend).toBe(false);
+    expect(useComposerDraftStore.getState().getDraftSession(draftId)).toMatchObject({
+      branch: "main",
+      worktreePath: null,
+    });
+  },
+);
 
 it("moves the draft the user typed into during a checkout onto the checkout", async () => {
   setup();
