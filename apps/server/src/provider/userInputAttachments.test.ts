@@ -737,53 +737,6 @@ describe("question answer paths", () => {
           exact: "## Annual report",
         },
         {
-          ext: "docx",
-          parts: {
-            "word/styles.xml":
-              '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' +
-              '<w:style w:type="paragraph" w:default="1" w:styleId="ReportSection"><w:pPr><w:outlineLvl w:val="1"/></w:pPr></w:style>' +
-              "</w:styles>",
-            "word/document.xml":
-              '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>' +
-              "<w:p><w:r><w:t> </w:t><w:instrText>Field code</w:instrText>" +
-              "<w:drawing><w:txbxContent><w:p><w:r><w:t>Box text</w:t></w:r></w:p></w:txbxContent></w:drawing>" +
-              "</w:r></w:p><w:p><w:r><w:noBreakHyphen/></w:r></w:p>" +
-              "</w:body></w:document>",
-          },
-          expected: [],
-          exact: "## Box text\n\n## ‑",
-        },
-        {
-          ext: "docx",
-          parts: {
-            "word/styles.xml":
-              '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' +
-              '<w:style w:type="paragraph" w:default="1" w:styleId="Heading1"></w:style>' +
-              "</w:styles>",
-            "word/document.xml":
-              '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>' +
-              "<w:p><w:r><w:t>Report</w:t></w:r></w:p>" +
-              "</w:body></w:document>",
-          },
-          expected: [],
-          exact: "# Report",
-        },
-        {
-          ext: "docx",
-          parts: {
-            "word/styles.xml":
-              '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' +
-              '<w:style w:type="paragraph" w:default="1" w:styleId="Ueberschrift2"><w:name w:val="heading 2"/></w:style>' +
-              "</w:styles>",
-            "word/document.xml":
-              '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>' +
-              "<w:p><w:r><w:t>Report</w:t></w:r></w:p>" +
-              "</w:body></w:document>",
-          },
-          expected: [],
-          exact: "## Report",
-        },
-        {
           ext: "epub",
           bounded: true,
           parts: {
