@@ -722,6 +722,19 @@ describe("question answer paths", () => {
       const config = yield* ServerConfig.ServerConfig;
       const cases = [
         {
+          ext: "odt",
+          parts: {
+            "content.xml":
+              '<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"><office:body><office:text>' +
+              '<text:p>Check the shipment<text:note text:id="ftn1" text:note-class="footnote"><text:note-citation>1</text:note-citation>' +
+              "<text:note-body><text:list><text:list-item><text:p>Inspect seals</text:p></text:list-item>" +
+              "<text:list-item><text:p>Record weight</text:p></text:list-item></text:list></text:note-body></text:note> before departure.</text:p>" +
+              "</office:text></office:body></office:document-content>",
+          },
+          expected: [],
+          exact: "Check the shipment[1: Inspect seals\nRecord weight] before departure.",
+        },
+        {
           ext: "epub",
           bounded: true,
           parts: {
