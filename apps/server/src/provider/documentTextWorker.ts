@@ -997,8 +997,9 @@ function rtfUnicodeDestination(
 }
 
 const RTF_NESTED_CELL_END = Symbol("rtf-nested-cell-end");
+const RTF_CELL_GAP = { columnGap: 1 };
 
-function* rtf(source: string): Generator<string, void> {
+function* rtf(source: string): Generator<string | typeof RTF_CELL_GAP, void> {
   // \nestcell ends a nested cell without a delimiter; space it only from adjacent text.
   let last = "";
   let afterNestedCell = false;
@@ -1007,7 +1008,7 @@ function* rtf(source: string): Generator<string, void> {
       afterNestedCell = true;
       continue;
     }
-    const text = part.replaceAll("\0", "");
+    const text = typeof part === "string" ? part.replaceAll("\0", "") : "\t";
     if (text) {
       if (afterNestedCell && /\S/u.test(last) && /\S/u.test(text[0]!)) yield " ";
       afterNestedCell = false;
@@ -1017,7 +1018,9 @@ function* rtf(source: string): Generator<string, void> {
   }
 }
 
-function* rtfParts(source: string): Generator<string | typeof RTF_NESTED_CELL_END, void> {
+function* rtfParts(
+  source: string,
+): Generator<string | typeof RTF_CELL_GAP | typeof RTF_NESTED_CELL_END, void> {
   if (!source.startsWith("{\\rtf")) throw new Error("Invalid RTF document");
   let state = {
     skip: false,
@@ -1179,7 +1182,7 @@ function* rtfParts(source: string): Generator<string | typeof RTF_NESTED_CELL_EN
         else if (!hidden() && control === "tab") yield "\t";
         // Table structure survives tracked deletions; only the deleted cell text is dropped.
         else if (!state.skip && control === "row") yield "\n";
-        else if (!state.skip && control === "cell") yield "\t";
+        else if (!state.skip && control === "cell") yield RTF_CELL_GAP;
         else if (!state.skip && control === "nestcell") yield RTF_NESTED_CELL_END;
         else if (!hidden() && symbols.has(control)) yield symbols.get(control)!;
       } else {
