@@ -1006,6 +1006,7 @@ export function workflowOneLine(text: string): string {
     .replace(/^([-*]|\d+\.)\s+/, "")
     .replace(/(`+)(.+?)\1(?!`)/g, (_, _ticks, inner: string) => `\0${code.push(inner) - 1}\0`);
   const plain = stripMarkdownLinks(stripped)
+    .trimStart()
     .replace(/(?<![\p{L}\p{M}\p{N}_/])(__|_)(\S(?:.*?\S)?)\1(?![\p{L}\p{M}\p{N}_/])/gu, "$2")
     .replace(/(\*\*|\*)(\S(?:.*?\S)?)\1/g, "$2")
     .replace(/\0(\d+)\0/g, (match, index: string) => code[Number(index)] ?? match);

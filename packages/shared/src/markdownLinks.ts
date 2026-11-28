@@ -790,7 +790,7 @@ function blankFencedCode(text: string): string {
 
 // Labels may nest balanced brackets (`[the [docs] guide](...)`), and the composer escapes them
 // (`[\[id\].tsx](...)`), so `\[` and `\]` never count. A blank line ends the paragraph and its labels.
-function* scanMarkdownLinks(markdown: string) {
+function* scanMarkdownLinks(markdown: string, onEscapedBracket?: (offset: number) => void) {
   const scanDestination = markdownLinkDestinationScanner(markdown);
   const paragraphEnd = markdownRunEndFinder(markdown, /\n[ \t\r]*\n/g);
   // A code span closes at the next run of as many backticks in its paragraph.
@@ -801,9 +801,13 @@ function* scanMarkdownLinks(markdown: string) {
     closersByLength.set(run[0].length, closers);
   }
   const bracket = /!\[|[[\]\\]|`+|\n[ \t\r]*\n/g;
-  const openers: { labelStart: number; image: boolean }[] = [];
+  const openers: { start: number; labelStart: number; image: boolean }[] = [];
   for (let match = bracket.exec(markdown); match; match = bracket.exec(markdown)) {
     if (match[0] === "\\") {
+      const escaped = markdown[match.index + 1];
+      if (openers.length > 0 && (escaped === "[" || escaped === "]")) {
+        onEscapedBracket?.(match.index);
+      }
       bracket.lastIndex = match.index + 2;
     } else if (match[0].startsWith("`")) {
       const length = match[0].length;
@@ -816,7 +820,7 @@ function* scanMarkdownLinks(markdown: string) {
     } else if (match[0].startsWith("\n")) {
       openers.length = 0;
     } else if (match[0].endsWith("[")) {
-      openers.push({ labelStart: bracket.lastIndex, image: match[0] === "![" });
+      openers.push({ start: match.index, labelStart: bracket.lastIndex, image: match[0] === "![" });
     } else if (openers.length > 0) {
       const opener = openers.pop()!;
       const destination = scanDestination(match.index + 1);
@@ -824,7 +828,12 @@ function* scanMarkdownLinks(markdown: string) {
       // A link cannot contain a link, but it can contain an image.
       if (!opener.image) openers.length = 0;
       bracket.lastIndex = destination.end;
-      yield { ...destination, labelStart: opener.labelStart, labelEnd: match.index };
+      yield {
+        ...destination,
+        start: opener.start,
+        labelStart: opener.labelStart,
+        labelEnd: match.index,
+      };
     }
   }
 }
@@ -841,9 +850,12 @@ export function extractMarkdownLinkHrefs(text: string): string[] {
 
 /** Keep inline link labels in prose, removing the brackets and destinations around them. */
 export function stripMarkdownLinks(text: string): string {
-  const removals: [start: number, end: number][] = [];
-  for (const { labelStart, labelEnd, end } of scanMarkdownLinks(blankFencedCode(text))) {
-    removals.push([labelStart - 1, labelStart], [labelEnd, end]);
+  const removals: [start: number, end: number, kind: "open" | "close" | "escape"][] = [];
+  for (const { start, labelStart, labelEnd, end } of scanMarkdownLinks(
+    blankFencedCode(text),
+    (offset) => removals.push([offset, offset + 1, "escape"]),
+  )) {
+    removals.push([start, labelStart, "open"], [labelEnd, end, "close"]);
   }
   if (removals.length === 0) return text;
 
@@ -851,7 +863,12 @@ export function stripMarkdownLinks(text: string): string {
   removals.sort(([left], [right]) => left - right);
   let plain = "";
   let cursor = 0;
-  for (const [start, end] of removals) {
+  let labelDepth = 0;
+  for (const [start, end, kind] of removals) {
+    // Escapes in unmatched labels are still prose. The scanner skips escapes inside code.
+    if (kind === "escape" && labelDepth === 0) continue;
+    if (kind === "open") labelDepth++;
+    if (kind === "close") labelDepth--;
     plain += text.slice(cursor, start);
     cursor = end;
   }
