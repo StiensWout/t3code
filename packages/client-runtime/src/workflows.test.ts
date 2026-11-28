@@ -736,8 +736,14 @@ describe("workflowStepTime", () => {
 });
 
 describe("workflowOneLine", () => {
-  it("reads the sentence after an empty-alt image", () => {
-    expect(workflowOneLine("![](badge.svg) Build passed. Next.")).toBe("Build passed.");
+  it.each([
+    ["![](badge.svg) Build passed. Next.", "Build passed."],
+    ["![](badge.svg)\nBuild passed. Next.", "Build passed."],
+    ["![](badge.svg)\n    Build passed. Next.", "Build passed."],
+    ["    ![](badge.svg)\n    Build passed. Next.", "Build passed."],
+    ["![](badge.svg)", ""],
+  ])("reads the first available sentence around an empty-alt image in %j", (text, expected) => {
+    expect(workflowOneLine(text)).toBe(expected);
   });
 
   it("reads a reply's first sentence as plain words", () => {
