@@ -297,6 +297,20 @@ describe("extractMarkdownLinkHrefs", () => {
   });
 
   it.each([
+    ["    [code](one.ts)\n\n    [more code](two.ts)", []],
+    ["\t[code](one.ts)\r\n[link](two.ts)", ["two.ts"]],
+    [">     [code](one.ts)\n> [link](two.ts)", ["two.ts"]],
+    ["- [link](one.ts)\n\n      [code](two.ts)", ["one.ts"]],
+    [
+      "    [code](three.ts)\n\n-        [link](one.ts)\n         [link](two.ts)",
+      ["one.ts", "two.ts"],
+    ],
+    ["    [code](one.ts)\nText\n    [continuation](two.ts)", ["two.ts"]],
+  ])("skips literal indented links while keeping visible links in %j", (markdown, hrefs) => {
+    expect(extractMarkdownLinkHrefs(markdown)).toEqual(hrefs);
+  });
+
+  it.each([
     [
       String.raw`[one](<./a/doc\> final.ts>) [two](<./b/doc\> final.ts>)`,
       [String.raw`./a/doc\> final.ts`, String.raw`./b/doc\> final.ts`],
