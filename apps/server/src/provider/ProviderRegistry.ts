@@ -591,6 +591,9 @@ export const layer = Layer.effect(
     );
     const syncSemaphore = yield* Semaphore.make(1);
 
+    // A writer owns each entry until it has saved the latest queued snapshot for that instance.
+    const pendingCacheWrites = new Map<ProviderInstanceId, ServerProvider | undefined>();
+
     const persistProvider = Effect.fn("ProviderRegistry.persistProvider")(function* (
       provider: ServerProvider,
     ) {
@@ -610,6 +613,19 @@ export const layer = Layer.effect(
         Effect.tapError(Effect.logError),
         Effect.ignore,
       );
+    });
+
+    const drainProviderCache = Effect.fn("ProviderRegistry.drainProviderCache")(function* (
+      provider: ServerProvider,
+    ) {
+      const key = snapshotInstanceKey(provider);
+      let next: ServerProvider | undefined = provider;
+      while (next !== undefined) {
+        yield* persistProvider(next);
+        next = pendingCacheWrites.get(key);
+        pendingCacheWrites.set(key, undefined);
+      }
+      pendingCacheWrites.delete(key);
     });
 
     const applyProviderUpdateState = Effect.fn("applyProviderUpdateState")(function* (
@@ -643,48 +659,55 @@ export const layer = Layer.effect(
           concurrency: "unbounded",
         },
       );
-      const [previousProviders, providers, providersToPersist] = yield* Ref.modify(
-        providersRef,
-        (previousProviders) => {
-          const mergedProviders = new Map(
-            previousProviders.map((provider) => [snapshotInstanceKey(provider), provider] as const),
-          );
-          const updatedKeys = new Set<ProviderInstanceId>();
+      const [providers, changed] = yield* Ref.modify(providersRef, (previousProviders) => {
+        const mergedProviders = new Map(
+          previousProviders.map((provider) => [snapshotInstanceKey(provider), provider] as const),
+        );
+        const updatedKeys = new Set<ProviderInstanceId>();
 
-          for (const provider of nextProvidersWithUpdateState) {
+        for (const provider of nextProvidersWithUpdateState) {
+          const key = snapshotInstanceKey(provider);
+          updatedKeys.add(key);
+          mergedProviders.set(
+            key,
+            options?.replace === true
+              ? provider
+              : mergeProviderSnapshot(mergedProviders.get(key), provider),
+          );
+        }
+
+        const providers = orderProviderSnapshots(
+          [...mergedProviders.values()].map((provider) =>
+            classifyCompatibility(provider, manifest),
+          ),
+        );
+        const changed = haveProvidersChanged(previousProviders, providers);
+        const writes = [];
+        if (changed && options?.persist !== false) {
+          // Queue in the same order as the in-memory commits, before any file I/O can yield.
+          for (const provider of providers) {
             const key = snapshotInstanceKey(provider);
-            updatedKeys.add(key);
-            mergedProviders.set(
-              key,
-              options?.replace === true
-                ? provider
-                : mergeProviderSnapshot(mergedProviders.get(key), provider),
-            );
+            if (!updatedKeys.has(key)) continue;
+            if (pendingCacheWrites.has(key)) {
+              pendingCacheWrites.set(key, provider);
+            } else {
+              pendingCacheWrites.set(key, undefined);
+              writes.push(provider);
+            }
           }
-
-          const providers = orderProviderSnapshots(
-            [...mergedProviders.values()].map((provider) =>
-              classifyCompatibility(provider, manifest),
-            ),
-          );
-          const providersToPersist = providers.filter((provider) =>
-            updatedKeys.has(snapshotInstanceKey(provider)),
-          );
-          return [[previousProviders, providers, providersToPersist] as const, providers];
-        },
+        }
+        return [[providers, changed, writes] as const, providers];
+      }).pipe(
+        Effect.tap(([, , writes]) =>
+          Effect.forEach(writes, drainProviderCache, { concurrency: "unbounded", discard: true }),
+        ),
+        // Once claimed, drain queued writes even if the initiating refresh or stream is interrupted.
+        Effect.uninterruptible,
       );
 
-      if (haveProvidersChanged(previousProviders, providers)) {
-        if (options?.persist !== false) {
-          yield* Effect.forEach(providersToPersist, persistProvider, {
-            concurrency: "unbounded",
-            discard: true,
-          });
-        }
-        if (options?.publish !== false) {
-          // A newer upsert may have committed and published during the cache write; never republish an older array.
-          yield* PubSub.publish(changesPubSub, yield* Ref.get(providersRef));
-        }
+      if (changed && options?.publish !== false) {
+        // A newer upsert may have committed and published during the cache write; never republish an older array.
+        yield* PubSub.publish(changesPubSub, yield* Ref.get(providersRef));
       }
 
       return providers;
