@@ -751,7 +751,7 @@ function bareMarkdownLinkDestinationEnd(markdown: string, start: number): number
   }
 }
 
-export function markdownLinkDestinationScanner(markdown: string) {
+function markdownLinkDestinationScanner(markdown: string) {
   const whitespaceEnd = markdownRunEndFinder(markdown, /\S/g);
   const angleEnd = markdownRunEndFinder(markdown, /\\[\\<>]|[<>\r\n]/g);
   // Separate caches keep scans moving forward when angle destinations fall back to bare ones.
@@ -789,9 +789,7 @@ function blankFencedCode(text: string): string {
 
 // Labels may nest balanced brackets (`[the [docs] guide](...)`), and the composer escapes them
 // (`[\[id\].tsx](...)`), so `\[` and `\]` never count. A blank line ends the paragraph and its labels.
-export function extractMarkdownLinkHrefs(text: string): string[] {
-  const markdown = blankFencedCode(text);
-  const hrefs: string[] = [];
+function* scanMarkdownLinks(markdown: string) {
   const scanDestination = markdownLinkDestinationScanner(markdown);
   const paragraphEnd = markdownRunEndFinder(markdown, /\n[ \t\r]*\n/g);
   // A code span closes at the next run of as many backticks in its paragraph.
@@ -802,7 +800,7 @@ export function extractMarkdownLinkHrefs(text: string): string[] {
     closersByLength.set(run[0].length, closers);
   }
   const bracket = /!\[|[[\]\\]|`+|\n[ \t\r]*\n/g;
-  const openers: boolean[] = [];
+  const openers: { labelStart: number; image: boolean }[] = [];
   for (let match = bracket.exec(markdown); match; match = bracket.exec(markdown)) {
     if (match[0] === "\\") {
       bracket.lastIndex = match.index + 2;
@@ -817,19 +815,46 @@ export function extractMarkdownLinkHrefs(text: string): string[] {
     } else if (match[0].startsWith("\n")) {
       openers.length = 0;
     } else if (match[0].endsWith("[")) {
-      openers.push(match[0] === "![");
+      openers.push({ labelStart: bracket.lastIndex, image: match[0] === "![" });
     } else if (openers.length > 0) {
-      const image = openers.pop();
+      const opener = openers.pop()!;
       const destination = scanDestination(match.index + 1);
       if (!destination) continue;
       // A link cannot contain a link, but it can contain an image.
-      if (!image) openers.length = 0;
+      if (!opener.image) openers.length = 0;
       bracket.lastIndex = destination.end;
-      const href = markdown.slice(destination.hrefStart, destination.hrefEnd).trim();
-      if (href) hrefs.push(href);
+      yield { ...destination, labelStart: opener.labelStart, labelEnd: match.index };
     }
   }
+}
+
+export function extractMarkdownLinkHrefs(text: string): string[] {
+  const markdown = blankFencedCode(text);
+  const hrefs: string[] = [];
+  for (const { hrefStart, hrefEnd } of scanMarkdownLinks(markdown)) {
+    const href = markdown.slice(hrefStart, hrefEnd).trim();
+    if (href) hrefs.push(href);
+  }
   return hrefs;
+}
+
+/** Keep inline link labels in prose, removing the brackets and destinations around them. */
+export function stripMarkdownLinks(text: string): string {
+  const removals: [start: number, end: number][] = [];
+  for (const { labelStart, labelEnd, end } of scanMarkdownLinks(blankFencedCode(text))) {
+    removals.push([labelStart - 1, labelStart], [labelEnd, end]);
+  }
+  if (removals.length === 0) return text;
+
+  // An image inside a link is found before the link that surrounds it.
+  removals.sort(([left], [right]) => left - right);
+  let plain = "";
+  let cursor = 0;
+  for (const [start, end] of removals) {
+    plain += text.slice(cursor, start);
+    cursor = end;
+  }
+  return plain + text.slice(cursor);
 }
 
 export function resolveMarkdownFileLinkTarget(

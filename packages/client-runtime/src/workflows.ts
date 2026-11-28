@@ -16,7 +16,7 @@ import {
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { markdownLinkDestinationScanner } from "@t3tools/shared/markdownLinks";
+import { stripMarkdownLinks } from "@t3tools/shared/markdownLinks";
 import { formatDuration } from "@t3tools/shared/orchestrationTimingCopy";
 import { parseUrl } from "@t3tools/shared/url";
 
@@ -952,19 +952,6 @@ export function workflowStepTime(ms: number, resolve: MFunctionType = mFallback)
   const seconds = Math.round(ms / 1000);
   if (seconds < 60) return resolve(msg("{seconds}s", { seconds }));
   return formatDuration(ms, resolve);
-}
-
-function stripMarkdownLinks(text: string): string {
-  const scan = markdownLinkDestinationScanner(text);
-  let out = "";
-  let cursor = 0;
-  for (const match of text.matchAll(/\[([^[\]]*)\](?=\()/g)) {
-    const dest = match.index >= cursor ? scan(match.index + match[0].length) : null;
-    if (dest === null) continue;
-    out += text.slice(cursor, match.index) + match[1];
-    cursor = dest.end;
-  }
-  return cursor === 0 ? text : out + text.slice(cursor);
 }
 
 /**

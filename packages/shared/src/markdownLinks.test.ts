@@ -5,6 +5,7 @@ import {
   extractInlineCodeSpans,
   extractMarkdownLinkHrefs,
   resolveMarkdownFileLinkTarget,
+  stripMarkdownLinks,
 } from "./markdownLinks.ts";
 
 import {
@@ -258,6 +259,19 @@ describe("extractInlineCodeSpans", () => {
     ["    ```\n    `./a/shared.ts`\n    ```\n\n`./b/shared.ts`", ["./b/shared.ts"]],
   ])("skips only fenced code in %j", (markdown, spans) => {
     expect(extractInlineCodeSpans(markdown)).toEqual(spans);
+  });
+});
+
+describe("stripMarkdownLinks", () => {
+  it.each([
+    ["[[a [b]]](one)[[c]](two)", "[a [b]][c]"],
+    [String.raw`[a \[b\] [c]](one)`, String.raw`a \[b\] [c]`],
+    ["[bad [label]](broken and [[good]](ok)", "[bad [label]](broken and [good]"],
+    ["[See ![preview](image.png)](page)", "See !preview"],
+    ["`[code](literal)` and [[docs]](link)", "`[code](literal)` and [docs]"],
+    ["", ""],
+  ])("keeps the label text in %s", (markdown, expected) => {
+    expect(stripMarkdownLinks(markdown)).toBe(expected);
   });
 });
 
