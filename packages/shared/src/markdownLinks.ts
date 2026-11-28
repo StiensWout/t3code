@@ -825,7 +825,7 @@ export function extractMarkdownLinkHrefs(text: string): string[] {
     } else if (openers.length > 0) {
       const image = openers.pop();
       const destination = scanDestination(match.index + 1);
-      if (!destination) continue;
+      if (!destination || destination.end > paragraphEnd(match.index + 1)) continue;
       // A link cannot contain a link, but it can contain an image.
       if (!image) openers.length = 0;
       bracket.lastIndex = destination.end;

@@ -306,6 +306,7 @@ describe("extractMarkdownLinkHrefs", () => {
       ["one.ts", "two.ts"],
     ],
     ["    [code](one.ts)\nText\n    [continuation](two.ts)", ["two.ts"]],
+    ["[unfinished](\n\n    [example](one.ts)\ntwo.ts) [link](three.ts)", ["three.ts"]],
   ])("skips literal indented links while keeping visible links in %j", (markdown, hrefs) => {
     expect(extractMarkdownLinkHrefs(markdown)).toEqual(hrefs);
   });
