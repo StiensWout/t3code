@@ -520,8 +520,8 @@ const BLOCKQUOTE = 0;
 export function extractInlineCodeSpans(text: string): string[] {
   if (!text.includes("`")) return [];
   const spans: string[] = [];
-  visitMarkdownLines(text, (line, _start, kind) => {
-    if (kind !== "fenced") collectLineCodeSpans(line, spans);
+  visitMarkdownLines(text, (line, _start, blockCode) => {
+    if (!blockCode) collectLineCodeSpans(line, spans);
   });
   return spans;
 }
@@ -534,23 +534,24 @@ export function extractInlineCodeSpans(text: string): string[] {
  */
 function visitMarkdownLines(
   text: string,
-  visit: (line: string, start: number, kind: "text" | "fenced" | "indented") => void,
+  visit: (line: string, start: number, blockCode: boolean) => void,
 ) {
   // Open containers, outermost first: BLOCKQUOTE, or a list item's content indentation.
   const containers: number[] = [];
-  let fence: { marker: string; indented: boolean } | null = null;
+  let fence: { marker: string; minIndent: number; maxCloserIndent: number } | null = null;
   // Whether the previous line left a paragraph open, and whether indented code is still open:
   // micromark lets neither be interrupted by an empty list item or one not numbered 1.
   let paragraph = false;
   let indentedCode = false;
-  let recoveredListCode = false;
+  let recoveredListParagraph: boolean | null = null;
   // Depth of an item that has only its marker so far; a blank line next ends it.
   let emptyItemDepth = 0;
   let lineStart = 0;
-  for (const line of text.split("\n")) {
+  for (const ending of text.matchAll(/\r\n?|\n|$/g)) {
     const start = lineStart;
-    lineStart += line.length + 1;
-    let source = line.endsWith("\r") ? line.slice(0, -1) : line;
+    const line = text.slice(start, ending.index);
+    lineStart = ending.index + ending[0].length;
+    let source = line;
     if (source.includes("\t")) {
       let column = 0;
       source = source.replace(/\t|[^\t]+/g, (part) => {
@@ -595,14 +596,13 @@ function visitMarkdownLines(
     if (fence) {
       if (matched === containers.length) {
         if (content === "") continue;
-        // A fence written inside indented code ends with that code.
-        if (!fence.indented || indent >= 4) {
-          visit(line, start, "fenced");
+        if (indent >= fence.minIndent) {
+          visit(line, start, true);
           const closer = FENCE_CLOSER_PATTERN.exec(content)?.[1];
           if (
             closer?.startsWith(fence.marker[0]!) &&
             closer.length >= fence.marker.length &&
-            (fence.indented || indent <= 3)
+            indent <= fence.maxCloserIndent
           ) {
             fence = null;
             paragraph = false;
@@ -620,13 +620,13 @@ function visitMarkdownLines(
         content !== "" &&
         (indent >= 4 || !PARAGRAPH_INTERRUPTION_PATTERN.test(content))
       ) {
-        visit(line, start, "text");
+        visit(line, start, false);
         continue;
       }
       containers.length = matched;
       paragraph = false;
       indentedCode = false;
-      recoveredListCode = false;
+      recoveredListParagraph = null;
     }
     // micromark decides this once per line, and not at all on a line that closed a container.
     const interrupts = paragraph || indentedCode;
@@ -635,25 +635,42 @@ function visitMarkdownLines(
     for (;;) {
       if (content === "") {
         paragraph = false;
+        if (recoveredListParagraph !== null) recoveredListParagraph = false;
         break;
       }
       const opener = FENCE_OPENER_PATTERN.exec(content)?.[1];
       if (indent >= 4) {
         if (!paragraph && !closedContainer) indentedCode = true;
-        // The span scan also skips fence examples inside indented blocks.
+        // Recovered list text is parsed after stripping the four columns of the original code.
+        if (recoveredListParagraph !== null) {
+          const code = !recoveredListParagraph && indent >= 8;
+          if (opener && !recoveredListParagraph && !code) {
+            fence = { marker: opener, minIndent: 4, maxCloserIndent: 7 };
+            visit(line, start, true);
+          } else {
+            visit(line, start, code);
+            recoveredListParagraph = !(
+              code ||
+              ATX_HEADING_PATTERN.test(content) ||
+              THEMATIC_BREAK_PATTERN.test(content) ||
+              (recoveredListParagraph && SETEXT_UNDERLINE_PATTERN.test(content))
+            );
+          }
+          break;
+        }
         if (opener && (!paragraph || opener[0] === "`")) {
-          fence = { marker: opener, indented: true };
-          visit(line, start, "fenced");
+          fence = { marker: opener, minIndent: 4, maxCloserIndent: Infinity };
+          visit(line, start, true);
         } else {
-          visit(line, start, paragraph || recoveredListCode ? "text" : "indented");
+          visit(line, start, !paragraph);
         }
         break;
       }
       indentedCode = false;
-      recoveredListCode = false;
+      recoveredListParagraph = null;
       if (opener) {
-        fence = { marker: opener, indented: false };
-        visit(line, start, "fenced");
+        fence = { marker: opener, minIndent: 0, maxCloserIndent: 3 };
+        visit(line, start, true);
         break;
       }
       if (content[0] === ">") {
@@ -681,11 +698,16 @@ function visitMarkdownLines(
         position += indent + width;
         paragraph = false;
         readIndent();
-        // The Markdown renderer recovers over-indented text starting on the list marker's line.
-        recoveredListCode = indent > 4;
+        // Recovery requires whitespace left in the code value after its four columns are stripped.
+        if (indent > 4 && content !== "") {
+          recoveredListParagraph = true;
+          if (!closedContainer) indentedCode = true;
+          visit(line, start, false);
+          break;
+        }
         continue;
       }
-      visit(line, start, "text");
+      visit(line, start, false);
       paragraph = !(
         ATX_HEADING_PATTERN.test(content) ||
         (paragraph && SETEXT_UNDERLINE_PATTERN.test(content))
@@ -783,9 +805,9 @@ function blankBlockCode(text: string): string {
   if (!/ {4}|\t|```|~~~/.test(text)) return text;
   let blanked = "";
   let copied = 0;
-  visitMarkdownLines(text, (line, start, kind) => {
-    if (kind === "text") return;
-    blanked += text.slice(copied, start) + line.replace(/[^\r]/g, " ");
+  visitMarkdownLines(text, (line, start, blockCode) => {
+    if (!blockCode) return;
+    blanked += text.slice(copied, start) + " ".repeat(line.length);
     copied = start + line.length;
   });
   return blanked + text.slice(copied);
@@ -794,7 +816,8 @@ function blankBlockCode(text: string): string {
 // Labels may nest balanced brackets (`[the [docs] guide](...)`), and the composer escapes them
 // (`[\[id\].tsx](...)`), so `\[` and `\]` never count. A blank line ends the paragraph and its labels.
 export function extractMarkdownLinkHrefs(text: string): string[] {
-  const markdown = blankBlockCode(text);
+  // Normalize bare carriage returns without moving any source offsets.
+  const markdown = blankBlockCode(text.replace(/\r(?!\n)/g, "\n"));
   const hrefs: string[] = [];
   const scanDestination = markdownLinkDestinationScanner(markdown);
   const paragraphEnd = markdownRunEndFinder(markdown, /\n[ \t\r]*\n/g);

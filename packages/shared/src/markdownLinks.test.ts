@@ -256,7 +256,10 @@ describe("extractInlineCodeSpans", () => {
     ["Step\n2. ~~~\n   `./a/shared.ts`", ["./a/shared.ts"]],
     ["1. Step\n    ```\r\n    `./a/shared.ts`\r\n    ```\r\n`./b/shared.ts`", ["./b/shared.ts"]],
     ["    ```\n    `./a/shared.ts`\n    ```\n\n`./b/shared.ts`", ["./b/shared.ts"]],
-  ])("skips only fenced code in %j", (markdown, spans) => {
+    ["Edit `src/index.ts`.\n\n    `fixtures/index.ts`", ["src/index.ts"]],
+    ["    `fixtures/index.ts`\r\rEdit `src/index.ts`.", ["src/index.ts"]],
+    ["-      `src/index.ts`\n\n          `fixtures/index.ts`", ["src/index.ts"]],
+  ])("skips block code in %j", (markdown, spans) => {
     expect(extractInlineCodeSpans(markdown)).toEqual(spans);
   });
 });
@@ -307,6 +310,10 @@ describe("extractMarkdownLinkHrefs", () => {
     ],
     ["    [code](one.ts)\nText\n    [continuation](two.ts)", ["two.ts"]],
     ["[unfinished](\n\n    [example](one.ts)\ntwo.ts) [link](three.ts)", ["three.ts"]],
+    ["    example\r\rOpen [link](one.ts).", ["one.ts"]],
+    ["[unfinished](\r\n\r    [example](one.ts)\rtwo.ts) [link](three.ts)", ["three.ts"]],
+    ["-      Example:\n\n          [code](one.ts)\n\n         [link](two.ts)", ["two.ts"]],
+    ["-     [code](one.ts)\n-      [link](two.ts)", ["two.ts"]],
   ])("skips literal indented links while keeping visible links in %j", (markdown, hrefs) => {
     expect(extractMarkdownLinkHrefs(markdown)).toEqual(hrefs);
   });
