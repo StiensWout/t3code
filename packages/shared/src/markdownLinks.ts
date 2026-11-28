@@ -643,7 +643,7 @@ function visitMarkdownLines(
         if (!paragraph && !closedContainer) indentedCode = true;
         // Recovered list text is parsed after stripping the four columns of the original code.
         if (recoveredListParagraph !== null) {
-          const code = !recoveredListParagraph && indent >= 8;
+          const code: boolean = !recoveredListParagraph && indent >= 8;
           if (opener && !recoveredListParagraph && !code) {
             fence = { marker: opener, minIndent: 4, maxCloserIndent: 7 };
             visit(line, start, true);
