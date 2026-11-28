@@ -954,52 +954,7 @@ export function workflowStepTime(ms: number, resolve: MFunctionType = mFallback)
   return formatDuration(ms, resolve);
 }
 
-/**
- * The first prose sentence of a reply, as one line of plain text: headings, tables, and fenced
- * code blocks are skipped; indented text is a fallback. List marks, code, emphasis, and links read as words.
- * Code keeps its text, and an underscore inside a word, as in snake_case, is not emphasis.
- */
-export function workflowOneLine(text: string): string {
-  let fence: string | null = null;
-  let fenceQuoteDepth = 0;
-  let indented: string | undefined;
-  const line =
-    text
-      .split("\n")
-      .find((candidate) => {
-        const quote = /^(?: {0,3}>[ \t]?)+/.exec(candidate)?.[0] ?? "";
-        const quoteDepth = quote.replace(/[^>]/g, "").length;
-        const content = candidate.slice(quote.length);
-        const [, marker, rest] = /^ {0,3}(`{3,}|~{3,})([^\n]*)$/.exec(content) ?? [];
-        if (quoteDepth < fenceQuoteDepth) fence = null;
-        if (fence !== null) {
-          if (
-            quoteDepth === fenceQuoteDepth &&
-            marker?.startsWith(fence) &&
-            /^[ \t]*\r?$/.test(rest ?? "")
-          ) {
-            fence = null;
-          }
-          return false;
-        }
-        if (marker !== undefined && !(marker[0] === "`" && rest?.includes("`"))) {
-          fence = marker;
-          fenceQuoteDepth = quoteDepth;
-          return false;
-        }
-        if (
-          /^\s*$/.test(content) ||
-          /^ {0,3}#{1,6}(?:[ \t]|\r?$)/.test(content) ||
-          /^[ \t]*\|/.test(candidate)
-        )
-          return false;
-        if (!/^(?: {4}| {0,3}\t)/.test(content)) return true;
-        indented ??= candidate;
-        return false;
-      })
-      ?.trim() ??
-    indented?.trim() ??
-    "";
+function workflowProseSentence(line: string): string {
   const code: string[] = [];
   const stripped = line
     .replace(/^(?:>\s*)+/, "")
@@ -1012,4 +967,51 @@ export function workflowOneLine(text: string): string {
     .replace(/\0(\d+)\0/g, (match, index: string) => code[Number(index)] ?? match);
   const end = plain.search(/[.!?](\s|$)/);
   return end === -1 ? plain : plain.slice(0, end + 1);
+}
+
+/**
+ * The first prose sentence of a reply, as one line of plain text: headings, tables, and fenced
+ * code blocks are skipped; indented text is a fallback. List marks, code, emphasis, and links read as words.
+ * Code keeps its text, and an underscore inside a word, as in snake_case, is not emphasis.
+ */
+export function workflowOneLine(text: string): string {
+  let fence: string | null = null;
+  let fenceQuoteDepth = 0;
+  let indented: string | undefined;
+  for (const candidate of text.split("\n")) {
+    const quote = /^(?: {0,3}>[ \t]?)+/.exec(candidate)?.[0] ?? "";
+    const quoteDepth = quote.replace(/[^>]/g, "").length;
+    const content = candidate.slice(quote.length);
+    const [, marker, rest] = /^ {0,3}(`{3,}|~{3,})([^\n]*)$/.exec(content) ?? [];
+    if (quoteDepth < fenceQuoteDepth) fence = null;
+    if (fence !== null) {
+      if (
+        quoteDepth === fenceQuoteDepth &&
+        marker?.startsWith(fence) &&
+        /^[ \t]*\r?$/.test(rest ?? "")
+      ) {
+        fence = null;
+      }
+      continue;
+    }
+    if (marker !== undefined && !(marker[0] === "`" && rest?.includes("`"))) {
+      fence = marker;
+      fenceQuoteDepth = quoteDepth;
+      continue;
+    }
+    if (
+      /^\s*$/.test(content) ||
+      /^ {0,3}#{1,6}(?:[ \t]|\r?$)/.test(content) ||
+      /^[ \t]*\|/.test(candidate)
+    )
+      continue;
+    const isIndented = /^(?: {4}| {0,3}\t)/.test(content);
+    if (isIndented && indented !== undefined) continue;
+
+    const line = workflowProseSentence(candidate.trim());
+    if (line === "") continue;
+    if (!isIndented) return line;
+    indented = line;
+  }
+  return indented ?? "";
 }
