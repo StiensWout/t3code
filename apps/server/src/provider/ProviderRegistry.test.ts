@@ -4150,6 +4150,136 @@ it.layer(
     );
 
     it.effect(
+      "shows the newest provider status after restart when an earlier cache write finishes last",
+      () =>
+        Effect.gen(function* () {
+          const driver = ProviderDriverKind.make("claudeAgent");
+          const instanceId = ProviderInstanceId.make("claudeAgent");
+          const initial = {
+            instanceId,
+            driver,
+            status: "ready",
+            enabled: true,
+            installed: true,
+            auth: { status: "authenticated" },
+            checkedAt: "2026-04-14T00:00:00.000Z",
+            version: "2.1.300",
+            models: [],
+            slashCommands: [],
+            skills: [],
+          } as const satisfies ServerProvider;
+          const older = {
+            ...initial,
+            status: "error",
+            message: "Claude CLI check failed.",
+            checkedAt: "2026-04-14T00:01:00.000Z",
+          } as const satisfies ServerProvider;
+          const newer = { ...initial, checkedAt: "2026-04-14T00:02:00.000Z" };
+          const snapshot = yield* Ref.make<ServerProvider>(initial);
+          const awaitingFirstCheck = yield* Ref.make(false);
+          const changes = yield* PubSub.unbounded<ServerProvider>();
+          const listening = yield* Deferred.make<void>();
+          const instance = {
+            instanceId,
+            driverKind: driver,
+            continuationIdentity: { driverKind: driver, continuationKey: "claude:cache-race" },
+            displayName: undefined,
+            enabled: true,
+            snapshot: {
+              resolveMaintenance: () =>
+                Effect.succeed(
+                  makeManualOnlyProviderMaintenanceCapabilities({
+                    provider: driver,
+                    packageName: null,
+                  }),
+                ),
+              getSnapshot: Ref.get(snapshot),
+              refresh: Ref.get(snapshot),
+              isAwaitingFirstCheck: Ref.get(awaitingFirstCheck),
+              streamChanges: Stream.unwrap(
+                PubSub.subscribe(changes).pipe(
+                  Effect.tap(() => Deferred.succeed(listening, undefined)),
+                  Effect.map(Stream.fromSubscription),
+                ),
+              ),
+              applyUsageLimits: () => Effect.void,
+            },
+            orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
+            textGeneration: {} as ProviderInstance["textGeneration"],
+          } satisfies ProviderInstance;
+          const registryLayer = Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
+            getInstance: () => Effect.succeed(instance),
+            listInstances: Effect.succeed([instance]),
+            listUnavailable: Effect.succeed([]),
+            subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), PubSub.subscribe),
+          });
+          const writeStarted = yield* Deferred.make<void>();
+          const releaseWrite = yield* Deferred.make<void>();
+          const oldWriteFinished = yield* Deferred.make<void>();
+          let gatePath: string | undefined;
+          const gatedFileSystem = Layer.effect(
+            FileSystem.FileSystem,
+            Effect.gen(function* () {
+              const fs = yield* FileSystem.FileSystem;
+              return {
+                ...fs,
+                rename: (from, to) =>
+                  Effect.suspend(() => {
+                    if (to !== gatePath) return fs.rename(from, to);
+                    gatePath = undefined;
+                    return Deferred.succeed(writeStarted, undefined).pipe(
+                      Effect.andThen(Deferred.await(releaseWrite)),
+                      Effect.andThen(fs.rename(from, to)),
+                      Effect.tap(() => Deferred.succeed(oldWriteFinished, undefined)),
+                    );
+                  }),
+              } satisfies FileSystem.FileSystem;
+            }),
+          ).pipe(Layer.provide(NodeServices.layer));
+
+          const live = ProviderRegistry.layer.pipe(
+            Layer.provide(layerUnusedMutator),
+            Layer.provide(registryLayer),
+            Layer.provide(gatedFileSystem),
+          );
+
+          yield* Effect.gen(function* () {
+            const registry = yield* ProviderRegistry.ProviderRegistry;
+            const config = yield* ServerConfig.ServerConfig;
+            const filePath = yield* resolveProviderStatusCachePath({
+              cacheDir: config.providerStatusCacheDir,
+              instanceId,
+            });
+            yield* Deferred.await(listening);
+            gatePath = filePath;
+            yield* Ref.set(snapshot, older);
+            yield* PubSub.publish(changes, older);
+            yield* Deferred.await(writeStarted);
+
+            yield* Ref.set(snapshot, newer);
+            yield* registry.refreshInstance(instanceId);
+            yield* Deferred.succeed(releaseWrite, undefined);
+            yield* Deferred.await(oldWriteFinished);
+
+            expect((yield* registry.getProviders)[0]?.status).toBe("ready");
+          }).pipe(Effect.provide(live), Effect.scoped);
+
+          yield* Ref.set(snapshot, { ...initial, status: "unknown", version: null });
+          yield* Ref.set(awaitingFirstCheck, true);
+          const afterRestart = yield* ProviderRegistry.ProviderRegistry.use(
+            (registry) => registry.getProviders,
+          ).pipe(Effect.provide(Layer.fresh(live)));
+          expect(afterRestart[0]?.status).toBe("ready");
+        }).pipe(
+          Effect.provide(
+            ServerConfig.layerTest(process.cwd(), {
+              prefix: "t3-provider-stale-status-cache-",
+            }).pipe(Layer.provideMerge(NodeServices.layer)),
+          ),
+        ),
+    );
+
+    it.effect(
       "persists authoritative OpenCode removals without resurrecting them on a failed live refresh",
       () =>
         Effect.gen(function* () {
