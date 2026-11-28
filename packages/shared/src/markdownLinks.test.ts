@@ -265,9 +265,14 @@ describe("extractInlineCodeSpans", () => {
 describe("stripMarkdownLinks", () => {
   it.each([
     ["[[a [b]]](one)[[c]](two)", "[a [b]][c]"],
-    [String.raw`[a \[b\] [c]](one)`, String.raw`a \[b\] [c]`],
+    [String.raw`[a \[b\] [c]](one)`, "a [b] [c]"],
     ["[bad [label]](broken and [[good]](ok)", "[bad [label]](broken and [good]"],
-    ["[See ![preview](image.png)](page)", "See !preview"],
+    ["![preview](image.png)", "preview"],
+    ["[See ![preview](image.png)](page)", "See preview"],
+    [
+      "[`\\[literal\\]` and \\[label\\]](page) \\[outside\\]",
+      "`\\[literal\\]` and [label] \\[outside\\]",
+    ],
     ["`[code](literal)` and [[docs]](link)", "`[code](literal)` and [docs]"],
     ["", ""],
   ])("keeps the label text in %s", (markdown, expected) => {

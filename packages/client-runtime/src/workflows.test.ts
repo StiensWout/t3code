@@ -736,6 +736,10 @@ describe("workflowStepTime", () => {
 });
 
 describe("workflowOneLine", () => {
+  it("reads the sentence after an empty-alt image", () => {
+    expect(workflowOneLine("![](badge.svg) Build passed. Next.")).toBe("Build passed.");
+  });
+
   it("reads a reply's first sentence as plain words", () => {
     expect(workflowOneLine("## Done\n\nI added `clamp` next to **sum**. Tests pass.")).toBe(
       "I added clamp next to sum.",
